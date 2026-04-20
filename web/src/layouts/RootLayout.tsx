@@ -1,11 +1,15 @@
 import { Outlet } from 'react-router-dom'
-import Sidebar from '../components/Sidebar'
-import Header  from '../components/Header'
+import Sidebar      from '../components/Sidebar'
+import Header       from '../components/Header'
 import OfflineBanner from '../components/OfflineBanner'
+import GlobalSearch  from '../components/GlobalSearch'
 
 export default function RootLayout() {
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50" dir="rtl">
+      {/* Global Search overlay — available on every page via Ctrl+K */}
+      <GlobalSearch />
+
       {/* Sidebar — fixed on the right in RTL */}
       <Sidebar />
 

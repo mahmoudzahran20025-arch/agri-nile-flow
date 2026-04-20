@@ -154,3 +154,15 @@ export interface Partner {
   capital_paid: number
   current_acct: number
 }
+
+export interface FinancialPeriod {
+  id:          number
+  company_id:  number
+  name:        string
+  period_type: string
+  start_date:  string
+  end_date:    string
+  is_closed:   number   // 0 = open, 1 = closed
+  closed_at:   string | null
+  closed_by:   number | null
+}

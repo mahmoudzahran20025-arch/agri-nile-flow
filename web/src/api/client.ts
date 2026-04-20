@@ -1,4 +1,4 @@
-import type { ApiResult, Paginated } from '../types'
+import type { ApiResult, Paginated, DashboardStats } from '../types'
 
 const BASE = window.location.hostname.endsWith('pages.dev') 
   ? 'https://agri-nile-flow.mahm-zahran22.workers.dev/api' 
@@ -13,17 +13,40 @@ async function request<T>(
   options: RequestInit = {},
 ): Promise<ApiResult<T>> {
   const token = getToken()
-  const res   = await fetch(`${BASE}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options.headers,
-    },
-  })
+  const url = `${BASE}${path}`
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...options.headers,
+  }
 
-  const json = await res.json() as ApiResult<T>
-  return json
+  // Debug logging
+  console.log(`🌐 [API] ${options.method || 'GET'} ${path}`)
+  if (!token) console.warn(`⚠️ [API] No token found for ${path}`)
+
+  try {
+    const res = await fetch(url, {
+      ...options,
+      headers,
+    })
+
+    console.log(`📡 [API Response] ${path}:`, res.status, res.statusText)
+
+    if (!res.ok) {
+      console.error(`❌ [API Error] ${path}: HTTP ${res.status}`)
+    }
+
+    const json = await res.json() as ApiResult<T>
+    
+    if (!json.success) {
+      console.error(`❌ [API Error] ${path}: ${json.error}`)
+    }
+
+    return json
+  } catch (error) {
+    console.error(`💥 [API Exception] ${path}:`, error)
+    throw error
+  }
 }
 
 export const api = {
@@ -45,9 +68,21 @@ export const api = {
 
 // ─── Typed helpers ────────────────────────────────────────────
 export async function unwrap<T>(promise: Promise<ApiResult<T>>): Promise<T> {
-  const res = await promise
-  if (!res.success) throw new Error(res.error)
-  return res.data
+  try {
+    const res = await promise
+    if (!res.success) {
+      console.error(`❌ [unwrap] API returned error: ${res.error}`)
+      throw new Error(res.error || 'API returned success=false')
+    }
+    if (!res.data) {
+      console.warn(`⚠️ [unwrap] API response has no data, returning empty`)
+    }
+    console.log(`✅ [unwrap] Success, data:`, res.data)
+    return res.data
+  } catch (error) {
+    console.error(`💥 [unwrap] Exception:`, error)
+    throw error
+  }
 }
 
 export function paginatedUrl(
@@ -78,7 +113,7 @@ export const authApi = {
 
 // ─── Dashboard ────────────────────────────────────────────────
 export const dashboardApi = {
-  stats:             () => unwrap(api.get('/dashboard/stats')),
+  stats:             () => unwrap(api.get<DashboardStats>('/dashboard/stats')),
   monthlyCashflow:   (months = 12) => unwrap(api.get(`/dashboard/monthly-cashflow?months=${months}`)),
   costByCrop:        (seasonId?: number) => unwrap(api.get(`/dashboard/cost-by-crop${seasonId ? `?season_id=${seasonId}` : ''}`)),
   recentTransactions:(limit = 15) => unwrap(api.get(`/dashboard/recent-transactions?limit=${limit}`)),
@@ -95,6 +130,7 @@ export const suppliersApi = {
   statement:  (code: number, p: { page?: number; size?: number; season_id?: number; month?: number }) =>
     unwrap(api.get<Paginated<unknown>>(paginatedUrl(`/suppliers/${code}/statement`, p))),
   addTransaction: (code: number, body: unknown) => api.post(`/suppliers/${code}/transactions`, body),
+  aging:      (asOf?: string) => unwrap(api.get(`/suppliers/aging${asOf ? `?as_of=${asOf}` : ''}`)),
 }
 
 // ─── Treasury ─────────────────────────────────────────────────
@@ -115,7 +151,7 @@ export const inventoryApi = {
   balances:   (warehouse?: string) =>
     unwrap(api.get<unknown[]>(`/inventory/balances${warehouse ? `?warehouse=${encodeURIComponent(warehouse)}` : ''}`)),
   warehouses: () => unwrap(api.get<string[]>('/inventory/warehouses')),
-  list:       (p: { page?: number; size?: number; warehouse?: string; item_code?: number; type?: string }) =>
+  list:       (p: { page?: number; size?: number; warehouse?: string; item_code?: number; type?: string; start?: string; end?: string }) =>
     unwrap(api.get<Paginated<unknown>>(paginatedUrl('/inventory/movements', p))),
   create:     (body: unknown) => api.post('/inventory/movements', body),
   itemCard:   (code: number, warehouse?: string) =>
@@ -222,6 +258,23 @@ export const glApi = {
     unwrap(api.get(`/gl/income-statement${start ? `?start=${start}${end ? `&end=${end}` : ''}` : ''}`)),
   balanceSheet:     (asOf?: string) =>
     unwrap(api.get(`/gl/balance-sheet${asOf ? `?as_of=${asOf}` : ''}`)),
+}
+
+// ─── Audit Log ────────────────────────────────────────────────
+export const auditApi = {
+  list: (p: { page?: number; size?: number; table?: string; action?: string; user_id?: number; start?: string; end?: string }) =>
+    unwrap(api.get<unknown>(paginatedUrl('/audit', p))),
+  stats: () => unwrap(api.get<unknown>('/audit/stats')),
+}
+
+// ─── Admin (super_admin only) ─────────────────────────────────
+export const adminApi = {
+  companies:     () => unwrap(api.get<unknown[]>('/admin/companies')),
+  createCompany: (body: unknown) => api.post('/admin/companies', body),
+  updateCompany: (id: number, body: unknown) => api.patch(`/admin/companies/${id}`, body),
+  switchCompany: (companyId: number) =>
+    api.post<{ token: string; user: { id: number; full_name: string; email: string; company_id: number; role: string }; company: { id: number; code: string; name: string } }>('/admin/switch/' + companyId, {}),
+  companyUsers:  (id: number) => unwrap(api.get<unknown[]>(`/admin/companies/${id}/users`)),
 }
 
 // ─── Export (CSV) ─────────────────────────────────────────────

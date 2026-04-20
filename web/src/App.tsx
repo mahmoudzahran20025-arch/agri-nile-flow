@@ -5,6 +5,7 @@ import { useAppStore, useIsAuth } from './store/appStore'
 import { configApi } from './api/client'
 import RootLayout    from './layouts/RootLayout'
 import LoginPage     from './pages/LoginPage'
+import DebugPage     from './pages/DebugPage'
 import DashboardPage from './pages/DashboardPage'
 import SupplierListPage      from './pages/suppliers/SupplierListPage'
 import SupplierDetailPage    from './pages/suppliers/SupplierDetailPage'
@@ -22,6 +23,9 @@ import ContractsPage   from './pages/contracts/ContractsPage'
 import ChartOfAccountsPage   from './pages/gl/ChartOfAccountsPage'
 import JournalEntriesPage    from './pages/gl/JournalEntriesPage'
 import FinancialStatementsPage from './pages/gl/FinancialStatementsPage'
+import AccountLedgerPage     from './pages/gl/AccountLedgerPage'
+import SuperAdminPage        from './pages/admin/SuperAdminPage'
+import AuditLogPage          from './pages/audit/AuditLogPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuth = useIsAuth()
@@ -46,6 +50,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/debug" element={<DebugPage />} />
 
       <Route
         path="/"
@@ -77,12 +82,19 @@ export default function App() {
         <Route path="contracts"  element={<ContractsPage />} />
 
         {/* General Ledger */}
-        <Route path="gl/accounts"   element={<ChartOfAccountsPage />} />
-        <Route path="gl/entries"    element={<JournalEntriesPage />} />
-        <Route path="gl/statements" element={<FinancialStatementsPage />} />
+        <Route path="gl/accounts"        element={<ChartOfAccountsPage />} />
+        <Route path="gl/ledger/:code"    element={<AccountLedgerPage />} />
+        <Route path="gl/entries"         element={<JournalEntriesPage />} />
+        <Route path="gl/statements"      element={<FinancialStatementsPage />} />
 
         {/* Reports */}
         <Route path="reports" element={<ReportsPage />} />
+
+        {/* Super Admin */}
+        <Route path="admin" element={<SuperAdminPage />} />
+
+        {/* Audit Log */}
+        <Route path="audit" element={<AuditLogPage />} />
 
         {/* Users */}
         <Route path="users" element={<UsersPage />} />

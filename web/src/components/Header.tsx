@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bell, ChevronDown, KeyRound, LogOut, User } from 'lucide-react'
+import { Bell, ChevronDown, KeyRound, LogOut, Search } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import ChangePasswordModal from './forms/ChangePasswordModal'
 import type { Season } from '../types'
@@ -72,6 +72,20 @@ export default function Header() {
           />
         </div>
       )}
+
+      {/* Global Search trigger */}
+      <button
+        onClick={() => {
+          const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })
+          window.dispatchEvent(event)
+        }}
+        className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200
+                   text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors text-sm"
+      >
+        <Search size={14} />
+        <span className="text-xs">بحث سريع</span>
+        <kbd className="text-[10px] bg-slate-200 rounded px-1 py-0.5">Ctrl+K</kbd>
+      </button>
 
       {/* Notifications placeholder */}
       <button className="relative p-2 rounded-lg hover:bg-slate-100 transition-colors text-slate-500">
