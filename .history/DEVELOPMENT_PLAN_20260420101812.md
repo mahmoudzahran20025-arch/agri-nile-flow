@@ -131,15 +131,7 @@ printf "SECRET_VALUE" | npx wrangler secret put JWT_SECRET
 | **Phase 3 Complete** | ✅ | **جميع البيانات تم تنسيقها مع الاسكيما بنجاح** |
 | **Final Data Import** | ✅ | **10 موردين + 286 + 69 + 700 = 1,065 سجل** |
 | **Schema Assessment** | ✅ | **تقييم شامل: 98% جاهزية** (انظر SCHEMA_ASSESSMENT.md) |
-| **Phase 2: Agricultural ERP** | ✅ | **fields, employees, operations, contracts — APIs deployed** |
-| **Phase 3: GL Engine** | ✅ | **شجرة حسابات + يومية + ميزان + P&L + ميزانية عمومية** |
-| **Toast System** | ✅ | **ToastContext + ToastContainer — إشعارات فورية** |
-| **Data Import Complete** | ✅ | **1,065 سجل: 10 suppliers + 286 transactions + 69 cash + 700 inventory** |
-| **Backend Deployment** | ✅ | **https://agri-nile-flow.mahm-zahran22.workers.dev** |
-| **Frontend Deployment** | ✅ | **https://fb7b4223.agri-nile-flow-lake.pages.dev** |
-| **Database Verification** | ✅ | **35 tables + all core data imported + Phase 2 tables ready** |
-| CSV Export (all modules) | ✅ | Treasury, Suppliers, Inventory |
-| Financial Reports / Export | ⏳ | Excel export Phase 4 |
+| Financial Reports / Export | ⏳ | PDF/Excel export (Phase 4) |
 
 ---
 
@@ -157,18 +149,12 @@ printf "SECRET_VALUE" | npx wrangler secret put JWT_SECRET
 - [ ] `node import.js all`
 - [ ] مراجعة البيانات على التطبيق المباشر
 
-### المرحلة الرابعة — تطبيق الـ Schema 3 + تشغيل
-```bash
-npx wrangler d1 execute agri-nile-flow-data-lake --remote --file=./schema_phase3.sql
-```
-
-### المرحلة الخامسة — التوسع
-- [ ] Permission-based UI guards (إخفاء أزرار بناء على الدور)
-- [ ] بوابة الشركات الـ 31 (super-admin portal)
-- [ ] تقارير مجمعة (consolidated multi-company)
+### المرحلة الرابعة — تقارير متقدمة + تصدير
+- [ ] تصدير كشف حساب المورد إلى PDF/Excel
+- [ ] تصدير دفتر اليومية
+- [ ] تصدير تقرير المخزون
+- [ ] بوابة الشركات الـ 31 (super-admin)
 - [ ] Offline-first (PWA + IndexedDB)
-- [ ] Excel export للقوائم المالية
-- [ ] Account ledger page مستقلة
 
 ---
 

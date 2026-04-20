@@ -23,6 +23,12 @@ export default {
         },
       },
       screens: { xs: '480px' },
+      keyframes: {
+        slideIn: { from: { transform: 'translateX(-100%)', opacity: '0' }, to: { transform: 'translateX(0)', opacity: '1' } },
+      },
+      animation: {
+        slideIn: 'slideIn 0.2s ease',
+      },
     },
   },
   plugins: [],

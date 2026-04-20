@@ -260,7 +260,7 @@ async function importInventory() {
     return
   }
 
-  const valid = rows.filter(r => r.movement_date && r.warehouse && r.item_code && (r.quantity_in || r.quantity_out))
+  const valid = rows.filter(r => r.movement_date && r.warehouse && r.item_name && (r.quantity_in || r.quantity_out))
   console.log(`  → ${valid.length} حركة صالحة من أصل ${rows.length}`)
 
   // Track running balances in memory for WAC calculation
@@ -285,16 +285,12 @@ async function importInventory() {
       if (!balances[key]) balances[key] = { qty: 0, val: 0 }
       const prev = balances[key]
 
-      // Unit price priority:
-      // 1. From sheet (column 24) if available and not NaN
-      // 2. Calculate from WAC if sheet price not available
-      let unitPrice = Number(r.unit_price) || 0
-      if (!unitPrice || isNaN(unitPrice)) {
-        if (qtyIn > 0 && valIn > 0) {
-          unitPrice = valIn / qtyIn
-        } else if (qtyOut > 0 && prev.qty > 0) {
-          unitPrice = prev.val / prev.qty
-        }
+      // WAC unit price
+      let unitPrice = 0
+      if (qtyIn > 0 && valIn > 0) {
+        unitPrice = valIn / qtyIn
+      } else if (qtyOut > 0 && prev.qty > 0) {
+        unitPrice = prev.val / prev.qty
       }
 
       const qty = Math.max(qtyIn, qtyOut)
@@ -305,20 +301,12 @@ async function importInventory() {
       const balVal = prev.val
       const d = new Date(date)
 
-      // Package fields from sheet
-      const pkgType = r.package_type ? String(r.package_type).trim() : null
-      const pkgCap = Number(r.pack_capacity) || null
-      const pkgCount = Number(r.pack_count) || null
-
       return `INSERT INTO inventory_movements (
-        company_id, item_code, movement_date, warehouse, movement_type, document_number, supplier_code,
-        package_type, pack_capacity, pack_count, quantity, unit_price, qty_in, qty_out, value_in, value_out, 
-        balance_qty, balance_value, year, month, notes, created_by_user_id
+        company_id, item_code, movement_date, warehouse, movement_type, quantity, unit_price, qty_in, qty_out, value_in, value_out, balance_qty, balance_value, 
+        document_number, supplier_code, year, month, notes, created_by_user_id
       ) VALUES (
-        ${COMPANY_ID}, ${esc(r.item_code ? Number(r.item_code) : null)}, ${esc(date)}, ${esc(wh)}, ${esc(mtype)}, 
-        ${esc(r.document_number ? Number(r.document_number) : null)}, ${esc(r.supplier_code ? Number(r.supplier_code) : null)},
-        ${esc(pkgType)}, ${esc(pkgCap)}, ${esc(pkgCount)}, ${qty}, ${unitPrice || 0}, ${qtyIn}, ${qtyOut}, ${valIn}, ${valOut}, 
-        ${balQty}, ${balVal}, ${d.getFullYear()}, ${d.getMonth()+1}, ${esc(item)}, 1
+        ${COMPANY_ID}, ${esc(r.item_code ? Number(r.item_code) : null)}, ${esc(date)}, ${esc(wh)}, ${esc(mtype)}, ${qty}, ${unitPrice || 0}, ${qtyIn}, ${qtyOut}, ${valIn}, ${valOut}, ${balQty}, ${balVal}, 
+        ${esc(r.document_number ? Number(r.document_number) : null)}, ${esc(r.supplier_code ? Number(r.supplier_code) : null)}, ${d.getFullYear()}, ${d.getMonth()+1}, ${esc(item)}, 1
       );`
     }).filter(Boolean).join('\n')
 

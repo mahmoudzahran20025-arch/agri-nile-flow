@@ -14,6 +14,7 @@ import employeesRoutes  from './api/employees'
 import operationsRoutes from './api/operations'
 import contractsRoutes  from './api/contracts'
 import exportRoutes     from './api/export'
+import glRoutes         from './api/gl'
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -33,7 +34,7 @@ app.use('/api/*', cors({
     if (origin && origin.includes('.agri-nile-flow-lake.pages.dev')) return origin
     return ALLOWED_ORIGINS[0]
   },
-  allowMethods:  ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowMethods:  ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   allowHeaders:  ['Content-Type', 'Authorization'],
   exposeHeaders: ['X-Total-Count'],
   maxAge:        86_400,
@@ -53,6 +54,7 @@ app.route('/api/employees',  employeesRoutes)
 app.route('/api/operations', operationsRoutes)
 app.route('/api/contracts',  contractsRoutes)
 app.route('/api/export',     exportRoutes)
+app.route('/api/gl',         glRoutes)
 
 // ─── Health Check ─────────────────────────────────────────────
 app.get('/api/health', (c) => c.json({ status: 'ok', ts: new Date().toISOString() }))

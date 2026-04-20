@@ -19,6 +19,9 @@ import FieldsPage      from './pages/fields/FieldsPage'
 import EmployeesPage   from './pages/employees/EmployeesPage'
 import WorkOrdersPage  from './pages/operations/WorkOrdersPage'
 import ContractsPage   from './pages/contracts/ContractsPage'
+import ChartOfAccountsPage   from './pages/gl/ChartOfAccountsPage'
+import JournalEntriesPage    from './pages/gl/JournalEntriesPage'
+import FinancialStatementsPage from './pages/gl/FinancialStatementsPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuth = useIsAuth()
@@ -72,6 +75,11 @@ export default function App() {
         <Route path="employees"  element={<EmployeesPage />} />
         <Route path="operations" element={<WorkOrdersPage />} />
         <Route path="contracts"  element={<ContractsPage />} />
+
+        {/* General Ledger */}
+        <Route path="gl/accounts"   element={<ChartOfAccountsPage />} />
+        <Route path="gl/entries"    element={<JournalEntriesPage />} />
+        <Route path="gl/statements" element={<FinancialStatementsPage />} />
 
         {/* Reports */}
         <Route path="reports" element={<ReportsPage />} />

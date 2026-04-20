@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
+import { glInventoryMovement } from '../lib/gl'
 
 const inventory = new Hono<{ Bindings: Env }>()
 inventory.use('*', authMiddleware)
@@ -139,6 +140,19 @@ inventory.post('/movements', async (c) => {
     qtyIn, qtyOut, balQty, valueIn, valueOut, balVal,
     b.notes ?? null, date.getFullYear(), date.getMonth() + 1, userId
   ).run()
+
+  const lastMov = await c.env.DB
+    .prepare('SELECT id FROM inventory_movements WHERE company_id = ? ORDER BY id DESC LIMIT 1')
+    .bind(company_id).first<{id:number}>()
+  const movId = lastMov?.id ?? 0
+
+  const itemRow = await c.env.DB
+    .prepare('SELECT name FROM items WHERE code = ? AND company_id = ?')
+    .bind(b.item_code, company_id).first<{name:string}>()
+
+  const glValue = b.movement_type === 'اضافة' ? valueIn : valueOut
+  await glInventoryMovement(c.env.DB, company_id, movId,
+    b.movement_type, glValue, b.movement_date, itemRow?.name ?? String(b.item_code), userId)
 
   return c.json({ success: true, data: { balance_qty: balQty, balance_value: balVal } }, 201)
 })

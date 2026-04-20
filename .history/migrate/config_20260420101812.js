@@ -99,11 +99,8 @@ export const INVENTORY_CONFIG = {
       item_code:        11,         // Column 11: كود الصنف
       item_name:        12,         // Column 12: الصنف
       unit:             13,         // Column 13: الوحدة
-      package_type:     14,         // Column 14: العبوه (شيكارة/جركن/عدد)
-      pack_capacity:    15,         // Column 15: السعة (50 كجم)
-      pack_count:       16,         // Column 16: العدد (كم شيكارة)
-      quantity:         23,         // Column 23: الكمية = السعة × العدد
-      unit_price:       24,         // Column 24: الفئة (سعر الوحدة)
+      quantity:         23,         // Column 23: الكمية
+      unit_price:       24,         // Column 24: الفئة / السعر
       quantity_in:      25,         // Column 25: كمية الوارد
       quantity_out:     26,         // Column 26: كمية المنصرف
       value_in:         28,         // Column 28: قيمة الوارد

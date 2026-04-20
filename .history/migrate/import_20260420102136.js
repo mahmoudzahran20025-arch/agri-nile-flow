@@ -260,7 +260,7 @@ async function importInventory() {
     return
   }
 
-  const valid = rows.filter(r => r.movement_date && r.warehouse && r.item_code && (r.quantity_in || r.quantity_out))
+  const valid = rows.filter(r => r.movement_date && r.warehouse && r.item_name && (r.quantity_in || r.quantity_out))
   console.log(`  → ${valid.length} حركة صالحة من أصل ${rows.length}`)
 
   // Track running balances in memory for WAC calculation

@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
+import { glSupplierTransaction } from '../lib/gl'
 
 const suppliers = new Hono<{ Bindings: Env }>()
 suppliers.use('*', authMiddleware)
@@ -177,6 +178,18 @@ suppliers.post('/:code/transactions', async (c) => {
     b.check_amount ?? 0, b.due_date ?? null, b.notes ?? null,
     date.getFullYear(), date.getMonth() + 1, userId
   ).run()
+
+  const lastSupTxn = await c.env.DB
+    .prepare('SELECT id FROM supplier_transactions WHERE company_id = ? AND supplier_code = ? ORDER BY id DESC LIMIT 1')
+    .bind(company_id, code).first<{id:number}>()
+  const txnId = lastSupTxn?.id ?? 0
+
+  const supplierRow = await c.env.DB
+    .prepare('SELECT name FROM suppliers WHERE code = ? AND company_id = ?')
+    .bind(code, company_id).first<{name:string}>()
+
+  await glSupplierTransaction(c.env.DB, company_id, txnId, b.entry_type, b.amount,
+    b.transaction_date, `${b.expense_category ?? b.entry_type} — ${supplierRow?.name ?? code}`, userId)
 
   return c.json({ success: true, data: null }, 201)
 })

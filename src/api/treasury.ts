@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
+import { glCashTransaction } from '../lib/gl'
 
 const treasury = new Hono<{ Bindings: Env }>()
 treasury.use('*', authMiddleware)
@@ -100,6 +101,15 @@ treasury.post('/transactions', async (c) => {
     runningBalance, b.unit ?? null, b.quantity ?? null, b.unit_price ?? null,
     b.notes ?? null, date.getFullYear(), date.getMonth() + 1, userId
   ).run()
+
+  const lastRowPost = await c.env.DB
+    .prepare('SELECT id FROM cash_transactions WHERE company_id = ? ORDER BY id DESC LIMIT 1')
+    .bind(company_id).first<{id:number}>()
+  const txnId = lastRowPost?.id ?? 0
+
+  // Auto-post GL entry (fire-and-forget)
+  await glCashTransaction(c.env.DB, company_id, txnId,
+    b.direction, b.amount, b.transaction_date, b.narration, userId)
 
   return c.json({ success: true, data: { running_balance: runningBalance } }, 201)
 })

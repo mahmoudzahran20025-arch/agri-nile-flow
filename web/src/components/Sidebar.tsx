@@ -3,6 +3,7 @@ import {
   LayoutDashboard, Users, Banknote, Package,
   FileText, Settings, LogOut, Leaf, ChevronLeft,
   ClipboardList, UserCog, TrendingUp, MapPin, Wrench,
+  BookOpen, BookMarked, BarChart3,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useState } from 'react'
@@ -26,6 +27,9 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/employees',            icon: <Users           size={20} />, label: 'الموظفون' },
   { to: '/operations',           icon: <Wrench          size={20} />, label: 'أوامر العمل' },
   { to: '/contracts',            icon: <FileText        size={20} />, label: 'العقود' },
+  { to: '/gl/accounts',         icon: <BookOpen        size={20} />, label: 'شجرة الحسابات' },
+  { to: '/gl/entries',          icon: <BookMarked      size={20} />, label: 'قيود اليومية' },
+  { to: '/gl/statements',       icon: <BarChart3       size={20} />, label: 'القوائم المالية' },
   { to: '/reports',              icon: <ClipboardList   size={20} />, label: 'التقارير' },
   { to: '/users',                icon: <UserCog         size={20} />, label: 'المستخدمون' },
   { to: '/config',               icon: <Settings        size={20} />, label: 'الإعدادات' },
