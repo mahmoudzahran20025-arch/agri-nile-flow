@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+.npm/
+
+# Cloudflare
+.wrangler/
+dist/
+
+# IDEs
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environments
+.env
+.env.local

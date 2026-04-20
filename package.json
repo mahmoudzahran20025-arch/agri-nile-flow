@@ -1,0 +1,19 @@
+{
+  "name": "agri-nile-flow",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:web": "cd web && npm run dev",
+    "db:init": "wrangler d1 execute nawa-agro-ledger --remote --file=./schema.sql",
+    "deploy": "npm run build:web && wrangler deploy",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241127.0",
+    "typescript": "^5.6.0",
+    "wrangler": "^3.95.0"
+  }
+}
