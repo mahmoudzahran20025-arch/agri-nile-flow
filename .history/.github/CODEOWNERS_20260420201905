@@ -1,0 +1,57 @@
+# Code Owners for Agri-Nile Flow — Production Ready
+# Repository Owner: mahmoud-zahran
+# Updated: April 20, 2026
+
+# ============================================================
+# Global Default — Project Owner
+# ============================================================
+* @mahmoud-zahran
+
+# ============================================================
+# Security & Deployment (Critical — Require Review)
+# ============================================================
+SECURITY.md @mahmoud-zahran
+.github/workflows/ @mahmoud-zahran
+.github/CODEOWNERS @mahmoud-zahran
+.github/pull_request_template.md @mahmoud-zahran
+.github/ISSUE_TEMPLATE/ @mahmoud-zahran
+
+# ============================================================
+# Authentication & Authorization (Critical)
+# ============================================================
+src/middleware/auth.ts @mahmoud-zahran
+src/api/auth.ts @mahmoud-zahran
+web/src/pages/LoginPage.tsx @mahmoud-zahran
+
+# ============================================================
+# Database & Schema (Critical)
+# ============================================================
+schema.sql @mahmoud-zahran
+schema_phase*.sql @mahmoud-zahran
+migrate/config.js @mahmoud-zahran
+migrate/import.js @mahmoud-zahran
+
+# ============================================================
+# Infrastructure & Deployment Config
+# ============================================================
+wrangler.toml @mahmoud-zahran
+web/vite.config.ts @mahmoud-zahran
+tsconfig.json @mahmoud-zahran
+
+# ============================================================
+# Documentation (Owner Maintains)
+# ============================================================
+README.md @mahmoud-zahran
+DEVELOPMENT_PLAN.md @mahmoud-zahran
+CONTRIBUTING.md @mahmoud-zahran
+CHANGELOG.md @mahmoud-zahran
+SECURITY.md @mahmoud-zahran
+GITHUB_SETUP.md @mahmoud-zahran
+GITHUB_SECURITY_CHECKLIST.md @mahmoud-zahran
+
+# ============================================================
+# API Routes & Business Logic
+# ============================================================
+src/api/ @mahmoud-zahran
+src/index.ts @mahmoud-zahran
+src/types.ts @mahmoud-zahran
