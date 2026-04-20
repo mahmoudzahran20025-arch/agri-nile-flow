@@ -6,7 +6,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://agri-nile-flow.zahranmalk2.workers.dev',
+        target: 'https://agri-nile-flow-lake.mahm-zahran22.workers.dev',
         changeOrigin: true,
       },
     },
