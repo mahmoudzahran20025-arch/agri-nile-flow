@@ -2,6 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Users, Banknote, Package,
   FileText, Settings, LogOut, Leaf, ChevronLeft,
+  ClipboardList, UserCog, TrendingUp, MapPin, Wrench,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useState } from 'react'
@@ -11,15 +12,23 @@ interface NavItem {
   icon:    React.ReactNode
   label:   string
   badge?:  number
+  group?:  string
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { to: '/dashboard',  icon: <LayoutDashboard size={20} />, label: 'لوحة التحكم' },
-  { to: '/suppliers',  icon: <Users           size={20} />, label: 'الموردين والعملاء' },
-  { to: '/treasury',   icon: <Banknote        size={20} />, label: 'الخزينة' },
-  { to: '/inventory',  icon: <Package         size={20} />, label: 'المخازن' },
-  { to: '/reports',    icon: <FileText        size={20} />, label: 'التقارير' },
-  { to: '/config',     icon: <Settings        size={20} />, label: 'الإعدادات' },
+  { to: '/dashboard',            icon: <LayoutDashboard size={20} />, label: 'لوحة التحكم' },
+  { to: '/suppliers',            icon: <Users           size={20} />, label: 'الموردين والعملاء' },
+  { to: '/treasury',             icon: <Banknote        size={20} />, label: 'الخزينة' },
+  { to: '/treasury/partners',    icon: <TrendingUp      size={20} />, label: 'الشركاء' },
+  { to: '/inventory',            icon: <Package         size={20} />, label: 'أرصدة المخازن' },
+  { to: '/inventory/movements',  icon: <ClipboardList   size={20} />, label: 'حركات المخزون' },
+  { to: '/fields',               icon: <MapPin          size={20} />, label: 'قطع الأراضي' },
+  { to: '/employees',            icon: <Users           size={20} />, label: 'الموظفون' },
+  { to: '/operations',           icon: <Wrench          size={20} />, label: 'أوامر العمل' },
+  { to: '/contracts',            icon: <FileText        size={20} />, label: 'العقود' },
+  { to: '/reports',              icon: <ClipboardList   size={20} />, label: 'التقارير' },
+  { to: '/users',                icon: <UserCog         size={20} />, label: 'المستخدمون' },
+  { to: '/config',               icon: <Settings        size={20} />, label: 'الإعدادات' },
 ]
 
 export default function Sidebar() {

@@ -1,0 +1,15 @@
+{
+  "name": "agri-nile-flow-migrate",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "suppliers": "node import.js suppliers",
+    "treasury":  "node import.js treasury",
+    "inventory": "node import.js inventory",
+    "all":       "node import.js all"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  }
+}

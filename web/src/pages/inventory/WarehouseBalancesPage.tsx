@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Package, ChevronDown, ChevronUp } from 'lucide-react'
-import { inventoryApi } from '../../api/client'
+import { Package, ChevronDown, ChevronUp, Plus, Download } from 'lucide-react'
+import { inventoryApi, downloadCsv } from '../../api/client'
+import AddInventoryMovementModal from '../../components/forms/AddInventoryMovementModal'
 import type { InventoryBalance } from '../../types'
 
 function egp(n: number) {
@@ -13,7 +14,8 @@ function num(n: number) {
 
 export default function WarehouseBalancesPage() {
   const [activeWarehouse, setActiveWarehouse] = useState<string | null>(null)
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [expanded,        setExpanded]        = useState<Set<string>>(new Set())
+  const [addOpen,         setAddOpen]         = useState(false)
 
   const { data: warehouses } = useQuery({
     queryKey: ['warehouses'],
@@ -45,6 +47,18 @@ export default function WarehouseBalancesPage() {
     <div className="space-y-5">
       <div className="page-header">
         <h1 className="page-title">أرصدة المخازن</h1>
+        <div className="flex items-center gap-2">
+          <button
+            className="btn-secondary gap-2"
+            onClick={() => downloadCsv('/inventory', 'أرصدة_المخازن')}
+          >
+            <Download size={16} />تصدير CSV
+          </button>
+          <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
+            <Plus size={16} />
+            حركة جديدة
+          </button>
+        </div>
       </div>
 
       {/* Warehouse tabs */}
@@ -147,6 +161,12 @@ export default function WarehouseBalancesPage() {
           })}
         </div>
       )}
+
+      <AddInventoryMovementModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        defaultWarehouse={activeWarehouse ?? undefined}
+      />
     </div>
   )
 }

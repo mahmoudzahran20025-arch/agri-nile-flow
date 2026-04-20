@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, FileText } from 'lucide-react'
-import { suppliersApi } from '../../api/client'
+import { ArrowRight, FileText, Plus } from 'lucide-react'
+import { suppliersApi, downloadCsv } from '../../api/client'
 import DataTable, { type Column } from '../../components/ui/DataTable'
+import AddSupplierTransactionModal from '../../components/forms/AddSupplierTransactionModal'
 import type { Supplier, SupplierTransaction } from '../../types'
 
 function egp(n: number | null | undefined) {
@@ -36,7 +37,8 @@ const TXNS_COLS: Column<SupplierTransaction>[] = [
 export default function SupplierDetailPage() {
   const { code } = useParams<{ code: string }>()
   const navigate  = useNavigate()
-  const [page, setPage] = useState(1)
+  const [page,    setPage]    = useState(1)
+  const [addOpen, setAddOpen] = useState(false)
 
   const { data: supplier } = useQuery({
     queryKey: ['supplier', code],
@@ -66,9 +68,16 @@ export default function SupplierDetailPage() {
           </p>
         </div>
         <div className="flex-1" />
-        <button className="btn-secondary gap-2">
+        <button
+          className="btn-secondary gap-2"
+          onClick={() => downloadCsv(`/supplier/${code}/statement`, `كشف_حساب_${code}`)}
+        >
           <FileText size={16} />
           تصدير كشف الحساب
+        </button>
+        <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
+          <Plus size={16} />
+          إضافة قيد
         </button>
       </div>
 
@@ -99,6 +108,13 @@ export default function SupplierDetailPage() {
         onPage={setPage}
         rowKey={r => r.id}
         emptyText="لا توجد معاملات لهذا المورد"
+      />
+
+      <AddSupplierTransactionModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        supplierCode={Number(code)}
+        supplierName={supplier?.name ?? ''}
       />
     </div>
   )

@@ -2,33 +2,57 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import type { Env } from './types'
-import authRoutes      from './api/auth'
-import dashboardRoutes from './api/dashboard'
-import supplierRoutes  from './api/suppliers'
-import treasuryRoutes  from './api/treasury'
-import inventoryRoutes from './api/inventory'
-import configRoutes    from './api/config'
+import authRoutes       from './api/auth'
+import dashboardRoutes  from './api/dashboard'
+import supplierRoutes   from './api/suppliers'
+import treasuryRoutes   from './api/treasury'
+import inventoryRoutes  from './api/inventory'
+import configRoutes     from './api/config'
+import usersRoutes      from './api/users'
+import fieldsRoutes     from './api/fields'
+import employeesRoutes  from './api/employees'
+import operationsRoutes from './api/operations'
+import contractsRoutes  from './api/contracts'
+import exportRoutes     from './api/export'
 
 const app = new Hono<{ Bindings: Env }>()
+
+const ALLOWED_ORIGINS = [
+  'https://agri-nile-flow-lake.pages.dev',
+  'http://localhost:5173',
+  'http://localhost:4173',
+]
 
 // ─── Global Middleware ────────────────────────────────────────
 app.use('*', logger())
 app.use('/api/*', cors({
-  origin:         (origin) => origin, // Allow all origins for the transition
-  allowMethods:   ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowHeaders:   ['Content-Type', 'Authorization'],
-  exposeHeaders:  ['X-Total-Count'],
-  maxAge:         86_400,
-  credentials:    true,
+  origin: (origin) => {
+    // Allow exact matches
+    if (ALLOWED_ORIGINS.includes(origin)) return origin
+    // Allow any preview URLs under pages.dev (e.g., [hash].agri-nile-flow-lake.pages.dev)
+    if (origin && origin.includes('.agri-nile-flow-lake.pages.dev')) return origin
+    return ALLOWED_ORIGINS[0]
+  },
+  allowMethods:  ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowHeaders:  ['Content-Type', 'Authorization'],
+  exposeHeaders: ['X-Total-Count'],
+  maxAge:        86_400,
+  credentials:   true,
 }))
 
 // ─── API Routes ───────────────────────────────────────────────
-app.route('/api/auth',      authRoutes)
-app.route('/api/dashboard', dashboardRoutes)
-app.route('/api/suppliers', supplierRoutes)
-app.route('/api/treasury',  treasuryRoutes)
-app.route('/api/inventory', inventoryRoutes)
-app.route('/api/config',    configRoutes)
+app.route('/api/auth',       authRoutes)
+app.route('/api/dashboard',  dashboardRoutes)
+app.route('/api/suppliers',  supplierRoutes)
+app.route('/api/treasury',   treasuryRoutes)
+app.route('/api/inventory',  inventoryRoutes)
+app.route('/api/config',     configRoutes)
+app.route('/api/users',      usersRoutes)
+app.route('/api/fields',     fieldsRoutes)
+app.route('/api/employees',  employeesRoutes)
+app.route('/api/operations', operationsRoutes)
+app.route('/api/contracts',  contractsRoutes)
+app.route('/api/export',     exportRoutes)
 
 // ─── Health Check ─────────────────────────────────────────────
 app.get('/api/health', (c) => c.json({ status: 'ok', ts: new Date().toISOString() }))

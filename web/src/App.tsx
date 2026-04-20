@@ -6,11 +6,19 @@ import { configApi } from './api/client'
 import RootLayout    from './layouts/RootLayout'
 import LoginPage     from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
-import SupplierListPage   from './pages/suppliers/SupplierListPage'
-import SupplierDetailPage from './pages/suppliers/SupplierDetailPage'
-import CashJournalPage    from './pages/treasury/CashJournalPage'
+import SupplierListPage      from './pages/suppliers/SupplierListPage'
+import SupplierDetailPage    from './pages/suppliers/SupplierDetailPage'
+import CashJournalPage       from './pages/treasury/CashJournalPage'
 import WarehouseBalancesPage from './pages/inventory/WarehouseBalancesPage'
-import ConfigPage    from './pages/config/ConfigPage'
+import InventoryMovementsPage from './pages/inventory/InventoryMovementsPage'
+import UsersPage       from './pages/users/UsersPage'
+import PartnersPage    from './pages/treasury/PartnersPage'
+import ReportsPage     from './pages/ReportsPage'
+import ConfigPage      from './pages/config/ConfigPage'
+import FieldsPage      from './pages/fields/FieldsPage'
+import EmployeesPage   from './pages/employees/EmployeesPage'
+import WorkOrdersPage  from './pages/operations/WorkOrdersPage'
+import ContractsPage   from './pages/contracts/ContractsPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuth = useIsAuth()
@@ -52,14 +60,28 @@ export default function App() {
         <Route path="suppliers/:code"  element={<SupplierDetailPage />} />
 
         {/* Treasury */}
-        <Route path="treasury"         element={<CashJournalPage />} />
+        <Route path="treasury"          element={<CashJournalPage />} />
+        <Route path="treasury/partners" element={<PartnersPage />} />
 
         {/* Inventory */}
-        <Route path="inventory"        element={<WarehouseBalancesPage />} />
+        <Route path="inventory"           element={<WarehouseBalancesPage />} />
+        <Route path="inventory/movements" element={<InventoryMovementsPage />} />
+
+        {/* Agricultural ERP */}
+        <Route path="fields"     element={<FieldsPage />} />
+        <Route path="employees"  element={<EmployeesPage />} />
+        <Route path="operations" element={<WorkOrdersPage />} />
+        <Route path="contracts"  element={<ContractsPage />} />
+
+        {/* Reports */}
+        <Route path="reports" element={<ReportsPage />} />
+
+        {/* Users */}
+        <Route path="users" element={<UsersPage />} />
 
         {/* Config */}
-        <Route path="config"           element={<ConfigPage />} />
-        <Route path="config/:tab"      element={<ConfigPage />} />
+        <Route path="config"       element={<ConfigPage />} />
+        <Route path="config/:tab"  element={<ConfigPage />} />
 
         {/* Catch-all */}
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

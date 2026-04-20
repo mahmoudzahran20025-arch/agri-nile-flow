@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { hashPassword, generateSalt, signJwt, verifyJwt } from '../middleware/auth'
+import { authMiddleware, getUser } from '../middleware/auth'
 
 const auth = new Hono<{ Bindings: Env }>()
 
@@ -97,6 +98,41 @@ auth.get('/companies', async (c) => {
     .bind(user.id).all()
 
   return c.json({ success: true, data: results })
+})
+
+// POST /api/auth/change-password (requires auth)
+auth.post('/change-password', authMiddleware, async (c) => {
+  const { sub: userId } = getUser(c)
+  const { current_password, new_password } = await c.req.json<{
+    current_password: string; new_password: string
+  }>()
+
+  if (!current_password || !new_password) {
+    return c.json({ success: false, error: 'كلمة المرور الحالية والجديدة مطلوبتان' }, 400)
+  }
+  if (new_password.length < 6) {
+    return c.json({ success: false, error: 'كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل' }, 400)
+  }
+
+  const user = await c.env.DB
+    .prepare('SELECT password_hash, password_salt FROM users WHERE id = ?')
+    .bind(userId).first<{ password_hash: string; password_salt: string }>()
+
+  if (!user) return c.json({ success: false, error: 'المستخدم غير موجود' }, 404)
+
+  const currentHash = await hashPassword(current_password, user.password_salt)
+  if (currentHash !== user.password_hash) {
+    return c.json({ success: false, error: 'كلمة المرور الحالية غير صحيحة' }, 401)
+  }
+
+  const newSalt = generateSalt()
+  const newHash = await hashPassword(new_password, newSalt)
+
+  await c.env.DB
+    .prepare('UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?')
+    .bind(newHash, newSalt, userId).run()
+
+  return c.json({ success: true, data: null, message: 'تم تغيير كلمة المرور بنجاح' })
 })
 
 export default auth

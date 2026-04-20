@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Plus, Download } from 'lucide-react'
-import { treasuryApi } from '../../api/client'
+import { treasuryApi, downloadCsv } from '../../api/client'
 import DataTable, { type Column } from '../../components/ui/DataTable'
+import AddCashTransactionModal from '../../components/forms/AddCashTransactionModal'
 import type { CashTransaction } from '../../types'
 
 function egp(n: number | null | undefined) {
@@ -43,6 +44,7 @@ export default function CashJournalPage() {
   const [page,      setPage]      = useState(1)
   const [direction, setDirection] = useState('')
   const [month,     setMonth]     = useState('')
+  const [addOpen,   setAddOpen]   = useState(false)
 
   const { data: balance } = useQuery({
     queryKey: ['treasury', 'balance'],
@@ -73,8 +75,16 @@ export default function CashJournalPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <button className="btn-secondary gap-2"><Download size={16} />تصدير</button>
-          <button className="btn-primary gap-2"><Plus size={16} />حركة جديدة</button>
+          <button
+            className="btn-secondary gap-2"
+            onClick={() => downloadCsv('/treasury', 'دفتر_اليومية', {
+              year:  new Date().getFullYear(),
+              month: month ? Number(month) : undefined,
+            })}
+          >
+            <Download size={16} />تصدير CSV
+          </button>
+          <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}><Plus size={16} />حركة جديدة</button>
         </div>
       </div>
 
@@ -111,7 +121,7 @@ export default function CashJournalPage() {
         )}
 
         <div className="flex-1 text-left self-center text-sm text-slate-400">
-          {data ? `${data.total.toLocaleString('ar-EG')} حركة` : ''}
+          {data ? `${(data?.total ?? 0).toLocaleString('ar-EG')} حركة` : ''}
         </div>
       </div>
 
@@ -126,6 +136,8 @@ export default function CashJournalPage() {
         rowKey={r => r.id}
         emptyText="لا توجد حركات في الخزينة"
       />
+
+      <AddCashTransactionModal open={addOpen} onClose={() => setAddOpen(false)} />
     </div>
   )
 }

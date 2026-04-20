@@ -68,6 +68,9 @@ export const authApi = {
 
   me: () =>
     unwrap(api.get<{ user: { id: number; email: string; full_name: string }; company: { id: number; code: string; name: string }; role: string }>('/auth/me')),
+
+  changePassword: (current_password: string, new_password: string) =>
+    api.post('/auth/change-password', { current_password, new_password }),
 }
 
 // ─── Dashboard ────────────────────────────────────────────────
@@ -93,13 +96,15 @@ export const suppliersApi = {
 
 // ─── Treasury ─────────────────────────────────────────────────
 export const treasuryApi = {
-  balance:    () => unwrap(api.get<{ balance: number }>('/treasury/balance')),
-  list:       (p: { page?: number; size?: number; direction?: string; month?: number; year?: number }) =>
+  balance:        () => unwrap(api.get<{ balance: number }>('/treasury/balance')),
+  list:           (p: { page?: number; size?: number; direction?: string; month?: number; year?: number }) =>
     unwrap(api.get<Paginated<unknown>>(paginatedUrl('/treasury/transactions', p))),
-  create:     (body: unknown) => api.post('/treasury/transactions', body),
-  payments:   (supplierCode?: number) =>
+  create:         (body: unknown) => api.post('/treasury/transactions', body),
+  payments:       (supplierCode?: number) =>
     unwrap(api.get(`/treasury/supplier-payments${supplierCode ? `?supplier_code=${supplierCode}` : ''}`)),
-  partners:   () => unwrap(api.get('/treasury/partners')),
+  partners:       () => unwrap(api.get('/treasury/partners')),
+  createPartner:  (body: unknown) => api.post('/treasury/partners', body),
+  updatePartner:  (id: number, body: unknown) => api.patch(`/treasury/partners/${id}`, body),
 }
 
 // ─── Inventory ────────────────────────────────────────────────
@@ -116,11 +121,107 @@ export const inventoryApi = {
 
 // ─── Config ───────────────────────────────────────────────────
 export const configApi = {
-  seasons:     () => unwrap(api.get('/config/seasons')),
-  createSeason:(body: unknown) => api.post('/config/seasons', body),
-  items:       () => unwrap(api.get('/config/items')),
-  createItem:  (body: unknown) => api.post('/config/items', body),
-  costCenters: () => unwrap(api.get('/config/cost_centers')),
-  accounts:    () => unwrap(api.get('/config/accounts')),
-  companies:   () => unwrap(api.get('/config/companies')),
+  seasons:          () => unwrap(api.get('/config/seasons')),
+  createSeason:     (body: unknown) => api.post('/config/seasons', body),
+  updateSeasonStatus:(id: number, status: string) => api.patch(`/config/seasons/${id}/status`, { status }),
+  items:            () => unwrap(api.get('/config/items')),
+  createItem:       (body: unknown) => api.post('/config/items', body),
+  costCenters:      () => unwrap(api.get('/config/cost_centers')),
+  accounts:         () => unwrap(api.get('/config/accounts')),
+  expenseTypes:     () => unwrap(api.get('/config/expense_types')),
+  companies:        () => unwrap(api.get('/config/companies')),
+}
+
+// ─── Users (admin) ────────────────────────────────────────────
+export const usersApi = {
+  list:   () => unwrap(api.get<unknown[]>('/users')),
+  create: (body: unknown) => api.post('/users', body),
+  update: (id: number, body: unknown) => api.patch(`/users/${id}`, body),
+}
+
+// ─── Fields (قطع الأراضي) ─────────────────────────────────────
+export const fieldsApi = {
+  list:   (p?: { season_id?: number; q?: string }) =>
+    unwrap(api.get<unknown[]>(paginatedUrl('/fields', p ?? {}))),
+  get:    (id: number) => unwrap(api.get(`/fields/${id}`)),
+  create: (body: unknown) => api.post('/fields', body),
+  update: (id: number, body: unknown) => api.patch(`/fields/${id}`, body),
+}
+
+// ─── Employees (الموظفون) ─────────────────────────────────────
+export const employeesApi = {
+  list:   (q?: string) =>
+    unwrap(api.get<unknown[]>(`/employees${q ? `?q=${encodeURIComponent(q)}` : ''}`)),
+  get:    (id: number) => unwrap(api.get(`/employees/${id}`)),
+  create: (body: unknown) => api.post('/employees', body),
+  update: (id: number, body: unknown) => api.patch(`/employees/${id}`, body),
+}
+
+// ─── Operations (أوامر العمل) ─────────────────────────────────
+export const operationsApi = {
+  listOrders:  (p?: { season_id?: number; field_id?: number; status?: string; page?: number; size?: number }) =>
+    unwrap(api.get<unknown>(paginatedUrl('/operations/orders', p ?? {}))),
+  getOrder:    (id: number) => unwrap(api.get(`/operations/orders/${id}`)),
+  createOrder: (body: unknown) => api.post('/operations/orders', body),
+  updateStatus:(id: number, status: string, actual_date?: string) =>
+    api.patch(`/operations/orders/${id}/status`, { status, actual_date }),
+  addTask:     (orderId: number, body: unknown) => api.post(`/operations/orders/${orderId}/tasks`, body),
+  deleteTask:  (id: number) => api.delete(`/operations/tasks/${id}`),
+  summary:     (season_id?: number) =>
+    unwrap(api.get<unknown[]>(`/operations/summary${season_id ? `?season_id=${season_id}` : ''}`)),
+}
+
+// ─── Contracts (العقود) ───────────────────────────────────────
+export const contractsApi = {
+  listPurchase:   (p?: { season_id?: number; status?: string }) =>
+    unwrap(api.get<unknown[]>(paginatedUrl('/contracts/purchase', p ?? {}))),
+  getPurchase:    (id: number) => unwrap(api.get(`/contracts/purchase/${id}`)),
+  createPurchase: (body: unknown) => api.post('/contracts/purchase', body),
+  updatePurchaseStatus: (id: number, status: string, paid_value?: number) =>
+    api.patch(`/contracts/purchase/${id}/status`, { status, paid_value }),
+
+  listSales:      (p?: { season_id?: number; status?: string }) =>
+    unwrap(api.get<unknown[]>(paginatedUrl('/contracts/sales', p ?? {}))),
+  createSales:    (body: unknown) => api.post('/contracts/sales', body),
+  updateSalesStatus: (id: number, status: string, advance_paid?: number) =>
+    api.patch(`/contracts/sales/${id}/status`, { status, advance_paid }),
+
+  summary:        (season_id?: number) =>
+    unwrap(api.get(`/contracts/summary${season_id ? `?season_id=${season_id}` : ''}`)),
+}
+
+// ─── Export (CSV) ─────────────────────────────────────────────
+export function exportUrl(path: string, params?: Record<string, string | number | undefined>): string {
+  const token = localStorage.getItem('agro_token')
+  const base  = window.location.hostname.endsWith('pages.dev')
+    ? 'https://agri-nile-flow.mahm-zahran22.workers.dev/api'
+    : '/api'
+  const url   = new URL(`${base}/export${path}`, window.location.origin)
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined) url.searchParams.set(k, String(v))
+    }
+  }
+  if (token) url.searchParams.set('_t', token)
+  return url.toString()
+}
+
+export async function downloadCsv(path: string, filename: string, params?: Record<string, string | number | undefined>) {
+  const token = localStorage.getItem('agro_token')
+  const base  = window.location.hostname.endsWith('pages.dev')
+    ? 'https://agri-nile-flow.mahm-zahran22.workers.dev/api'
+    : '/api'
+  const url = new URL(`${base}/export${path}`, window.location.origin)
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined) url.searchParams.set(k, String(v))
+    }
+  }
+  const res  = await fetch(url.toString(), { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+  const blob = await res.blob()
+  const a    = document.createElement('a')
+  a.href     = URL.createObjectURL(blob)
+  a.download = `${filename}.csv`
+  a.click()
+  URL.revokeObjectURL(a.href)
 }

@@ -125,12 +125,44 @@ treasury.get('/supplier-payments', async (c) => {
 // GET /api/treasury/partners
 treasury.get('/partners', async (c) => {
   const { company_id } = getUser(c)
-
   const { results } = await c.env.DB
     .prepare('SELECT * FROM partners WHERE company_id = ? ORDER BY name')
     .bind(company_id).all()
-
   return c.json({ success: true, data: results })
+})
+
+// POST /api/treasury/partners
+treasury.post('/partners', async (c) => {
+  const { company_id } = getUser(c)
+  const b = await c.req.json<{ name: string; capital_paid?: number; current_acct?: number }>()
+  if (!b.name) return c.json({ success: false, error: 'الاسم مطلوب' }, 400)
+
+  const result = await c.env.DB.prepare(
+    'INSERT INTO partners (company_id, name, capital_paid, current_acct) VALUES (?,?,?,?)'
+  ).bind(company_id, b.name.trim(), b.capital_paid ?? 0, b.current_acct ?? 0).run()
+
+  return c.json({ success: true, data: { id: result.meta.last_row_id } }, 201)
+})
+
+// PATCH /api/treasury/partners/:id
+treasury.patch('/partners/:id', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const b  = await c.req.json<{ name?: string; capital_paid?: number; current_acct?: number }>()
+
+  const fields: string[] = []
+  const values: unknown[] = []
+  if (b.name        !== undefined) { fields.push('name = ?');         values.push(b.name.trim()) }
+  if (b.capital_paid !== undefined) { fields.push('capital_paid = ?'); values.push(b.capital_paid) }
+  if (b.current_acct !== undefined) { fields.push('current_acct = ?'); values.push(b.current_acct) }
+
+  if (!fields.length) return c.json({ success: false, error: 'لا توجد بيانات للتحديث' }, 400)
+
+  await c.env.DB
+    .prepare(`UPDATE partners SET ${fields.join(', ')} WHERE id = ? AND company_id = ?`)
+    .bind(...values, id, company_id).run()
+
+  return c.json({ success: true, data: null })
 })
 
 export default treasury
