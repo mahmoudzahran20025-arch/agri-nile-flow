@@ -9,8 +9,8 @@ not_found_handling = "single-page-application"
 
 [[d1_databases]]
 binding       = "DB"
-database_name = "nawa-agro-ledger"
-database_id   = "b2e5f26c-1aa8-469e-b84a-c291f5eb9cdd"
+database_name = "agri-nile-flow-data-lake"
+database_id   = "2dd5cfe6-b694-46bd-9cb8-adf1bc7c27af"
 
 [vars]
 JWT_SECRET = "REPLACE_WITH_STRONG_SECRET_BEFORE_DEPLOY"

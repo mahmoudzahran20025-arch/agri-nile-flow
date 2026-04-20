@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev:web": "cd web && npm run dev",
-    "db:init": "wrangler d1 execute nawa-agro-ledger --remote --file=./schema.sql",
+    "db:init": "wrangler d1 execute agri-nile-flow-data-lake --remote --file=./schema.sql",
     "deploy": "npm run build:web && wrangler deploy",
     "type-check": "tsc --noEmit"
   },
