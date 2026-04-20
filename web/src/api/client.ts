@@ -1,6 +1,8 @@
 import type { ApiResult, Paginated } from '../types'
 
-const BASE = '/api'
+const BASE = window.location.hostname.endsWith('pages.dev') 
+  ? 'https://agri-nile-flow.mahm-zahran22.workers.dev/api' 
+  : '/api'
 
 function getToken(): string | null {
   return localStorage.getItem('agro_token')
