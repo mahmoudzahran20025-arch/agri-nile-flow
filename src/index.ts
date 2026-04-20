@@ -14,7 +14,7 @@ const app = new Hono<{ Bindings: Env }>()
 // ─── Global Middleware ────────────────────────────────────────
 app.use('*', logger())
 app.use('/api/*', cors({
-  origin:         ['http://localhost:5173', 'https://agri-nile-flow.mahm-zahran22.workers.dev'],
+  origin:         (origin) => origin, // Allow all origins for the transition
   allowMethods:   ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowHeaders:   ['Content-Type', 'Authorization'],
   exposeHeaders:  ['X-Total-Count'],
