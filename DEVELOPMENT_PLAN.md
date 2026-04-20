@@ -54,7 +54,7 @@
 ### 1. الاختبار السريع باستخدام `curl`
 مثال لاختبار نقطة التحقق من الـ API:
 ```bash
-curl https://agri-nile-flow-lake.mahm-zahran22.workers.dev/api/auth/me
+curl https://agri-nile-flow.mahm-zahran22.workers.dev/api/auth/me
 ```
 
 ### 2. الاختبار من المتصفح (للواجهات)
@@ -80,5 +80,5 @@ curl https://agri-nile-flow-lake.mahm-zahran22.workers.dev/api/auth/me
 ---
 
 ## 📝 ملاحظات تقنية:
-*   رابط الباك إند المعتمد: `https://agri-nile-flow-lake.mahm-zahran22.workers.dev`
+*   رابط الباك إند المعتمد: `https://agri-nile-flow.mahm-zahran22.workers.dev`
 *   تعديلات الـ Proxy تتم في ملف `web/vite.config.ts`.
