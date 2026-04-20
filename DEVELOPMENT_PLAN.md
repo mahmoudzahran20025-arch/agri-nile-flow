@@ -1,84 +1,65 @@
-# دليل تطوير Agri-Nile Flow (النظام الموحد) 🌾
+# دليل تطوير Agri-Nile Flow (النظام المتكامل) 🌾
 
-هذا المستند هو المرجع الأساسي لإدارة وتطوير المشروع باستخدام نظام **Remote-First**.
-
----
-
-## 🛠️ نظام التطوير اليومي (Workflow)
-
-لضمان أعلى استقرار وأسرع أداء، اتبع هذه الخطوات بالترتيب:
-
-1.  **تعديل الباك إند:** عدل في ملفات `src`.
-2.  **رفع الكود (Deploy):** شغل الأمر التالي لرفع التعديلات:
-    ```bash
-    wrangler deploy
-    ```
-3.  **تشغيل الواجهات:** شغل الفرونت إند محلياً:
-    ```bash
-    npm run dev:web
-    ```
-    *الآن الـ Localhost يكلم الـ API الحقيقي المرفوع فوراً.*
+هذا المستند يوثق البنية النهائية للمشروع وخطوات التطوير بعد الفصل بين الفرونت إند والباك إند.
 
 ---
 
-## 🗄️ التعامل مع قاعدة البيانات (D1 Remote)
+## 🏗️ البنية التحتية الحالية (Architecture)
 
-يتم التعامل مع البيانات دائماً على Cloudflare لضمان دقة النتائج.
+تم تقسيم المشروع إلى جزئين مستقلين لضمان أفضل أداء وCI/CD:
 
-### 1. الاستعلامات الشائعة (SQL Commands)
-استخدم هذه الأوامر في الـ Terminal للمتابعة السريعة:
+1.  **الفرونت إند (Cloudflare Pages):**
+    *   **الرابط:** `https://agri-nile-flow-lake.pages.dev`
+    *   **طريقة التحديث:** يتم البناء والرفع تلقائياً عند عمل `git push`.
+2.  **الباك إند (Cloudflare Worker):**
+    *   **الرابط:** `https://agri-nile-flow.mahm-zahran22.workers.dev`
+    *   **القاعدة المرتبطة:** `agri-nile-flow-data-lake` (D1).
 
-*   **عرض جميع المستخدمين:**
+---
+
+## 🛠️ دليل التطوير اليومي
+
+### 1. العمل المحلي (Local Dev)
+*   شغل الفرونت إند: `npm run dev:web` (يتصل بالـ API الأونلاين).
+*   تعديل الباك إند: عدل في `src` ثم ارفع بـ `wrangler deploy`.
+
+### 2. التحديث العام (Deployment)
+*   بمجرد تنفيذ `git add .` و `git commit` و `git push`.. سيقوم Cloudflare بتحديث الفرونت إند أوتوماتيكياً.
+
+---
+
+## 🗄️ إدارة قاعدة البيانات (D1)
+
+اسم قاعدة البيانات الحالي: **`agri-nile-flow-data-lake`**
+
+*   **تحديث الجداول:** `npm run db:init`
+*   **استعلام سريع عن المستخدمين:**
     ```bash
-    wrangler d1 execute agri-nile-flow-data-lake --remote --command="SELECT id, email, full_name FROM users;"
-    ```
-*   **عرض الشركات المسجلة:**
-    ```bash
-    wrangler d1 execute agri-nile-flow-data-lake --remote --command="SELECT * FROM companies;"
-    ```
-*   **التأكد من الأذونات (Permissions):**
-    ```bash
-    wrangler d1 execute agri-nile-flow-data-lake --remote --command="SELECT * FROM roles;"
-    ```
-*   **تصفير وإعادة بناء قاعدة البيانات (تحذير: يمسح البيانات):**
-    ```bash
-    npm run db:init
+    wrangler d1 execute agri-nile-flow-data-lake --remote --command="SELECT * FROM users;"
     ```
 
 ---
 
-## 🧪 اختبار الـ Endpoints (Testing)
+## ✅ تقرير التقدم (Progress Report)
 
-أفضل وأسهل الطرق لاختبار الباك إند بعد كل `deploy`:
-
-### 1. الاختبار السريع باستخدام `curl`
-مثال لاختبار نقطة التحقق من الـ API:
-```bash
-curl https://agri-nile-flow.mahm-zahran22.workers.dev/api/auth/me
-```
-
-### 2. الاختبار من المتصفح (للواجهات)
-بما أننا ربطنا الـ Proxy في `vite.config.ts` بالرابط الأونلاين، يمكنك ببساطة:
-1.  فتح `http://localhost:3000`.
-2.  فتح الـ **Inspect Element (F12)** ثم تبويب **Network**.
-3.  أي طلب API يظهر أمامك يمكنك الضغط عليه (Right Click) واختيار **"Copy as fetch"** أو **"Copy as curl"** لإعادة اختباره وتعديله.
-
-### 3. نصيحة للمصادقة (Auth Testing)
-بما أن النظام يستخدم JWT، ستحتاج لإرسال التوكين في الـ Header. أسهل طريقة هي تسجيل الدخول من الموقع مرة واحدة، ثم نسخ التوكين من الـ `localStorage` واستخدامه في الاختبارات الخارجية.
+| المهمة | الحالة | الملاحظات |
+| :--- | :---: | :--- |
+| إعداد البيئة المحلية | ✅ | تم ربط الـ Proxy وتظبط الـ Scripts |
+| إنشاء قاعدة البيانات D1 | ✅ | الاسم الجديد: agri-nile-flow-data-lake |
+| تفعيل الـ CI/CD للفرونت إند | ✅ | مربوط بـ Cloudflare Pages |
+| تفعيل الـ CI/CD للباك إند | ✅ | مربوط بـ Cloudflare Workers |
+| إعداد الـ CORS والـ Auth | ✅ | الباك إند يقبل طلبات من الـ Pages |
+| إنشاء مستخدم Admin أول | ✅ | البريد: admin@nawa.eg |
 
 ---
 
-## 🚀 قواعد ذهبية
-1.  **Deploy First:** لا تحاول تجربة كود جديد في الفرونت إند قبل أن تتأكد أنك رفعت نسخة الباك إند المتوافقة معه.
-2.  **Check Logs:** لو حدث خطأ 500، استخدم أمر متابعة السجلات مباشرة:
-    ```bash
-    wrangler tail
-    ```
-    *هذا الأمر يعرض لك الأخطاء اللي بتحصل في السيرفر الآن (Real-time logs).*
-3.  **No Local DB:** لا تحاول أبداً تشغيل `wrangler dev` بدون `--remote` لأنها ستنشئ قاعدة بيانات فارغة ومختلفة عن الحقيقية.
+## 🚀 الخطوات القادمة
+- [ ] إضافة موديول إدارة الموردين (Suppliers).
+- [ ] إعداد التقارير المالية (Financial Reports).
+- [ ] ضبط أذونات الوصول المتقدمة (RBAC).
 
 ---
 
 ## 📝 ملاحظات تقنية:
-*   رابط الباك إند المعتمد: `https://agri-nile-flow.mahm-zahran22.workers.dev`
-*   تعديلات الـ Proxy تتم في ملف `web/vite.config.ts`.
+*   رابط الـ API في الكود يتم تبديله تلقائياً بناءً على البيئة (Local vs Production).
+*   المفتاح السري للـ JWT تم ضبطه وتأمينه في الـ `wrangler.toml`.
