@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
-import { glInventoryMovement } from '../lib/gl'
+import { glInventoryMovement, getOpenPeriod } from '../lib/gl'
 
 const inventory = new Hono<{ Bindings: Env }>()
 inventory.use('*', authMiddleware)
@@ -43,7 +43,7 @@ inventory.get('/warehouses', async (c) => {
   return c.json({ success: true, data: results.map(r => (r as { warehouse: string }).warehouse) })
 })
 
-// GET /api/inventory/movements?page=&size=&warehouse=&item_code=&type=
+// GET /api/inventory/movements?page=&size=&warehouse=&item_code=&type=&start=&end=
 inventory.get('/movements', async (c) => {
   const { company_id } = getUser(c)
   const page      = Math.max(1, Number(c.req.query('page') ?? 1))
@@ -51,6 +51,8 @@ inventory.get('/movements', async (c) => {
   const warehouse = c.req.query('warehouse')
   const itemCode  = c.req.query('item_code')
   const type      = c.req.query('type')
+  const start     = c.req.query('start')
+  const end       = c.req.query('end')
   const offset    = (page - 1) * size
 
   let where   = 'WHERE im.company_id = ?'
@@ -59,6 +61,8 @@ inventory.get('/movements', async (c) => {
   if (warehouse) { where += ' AND im.warehouse = ?';       binds.push(warehouse) }
   if (itemCode)  { where += ' AND im.item_code = ?';       binds.push(Number(itemCode)) }
   if (type)      { where += ' AND im.movement_type = ?';   binds.push(type) }
+  if (start)     { where += ' AND im.movement_date >= ?';  binds.push(start) }
+  if (end)       { where += ' AND im.movement_date <= ?';  binds.push(end) }
 
   const [rows, cnt] = await Promise.all([
     c.env.DB.prepare(
@@ -101,6 +105,11 @@ inventory.post('/movements', async (c) => {
   }
   if (b.movement_type !== 'اضافة' && b.movement_type !== 'صرف') {
     return c.json({ success: false, error: "النوع يجب أن يكون 'اضافة' أو 'صرف'" }, 400)
+  }
+
+  const periodId = await getOpenPeriod(c.env.DB, company_id, b.movement_date)
+  if (!periodId) {
+    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.movement_date}` }, 400)
   }
 
   // Get current balance for this item in this warehouse

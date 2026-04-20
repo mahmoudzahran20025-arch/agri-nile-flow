@@ -24,7 +24,7 @@ async function getMapping(db: D1Database, company_id: number, key: string): Prom
   return row?.account_code ?? null
 }
 
-async function getOpenPeriod(db: D1Database, company_id: number, date: string): Promise<number | null> {
+export async function getOpenPeriod(db: D1Database, company_id: number, date: string): Promise<number | null> {
   const row = await db
     .prepare(`SELECT id FROM financial_periods
               WHERE company_id = ? AND start_date <= ? AND end_date >= ? AND is_closed = 0

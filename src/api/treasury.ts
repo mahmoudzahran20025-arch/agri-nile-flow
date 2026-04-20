@@ -1,7 +1,8 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
-import { glCashTransaction } from '../lib/gl'
+import { glCashTransaction, getOpenPeriod } from '../lib/gl'
+import { logAudit } from '../lib/audit'
 
 const treasury = new Hono<{ Bindings: Env }>()
 treasury.use('*', authMiddleware)
@@ -73,6 +74,12 @@ treasury.post('/transactions', async (c) => {
     return c.json({ success: false, error: "الاتجاه يجب أن يكون 'د' أو 'م'" }, 400)
   }
 
+  // Validate open financial period
+  const periodId = await getOpenPeriod(c.env.DB, company_id, b.transaction_date)
+  if (!periodId) {
+    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.transaction_date} — تحقق من إعدادات الفترات المالية` }, 400)
+  }
+
   // Calculate running balance
   const lastRow = await c.env.DB
     .prepare(`SELECT running_balance FROM cash_transactions
@@ -111,6 +118,13 @@ treasury.post('/transactions', async (c) => {
   await glCashTransaction(c.env.DB, company_id, txnId,
     b.direction, b.amount, b.transaction_date, b.narration, userId)
 
+  // Audit log
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'CREATE',
+    table_name: 'cash_transactions', record_id: txnId,
+    new_value: { direction: b.direction, amount: b.amount, narration: b.narration, date: b.transaction_date },
+  })
+
   return c.json({ success: true, data: { running_balance: runningBalance } }, 201)
 })
 
@@ -143,7 +157,7 @@ treasury.get('/partners', async (c) => {
 
 // POST /api/treasury/partners
 treasury.post('/partners', async (c) => {
-  const { company_id } = getUser(c)
+  const { company_id, sub: userId } = getUser(c)
   const b = await c.req.json<{ name: string; capital_paid?: number; current_acct?: number }>()
   if (!b.name) return c.json({ success: false, error: 'الاسم مطلوب' }, 400)
 
@@ -151,12 +165,19 @@ treasury.post('/partners', async (c) => {
     'INSERT INTO partners (company_id, name, capital_paid, current_acct) VALUES (?,?,?,?)'
   ).bind(company_id, b.name.trim(), b.capital_paid ?? 0, b.current_acct ?? 0).run()
 
-  return c.json({ success: true, data: { id: result.meta.last_row_id } }, 201)
+  const newId = result.meta.last_row_id as number
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'CREATE',
+    table_name: 'partners', record_id: newId,
+    new_value: { name: b.name, capital_paid: b.capital_paid ?? 0 },
+  })
+
+  return c.json({ success: true, data: { id: newId } }, 201)
 })
 
 // PATCH /api/treasury/partners/:id
 treasury.patch('/partners/:id', async (c) => {
-  const { company_id } = getUser(c)
+  const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
   const b  = await c.req.json<{ name?: string; capital_paid?: number; current_acct?: number }>()
 
@@ -171,6 +192,11 @@ treasury.patch('/partners/:id', async (c) => {
   await c.env.DB
     .prepare(`UPDATE partners SET ${fields.join(', ')} WHERE id = ? AND company_id = ?`)
     .bind(...values, id, company_id).run()
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'UPDATE',
+    table_name: 'partners', record_id: id, new_value: b,
+  })
 
   return c.json({ success: true, data: null })
 })

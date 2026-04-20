@@ -1,7 +1,8 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
-import { postAutoEntry } from '../lib/gl'
+import { postAutoEntry, getOpenPeriod } from '../lib/gl'
+import { logAudit } from '../lib/audit'
 
 const gl = new Hono<{ Bindings: Env }>()
 gl.use('*', authMiddleware)
@@ -111,15 +112,21 @@ gl.patch('/periods/:id/close', async (c) => {
   await c.env.DB.prepare(
     `UPDATE financial_periods SET is_closed = 1, closed_at = datetime('now'), closed_by = ? WHERE id = ? AND company_id = ?`
   ).bind(userId, id, company_id).run()
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'CLOSE', table_name: 'financial_periods', record_id: id,
+  })
   return c.json({ success: true, data: null })
 })
 
 gl.patch('/periods/:id/reopen', async (c) => {
-  const { company_id } = getUser(c)
+  const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
   await c.env.DB.prepare(
     `UPDATE financial_periods SET is_closed = 0, closed_at = NULL, closed_by = NULL WHERE id = ? AND company_id = ?`
   ).bind(id, company_id).run()
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'REOPEN', table_name: 'financial_periods', record_id: id,
+  })
   return c.json({ success: true, data: null })
 })
 
@@ -191,9 +198,20 @@ gl.post('/entries', async (c) => {
     return c.json({ success: false, error: `القيد غير متوازن — مدين: ${totalDebit.toFixed(2)} / دائن: ${totalCredit.toFixed(2)}` }, 400)
   }
 
+  const periodId = await getOpenPeriod(c.env.DB, company_id, b.entry_date)
+  if (!periodId) {
+    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.entry_date}` }, 400)
+  }
+
   await postAutoEntry(c.env.DB, {
     company_id, entry_date: b.entry_date, description: b.description,
     ref_type: 'manual', ref_id: 0, lines: b.lines, created_by: userId,
+  })
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'CREATE',
+    table_name: 'journal_entries',
+    new_value: { entry_date: b.entry_date, description: b.description, total: totalDebit },
   })
 
   return c.json({ success: true, data: null }, 201)

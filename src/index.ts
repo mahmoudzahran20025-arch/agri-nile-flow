@@ -15,6 +15,8 @@ import operationsRoutes from './api/operations'
 import contractsRoutes  from './api/contracts'
 import exportRoutes     from './api/export'
 import glRoutes         from './api/gl'
+import adminRoutes      from './api/admin'
+import auditRoutes      from './api/audit'
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -55,6 +57,8 @@ app.route('/api/operations', operationsRoutes)
 app.route('/api/contracts',  contractsRoutes)
 app.route('/api/export',     exportRoutes)
 app.route('/api/gl',         glRoutes)
+app.route('/api/admin',      adminRoutes)
+app.route('/api/audit',      auditRoutes)
 
 // ─── Health Check ─────────────────────────────────────────────
 app.get('/api/health', (c) => c.json({ status: 'ok', ts: new Date().toISOString() }))
