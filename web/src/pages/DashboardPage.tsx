@@ -2,11 +2,19 @@ import { useQuery } from '@tanstack/react-query'
 import {
   Banknote, TrendingDown, Package, Users,
   AlertTriangle, Clock, ArrowUp, ArrowDown,
+  TrendingUp, BarChart3, Minus,
 } from 'lucide-react'
-import { dashboardApi } from '../api/client'
+import { dashboardApi, glApi } from '../api/client'
 import { useSeasonId } from '../store/appStore'
 import KPICard from '../components/ui/KPICard'
 import type { DashboardStats } from '../types'
+
+function startOfYear() {
+  return `${new Date().getFullYear()}-01-01`
+}
+function todayStr() {
+  return new Date().toISOString().slice(0, 10)
+}
 
 function egp(n: number) {
   return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
@@ -43,6 +51,19 @@ export default function DashboardPage() {
     queryKey: ['dashboard', 'alerts'],
     queryFn:  () => dashboardApi.inventoryAlerts() as Promise<{ name: string; balance_qty: number; unit: string; warehouse: string }[]>,
   })
+
+  const { data: incomeData } = useQuery({
+    queryKey: ['dashboard', 'income-statement'],
+    queryFn:  () => glApi.incomeStatement(startOfYear(), todayStr()) as Promise<{
+      revenue: { code: string; name: string; amount: number }[]
+      expenses: { code: string; name: string; amount: number }[]
+      net_income: number
+    }>,
+  })
+
+  const totalRevenue  = incomeData?.revenue?.reduce( (s: number, r: { amount: number }) => s + (r.amount ?? 0), 0) ?? 0
+  const totalExpenses = incomeData?.expenses?.reduce((s: number, r: { amount: number }) => s + (r.amount ?? 0), 0) ?? 0
+  const netIncome     = incomeData?.net_income ?? (totalRevenue - totalExpenses)
 
   return (
     <div className="space-y-6">
@@ -88,6 +109,58 @@ export default function DashboardPage() {
           format="currency"
           subtitle="رأس المال + الجاري"
         />
+      </div>
+
+      {/* GL Financial Summary — Year to Date */}
+      <div className="card p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <BarChart3 size={18} className="text-brand-600" />
+          <h2 className="font-bold text-slate-800">الملخص المالي — منذ بداية العام</h2>
+          <span className="text-xs text-slate-400 mr-auto">
+            {new Date().getFullYear()}
+          </span>
+        </div>
+        <div className="grid grid-cols-3 gap-4">
+          {/* Revenue */}
+          <div className="flex items-center gap-3 p-3 rounded-xl bg-green-50">
+            <div className="w-9 h-9 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0">
+              <TrendingUp size={18} className="text-green-600" />
+            </div>
+            <div>
+              <p className="text-xs text-green-700 font-medium">إجمالي الإيرادات</p>
+              <p className="text-lg font-bold text-green-800">{egp(totalRevenue)}</p>
+            </div>
+          </div>
+          {/* Expenses */}
+          <div className="flex items-center gap-3 p-3 rounded-xl bg-red-50">
+            <div className="w-9 h-9 rounded-lg bg-red-100 flex items-center justify-center flex-shrink-0">
+              <TrendingDown size={18} className="text-red-600" />
+            </div>
+            <div>
+              <p className="text-xs text-red-700 font-medium">إجمالي المصروفات</p>
+              <p className="text-lg font-bold text-red-800">{egp(totalExpenses)}</p>
+            </div>
+          </div>
+          {/* Net Income */}
+          <div className={`flex items-center gap-3 p-3 rounded-xl ${netIncome >= 0 ? 'bg-brand-50' : 'bg-slate-50'}`}>
+            <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${netIncome >= 0 ? 'bg-brand-100' : 'bg-slate-100'}`}>
+              {netIncome > 0
+                ? <TrendingUp  size={18} className="text-brand-600" />
+                : netIncome < 0
+                  ? <TrendingDown size={18} className="text-red-600" />
+                  : <Minus size={18} className="text-slate-400" />}
+            </div>
+            <div>
+              <p className={`text-xs font-medium ${netIncome >= 0 ? 'text-brand-700' : 'text-red-700'}`}>
+                صافي الربح / الخسارة
+              </p>
+              <p className={`text-lg font-bold ${netIncome >= 0 ? 'text-brand-800' : 'text-red-700'}`}>
+                {egp(Math.abs(netIncome))}
+                {netIncome < 0 && <span className="text-sm mr-1">(خسارة)</span>}
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Middle row */}

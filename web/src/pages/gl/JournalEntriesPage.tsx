@@ -4,6 +4,7 @@ import { BookMarked, Plus, Trash2, ChevronDown } from 'lucide-react'
 import { glApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 import Modal from '../../components/ui/Modal'
+import { usePermission } from '../../hooks/usePermission'
 
 interface JournalEntry {
   id: number; entry_date: string; description: string; entry_number?: string
@@ -33,6 +34,7 @@ const REF_BADGE: Record<string, string> = {
 function fmt(n: number) { return Number(n || 0).toLocaleString('ar-EG') }
 
 export default function JournalEntriesPage() {
+  const { canWrite } = usePermission()
   const qc = useQueryClient()
   const { toast } = useToast()
 
@@ -110,9 +112,11 @@ export default function JournalEntriesPage() {
           <h1 className="text-xl font-bold text-gray-900">قيود اليومية</h1>
           <span className="badge badge-blue">{total} قيد</span>
         </div>
-        <button className="btn btn-primary" onClick={() => setOpenNew(true)}>
-          <Plus size={16} /> قيد يدوي
-        </button>
+        {canWrite('gl') && (
+          <button className="btn btn-primary" onClick={() => setOpenNew(true)}>
+            <Plus size={16} /> قيد يدوي
+          </button>
+        )}
       </div>
 
       {/* Filters */}

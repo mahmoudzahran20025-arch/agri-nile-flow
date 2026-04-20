@@ -53,12 +53,39 @@ export default function FinancialStatementsPage() {
           <BarChart3 size={24} className="text-brand-600" />
           <h1 className="text-xl font-bold text-gray-900">القوائم المالية</h1>
         </div>
-        <button
-          className="btn btn-ghost"
-          onClick={() => window.print()}
-        >
-          <Download size={16} /> طباعة
-        </button>
+        <div className="flex items-center gap-2">
+          {tab === 'pl' && (
+            <button
+              className="btn btn-ghost gap-2"
+              onClick={() => downloadCsv('/gl/income-statement', 'قائمة_الدخل', {
+                start: startDate, end: endDate,
+              })}
+            >
+              <Download size={16} /> تصدير CSV
+            </button>
+          )}
+          {tab === 'trial' && (
+            <button
+              className="btn btn-ghost gap-2"
+              onClick={() => downloadCsv('/gl/trial-balance', 'ميزان_المراجعة', {
+                start: startDate, end: endDate,
+              })}
+            >
+              <Download size={16} /> تصدير CSV
+            </button>
+          )}
+          {tab === 'balance' && (
+            <button
+              className="btn btn-ghost gap-2"
+              onClick={() => downloadCsv('/gl/balance-sheet', 'الميزانية_العمومية', { as_of: asOf })}
+            >
+              <Download size={16} /> تصدير CSV
+            </button>
+          )}
+          <button className="btn btn-ghost gap-2" onClick={() => window.print()}>
+            <Download size={16} /> طباعة
+          </button>
+        </div>
       </div>
 
       {/* Tabs */}

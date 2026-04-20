@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Plus, Download } from 'lucide-react'
 import { treasuryApi, downloadCsv } from '../../api/client'
+import { usePermission } from '../../hooks/usePermission'
 import DataTable, { type Column } from '../../components/ui/DataTable'
 import AddCashTransactionModal from '../../components/forms/AddCashTransactionModal'
 import type { CashTransaction } from '../../types'
@@ -41,6 +42,7 @@ const COLUMNS: Column<CashTransaction>[] = [
 ]
 
 export default function CashJournalPage() {
+  const { canWrite } = usePermission()
   const [page,      setPage]      = useState(1)
   const [direction, setDirection] = useState('')
   const [month,     setMonth]     = useState('')
@@ -84,7 +86,9 @@ export default function CashJournalPage() {
           >
             <Download size={16} />تصدير CSV
           </button>
-          <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}><Plus size={16} />حركة جديدة</button>
+          {canWrite('treasury') && (
+            <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}><Plus size={16} />حركة جديدة</button>
+          )}
         </div>
       </div>
 

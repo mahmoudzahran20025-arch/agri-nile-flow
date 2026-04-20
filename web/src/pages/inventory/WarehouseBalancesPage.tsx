@@ -4,6 +4,7 @@ import { Package, ChevronDown, ChevronUp, Plus, Download } from 'lucide-react'
 import { inventoryApi, downloadCsv } from '../../api/client'
 import AddInventoryMovementModal from '../../components/forms/AddInventoryMovementModal'
 import type { InventoryBalance } from '../../types'
+import { usePermission } from '../../hooks/usePermission'
 
 function egp(n: number) {
   return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
@@ -13,6 +14,7 @@ function num(n: number) {
 }
 
 export default function WarehouseBalancesPage() {
+  const { canWrite } = usePermission()
   const [activeWarehouse, setActiveWarehouse] = useState<string | null>(null)
   const [expanded,        setExpanded]        = useState<Set<string>>(new Set())
   const [addOpen,         setAddOpen]         = useState(false)
@@ -54,10 +56,12 @@ export default function WarehouseBalancesPage() {
           >
             <Download size={16} />تصدير CSV
           </button>
-          <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
-            <Plus size={16} />
-            حركة جديدة
-          </button>
+          {canWrite('inventory') && (
+            <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
+              <Plus size={16} />
+              حركة جديدة
+            </button>
+          )}
         </div>
       </div>
 

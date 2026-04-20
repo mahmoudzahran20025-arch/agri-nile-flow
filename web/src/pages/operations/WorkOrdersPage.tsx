@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Wrench, Plus, ChevronDown, Trash2, Clock, CheckCircle, XCircle, PlayCircle } from 'lucide-react'
 import { operationsApi, fieldsApi, configApi, employeesApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
+import { usePermission } from '../../hooks/usePermission'
 
 interface WorkOrder {
   id: number; code?: string; name: string; operation_type: string
@@ -32,6 +33,7 @@ const OP_TYPES = ['ري','تسميد','رش','حصاد','حراثة','زراعة
 const STATUSES = ['pending','in_progress','done','cancelled']
 
 export default function WorkOrdersPage() {
+  const { canWrite } = usePermission()
   const qc = useQueryClient()
   const [filterStatus, setFilterStatus] = useState('')
   const [openNew, setOpenNew]           = useState(false)
@@ -117,9 +119,11 @@ export default function WorkOrdersPage() {
           <h1 className="text-xl font-bold text-gray-900">أوامر العمل</h1>
           <span className="badge badge-blue">{orders.length} أمر</span>
         </div>
-        <button className="btn btn-primary" onClick={() => { setOpenNew(true); setErr('') }}>
-          <Plus size={16} /> أمر عمل جديد
-        </button>
+        {canWrite('operations') && (
+          <button className="btn btn-primary" onClick={() => { setOpenNew(true); setErr('') }}>
+            <Plus size={16} /> أمر عمل جديد
+          </button>
+        )}
       </div>
 
       {/* Filter */}
@@ -193,12 +197,14 @@ export default function WorkOrdersPage() {
                   <span className="text-sm text-gray-500">
                     إجمالي التكلفة: <strong className="text-brand-700">{Number(detail.total_cost).toLocaleString('ar-EG')} ج</strong>
                   </span>
-                  <button
-                    className="btn btn-outline text-sm py-1"
-                    onClick={() => { setOpenTask(true); setErr('') }}
-                  >
-                    <Plus size={14} /> مهمة
-                  </button>
+                  {canWrite('operations') && (
+                    <button
+                      className="btn btn-outline text-sm py-1"
+                      onClick={() => { setOpenTask(true); setErr('') }}
+                    >
+                      <Plus size={14} /> مهمة
+                    </button>
+                  )}
                 </div>
               </div>
 

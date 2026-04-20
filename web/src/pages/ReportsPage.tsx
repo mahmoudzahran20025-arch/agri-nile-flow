@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { FileText, TrendingUp, TrendingDown, Package, Users, Banknote, ArrowDown, ArrowUp, Download } from 'lucide-react'
+import { FileText, TrendingUp, TrendingDown, Package, Users, Banknote, ArrowDown, ArrowUp, Download, Clock } from 'lucide-react'
 import { dashboardApi, suppliersApi, treasuryApi, inventoryApi, downloadCsv } from '../api/client'
 import { useSeasonId } from '../store/appStore'
 import type { Supplier } from '../types'
@@ -11,8 +12,19 @@ function egp(n: number | null | undefined) {
 
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
 
+interface AgingRow {
+  code: number; name: string; activity: string | null
+  total_balance: number; current_0_30: number; aged_31_60: number; aged_61_90: number; aged_90_plus: number
+}
+interface AgingData {
+  suppliers: AgingRow[]
+  totals: AgingRow
+  as_of: string
+}
+
 export default function ReportsPage() {
   const seasonId = useSeasonId()
+  const [agingAsOf, setAgingAsOf] = useState(new Date().toISOString().slice(0, 10))
 
   const { data: stats }      = useQuery({ queryKey: ['dashboard', 'stats'], queryFn: dashboardApi.stats })
   const { data: cashflow }   = useQuery({ queryKey: ['dashboard', 'cashflow12'], queryFn: () => dashboardApi.monthlyCashflow(12) as Promise<{ year: number; month: number; cash_in: number; cash_out: number }[]> })
@@ -20,6 +32,10 @@ export default function ReportsPage() {
   const { data: suppliers }  = useQuery({ queryKey: ['suppliers', 1, ''], queryFn: () => suppliersApi.list({ page: 1, size: 200 }) as Promise<{ data: Supplier[] }> })
   const { data: balances }   = useQuery({ queryKey: ['inventory', 'balances', null], queryFn: () => inventoryApi.balances() })
   const { data: partners }   = useQuery({ queryKey: ['partners'], queryFn: treasuryApi.partners })
+  const { data: agingRaw }   = useQuery({
+    queryKey: ['suppliers-aging', agingAsOf],
+    queryFn:  () => suppliersApi.aging(agingAsOf) as Promise<AgingData>,
+  })
 
   const cashflowData = (cashflow ?? [])
   const suppliersData = suppliers?.data ?? []
@@ -253,7 +269,63 @@ export default function ReportsPage() {
         ) : <EmptyMsg />}
       </Section>
 
-      {/* ── Section 6: Partners ──────────────────────────────── */}
+      {/* ── Section 6: Supplier Aging ────────────────────────── */}
+      <Section title="تحليل أعمار الديون (الموردون والعملاء)" icon={<Clock size={16} />}>
+        <div className="flex items-center gap-3 mb-4">
+          <label className="text-xs text-slate-500">حتى تاريخ:</label>
+          <input type="date" className="input w-auto text-sm" value={agingAsOf}
+            onChange={e => setAgingAsOf(e.target.value)} />
+        </div>
+        {agingRaw && agingRaw.suppliers.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50">
+                <tr>
+                  {['المورد / العميل', 'النشاط', 'الرصيد الكلي', '0 – 30 يوم', '31 – 60 يوم', '61 – 90 يوم', '90+ يوم'].map(h => (
+                    <th key={h} className="px-4 py-2.5 text-xs font-semibold text-slate-500 text-right">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {agingRaw.suppliers.map(row => (
+                  <tr key={row.code} className="hover:bg-slate-50">
+                    <td className="px-4 py-2.5 font-medium text-slate-800">{row.name}</td>
+                    <td className="px-4 py-2.5 text-slate-400 text-xs">{row.activity ?? '—'}</td>
+                    <td className={`px-4 py-2.5 font-bold ${row.total_balance > 0 ? 'text-green-700' : 'text-red-600'}`}>
+                      {egp(row.total_balance)}
+                    </td>
+                    <td className="px-4 py-2.5 text-slate-700">{row.current_0_30 !== 0 ? egp(row.current_0_30) : '—'}</td>
+                    <td className="px-4 py-2.5 text-amber-600 font-medium">{row.aged_31_60 !== 0 ? egp(row.aged_31_60) : '—'}</td>
+                    <td className="px-4 py-2.5 text-orange-600 font-medium">{row.aged_61_90 !== 0 ? egp(row.aged_61_90) : '—'}</td>
+                    <td className="px-4 py-2.5 text-red-600 font-bold">{row.aged_90_plus !== 0 ? egp(row.aged_90_plus) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-slate-50 border-t-2 border-slate-200 font-semibold">
+                <tr>
+                  <td className="px-4 py-2.5 font-bold text-slate-700">الإجمالي</td>
+                  <td />
+                  <td className={`px-4 py-2.5 font-bold ${agingRaw.totals.total_balance > 0 ? 'text-green-700' : 'text-red-600'}`}>
+                    {egp(agingRaw.totals.total_balance)}
+                  </td>
+                  <td className="px-4 py-2.5 text-slate-700">{egp(agingRaw.totals.current_0_30)}</td>
+                  <td className="px-4 py-2.5 text-amber-600">{egp(agingRaw.totals.aged_31_60)}</td>
+                  <td className="px-4 py-2.5 text-orange-600">{egp(agingRaw.totals.aged_61_90)}</td>
+                  <td className="px-4 py-2.5 text-red-600">{egp(agingRaw.totals.aged_90_plus)}</td>
+                </tr>
+              </tfoot>
+            </table>
+            {agingRaw.totals.aged_90_plus > 0 && (
+              <div className="mt-3 flex items-center gap-2 text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                <TrendingDown size={13} />
+                تنبيه: يوجد {egp(agingRaw.totals.aged_90_plus)} متأخر أكثر من 90 يوماً — يستوجب المتابعة الفورية
+              </div>
+            )}
+          </div>
+        ) : <EmptyMsg />}
+      </Section>
+
+      {/* ── Section 7: Partners ──────────────────────────────── */}
       {partnersData.length > 0 && (
         <Section title="حقوق الشركاء" icon={<Users size={16} />}>
           <table className="w-full text-sm">

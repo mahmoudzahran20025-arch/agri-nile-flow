@@ -1,14 +1,19 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Settings, Calendar, Package, MapPin, BookOpen, Tag, Plus, ChevronDown } from 'lucide-react'
-import { configApi, api } from '../../api/client'
-import AddSeasonModal      from '../../components/forms/AddSeasonModal'
-import AddItemModal        from '../../components/forms/AddItemModal'
+import {
+  Settings, Calendar, Package, MapPin, BookOpen,
+  Tag, Plus, ChevronDown, Lock, LockOpen, AlertTriangle,
+} from 'lucide-react'
+import { configApi, glApi } from '../../api/client'
+import { usePermission } from '../../hooks/usePermission'
+import Modal from '../../components/ui/Modal'
+import AddSeasonModal       from '../../components/forms/AddSeasonModal'
+import AddItemModal         from '../../components/forms/AddItemModal'
 import AddMasterRecordModal from '../../components/forms/AddMasterRecordModal'
-import type { Season, Item, CostCenter } from '../../types'
+import type { Season, Item, CostCenter, FinancialPeriod } from '../../types'
 
-type Tab = 'seasons' | 'items' | 'cost_centers' | 'accounts' | 'expense_types'
+type Tab = 'seasons' | 'items' | 'cost_centers' | 'accounts' | 'expense_types' | 'periods'
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'seasons',       label: 'المواسم',         icon: <Calendar size={16} /> },
@@ -16,6 +21,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'cost_centers',  label: 'مراكز التكلفة',    icon: <MapPin   size={16} /> },
   { id: 'accounts',      label: 'الحسابات',         icon: <BookOpen size={16} /> },
   { id: 'expense_types', label: 'أنواع المصروفات',  icon: <Tag      size={16} /> },
+  { id: 'periods',       label: 'الفترات المالية',  icon: <Lock     size={16} /> },
 ]
 
 const STATUS_BADGE: Record<string, string> = {
@@ -34,9 +40,10 @@ const STATUS_NEXT: Record<string, { label: string; value: string }[]> = {
   closed:     [],
 }
 
-interface Account  { code: number; company_id: number; name: string }
+interface Account    { code: number; company_id: number; name: string }
 interface ExpenseType { code: number; company_id: number; name: string }
 
+// ─── Season Status Dropdown ──────────────────────────────────
 function SeasonStatusMenu({ season }: { season: Season }) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -74,16 +81,312 @@ function SeasonStatusMenu({ season }: { season: Season }) {
   )
 }
 
+// ─── Create Period Modal ─────────────────────────────────────
+function CreatePeriodModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const qc = useQueryClient()
+  const [saving, setSaving] = useState(false)
+  const [error,  setError]  = useState('')
+  const [form, setForm] = useState({
+    name:        '',
+    period_type: 'monthly',
+    start_date:  '',
+    end_date:    '',
+  })
+
+  const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }))
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    if (!form.name)       { setError('الاسم مطلوب'); return }
+    if (!form.start_date) { setError('تاريخ البداية مطلوب'); return }
+    if (!form.end_date)   { setError('تاريخ النهاية مطلوب'); return }
+    if (form.start_date >= form.end_date) { setError('تاريخ البداية يجب أن يسبق تاريخ النهاية'); return }
+
+    setSaving(true)
+    try {
+      const res = await glApi.createPeriod(form)
+      if (!(res as { success: boolean }).success) {
+        setError((res as { error: string }).error ?? 'حدث خطأ')
+        return
+      }
+      await qc.invalidateQueries({ queryKey: ['gl-periods'] })
+      setForm({ name: '', period_type: 'monthly', start_date: '', end_date: '' })
+      onClose()
+    } catch {
+      setError('حدث خطأ في الاتصال')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal open={open} title="إضافة فترة مالية جديدة" onClose={onClose} size="sm">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="label">اسم الفترة <span className="text-red-500">*</span></label>
+          <input className="input" placeholder="مثال: يناير 2025 أو السنة المالية 2025"
+            value={form.name} onChange={e => set('name', e.target.value)} required />
+        </div>
+        <div>
+          <label className="label">نوع الفترة</label>
+          <select className="input" value={form.period_type} onChange={e => set('period_type', e.target.value)}>
+            <option value="monthly">شهرية</option>
+            <option value="quarterly">ربع سنوية</option>
+            <option value="annual">سنوية</option>
+          </select>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="label">تاريخ البداية <span className="text-red-500">*</span></label>
+            <input type="date" className="input" value={form.start_date}
+              onChange={e => set('start_date', e.target.value)} required />
+          </div>
+          <div>
+            <label className="label">تاريخ النهاية <span className="text-red-500">*</span></label>
+            <input type="date" className="input" value={form.end_date}
+              onChange={e => set('end_date', e.target.value)} required />
+          </div>
+        </div>
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex gap-2 text-sm text-amber-800">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-500" />
+          <span>تأكد من عدم تداخل التواريخ مع فترات مالية أخرى. الفترة الجديدة ستكون مفتوحة تلقائياً.</span>
+        </div>
+        {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
+        <div className="flex gap-3 pt-2">
+          <button type="button" className="btn-secondary flex-1" onClick={onClose} disabled={saving}>إلغاء</button>
+          <button type="submit" className="btn-primary flex-1" disabled={saving}>
+            {saving ? 'جاري الحفظ...' : 'إنشاء الفترة'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+// ─── Period Close/Reopen Confirm Modal ───────────────────────
+function PeriodActionModal({
+  period, action, open, onClose,
+}: {
+  period: FinancialPeriod | null
+  action: 'close' | 'reopen'
+  open: boolean
+  onClose: () => void
+}) {
+  const qc = useQueryClient()
+  const [loading, setLoading] = useState(false)
+
+  const confirm = async () => {
+    if (!period) return
+    setLoading(true)
+    try {
+      if (action === 'close') {
+        await glApi.closePeriod(period.id)
+      } else {
+        await glApi.reopenPeriod(period.id)
+      }
+      await qc.invalidateQueries({ queryKey: ['gl-periods'] })
+      onClose()
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const isClose = action === 'close'
+
+  return (
+    <Modal open={open} title={isClose ? 'إغلاق الفترة المالية' : 'إعادة فتح الفترة المالية'} onClose={onClose} size="sm">
+      <div className="space-y-4">
+        <div className={`rounded-xl p-4 flex items-start gap-3 ${isClose ? 'bg-red-50' : 'bg-green-50'}`}>
+          {isClose
+            ? <Lock size={20} className="text-red-500 mt-0.5 shrink-0" />
+            : <LockOpen size={20} className="text-green-600 mt-0.5 shrink-0" />
+          }
+          <div>
+            <p className={`font-semibold text-sm ${isClose ? 'text-red-800' : 'text-green-800'}`}>
+              {period?.name}
+            </p>
+            <p className="text-sm text-slate-500 mt-1">
+              {isClose
+                ? 'بعد الإغلاق لن يمكن تسجيل قيود جديدة في هذه الفترة. يمكن إعادة الفتح لاحقاً إذا لزم الأمر.'
+                : 'إعادة الفتح ستسمح بتسجيل قيود جديدة في هذه الفترة مجدداً.'
+              }
+            </p>
+          </div>
+        </div>
+        <div className="flex gap-3">
+          <button className="btn-secondary flex-1" onClick={onClose} disabled={loading}>إلغاء</button>
+          <button
+            className={`flex-1 btn ${isClose ? 'bg-red-600 hover:bg-red-700 text-white' : 'btn-primary'}`}
+            onClick={confirm}
+            disabled={loading}
+          >
+            {loading ? 'جاري التنفيذ...' : isClose ? 'تأكيد الإغلاق' : 'تأكيد إعادة الفتح'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ─── Periods Tab Content ─────────────────────────────────────
+function PeriodsTab({ canManage }: { canManage: boolean }) {
+  const qc = useQueryClient()
+  const [createOpen, setCreateOpen] = useState(false)
+  const [actionTarget, setActionTarget] = useState<FinancialPeriod | null>(null)
+  const [actionType,   setActionType]   = useState<'close' | 'reopen'>('close')
+
+  const { data: periods, isLoading } = useQuery<FinancialPeriod[]>({
+    queryKey: ['gl-periods'],
+    queryFn:  () => glApi.periods() as Promise<FinancialPeriod[]>,
+  })
+
+  void qc  // avoid unused warning
+
+  const openAction = (p: FinancialPeriod, act: 'close' | 'reopen') => {
+    setActionTarget(p)
+    setActionType(act)
+  }
+
+  const PERIOD_TYPE: Record<string, string> = {
+    monthly:   'شهرية',
+    quarterly: 'ربع سنوية',
+    annual:    'سنوية',
+  }
+
+  const openCount   = (periods ?? []).filter(p => !p.is_closed).length
+  const closedCount = (periods ?? []).filter(p => p.is_closed).length
+
+  return (
+    <>
+      {/* Summary chips */}
+      {(periods ?? []).length > 0 && (
+        <div className="flex gap-3 flex-wrap">
+          <div className="card px-4 py-2.5 flex items-center gap-2 text-sm">
+            <LockOpen size={14} className="text-green-500" />
+            <span className="text-slate-500">مفتوحة:</span>
+            <span className="font-semibold text-green-700">{openCount}</span>
+          </div>
+          <div className="card px-4 py-2.5 flex items-center gap-2 text-sm">
+            <Lock size={14} className="text-slate-400" />
+            <span className="text-slate-500">مغلقة:</span>
+            <span className="font-semibold text-slate-600">{closedCount}</span>
+          </div>
+          {openCount === 0 && (
+            <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-4 py-2.5 text-sm text-red-700">
+              <AlertTriangle size={14} className="text-red-500" />
+              تحذير: لا توجد فترة مالية مفتوحة — لن تتمكن من تسجيل أي معاملات!
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="card overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100">
+          <span className="text-sm font-semibold text-slate-700">الفترات المالية</span>
+          {canManage && (
+            <button className="btn-primary gap-2 text-xs py-1.5 px-3" onClick={() => setCreateOpen(true)}>
+              <Plus size={13} />فترة جديدة
+            </button>
+          )}
+        </div>
+
+        {isLoading ? (
+          <div className="p-16 text-center text-slate-400">جاري التحميل...</div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50">
+              <tr>
+                {['الاسم', 'النوع', 'من', 'إلى', 'الحالة', 'أُغلقت في', ''].map(h => (
+                  <th key={h} className="px-5 py-3 text-xs font-semibold text-slate-500 text-right">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {(periods ?? []).map(p => (
+                <tr key={p.id} className="hover:bg-slate-50">
+                  <td className="px-5 py-3.5 font-medium text-slate-800">{p.name}</td>
+                  <td className="px-5 py-3.5 text-slate-500">{PERIOD_TYPE[p.period_type] ?? p.period_type}</td>
+                  <td className="px-5 py-3.5 text-slate-500 tabular-nums">{p.start_date}</td>
+                  <td className="px-5 py-3.5 text-slate-500 tabular-nums">{p.end_date}</td>
+                  <td className="px-5 py-3.5">
+                    {p.is_closed ? (
+                      <span className="inline-flex items-center gap-1 badge-slate">
+                        <Lock size={11} />مغلقة
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 badge-green">
+                        <LockOpen size={11} />مفتوحة
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-5 py-3.5 text-slate-400 text-xs tabular-nums">
+                    {p.closed_at ? new Date(p.closed_at).toLocaleDateString('ar-EG') : '—'}
+                  </td>
+                  <td className="px-5 py-3.5 text-left">
+                    {canManage && (
+                      p.is_closed ? (
+                        <button
+                          onClick={() => openAction(p, 'reopen')}
+                          className="flex items-center gap-1 text-xs text-green-600 hover:text-green-800 hover:bg-green-50 px-2 py-1 rounded-lg font-medium"
+                        >
+                          <LockOpen size={12} />إعادة فتح
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => openAction(p, 'close')}
+                          className="flex items-center gap-1 text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded-lg font-medium"
+                        >
+                          <Lock size={12} />إغلاق
+                        </button>
+                      )
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {!(periods ?? []).length && (
+                <tr>
+                  <td colSpan={7} className="px-5 py-16 text-center">
+                    <div className="flex flex-col items-center gap-3">
+                      <Lock size={32} className="text-slate-300" />
+                      <p className="text-slate-400">لا توجد فترات مالية مسجلة</p>
+                      {canManage && (
+                        <button className="btn-primary gap-2 text-sm" onClick={() => setCreateOpen(true)}>
+                          <Plus size={14} />إنشاء أول فترة مالية
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <CreatePeriodModal open={createOpen} onClose={() => setCreateOpen(false)} />
+      <PeriodActionModal
+        period={actionTarget}
+        action={actionType}
+        open={!!actionTarget}
+        onClose={() => setActionTarget(null)}
+      />
+    </>
+  )
+}
+
+// ─── Main Config Page ────────────────────────────────────────
 export default function ConfigPage() {
+  const { canWrite } = usePermission()
   const { tab: tabParam } = useParams<{ tab?: Tab }>()
   const navigate = useNavigate()
   const [tab, setTab] = useState<Tab>((tabParam as Tab) ?? 'seasons')
 
-  const [seasonModal,   setSeasonModal]   = useState(false)
-  const [itemModal,     setItemModal]     = useState(false)
-  const [ccModal,       setCcModal]       = useState(false)
-  const [acctModal,     setAcctModal]     = useState(false)
-  const [expModal,      setExpModal]      = useState(false)
+  const [seasonModal, setSeasonModal] = useState(false)
+  const [itemModal,   setItemModal]   = useState(false)
+  const [ccModal,     setCcModal]     = useState(false)
+  const [acctModal,   setAcctModal]   = useState(false)
+  const [expModal,    setExpModal]    = useState(false)
 
   const switchTab = (t: Tab) => { setTab(t); navigate(`/config/${t}`, { replace: true }) }
 
@@ -120,11 +423,11 @@ export default function ConfigPage() {
           <Settings size={22} className="text-slate-400" />
           الإعدادات
         </h1>
-        {tab === 'seasons'       && <button className="btn-primary gap-2" onClick={() => setSeasonModal(true)}><Plus size={15}/>موسم جديد</button>}
-        {tab === 'items'         && <button className="btn-primary gap-2" onClick={() => setItemModal(true)}><Plus size={15}/>صنف جديد</button>}
-        {tab === 'cost_centers'  && <button className="btn-primary gap-2" onClick={() => setCcModal(true)}><Plus size={15}/>مركز تكلفة</button>}
-        {tab === 'accounts'      && <button className="btn-primary gap-2" onClick={() => setAcctModal(true)}><Plus size={15}/>حساب جديد</button>}
-        {tab === 'expense_types' && <button className="btn-primary gap-2" onClick={() => setExpModal(true)}><Plus size={15}/>نوع مصروف</button>}
+        {canWrite('config') && tab === 'seasons'       && <button className="btn-primary gap-2" onClick={() => setSeasonModal(true)}><Plus size={15}/>موسم جديد</button>}
+        {canWrite('config') && tab === 'items'         && <button className="btn-primary gap-2" onClick={() => setItemModal(true)}><Plus size={15}/>صنف جديد</button>}
+        {canWrite('config') && tab === 'cost_centers'  && <button className="btn-primary gap-2" onClick={() => setCcModal(true)}><Plus size={15}/>مركز تكلفة</button>}
+        {canWrite('config') && tab === 'accounts'      && <button className="btn-primary gap-2" onClick={() => setAcctModal(true)}><Plus size={15}/>حساب جديد</button>}
+        {canWrite('config') && tab === 'expense_types' && <button className="btn-primary gap-2" onClick={() => setExpModal(true)}><Plus size={15}/>نوع مصروف</button>}
       </div>
 
       {/* Tab bar */}
@@ -286,6 +589,11 @@ export default function ConfigPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* Financial Periods */}
+      {tab === 'periods' && (
+        <PeriodsTab canManage={canWrite('gl')} />
       )}
 
       {/* Modals */}

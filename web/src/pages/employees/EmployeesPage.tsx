@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Users, Plus, Phone, Calendar, DollarSign, ToggleLeft, ToggleRight } from 'lucide-react'
 import { employeesApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
+import { usePermission } from '../../hooks/usePermission'
 
 interface Employee {
   id: number; name: string; national_id?: string; role_title?: string
@@ -19,6 +20,7 @@ const EMPTY: EmpForm = { name: '', national_id: '', role_title: '', phone: '', h
 const ROLES = ['مهندس زراعي','مشرف','عامل','سائق','حارس','محاسب','مدير مزرعة','أخرى']
 
 export default function EmployeesPage() {
+  const { canWrite } = usePermission()
   const qc = useQueryClient()
   const [open, setOpen]     = useState(false)
   const [search, setSearch] = useState('')
@@ -64,9 +66,11 @@ export default function EmployeesPage() {
           <h1 className="text-xl font-bold text-gray-900">الموظفون والعمال</h1>
           <span className="badge badge-blue">{list.filter(e => e.is_active).length} نشط</span>
         </div>
-        <button className="btn btn-primary" onClick={() => { setOpen(true); setForm(EMPTY); setErr('') }}>
-          <Plus size={16} /> إضافة موظف
-        </button>
+        {canWrite('employees') && (
+          <button className="btn btn-primary" onClick={() => { setOpen(true); setForm(EMPTY); setErr('') }}>
+            <Plus size={16} /> إضافة موظف
+          </button>
+        )}
       </div>
 
       <input

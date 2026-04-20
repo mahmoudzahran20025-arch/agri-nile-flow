@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MapPin, Plus, Edit2, CheckCircle, XCircle } from 'lucide-react'
+import { MapPin, Plus, CheckCircle, XCircle } from 'lucide-react'
 import { fieldsApi, configApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
+import { usePermission } from '../../hooks/usePermission'
 
 interface Field {
   id: number; code: string; name: string; area_feddan: number
@@ -27,6 +28,7 @@ const SOILS      = ['طيني','رملي','طيني رملي','طفلي']
 const IRRIGATION = ['غمر','تنقيط','رش','ري بالأخاديد']
 
 export default function FieldsPage() {
+  const { canWrite } = usePermission()
   const qc = useQueryClient()
   const [open, setOpen]     = useState(false)
   const [search, setSearch] = useState('')
@@ -77,9 +79,11 @@ export default function FieldsPage() {
           <h1 className="text-xl font-bold text-gray-900">قطع الأراضي</h1>
           <span className="badge badge-blue">{(fields as Field[]).length} قطعة</span>
         </div>
-        <button className="btn btn-primary" onClick={() => { setOpen(true); setForm(EMPTY); setErr('') }}>
-          <Plus size={16} /> إضافة قطعة
-        </button>
+        {canWrite('fields') && (
+          <button className="btn btn-primary" onClick={() => { setOpen(true); setForm(EMPTY); setErr('') }}>
+            <Plus size={16} /> إضافة قطعة
+          </button>
+        )}
       </div>
 
       {/* Search */}

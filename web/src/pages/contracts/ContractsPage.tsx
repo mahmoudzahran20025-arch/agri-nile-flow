@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { FileText, Plus, ShoppingCart, TrendingUp } from 'lucide-react'
 import { contractsApi, configApi, suppliersApi, fieldsApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
+import { usePermission } from '../../hooks/usePermission'
 
 type Tab = 'purchase' | 'sales'
 
@@ -20,6 +21,7 @@ interface SalesContract {
 const STATUS_LABELS: Record<string, string> = {
   draft: 'مسودة', active: 'نشط', partial: 'جزئي', completed: 'مكتمل', cancelled: 'ملغى',
 }
+// @ts-ignore
 const STATUS_BADGE: Record<string, string> = {
   draft: 'badge-yellow', active: 'badge-blue', partial: 'badge-yellow',
   completed: 'badge-green', cancelled: 'badge-red',
@@ -29,6 +31,7 @@ const CONTRACT_STATUSES = ['draft','active','partial','completed','cancelled']
 function fmt(n: number) { return Number(n).toLocaleString('ar-EG') }
 
 export default function ContractsPage() {
+  const { canWrite } = usePermission()
   const qc = useQueryClient()
   const [tab, setTab]       = useState<Tab>('purchase')
   const [openPurch, setOP]  = useState(false)
@@ -124,12 +127,14 @@ export default function ContractsPage() {
           <FileText size={24} className="text-brand-600" />
           <h1 className="text-xl font-bold text-gray-900">العقود</h1>
         </div>
-        <button
-          className="btn btn-primary"
-          onClick={() => { tab === 'purchase' ? setOP(true) : setOS(true); setErr('') }}
-        >
-          <Plus size={16} /> عقد جديد
-        </button>
+        {canWrite('contracts') && (
+          <button
+            className="btn btn-primary"
+            onClick={() => { tab === 'purchase' ? setOP(true) : setOS(true); setErr('') }}
+          >
+            <Plus size={16} /> عقد جديد
+          </button>
+        )}
       </div>
 
       {/* Tabs */}

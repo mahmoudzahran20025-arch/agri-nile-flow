@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, FileText, Plus } from 'lucide-react'
 import { suppliersApi, downloadCsv } from '../../api/client'
+import { usePermission } from '../../hooks/usePermission'
 import DataTable, { type Column } from '../../components/ui/DataTable'
 import AddSupplierTransactionModal from '../../components/forms/AddSupplierTransactionModal'
 import type { Supplier, SupplierTransaction } from '../../types'
@@ -35,6 +36,7 @@ const TXNS_COLS: Column<SupplierTransaction>[] = [
 ]
 
 export default function SupplierDetailPage() {
+  const { canWrite } = usePermission()
   const { code } = useParams<{ code: string }>()
   const navigate  = useNavigate()
   const [page,    setPage]    = useState(1)
@@ -75,10 +77,12 @@ export default function SupplierDetailPage() {
           <FileText size={16} />
           تصدير كشف الحساب
         </button>
-        <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
-          <Plus size={16} />
-          إضافة قيد
-        </button>
+        {canWrite('suppliers') && (
+          <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
+            <Plus size={16} />
+            إضافة قيد
+          </button>
+        )}
       </div>
 
       {/* Summary cards */}

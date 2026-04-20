@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, Plus, Settings } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { BookOpen, Plus, Settings, Eye } from 'lucide-react'
 import { glApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 import Modal from '../../components/ui/Modal'
+import { usePermission } from '../../hooks/usePermission'
 
 interface Account {
   id: number; code: string; name: string; account_type: string
@@ -28,6 +30,8 @@ const MAPPING_KEYS = [
 ]
 
 export default function ChartOfAccountsPage() {
+  const { canWrite } = usePermission()
+  const navigate = useNavigate()
   const qc = useQueryClient()
   const { toast } = useToast()
   const [filter, setFilter] = useState('')
@@ -97,12 +101,16 @@ export default function ChartOfAccountsPage() {
           <span className="badge badge-blue">{list.length} حساب</span>
         </div>
         <div className="flex items-center gap-2">
-          <button className="btn btn-ghost" onClick={openMappingModal}>
-            <Settings size={16} /> إعدادات الربط
-          </button>
-          <button className="btn btn-primary" onClick={() => setOpenAdd(true)}>
-            <Plus size={16} /> حساب جديد
-          </button>
+          {canWrite('gl') && (
+            <button className="btn btn-ghost" onClick={openMappingModal}>
+              <Settings size={16} /> إعدادات الربط
+            </button>
+          )}
+          {canWrite('gl') && (
+            <button className="btn btn-primary" onClick={() => setOpenAdd(true)}>
+              <Plus size={16} /> حساب جديد
+            </button>
+          )}
         </div>
       </div>
 
@@ -126,6 +134,7 @@ export default function ChartOfAccountsPage() {
                 <th className="th">الرصيد الطبيعي</th>
                 <th className="th">المستوى</th>
                 <th className="th">الحالة</th>
+                <th className="th"></th>
               </tr>
             </thead>
             <tbody>
@@ -164,6 +173,17 @@ export default function ChartOfAccountsPage() {
                     {a.is_header
                       ? <span className="badge badge-slate">مجموعة</span>
                       : <span className="badge badge-green">حساب فرعي</span>}
+                  </td>
+                  <td className="td text-left">
+                    {!a.is_header && (
+                      <button
+                        onClick={() => navigate(`/gl/ledger/${a.code}`)}
+                        className="p-1.5 rounded-lg text-brand-600 hover:bg-brand-50 transition-colors"
+                        title="دفتر الأستاذ"
+                      >
+                        <Eye size={15} />
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

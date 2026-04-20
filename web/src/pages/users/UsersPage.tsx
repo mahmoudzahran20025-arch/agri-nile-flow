@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { UserPlus, ToggleLeft, ToggleRight, Shield } from 'lucide-react'
 import { usersApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
+import { usePermission } from '../../hooks/usePermission'
 
 interface DbUser {
   id:         number
@@ -115,6 +116,7 @@ function AddUserModal({ open, onClose }: { open: boolean; onClose: () => void })
 }
 
 export default function UsersPage() {
+  const { canWrite } = usePermission()
   const qc = useQueryClient()
   const [addOpen, setAddOpen] = useState(false)
   const [toggling, setToggling] = useState<number | null>(null)
@@ -146,10 +148,12 @@ export default function UsersPage() {
             {users?.length ?? 0} مستخدم مسجل في هذه الشركة
           </p>
         </div>
-        <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
-          <UserPlus size={16} />
-          دعوة مستخدم
-        </button>
+        {canWrite('users') && (
+          <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
+            <UserPlus size={16} />
+            دعوة مستخدم
+          </button>
+        )}
       </div>
 
       <div className="card overflow-hidden">
@@ -188,20 +192,22 @@ export default function UsersPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-left">
-                    <button
-                      onClick={() => toggleActive(u)}
-                      disabled={toggling === u.id}
-                      title={u.is_active ? 'إيقاف المستخدم' : 'تفعيل المستخدم'}
-                      className={`p-1.5 rounded-lg transition-colors ${
-                        u.is_active
-                          ? 'text-green-600 hover:bg-green-50'
-                          : 'text-slate-400 hover:bg-slate-100'
-                      }`}
-                    >
-                      {u.is_active
-                        ? <ToggleRight size={20} />
-                        : <ToggleLeft  size={20} />}
-                    </button>
+                    {canWrite('users') && (
+                      <button
+                        onClick={() => toggleActive(u)}
+                        disabled={toggling === u.id}
+                        title={u.is_active ? 'إيقاف المستخدم' : 'تفعيل المستخدم'}
+                        className={`p-1.5 rounded-lg transition-colors ${
+                          u.is_active
+                            ? 'text-green-600 hover:bg-green-50'
+                            : 'text-slate-400 hover:bg-slate-100'
+                        }`}
+                      >
+                        {u.is_active
+                          ? <ToggleRight size={20} />
+                          : <ToggleLeft  size={20} />}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

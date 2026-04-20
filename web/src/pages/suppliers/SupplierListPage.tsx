@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Search, Plus } from 'lucide-react'
 import { suppliersApi } from '../../api/client'
+import { usePermission } from '../../hooks/usePermission'
 import DataTable, { type Column } from '../../components/ui/DataTable'
 import AddSupplierModal from '../../components/forms/AddSupplierModal'
 import type { Supplier } from '../../types'
@@ -46,18 +47,24 @@ const COLUMNS: Column<Supplier>[] = [
 ]
 
 export default function SupplierListPage() {
+  const { canWrite } = usePermission()
   const navigate = useNavigate()
   const [page,    setPage]    = useState(1)
   const [q,       setQ]       = useState('')
   const [qInput,  setQInput]  = useState('')
   const [addOpen, setAddOpen] = useState(false)
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['suppliers', page, q],
     queryFn:  () => suppliersApi.list({ page, size: 50, q: q || undefined }) as Promise<{
       data: Supplier[]; total: number; page: number; page_size: number; has_more: boolean
     }>,
   })
+
+  // Log errors for debugging
+  if (error) {
+    console.error('❌ Suppliers query error:', error)
+  }
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
@@ -69,11 +76,21 @@ export default function SupplierListPage() {
     <div className="space-y-5">
       <div className="page-header">
         <h1 className="page-title">الموردين والعملاء</h1>
-        <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
-          <Plus size={16} />
-          إضافة مورد
-        </button>
+        {canWrite('suppliers') && (
+          <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
+            <Plus size={16} />
+            إضافة مورد
+          </button>
+        )}
       </div>
+
+      {/* Error Display */}
+      {error && (
+        <div className="card bg-red-50 border border-red-200 p-4">
+          <p className="text-red-700 font-medium">❌ خطأ في تحميل البيانات</p>
+          <p className="text-red-600 text-sm">{String(error)}</p>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="card p-4">

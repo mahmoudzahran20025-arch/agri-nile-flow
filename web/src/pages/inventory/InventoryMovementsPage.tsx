@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Plus, SlidersHorizontal } from 'lucide-react'
-import { inventoryApi } from '../../api/client'
+import { Plus, SlidersHorizontal, Download } from 'lucide-react'
+import { inventoryApi, configApi, downloadCsv } from '../../api/client'
 import DataTable, { type Column } from '../../components/ui/DataTable'
 import AddInventoryMovementModal from '../../components/forms/AddInventoryMovementModal'
 import type { InventoryMovement } from '../../types'
+import { usePermission } from '../../hooks/usePermission'
 
 function egp(n: number | null | undefined) {
   if (n == null) return '—'
@@ -45,57 +46,126 @@ const COLUMNS: Column<InventoryMovement>[] = [
   { key: 'notes', header: 'ملاحظات', render: r => r.notes ?? '—' },
 ]
 
+function thisMonthStart() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
+}
+function today() { return new Date().toISOString().slice(0, 10) }
+
 export default function InventoryMovementsPage() {
+  const { canWrite } = usePermission()
   const [page,      setPage]      = useState(1)
   const [warehouse, setWarehouse] = useState('')
   const [movType,   setMovType]   = useState('')
+  const [itemCode,  setItemCode]  = useState('')
+  const [startDate, setStart]     = useState(thisMonthStart())
+  const [endDate,   setEnd]       = useState(today())
   const [addOpen,   setAddOpen]   = useState(false)
+
+  const reset = () => {
+    setWarehouse(''); setMovType(''); setItemCode('')
+    setStart(thisMonthStart()); setEnd(today()); setPage(1)
+  }
+  const isDirty = warehouse || movType || itemCode || startDate !== thisMonthStart() || endDate !== today()
 
   const { data: warehouses } = useQuery({
     queryKey: ['warehouses'],
     queryFn:  inventoryApi.warehouses,
   })
+  const { data: items = [] } = useQuery({
+    queryKey: ['config-items'],
+    queryFn:  configApi.items,
+  })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['inventory', 'movements', page, warehouse, movType],
+    queryKey: ['inventory', 'movements', page, warehouse, movType, itemCode, startDate, endDate],
     queryFn:  () => inventoryApi.list({
       page, size: 100,
-      warehouse: warehouse || undefined,
-      type:      movType   || undefined,
-    }) as Promise<{ data: InventoryMovement[]; total: number; page: number; page_size: number; has_more: boolean }>,
+      warehouse:  warehouse  || undefined,
+      type:       movType    || undefined,
+      item_code:  itemCode   ? Number(itemCode) : undefined,
+      start:      startDate  || undefined,
+      end:        endDate    || undefined,
+    } as Parameters<typeof inventoryApi.list>[0]) as Promise<{ data: InventoryMovement[]; total: number; page: number; page_size: number; has_more: boolean }>,
   })
 
   return (
     <div className="space-y-5">
       <div className="page-header">
         <h1 className="page-title">حركات المخزون</h1>
-        <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
-          <Plus size={16} />
-          حركة جديدة
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            className="btn-secondary gap-2"
+            onClick={() => downloadCsv('/inventory/movements', 'حركات_المخزون', {
+              warehouse: warehouse || undefined,
+              type:      movType   || undefined,
+            })}
+          >
+            <Download size={16} /> تصدير CSV
+          </button>
+          {canWrite('inventory') && (
+            <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
+              <Plus size={16} />
+              حركة جديدة
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
-      <div className="card p-4 flex flex-wrap gap-3 items-center">
-        <SlidersHorizontal size={16} className="text-slate-400" />
-        <select className="input w-44" value={warehouse} onChange={e => { setWarehouse(e.target.value); setPage(1) }}>
-          <option value="">كل المخازن</option>
-          {(warehouses ?? []).map(w => <option key={w} value={w}>{w}</option>)}
-        </select>
+      <div className="card p-4 space-y-3">
+        <div className="flex flex-wrap gap-3 items-center">
+          <SlidersHorizontal size={16} className="text-slate-400 flex-shrink-0" />
 
-        <select className="input w-36" value={movType} onChange={e => { setMovType(e.target.value); setPage(1) }}>
-          <option value="">كل الحركات</option>
-          <option value="اضافة">وارد</option>
-          <option value="صرف">منصرف</option>
-        </select>
+          {/* Date range */}
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-slate-500">من</label>
+            <input
+              type="date"
+              className="input w-36"
+              value={startDate}
+              onChange={e => { setStart(e.target.value); setPage(1) }}
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-slate-500">إلى</label>
+            <input
+              type="date"
+              className="input w-36"
+              value={endDate}
+              onChange={e => { setEnd(e.target.value); setPage(1) }}
+            />
+          </div>
 
-        {(warehouse || movType) && (
-          <button className="btn-ghost text-sm" onClick={() => { setWarehouse(''); setMovType(''); setPage(1) }}>
-            مسح الفلاتر
-          </button>
-        )}
-        <div className="flex-1 text-left text-sm text-slate-400">
-          {data ? `${(data?.total ?? 0).toLocaleString('ar-EG')} حركة` : ''}
+          {/* Warehouse */}
+          <select className="input w-40" value={warehouse} onChange={e => { setWarehouse(e.target.value); setPage(1) }}>
+            <option value="">كل المخازن</option>
+            {(warehouses ?? []).map(w => <option key={w} value={w}>{w}</option>)}
+          </select>
+
+          {/* Movement type */}
+          <select className="input w-32" value={movType} onChange={e => { setMovType(e.target.value); setPage(1) }}>
+            <option value="">كل الحركات</option>
+            <option value="اضافة">وارد</option>
+            <option value="صرف">منصرف</option>
+          </select>
+
+          {/* Item */}
+          <select className="input w-44" value={itemCode} onChange={e => { setItemCode(e.target.value); setPage(1) }}>
+            <option value="">كل الأصناف</option>
+            {(items as { id: number; name: string }[]).map(i => (
+              <option key={i.id} value={i.id}>{i.name}</option>
+            ))}
+          </select>
+
+          {isDirty && (
+            <button className="btn-ghost text-sm" onClick={reset}>
+              مسح الفلاتر
+            </button>
+          )}
+          <div className="flex-1 text-left text-sm text-slate-400">
+            {data ? `${(data?.total ?? 0).toLocaleString('ar-EG')} حركة` : ''}
+          </div>
         </div>
       </div>
 
@@ -108,7 +178,7 @@ export default function InventoryMovementsPage() {
         pageSize={100}
         onPage={setPage}
         rowKey={r => r.id}
-        emptyText="لا توجد حركات مخزنية"
+        emptyText="لا توجد حركات مخزنية في هذه الفترة"
       />
 
       <AddInventoryMovementModal
