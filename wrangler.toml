@@ -13,7 +13,7 @@ database_name = "agri-nile-flow-data-lake"
 database_id   = "2dd5cfe6-b694-46bd-9cb8-adf1bc7c27af"
 
 [vars]
-JWT_SECRET = "REPLACE_WITH_STRONG_SECRET_BEFORE_DEPLOY"
+JWT_SECRET = "aef19e3ed2238eb4941c1ebc5e77d22cc4da94d93181bd252938c4a897e6c8a7"
 APP_ENV    = "production"
 
 [dev]
