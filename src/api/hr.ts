@@ -491,32 +491,34 @@ hr.post('/payroll/run', async (c) => {
 
   let totalGross = 0, totalDeductions = 0, totalNet = 0
 
-  for (const emp of employees) {
+  // Build all payroll item rows first, then batch-insert
+  const itemStmts = employees.map(emp => {
     const att   = attMap.get(emp.id)
     const adv   = advMap.get(emp.id) ?? 0
-    const baseSalary = emp.base_salary ?? emp.daily_wage * 26  // fallback: daily_wage × 26 working days
+    const baseSalary = emp.base_salary ?? emp.daily_wage * 26
 
-    // Use job_details salary if available, else daily_wage-based
-    const workingDays  = att?.working_days ?? 0
-    const absentDays   = att?.absent_days  ?? 0
+    const workingDays  = att?.working_days  ?? 0
+    const absentDays   = att?.absent_days   ?? 0
     const overtimeHrs  = att?.overtime_hours ?? 0
 
-    // Calculate gross
     const dailyRate    = baseSalary / 26
     const earnedBase   = workingDays > 0 ? baseSalary - (absentDays * dailyRate) : 0
-    const housing      = emp.housing_allow ?? 0
-    const transport    = emp.transport_allow ?? 0
-    const otherAllows  = emp.other_allows ?? 0
+    const housing      = emp.housing_allow    ?? 0
+    const transport    = emp.transport_allow  ?? 0
+    const otherAllows  = emp.other_allows     ?? 0
     const overtimePay  = overtimeHrs * (dailyRate / 8) * 1.5
     const gross        = Math.max(0, earnedBase + housing + transport + otherAllows + overtimePay)
 
-    // Calculate deductions
     const socialInsur  = emp.social_insur ?? 0
     const incomeTax    = gross * ((emp.income_tax_pct ?? 0) / 100)
     const totalDeduct  = socialInsur + incomeTax + adv
     const net          = Math.max(0, gross - totalDeduct)
 
-    await c.env.DB.prepare(
+    totalGross      += gross
+    totalDeductions += totalDeduct
+    totalNet        += net
+
+    return c.env.DB.prepare(
       `INSERT INTO payroll_items
        (payroll_run_id, employee_id, company_id, working_days, absent_days, overtime_hours,
         base_salary, housing_allow, transport_allow, other_allows, gross_salary,
@@ -526,12 +528,11 @@ hr.post('/payroll/run', async (c) => {
       runId, emp.id, company_id, workingDays, absentDays, overtimeHrs,
       earnedBase, housing, transport, otherAllows, gross,
       adv, socialInsur, incomeTax, 0, net
-    ).run()
+    )
+  })
 
-    totalGross      += gross
-    totalDeductions += totalDeduct
-    totalNet        += net
-  }
+  // Single D1 batch — all employees in one round-trip
+  await c.env.DB.batch(itemStmts)
 
   // Update run totals
   await c.env.DB.prepare(
@@ -693,6 +694,402 @@ hr.get('/employees/:id/profile', async (c) => {
       advances: advances.results,
       assets: assets.results,
       leave_requests: leaveRequests.results,
+    },
+  })
+})
+
+// ═══════════════════════════════════════════════════════════
+// GEO — helpers
+// ═══════════════════════════════════════════════════════════
+
+function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6_371_000
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLng = (lng2 - lng1) * Math.PI / 180
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180)
+    * Math.sin(dLng / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+// Ray-casting point-in-polygon
+// coords are [lng, lat] (GeoJSON standard)
+function pointInPolygon(lat: number, lng: number, ring: [number, number][]): boolean {
+  let inside = false
+  const n = ring.length
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const [xi, yi] = ring[i]
+    const [xj, yj] = ring[j]
+    if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi))
+      inside = !inside
+  }
+  return inside
+}
+
+// Extract first polygon ring from GeoJSON string
+function extractRingFromGeoJSON(geojson: string): [number, number][] | null {
+  try {
+    const g = JSON.parse(geojson)
+    let geometry = g
+    if (g.type === 'FeatureCollection') geometry = g.features?.[0]?.geometry
+    else if (g.type === 'Feature') geometry = g.geometry
+    if (geometry?.type === 'Polygon') return geometry.coordinates[0]
+    if (geometry?.type === 'MultiPolygon') return geometry.coordinates[0][0]
+    return null
+  } catch { return null }
+}
+
+// ═══════════════════════════════════════════════════════════
+// GEO CHECK-IN (تسجيل الحضور بالموقع الجغرافي)
+// ═══════════════════════════════════════════════════════════
+// POST /hr/geo/check-in
+// الموظف يفتح التطبيق → يضغط "تسجيل حضور" → يُرسل GPS coordinates
+// النظام يحسب المسافة من الفرع ويحدد: onsite | field
+hr.post('/geo/check-in', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const b = await c.req.json<{
+    employee_id: number
+    work_date:   string
+    lat:         number
+    lng:         number
+    accuracy_m:  number
+    field_id?:   number  // اختياري — لو الموظف اختار حقل من القائمة
+  }>()
+
+  if (!b.employee_id || !b.work_date || b.lat == null || b.lng == null) {
+    return c.json({ success: false, error: 'بيانات ناقصة: employee_id, work_date, lat, lng مطلوبة' }, 400)
+  }
+
+  // جلب بيانات الفرع المرتبط بالموظف
+  const branch = await c.env.DB.prepare(
+    `SELECT b.lat, b.lng, b.geofence_radius_m
+     FROM branches b
+     JOIN employee_job_details ejd ON ejd.branch_id = b.id
+     WHERE ejd.employee_id = ? AND ejd.company_id = ?`
+  ).bind(b.employee_id, company_id).first<{ lat: number | null; lng: number | null; geofence_radius_m: number }>()
+
+  let location_status = 'unverified'
+  let distance_m: number | null = null
+
+  if (branch?.lat != null && branch?.lng != null) {
+    distance_m = Math.round(haversineM(b.lat, b.lng, branch.lat, branch.lng))
+    const radius = branch.geofence_radius_m ?? 200
+    location_status = distance_m <= radius ? 'onsite' : 'field'
+  }
+
+  // تحديث أو إنشاء سجل الحضور
+  const existing = await c.env.DB.prepare(
+    `SELECT id FROM attendance_records WHERE employee_id = ? AND company_id = ? AND work_date = ?`
+  ).bind(b.employee_id, company_id, b.work_date).first<{ id: number }>()
+
+  if (existing) {
+    await c.env.DB.prepare(
+      `UPDATE attendance_records
+       SET check_in = datetime('now'), check_in_lat = ?, check_in_lng = ?,
+           location_status = ?, gps_accuracy_m = ?, field_id = ?
+       WHERE id = ?`
+    ).bind(b.lat, b.lng, location_status, b.accuracy_m ?? null, b.field_id ?? null, existing.id).run()
+  } else {
+    await c.env.DB.prepare(
+      `INSERT INTO attendance_records
+         (employee_id, company_id, work_date, status, check_in, check_in_lat, check_in_lng,
+          location_status, gps_accuracy_m, field_id, recorded_by)
+       VALUES (?,?,?,?,datetime('now'),?,?,?,?,?,?)`
+    ).bind(
+      b.employee_id, company_id, b.work_date, 'present',
+      b.lat, b.lng, location_status, b.accuracy_m ?? null, b.field_id ?? null, userId
+    ).run()
+  }
+
+  return c.json({
+    success: true,
+    data: { location_status, distance_m, accuracy_m: b.accuracy_m, weak_signal: b.accuracy_m > 100 },
+  })
+})
+
+// ═══════════════════════════════════════════════════════════
+// LOCATION TASKS (مهام زيارة موضع)
+// ═══════════════════════════════════════════════════════════
+
+// GET /hr/location-tasks — قائمة المهام (للمدير: كل الموظفين / للموظف: مهامه)
+hr.get('/location-tasks', async (c) => {
+  const { company_id } = getUser(c)
+  const empId    = c.req.query('employee_id')
+  const taskDate = c.req.query('date')  // YYYY-MM-DD
+  const status   = c.req.query('status')
+
+  const conditions: string[] = ['lt.company_id = ?']
+  const params: unknown[] = [company_id]
+
+  if (empId)    { conditions.push('lt.employee_id = ?');  params.push(Number(empId)) }
+  if (taskDate) { conditions.push('lt.task_date = ?');    params.push(taskDate) }
+  if (status)   { conditions.push('lt.status = ?');       params.push(status) }
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT lt.*,
+            e.name    AS employee_name,
+            u.full_name AS assigned_by_name,
+            f.name    AS field_name,
+            f.code    AS field_code
+     FROM location_tasks lt
+     JOIN employees e ON e.id = lt.employee_id
+     JOIN users     u ON u.id = lt.assigned_by
+     LEFT JOIN fields f ON f.id = lt.field_id
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY lt.task_date DESC, lt.id DESC
+     LIMIT 200`
+  ).bind(...params).all()
+
+  return c.json({ success: true, data: results })
+})
+
+// POST /hr/location-tasks — المدير يُسند مهمة زيارة
+hr.post('/location-tasks', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const b = await c.req.json<{
+    employee_id:  number
+    task_date:    string
+    field_id?:    number   // إما حقل موجود
+    custom_lat?:  number   // أو موقع مخصص
+    custom_lng?:  number
+    custom_name?: string
+    tolerance_m?: number   // نطاق القبول (default 150m)
+    task_notes?:  string
+  }>()
+
+  if (!b.employee_id || !b.task_date) {
+    return c.json({ success: false, error: 'الموظف والتاريخ مطلوبان' }, 400)
+  }
+  if (!b.field_id && (b.custom_lat == null || b.custom_lng == null)) {
+    return c.json({ success: false, error: 'يجب تحديد حقل أو إحداثيات موقع مخصص' }, 400)
+  }
+
+  const r = await c.env.DB.prepare(
+    `INSERT INTO location_tasks
+       (company_id, employee_id, assigned_by, field_id, custom_lat, custom_lng, custom_name,
+        tolerance_m, task_date, task_notes)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`
+  ).bind(
+    company_id, b.employee_id, userId,
+    b.field_id ?? null, b.custom_lat ?? null, b.custom_lng ?? null, b.custom_name ?? null,
+    b.tolerance_m ?? 150, b.task_date, b.task_notes ?? null
+  ).run()
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'CREATE',
+    table_name: 'location_tasks', record_id: r.meta.last_row_id,
+  })
+
+  return c.json({ success: true, data: { id: r.meta.last_row_id } }, 201)
+})
+
+// PATCH /hr/location-tasks/:id/arrive — الموظف يُسجّل وصوله
+hr.patch('/location-tasks/:id/arrive', async (c) => {
+  const { company_id } = getUser(c)
+  const taskId = Number(c.req.param('id'))
+  const b = await c.req.json<{ lat: number; lng: number; accuracy_m?: number }>()
+
+  if (b.lat == null || b.lng == null) {
+    return c.json({ success: false, error: 'الإحداثيات مطلوبة' }, 400)
+  }
+
+  const task = await c.env.DB.prepare(
+    `SELECT * FROM location_tasks WHERE id = ? AND company_id = ?`
+  ).bind(taskId, company_id).first<{
+    status: string; field_id: number | null
+    custom_lat: number | null; custom_lng: number | null
+    tolerance_m: number
+  }>()
+
+  if (!task) return c.json({ success: false, error: 'المهمة غير موجودة' }, 404)
+  if (task.status !== 'pending') return c.json({ success: false, error: 'تم تسجيل الوصول مسبقاً' }, 409)
+
+  // جلب إحداثيات الهدف (مع boundary_geojson لو موجود)
+  let targetLat: number | null = task.custom_lat
+  let targetLng: number | null = task.custom_lng
+  let fieldPolygon: [number, number][] | null = null
+
+  if (task.field_id) {
+    const field = await c.env.DB.prepare(
+      'SELECT center_lat, center_lng, boundary_geojson FROM fields WHERE id = ? AND company_id = ?'
+    ).bind(task.field_id, company_id).first<{
+      center_lat: number | null; center_lng: number | null; boundary_geojson: string | null
+    }>()
+    if (field?.boundary_geojson) fieldPolygon = extractRingFromGeoJSON(field.boundary_geojson)
+    if (field?.center_lat != null) { targetLat = field.center_lat; targetLng = field.center_lng }
+  }
+
+  // حساب المسافة وتحديد الحالة
+  // الأولوية: polygon check → circle check → unverified
+  let distance_m: number | null = null
+  let newStatus = 'arrived'  // default: وصل (لو مفيش إحداثيات للهدف)
+
+  if (fieldPolygon && fieldPolygon.length >= 3) {
+    // استخدام فحص الـ polygon (دقيق)
+    const inside = pointInPolygon(b.lat, b.lng, fieldPolygon)
+    if (inside) {
+      newStatus = 'arrived'
+      distance_m = 0
+    } else if (targetLat != null && targetLng != null) {
+      distance_m = Math.round(haversineM(b.lat, b.lng, targetLat, targetLng))
+      newStatus  = distance_m <= task.tolerance_m ? 'arrived' : 'outside'
+    } else {
+      newStatus = 'outside'
+    }
+  } else if (targetLat != null && targetLng != null) {
+    // فحص دائرة (fallback)
+    distance_m = Math.round(haversineM(b.lat, b.lng, targetLat, targetLng))
+    newStatus  = distance_m <= task.tolerance_m ? 'arrived' : 'outside'
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE location_tasks
+     SET status = ?, arrived_at = datetime('now'), arrived_lat = ?, arrived_lng = ?,
+         distance_m = ?, gps_accuracy_m = ?
+     WHERE id = ?`
+  ).bind(newStatus, b.lat, b.lng, distance_m, b.accuracy_m ?? null, taskId).run()
+
+  return c.json({
+    success: true,
+    data: {
+      status:      newStatus,
+      distance_m,
+      tolerance_m: task.tolerance_m,
+      within_range: newStatus === 'arrived',
+      weak_signal:  b.accuracy_m != null && b.accuracy_m > 100,
+    },
+  })
+})
+
+// PATCH /hr/location-tasks/:id/cancel — المدير يلغي المهمة
+hr.patch('/location-tasks/:id/cancel', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const taskId = Number(c.req.param('id'))
+  await c.env.DB.prepare(
+    `UPDATE location_tasks SET status = 'missed' WHERE id = ? AND company_id = ? AND status = 'pending'`
+  ).bind(taskId, company_id).run()
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'CANCEL', table_name: 'location_tasks', record_id: taskId })
+  return c.json({ success: true, data: null })
+})
+
+// ═══════════════════════════════════════════════════════════
+// HR DASHBOARD — لوحة تحكم الموارد البشرية
+// ═══════════════════════════════════════════════════════════
+
+// GET /hr/dashboard — بيانات الداشبورد الكاملة
+hr.get('/dashboard', async (c) => {
+  const { company_id } = getUser(c)
+
+  const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+
+  const [
+    totalEmpsRes,
+    todayAttendRes,
+    pendingLeavesRes,
+    pendingAdvancesRes,
+    todayTasksRes,
+    monthlyAttendRes,
+    payrollTrendRes,
+    expiringDocRes,
+  ] = await Promise.all([
+    // إجمالي الموظفين النشطين
+    c.env.DB.prepare(
+      `SELECT COUNT(DISTINCT jd.employee_id) AS total
+       FROM employee_job_details jd
+       JOIN employees e ON e.id = jd.employee_id AND e.company_id = jd.company_id
+       WHERE jd.company_id = ? AND (jd.end_date IS NULL OR jd.end_date >= date('now'))`
+    ).bind(company_id).first<{ total: number }>(),
+
+    // إحصائيات الحضور اليوم
+    c.env.DB.prepare(
+      `SELECT
+         COUNT(CASE WHEN status IN ('present','late','half_day') THEN 1 END) AS present,
+         COUNT(CASE WHEN status = 'absent'   THEN 1 END) AS absent,
+         COUNT(CASE WHEN status = 'late'     THEN 1 END) AS late,
+         COUNT(CASE WHEN status = 'sick'     THEN 1 END) AS sick,
+         COUNT(CASE WHEN status = 'leave'    THEN 1 END) AS on_leave,
+         COUNT(*) AS total_records
+       FROM attendance_records
+       WHERE company_id = ? AND work_date = ?`
+    ).bind(company_id, today).first<{
+      present: number; absent: number; late: number;
+      sick: number; on_leave: number; total_records: number
+    }>(),
+
+    // طلبات الإجازة المعلقة
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS cnt FROM leave_requests WHERE company_id = ? AND status = 'pending'`
+    ).bind(company_id).first<{ cnt: number }>(),
+
+    // طلبات السلف المعلقة
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS cnt FROM salary_advances WHERE company_id = ? AND status = 'pending'`
+    ).bind(company_id).first<{ cnt: number }>(),
+
+    // مهام الزيارات اليوم
+    c.env.DB.prepare(
+      `SELECT
+         COUNT(CASE WHEN status = 'pending' THEN 1 END) AS pending,
+         COUNT(CASE WHEN status = 'arrived' THEN 1 END) AS arrived,
+         COUNT(CASE WHEN status = 'outside' THEN 1 END) AS outside,
+         COUNT(CASE WHEN status = 'missed'  THEN 1 END) AS missed,
+         COUNT(*) AS total
+       FROM location_tasks
+       WHERE company_id = ? AND task_date = ?`
+    ).bind(company_id, today).first<{
+      pending: number; arrived: number; outside: number; missed: number; total: number
+    }>(),
+
+    // توجه الحضور — آخر 6 أشهر (عدد أيام الحضور الفعلية لكل شهر)
+    c.env.DB.prepare(
+      `SELECT
+         strftime('%Y-%m', work_date) AS month,
+         COUNT(CASE WHEN status IN ('present','late','half_day') THEN 1 END) AS present_days,
+         COUNT(CASE WHEN status = 'absent' THEN 1 END) AS absent_days,
+         COUNT(DISTINCT employee_id) AS active_employees
+       FROM attendance_records
+       WHERE company_id = ? AND work_date >= date('now','-6 months')
+       GROUP BY month ORDER BY month ASC`
+    ).bind(company_id).all<{ month: string; present_days: number; absent_days: number; active_employees: number }>(),
+
+    // آخر 6 مسيرات رواتب معتمدة
+    c.env.DB.prepare(
+      `SELECT
+         period_year || '-' || printf('%02d', period_month) AS month,
+         total_gross, total_deductions, total_net
+       FROM payroll_runs
+       WHERE company_id = ? AND status IN ('approved','paid')
+       ORDER BY period_year DESC, period_month DESC
+       LIMIT 6`
+    ).bind(company_id).all<{ month: string; total_gross: number; total_deductions: number; total_net: number }>(),
+
+    // مستندات تنتهي في 30 يوم القادمة
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS cnt FROM documents
+       WHERE company_id = ? AND expiry_date IS NOT NULL
+         AND expiry_date BETWEEN date('now') AND date('now','+30 days')`
+    ).bind(company_id).first<{ cnt: number }>(),
+  ])
+
+  return c.json({
+    success: true,
+    data: {
+      today,
+      total_employees: totalEmpsRes?.total ?? 0,
+      today_attendance: {
+        present:  todayAttendRes?.present  ?? 0,
+        absent:   todayAttendRes?.absent   ?? 0,
+        late:     todayAttendRes?.late     ?? 0,
+        sick:     todayAttendRes?.sick     ?? 0,
+        on_leave: todayAttendRes?.on_leave ?? 0,
+        total:    todayAttendRes?.total_records ?? 0,
+      },
+      pending_leaves:    pendingLeavesRes?.cnt  ?? 0,
+      pending_advances:  pendingAdvancesRes?.cnt ?? 0,
+      today_tasks:       todayTasksRes ?? { pending: 0, arrived: 0, outside: 0, missed: 0, total: 0 },
+      monthly_attendance: (monthlyAttendRes?.results ?? []).reverse(), // oldest→newest for chart
+      payroll_trend:     (payrollTrendRes?.results ?? []).reverse(),
+      expiring_documents: expiringDocRes?.cnt ?? 0,
     },
   })
 })
