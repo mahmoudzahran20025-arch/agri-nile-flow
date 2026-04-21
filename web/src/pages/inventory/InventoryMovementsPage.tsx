@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { Plus, SlidersHorizontal, Download } from 'lucide-react'
 import { inventoryApi, configApi, downloadCsv } from '../../api/client'
 import DataTable, { type Column } from '../../components/ui/DataTable'
-import AddInventoryMovementModal from '../../components/forms/AddInventoryMovementModal'
+import AddInventoryBatchModal from '../../components/forms/AddInventoryBatchModal'
 import type { InventoryMovement } from '../../types'
 import { usePermission } from '../../hooks/usePermission'
 
@@ -28,7 +29,11 @@ const COLUMNS: Column<InventoryMovement>[] = [
       </span>
     ),
   },
-  { key: 'item_name',  header: 'الصنف',  render: r => r.item_name ?? `#${r.item_code}` },
+  { key: 'item_name',  header: 'الصنف',  render: r => (
+    <span className="font-medium text-brand-700 hover:underline cursor-pointer">
+      {r.item_name ?? `#${r.item_code}`}
+    </span>
+  )},
   { key: 'unit',       header: 'الوحدة', width: '70px',  render: r => r.unit ?? '—' },
   { key: 'quantity',   header: 'الكمية', width: '80px',  render: r => num(r.quantity) },
   { key: 'unit_price', header: 'سعر الوحدة', width: '100px', render: r => egp(r.unit_price) },
@@ -54,6 +59,7 @@ function today() { return new Date().toISOString().slice(0, 10) }
 
 export default function InventoryMovementsPage() {
   const { canWrite } = usePermission()
+  const navigate     = useNavigate()
   const [page,      setPage]      = useState(1)
   const [warehouse, setWarehouse] = useState('')
   const [movType,   setMovType]   = useState('')
@@ -178,10 +184,11 @@ export default function InventoryMovementsPage() {
         pageSize={100}
         onPage={setPage}
         rowKey={r => r.id}
+        onRowClick={r => navigate(`/inventory/item/${r.item_code}`)}
         emptyText="لا توجد حركات مخزنية في هذه الفترة"
       />
 
-      <AddInventoryMovementModal
+      <AddInventoryBatchModal
         open={addOpen}
         onClose={() => setAddOpen(false)}
         defaultWarehouse={warehouse || undefined}

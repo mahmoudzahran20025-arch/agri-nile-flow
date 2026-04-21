@@ -6,6 +6,9 @@ import {
   BookOpen, BookMarked, BarChart3, Building2, Shield,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
+import { useQuery } from '@tanstack/react-query'
+import { dashboardApi } from '../api/client'
+import { useIsAuth } from '../store/appStore'
 import { useState } from 'react'
 
 const ROLE_LABELS: Record<string, string> = {
@@ -42,13 +45,19 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/inventory',            icon: <Package         size={20} />, label: 'أرصدة المخازن' },
   { to: '/inventory/movements',  icon: <ClipboardList   size={20} />, label: 'حركات المخزون' },
   { to: '/fields',               icon: <MapPin          size={20} />, label: 'قطع الأراضي' },
-  { to: '/employees',            icon: <Users           size={20} />, label: 'الموظفون' },
-  { to: '/operations',           icon: <Wrench          size={20} />, label: 'أوامر العمل' },
+  { to: '/hr',                    icon: <Users           size={20} />, label: 'الموارد البشرية', group: 'HR' },
+  { to: '/hr/attendance',         icon: <ClipboardList   size={20} />, label: 'الحضور والانصراف', group: 'HR' },
+  { to: '/hr/leaves',             icon: <FileText        size={20} />, label: 'الإجازات والسلف', group: 'HR' },
+  { to: '/hr/payroll',            icon: <Banknote        size={20} />, label: 'مسيرات الرواتب', group: 'HR' },
+  { to: '/documents',             icon: <FileText        size={20} />, label: 'إدارة المستندات' },
+  { to: '/employees',             icon: <Users           size={20} />, label: 'الموظفون (قديم)' },
+  { to: '/operations',            icon: <Wrench          size={20} />, label: 'أوامر العمل' },
   { to: '/contracts',            icon: <FileText        size={20} />, label: 'العقود' },
   { to: '/gl/accounts',         icon: <BookOpen        size={20} />, label: 'شجرة الحسابات' },
   { to: '/gl/entries',          icon: <BookMarked      size={20} />, label: 'قيود اليومية' },
   { to: '/gl/statements',       icon: <BarChart3       size={20} />, label: 'القوائم المالية' },
   { to: '/reports',              icon: <ClipboardList   size={20} />, label: 'التقارير' },
+  { to: '/reports/charts',       icon: <BarChart3       size={20} />, label: 'التقارير المرئية' },
   { to: '/audit',                icon: <Shield          size={20} />, label: 'سجل المراجعة' },
   { to: '/users',                icon: <UserCog         size={20} />, label: 'المستخدمون' },
   { to: '/config',               icon: <Settings        size={20} />, label: 'الإعدادات' },
@@ -56,8 +65,19 @@ const NAV_ITEMS: NavItem[] = [
 
 export default function Sidebar() {
   const { company, user, role, logout } = useAppStore()
+  const isAuth = useIsAuth()
   const navigate = useNavigate()
   const [collapsed, setCollapsed] = useState(false)
+
+  // Low-stock alerts count
+  const { data: alertsData = [] } = useQuery({
+    queryKey: ['dashboard', 'alerts'],
+    queryFn:  () => dashboardApi.inventoryAlerts() as Promise<{ name: string; balance_qty: number }[]>,
+    enabled:  isAuth,
+    staleTime: 120_000,
+    refetchInterval: 300_000, // refresh every 5 min
+  })
+  const alertCount = alertsData.length
 
   const handleLogout = () => {
     logout()
@@ -117,29 +137,41 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 py-4 overflow-y-auto space-y-1 px-2">
-        {NAV_ITEMS.map(item => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            className={({ isActive }) => `
-              flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
-              transition-colors duration-150 group relative
-              ${isActive
-                ? 'bg-brand-700 text-white'
-                : 'text-brand-200 hover:bg-brand-800 hover:text-white'}
-              ${collapsed ? 'justify-center' : ''}
-            `}
-            title={collapsed ? item.label : undefined}
-          >
-            <span className="flex-shrink-0">{item.icon}</span>
-            {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
-            {!collapsed && item.badge != null && (
-              <span className="bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
-                {item.badge}
+        {NAV_ITEMS.map(item => {
+          const isInventory = item.to === '/inventory'
+          const badge = isInventory && alertCount > 0 ? alertCount : item.badge
+          return (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) => `
+                flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
+                transition-colors duration-150 group relative
+                ${isActive
+                  ? 'bg-brand-700 text-white'
+                  : 'text-brand-200 hover:bg-brand-800 hover:text-white'}
+                ${collapsed ? 'justify-center' : ''}
+              `}
+              title={collapsed ? item.label : undefined}
+            >
+              <span className="flex-shrink-0 relative">
+                {item.icon}
+                {collapsed && badge != null && (
+                  <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] rounded-full min-w-[16px] h-4 flex items-center justify-center px-0.5 leading-none">
+                    {badge > 99 ? '99+' : badge}
+                  </span>
+                )}
               </span>
-            )}
-          </NavLink>
-        ))}
+              {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
+              {!collapsed && badge != null && (
+                <span className={`text-white text-xs rounded-full px-1.5 py-0.5 min-w-[20px] text-center
+                  ${isInventory ? 'bg-orange-500' : 'bg-red-500'}`}>
+                  {badge > 99 ? '99+' : badge}
+                </span>
+              )}
+            </NavLink>
+          )
+        })}
       </nav>
 
       {/* User footer */}

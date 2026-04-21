@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Package, ChevronDown, ChevronUp, Plus, Download } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Package, ChevronDown, ChevronUp, Plus, Download, ExternalLink } from 'lucide-react'
 import { inventoryApi, downloadCsv } from '../../api/client'
-import AddInventoryMovementModal from '../../components/forms/AddInventoryMovementModal'
+import AddInventoryBatchModal from '../../components/forms/AddInventoryBatchModal'
+import { TableSkeleton } from '../../components/ui/Skeleton'
 import type { InventoryBalance } from '../../types'
 import { usePermission } from '../../hooks/usePermission'
 
@@ -15,6 +17,7 @@ function num(n: number) {
 
 export default function WarehouseBalancesPage() {
   const { canWrite } = usePermission()
+  const navigate     = useNavigate()
   const [activeWarehouse, setActiveWarehouse] = useState<string | null>(null)
   const [expanded,        setExpanded]        = useState<Set<string>>(new Set())
   const [addOpen,         setAddOpen]         = useState(false)
@@ -85,14 +88,14 @@ export default function WarehouseBalancesPage() {
       </div>
 
       {isLoading ? (
-        <div className="card p-16 text-center text-slate-400">
-          <Package size={40} className="mx-auto mb-3 opacity-30 animate-pulse" />
-          جاري تحميل أرصدة المخازن...
-        </div>
+        <TableSkeleton rows={6} cols={6} />
       ) : Object.keys(grouped).length === 0 ? (
         <div className="card p-16 text-center text-slate-400">
-          <Package size={40} className="mx-auto mb-3 opacity-30" />
-          لا توجد أرصدة مخزنية
+          <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <Package size={32} className="opacity-30" />
+          </div>
+          <p className="font-medium">لا توجد أرصدة مخزنية</p>
+          <p className="text-sm text-slate-300 mt-1">أضف حركة مخزنية لتظهر هنا</p>
         </div>
       ) : (
         <div className="space-y-4">
@@ -135,8 +138,13 @@ export default function WarehouseBalancesPage() {
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {items.map(item => (
-                          <tr key={item.item_code} className="hover:bg-slate-50">
-                            <td className="px-4 py-3 font-medium text-slate-700">{item.item_name ?? `#${item.item_code}`}</td>
+                          <tr key={item.item_code}
+                            className="hover:bg-brand-50 cursor-pointer transition-colors group"
+                            onClick={() => navigate(`/inventory/item/${item.item_code}`)}>
+                            <td className="px-4 py-3 font-medium text-slate-700 group-hover:text-brand-700 flex items-center gap-1.5">
+                              {item.item_name ?? `#${item.item_code}`}
+                              <ExternalLink size={12} className="opacity-0 group-hover:opacity-60 transition-opacity text-brand-500" />
+                            </td>
                             <td className="px-4 py-3 text-slate-500">{item.unit ?? '—'}</td>
                             <td className="px-4 py-3 text-green-700">{num(item.total_in)}</td>
                             <td className="px-4 py-3 text-red-600">{num(item.total_out)}</td>
@@ -166,7 +174,7 @@ export default function WarehouseBalancesPage() {
         </div>
       )}
 
-      <AddInventoryMovementModal
+      <AddInventoryBatchModal
         open={addOpen}
         onClose={() => setAddOpen(false)}
         defaultWarehouse={activeWarehouse ?? undefined}

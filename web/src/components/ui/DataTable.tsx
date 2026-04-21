@@ -1,4 +1,4 @@
-import { ChevronRight, ChevronLeft, Loader2 } from 'lucide-react'
+import { ChevronRight, ChevronLeft, SearchX } from 'lucide-react'
 
 export interface Column<T> {
   key:       keyof T | string
@@ -6,6 +6,7 @@ export interface Column<T> {
   render?:   (row: T) => React.ReactNode
   align?:    'right' | 'left' | 'center'
   width?:    string
+  minWidth?: string   // mobile hint: minimum column width for scroll
 }
 
 interface Props<T> {
@@ -19,6 +20,7 @@ interface Props<T> {
   rowKey:    (row: T) => string | number
   onRowClick?: (row: T) => void
   emptyText?: string
+  emptyIcon?: React.ReactNode
 }
 
 function getVal<T>(row: T, key: string): React.ReactNode {
@@ -29,23 +31,50 @@ function getVal<T>(row: T, key: string): React.ReactNode {
   return v == null ? '—' : String(v)
 }
 
+// ── Skeleton rows while loading ───────────────────────────────
+function SkeletonRows({ cols, rows = 7 }: { cols: number; rows?: number }) {
+  return (
+    <>
+      {Array.from({ length: rows }).map((_, ri) => (
+        <tr key={ri} className="border-b border-slate-100">
+          {Array.from({ length: cols }).map((_, ci) => (
+            <td key={ci} className="px-4 py-3">
+              <div
+                className="h-4 rounded animate-pulse bg-slate-200"
+                style={{
+                  width: ci === 0 ? '60%' : `${50 + Math.random() * 40}%`,
+                  animationDelay: `${(ri * cols + ci) * 30}ms`,
+                }}
+              />
+            </td>
+          ))}
+        </tr>
+      ))}
+    </>
+  )
+}
+
 export default function DataTable<T>({
   columns, data, loading, total = 0, page = 1, pageSize = 50,
-  onPage, rowKey, onRowClick, emptyText = 'لا توجد بيانات',
+  onPage, rowKey, onRowClick, emptyText = 'لا توجد بيانات', emptyIcon,
 }: Props<T>) {
   const totalPages = Math.ceil(total / pageSize)
 
   return (
     <div className="card overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+      {/*
+        overflow-x-auto  → enables horizontal scroll on mobile
+        -webkit-overflow-scrolling: touch → smooth iOS scroll (via inline style)
+      */}
+      <div className="overflow-x-auto" style={{ WebkitOverflowScrolling: 'touch' }}>
+        <table className="w-full text-sm" style={{ minWidth: '560px' }}>
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200">
               {columns.map(col => (
                 <th
                   key={String(col.key)}
-                  style={{ width: col.width }}
-                  className={`px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide
+                  style={{ width: col.width, minWidth: col.minWidth }}
+                  className={`px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap
                     ${col.align === 'left' ? 'text-left' : col.align === 'center' ? 'text-center' : 'text-right'}`}
                 >
                   {col.header}
@@ -55,16 +84,16 @@ export default function DataTable<T>({
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (
-              <tr>
-                <td colSpan={columns.length} className="py-16 text-center text-slate-400">
-                  <Loader2 className="animate-spin mx-auto mb-2" size={24} />
-                  جاري التحميل...
-                </td>
-              </tr>
+              <SkeletonRows cols={columns.length} />
             ) : data.length === 0 ? (
               <tr>
-                <td colSpan={columns.length} className="py-16 text-center text-slate-400">
-                  {emptyText}
+                <td colSpan={columns.length}>
+                  <div className="py-16 flex flex-col items-center gap-3 text-slate-400">
+                    <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center">
+                      {emptyIcon ?? <SearchX size={24} className="text-slate-300" />}
+                    </div>
+                    <p className="text-sm font-medium">{emptyText}</p>
+                  </div>
                 </td>
               </tr>
             ) : (
@@ -72,12 +101,12 @@ export default function DataTable<T>({
                 <tr
                   key={rowKey(row)}
                   onClick={() => onRowClick?.(row)}
-                  className={`hover:bg-slate-50 transition-colors ${onRowClick ? 'cursor-pointer' : ''}`}
+                  className={`hover:bg-slate-50 transition-colors ${onRowClick ? 'cursor-pointer group' : ''}`}
                 >
                   {columns.map(col => (
                     <td
                       key={String(col.key)}
-                      className={`px-4 py-3 text-slate-700
+                      className={`px-4 py-3 text-slate-700 whitespace-nowrap
                         ${col.align === 'left' ? 'text-left' : col.align === 'center' ? 'text-center' : 'text-right'}`}
                     >
                       {col.render ? col.render(row) : getVal(row, String(col.key))}

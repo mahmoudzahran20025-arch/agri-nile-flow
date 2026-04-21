@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { FileText, TrendingUp, TrendingDown, Package, Users, Banknote, ArrowDown, ArrowUp, Download, Clock } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { FileText, TrendingUp, TrendingDown, Package, Users, Banknote, ArrowDown, ArrowUp, Download, Clock, BarChart3 } from 'lucide-react'
 import { dashboardApi, suppliersApi, treasuryApi, inventoryApi, downloadCsv } from '../api/client'
 import { useSeasonId } from '../store/appStore'
 import type { Supplier } from '../types'
@@ -24,6 +25,7 @@ interface AgingData {
 
 export default function ReportsPage() {
   const seasonId = useSeasonId()
+  const navigate = useNavigate()
   const [agingAsOf, setAgingAsOf] = useState(new Date().toISOString().slice(0, 10))
 
   const { data: stats }      = useQuery({ queryKey: ['dashboard', 'stats'], queryFn: dashboardApi.stats })
@@ -71,6 +73,9 @@ export default function ReportsPage() {
           </button>
           <button className="btn-secondary gap-2" onClick={() => window.print()}>
             <FileText size={15} /> طباعة PDF
+          </button>
+          <button className="btn-primary gap-2" onClick={() => navigate('/reports/charts')}>
+            <BarChart3 size={15} /> التقارير المرئية
           </button>
         </div>
       </div>

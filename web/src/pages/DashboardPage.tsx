@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import {
   Banknote, TrendingDown, Package, Users,
   AlertTriangle, Clock, ArrowUp, ArrowDown,
-  TrendingUp, BarChart3, Minus,
+  TrendingUp, BarChart3,
 } from 'lucide-react'
 import { dashboardApi, glApi } from '../api/client'
 import { useSeasonId } from '../store/appStore'
@@ -26,6 +27,7 @@ function dateAr(iso: string) {
 
 export default function DashboardPage() {
   const seasonId = useSeasonId()
+  const navigate = useNavigate()
 
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['dashboard', 'stats'],
@@ -65,6 +67,17 @@ export default function DashboardPage() {
   const totalExpenses = incomeData?.expenses?.reduce((s: number, r: { amount: number }) => s + (r.amount ?? 0), 0) ?? 0
   const netIncome     = incomeData?.net_income ?? (totalRevenue - totalExpenses)
 
+  // Month-over-month trends from cashflow (current vs previous month net)
+  const cf = cashflow ?? []
+  const cfCurrent  = cf[cf.length - 1]
+  const cfPrevious = cf[cf.length - 2]
+  function mpmTrend(curr: number | undefined, prev: number | undefined): number | undefined {
+    if (curr == null || prev == null || prev === 0) return undefined
+    return ((curr - prev) / Math.abs(prev)) * 100
+  }
+  const cashInTrend  = mpmTrend(cfCurrent?.cash_in,  cfPrevious?.cash_in)
+  const cashOutTrend = mpmTrend(cfCurrent?.cash_out, cfPrevious?.cash_out)
+
   return (
     <div className="space-y-6">
       {/* Page title */}
@@ -84,6 +97,7 @@ export default function DashboardPage() {
           color="green"
           format="currency"
           subtitle="آخر حركة مسجلة"
+          trend={cashInTrend}
         />
         <KPICard
           title="إجمالي المديونية"
@@ -92,6 +106,8 @@ export default function DashboardPage() {
           color="red"
           format="currency"
           subtitle="ما يستحق للموردين"
+          trend={cashOutTrend}
+          invertTrend
         />
         <KPICard
           title="قيمة المخزون"
@@ -120,46 +136,20 @@ export default function DashboardPage() {
             {new Date().getFullYear()}
           </span>
         </div>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {/* Revenue */}
-          <div className="flex items-center gap-3 p-3 rounded-xl bg-green-50">
-            <div className="w-9 h-9 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0">
-              <TrendingUp size={18} className="text-green-600" />
-            </div>
-            <div>
-              <p className="text-xs text-green-700 font-medium">إجمالي الإيرادات</p>
-              <p className="text-lg font-bold text-green-800">{egp(totalRevenue)}</p>
-            </div>
-          </div>
+          <KPICard title="إجمالي الإيرادات" value={totalRevenue} icon={TrendingUp} color="green" format="currency" subtitle="منذ بداية العام" />
           {/* Expenses */}
-          <div className="flex items-center gap-3 p-3 rounded-xl bg-red-50">
-            <div className="w-9 h-9 rounded-lg bg-red-100 flex items-center justify-center flex-shrink-0">
-              <TrendingDown size={18} className="text-red-600" />
-            </div>
-            <div>
-              <p className="text-xs text-red-700 font-medium">إجمالي المصروفات</p>
-              <p className="text-lg font-bold text-red-800">{egp(totalExpenses)}</p>
-            </div>
-          </div>
+          <KPICard title="إجمالي المصروفات" value={totalExpenses} icon={TrendingDown} color="red" format="currency" subtitle="منذ بداية العام" invertTrend />
           {/* Net Income */}
-          <div className={`flex items-center gap-3 p-3 rounded-xl ${netIncome >= 0 ? 'bg-brand-50' : 'bg-slate-50'}`}>
-            <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${netIncome >= 0 ? 'bg-brand-100' : 'bg-slate-100'}`}>
-              {netIncome > 0
-                ? <TrendingUp  size={18} className="text-brand-600" />
-                : netIncome < 0
-                  ? <TrendingDown size={18} className="text-red-600" />
-                  : <Minus size={18} className="text-slate-400" />}
-            </div>
-            <div>
-              <p className={`text-xs font-medium ${netIncome >= 0 ? 'text-brand-700' : 'text-red-700'}`}>
-                صافي الربح / الخسارة
-              </p>
-              <p className={`text-lg font-bold ${netIncome >= 0 ? 'text-brand-800' : 'text-red-700'}`}>
-                {egp(Math.abs(netIncome))}
-                {netIncome < 0 && <span className="text-sm mr-1">(خسارة)</span>}
-              </p>
-            </div>
-          </div>
+          <KPICard
+            title="صافي الربح / الخسارة"
+            value={Math.abs(netIncome)}
+            icon={netIncome >= 0 ? TrendingUp : TrendingDown}
+            color={netIncome >= 0 ? 'green' : 'red'}
+            format="currency"
+            subtitle={netIncome < 0 ? '(خسارة)' : 'ربح صافي'}
+          />
         </div>
       </div>
 
@@ -266,20 +256,29 @@ export default function DashboardPage() {
           <h2 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
             <AlertTriangle size={16} className="text-amber-500" />
             تنبيهات المخزون
+            {alerts && alerts.length > 0 && (
+              <span className="mr-auto bg-amber-100 text-amber-700 text-xs font-semibold px-2 py-0.5 rounded-full">
+                {alerts.length} صنف
+              </span>
+            )}
           </h2>
           {alerts && alerts.length > 0 ? (
-            <div className="space-y-2">
+            <div className="space-y-1">
               {alerts.map((item, i) => (
-                <div key={i} className="flex items-center gap-3 py-2 border-b border-slate-100 last:border-0">
-                  <div className="w-2 h-2 rounded-full bg-amber-500 flex-shrink-0 mt-1" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-slate-700 truncate">{item.name}</p>
+                <button
+                  key={i}
+                  onClick={() => navigate(`/inventory/item/${(item as { item_code?: string }).item_code ?? String(i)}`)}
+                  className="w-full flex items-center gap-3 py-2 px-2 rounded-lg border-b border-slate-100 last:border-0 hover:bg-amber-50 transition-colors text-right group"
+                >
+                  <div className="w-2 h-2 rounded-full bg-amber-500 flex-shrink-0" />
+                  <div className="flex-1 min-w-0 text-right">
+                    <p className="text-sm font-medium text-slate-700 truncate group-hover:text-amber-700">{item.name}</p>
                     <p className="text-xs text-slate-400">{item.warehouse}</p>
                   </div>
                   <span className="text-sm font-bold text-amber-600 shrink-0">
                     {item.balance_qty} {item.unit}
                   </span>
-                </div>
+                </button>
               ))}
             </div>
           ) : (

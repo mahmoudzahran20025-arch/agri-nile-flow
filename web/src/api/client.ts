@@ -148,13 +148,26 @@ export const treasuryApi = {
 
 // ─── Inventory ────────────────────────────────────────────────
 export const inventoryApi = {
-  balances:   (warehouse?: string) =>
+  balances:    (warehouse?: string) =>
     unwrap(api.get<unknown[]>(`/inventory/balances${warehouse ? `?warehouse=${encodeURIComponent(warehouse)}` : ''}`)),
-  warehouses: () => unwrap(api.get<string[]>('/inventory/warehouses')),
-  list:       (p: { page?: number; size?: number; warehouse?: string; item_code?: number; type?: string; start?: string; end?: string }) =>
+  warehouses:  () => unwrap(api.get<string[]>('/inventory/warehouses')),
+  list:        (p: { page?: number; size?: number; warehouse?: string; item_code?: number; type?: string; start?: string; end?: string }) =>
     unwrap(api.get<Paginated<unknown>>(paginatedUrl('/inventory/movements', p))),
-  create:     (body: unknown) => api.post('/inventory/movements', body),
-  itemCard:   (code: number, warehouse?: string) =>
+  create:      (body: unknown) => api.post('/inventory/movements', body),
+  createBatch: (body: {
+    movement_date:    string
+    warehouse:        string
+    movement_type:    string
+    supplier_code?:   number
+    document_number?: number
+    notes?:           string
+    items: Array<{ item_code: number; quantity: number; unit_price?: number; notes?: string }>
+  }) => api.post('/inventory/movements/batch', body),
+  itemStock:   (code: number, warehouse?: string) =>
+    unwrap(api.get<{ by_warehouse: unknown[]; total_qty: number; total_value: number; avg_cost: number }>(
+      `/inventory/item/${code}/stock${warehouse ? `?warehouse=${encodeURIComponent(warehouse)}` : ''}`
+    )),
+  itemCard:    (code: number, warehouse?: string) =>
     unwrap(api.get(`/inventory/item/${code}/card${warehouse ? `?warehouse=${encodeURIComponent(warehouse)}` : ''}`)),
 }
 

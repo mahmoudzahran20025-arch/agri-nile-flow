@@ -12,9 +12,11 @@ import SupplierDetailPage    from './pages/suppliers/SupplierDetailPage'
 import CashJournalPage       from './pages/treasury/CashJournalPage'
 import WarehouseBalancesPage from './pages/inventory/WarehouseBalancesPage'
 import InventoryMovementsPage from './pages/inventory/InventoryMovementsPage'
+import ItemCardPage from './pages/inventory/ItemCardPage'
 import UsersPage       from './pages/users/UsersPage'
 import PartnersPage    from './pages/treasury/PartnersPage'
 import ReportsPage     from './pages/ReportsPage'
+import ChartsPage      from './pages/reports/ChartsPage'
 import ConfigPage      from './pages/config/ConfigPage'
 import FieldsPage      from './pages/fields/FieldsPage'
 import EmployeesPage   from './pages/employees/EmployeesPage'
@@ -26,6 +28,12 @@ import FinancialStatementsPage from './pages/gl/FinancialStatementsPage'
 import AccountLedgerPage     from './pages/gl/AccountLedgerPage'
 import SuperAdminPage        from './pages/admin/SuperAdminPage'
 import AuditLogPage          from './pages/audit/AuditLogPage'
+import EmployeeListPage      from './pages/hr/EmployeeListPage'
+import EmployeeProfilePage   from './pages/hr/EmployeeProfilePage'
+import AttendancePage        from './pages/hr/AttendancePage'
+import LeavesAdvancesPage    from './pages/hr/LeavesAdvancesPage'
+import PayrollPage           from './pages/hr/PayrollPage'
+import DocumentsPage         from './pages/documents/DocumentsPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuth = useIsAuth()
@@ -72,8 +80,19 @@ export default function App() {
         <Route path="treasury/partners" element={<PartnersPage />} />
 
         {/* Inventory */}
-        <Route path="inventory"           element={<WarehouseBalancesPage />} />
-        <Route path="inventory/movements" element={<InventoryMovementsPage />} />
+        <Route path="inventory"                element={<WarehouseBalancesPage />} />
+        <Route path="inventory/movements"      element={<InventoryMovementsPage />} />
+        <Route path="inventory/item/:code"     element={<ItemCardPage />} />
+
+        {/* HR Module */}
+        <Route path="hr"                      element={<EmployeeListPage />} />
+        <Route path="hr/employees/:id"        element={<EmployeeProfilePage />} />
+        <Route path="hr/attendance"           element={<AttendancePage />} />
+        <Route path="hr/leaves"               element={<LeavesAdvancesPage />} />
+        <Route path="hr/payroll"              element={<PayrollPage />} />
+
+        {/* Documents */}
+        <Route path="documents" element={<DocumentsPage />} />
 
         {/* Agricultural ERP */}
         <Route path="fields"     element={<FieldsPage />} />
@@ -89,6 +108,7 @@ export default function App() {
 
         {/* Reports */}
         <Route path="reports" element={<ReportsPage />} />
+        <Route path="reports/charts" element={<ChartsPage />} />
 
         {/* Super Admin */}
         <Route path="admin" element={<SuperAdminPage />} />
