@@ -26,6 +26,9 @@ import ChartOfAccountsPage   from './pages/gl/ChartOfAccountsPage'
 import JournalEntriesPage    from './pages/gl/JournalEntriesPage'
 import FinancialStatementsPage from './pages/gl/FinancialStatementsPage'
 import AccountLedgerPage     from './pages/gl/AccountLedgerPage'
+import PeriodsPage           from './pages/gl/PeriodsPage'
+import BankReconciliationPage from './pages/treasury/BankReconciliationPage'
+import PurchaseOrdersPage    from './pages/treasury/PurchaseOrdersPage'
 import SuperAdminPage        from './pages/admin/SuperAdminPage'
 import AuditLogPage          from './pages/audit/AuditLogPage'
 import EmployeeListPage      from './pages/hr/EmployeeListPage'
@@ -34,6 +37,10 @@ import AttendancePage        from './pages/hr/AttendancePage'
 import LeavesAdvancesPage    from './pages/hr/LeavesAdvancesPage'
 import PayrollPage           from './pages/hr/PayrollPage'
 import DocumentsPage         from './pages/documents/DocumentsPage'
+import HarvestPage           from './pages/fields/HarvestPage'
+import LocationTasksPage     from './pages/hr/LocationTasksPage'
+import HrDashboardPage       from './pages/hr/HrDashboardPage'
+import CalendarPage          from './pages/calendar/CalendarPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuth = useIsAuth()
@@ -85,18 +92,24 @@ export default function App() {
         <Route path="inventory/item/:code"     element={<ItemCardPage />} />
 
         {/* HR Module */}
+        <Route path="hr/dashboard"            element={<HrDashboardPage />} />
         <Route path="hr"                      element={<EmployeeListPage />} />
         <Route path="hr/employees/:id"        element={<EmployeeProfilePage />} />
         <Route path="hr/attendance"           element={<AttendancePage />} />
         <Route path="hr/leaves"               element={<LeavesAdvancesPage />} />
         <Route path="hr/payroll"              element={<PayrollPage />} />
+        <Route path="hr/location-tasks"       element={<LocationTasksPage />} />
+
+        {/* Calendar & Tasks */}
+        <Route path="calendar" element={<CalendarPage />} />
 
         {/* Documents */}
         <Route path="documents" element={<DocumentsPage />} />
 
         {/* Agricultural ERP */}
-        <Route path="fields"     element={<FieldsPage />} />
-        <Route path="employees"  element={<EmployeesPage />} />
+        <Route path="fields"          element={<FieldsPage />} />
+        <Route path="fields/harvest"  element={<HarvestPage />} />
+        <Route path="employees"       element={<EmployeesPage />} />
         <Route path="operations" element={<WorkOrdersPage />} />
         <Route path="contracts"  element={<ContractsPage />} />
 
@@ -105,6 +118,11 @@ export default function App() {
         <Route path="gl/ledger/:code"    element={<AccountLedgerPage />} />
         <Route path="gl/entries"         element={<JournalEntriesPage />} />
         <Route path="gl/statements"      element={<FinancialStatementsPage />} />
+        <Route path="gl/periods"         element={<PeriodsPage />} />
+
+        {/* Finance */}
+        <Route path="treasury/bank"      element={<BankReconciliationPage />} />
+        <Route path="treasury/po"        element={<PurchaseOrdersPage />} />
 
         {/* Reports */}
         <Route path="reports" element={<ReportsPage />} />

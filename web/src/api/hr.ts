@@ -85,6 +85,9 @@ export interface EmployeeAsset {
 
 // ── Branch endpoints ──────────────────────────────────────────
 export const hrApi = {
+  // Dashboard
+  getDashboard: () => unwrap(api.get<HrDashboardData>('/hr/dashboard')),
+
   // Branches
   getBranches:  () => unwrap(api.get<Branch[]>('/hr/branches')),
   createBranch: (b: Partial<Branch>) => unwrap(api.post<{id:number}>('/hr/branches', b)),
@@ -146,4 +149,68 @@ export const hrApi = {
       recent_attendance: AttendanceRecord[]; advances: SalaryAdvance[]
       assets: EmployeeAsset[]; leave_requests: LeaveRequest[]
     }>(`/hr/employees/${id}/profile`)),
+
+  // ── Geo Check-in ──────────────────────────────────────────
+  geoCheckIn: (b: { employee_id: number; work_date: string; lat: number; lng: number; accuracy_m: number; field_id?: number }) =>
+    unwrap(api.post<{ location_status: string; distance_m: number | null; accuracy_m: number; weak_signal: boolean }>('/hr/geo/check-in', b)),
+
+  // ── Location Tasks ────────────────────────────────────────
+  getLocationTasks: (params?: Record<string, string>) => {
+    const qs = params ? '?' + new URLSearchParams(params).toString() : ''
+    return unwrap(api.get<LocationTask[]>(`/hr/location-tasks${qs}`))
+  },
+  createLocationTask: (b: CreateLocationTaskInput) => unwrap(api.post<{id: number}>('/hr/location-tasks', b)),
+  arriveAtTask:       (id: number, b: { lat: number; lng: number; accuracy_m?: number }) =>
+    unwrap(api.patch<ArrivalResult>(`/hr/location-tasks/${id}/arrive`, b)),
+  cancelLocationTask: (id: number) => unwrap(api.patch<null>(`/hr/location-tasks/${id}/cancel`, {})),
+}
+
+// ── Geo Types ──────────────────────────────────────────────────
+export interface LocationTask {
+  id: number; company_id: number
+  employee_id: number; employee_name: string
+  assigned_by: number; assigned_by_name: string
+  field_id?: number; field_name?: string; field_code?: string
+  custom_lat?: number; custom_lng?: number; custom_name?: string
+  tolerance_m: number; task_date: string; task_notes?: string
+  status: 'pending' | 'arrived' | 'outside' | 'missed'
+  arrived_at?: string; arrived_lat?: number; arrived_lng?: number
+  distance_m?: number; gps_accuracy_m?: number; created_at: string
+}
+
+export interface CreateLocationTaskInput {
+  employee_id: number; task_date: string
+  field_id?: number
+  custom_lat?: number; custom_lng?: number; custom_name?: string
+  tolerance_m?: number; task_notes?: string
+}
+
+export interface ArrivalResult {
+  status: 'arrived' | 'outside'
+  distance_m: number | null
+  tolerance_m: number
+  within_range: boolean
+  weak_signal: boolean
+}
+
+// ── HR Dashboard Types ─────────────────────────────────────────
+export interface HrDashboardData {
+  today: string
+  total_employees: number
+  today_attendance: {
+    present: number; absent: number; late: number
+    sick: number; on_leave: number; total: number
+  }
+  pending_leaves:   number
+  pending_advances: number
+  today_tasks: {
+    pending: number; arrived: number; outside: number; missed: number; total: number
+  }
+  monthly_attendance: Array<{
+    month: string; present_days: number; absent_days: number; active_employees: number
+  }>
+  payroll_trend: Array<{
+    month: string; total_gross: number; total_deductions: number; total_net: number
+  }>
+  expiring_documents: number
 }

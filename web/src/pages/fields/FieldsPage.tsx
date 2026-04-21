@@ -1,26 +1,39 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MapPin, Plus, CheckCircle, XCircle } from 'lucide-react'
+import { MapPin, Plus, CheckCircle, XCircle, Navigation } from 'lucide-react'
 import { fieldsApi, configApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
 import { usePermission } from '../../hooks/usePermission'
+import GeoJSONFieldDrawer from '../../components/forms/GeoJSONFieldDrawer'
+import type { GeoFieldResult } from '../../lib/geoUtils'
+import { formatFeddan } from '../../lib/geoUtils'
 
 interface Field {
   id: number; code: string; name: string; area_feddan: number
   season_name?: string; crop_type?: string; irrigation_type?: string
   landlord_name?: string; is_active: number
+  center_lat?: number; center_lng?: number; geofence_radius_m?: number
+  boundary_geojson?: string
 }
 
 interface FieldForm {
   code: string; name: string; area_feddan: string; season_id: string
   location: string; crop_type: string; soil_type: string
   irrigation_type: string; landlord_name: string; rent_per_feddan: string; notes: string
+  // Geo — auto-filled from GeoJSONFieldDrawer
+  center_lat: string; center_lng: string; geofence_radius_m: string
+  boundary_geojson: string
+  // Manual fallback dimensions
+  length_m: string; width_m: string
 }
 
 const EMPTY: FieldForm = {
   code: '', name: '', area_feddan: '', season_id: '',
   location: '', crop_type: '', soil_type: '',
   irrigation_type: '', landlord_name: '', rent_per_feddan: '', notes: '',
+  center_lat: '', center_lng: '', geofence_radius_m: '150',
+  boundary_geojson: '',
+  length_m: '', width_m: '',
 }
 
 const CROPS      = ['قمح','ذرة','أرز','قصب سكر','قطن','بنجر السكر','بصل','طماطم','أخرى']
@@ -30,10 +43,23 @@ const IRRIGATION = ['غمر','تنقيط','رش','ري بالأخاديد']
 export default function FieldsPage() {
   const { canWrite } = usePermission()
   const qc = useQueryClient()
-  const [open, setOpen]     = useState(false)
-  const [search, setSearch] = useState('')
-  const [form, setForm]     = useState<FieldForm>(EMPTY)
-  const [err, setErr]       = useState('')
+  const [open, setOpen]       = useState(false)
+  const [search, setSearch]   = useState('')
+  const [form, setForm]       = useState<FieldForm>(EMPTY)
+  const [err, setErr]         = useState('')
+  const [geoResult, setGeoResult] = useState<GeoFieldResult | null>(null)
+
+  // When GeoJSONFieldDrawer gives us a result → auto-fill form
+  const handleGeoResult = (res: GeoFieldResult) => {
+    setGeoResult(res)
+    setForm(f => ({
+      ...f,
+      area_feddan:      res.area_feddan.toFixed(4),
+      center_lat:       res.center_lat.toString(),
+      center_lng:       res.center_lng.toString(),
+      boundary_geojson: res.boundary_geojson,
+    }))
+  }
 
   const { data: fields = [], isLoading } = useQuery({
     queryKey: ['fields'],
@@ -44,11 +70,19 @@ export default function FieldsPage() {
     queryFn:  configApi.seasons,
   })
 
+  // Determine final area: polygon takes priority, then manual dimensions, then direct entry
+  const calcAreaFeddan = () => {
+    if (geoResult) return geoResult.area_feddan.toFixed(4)  // from polygon
+    const l = parseFloat(form.length_m), w = parseFloat(form.width_m)
+    if (!isNaN(l) && !isNaN(w)) return (l * w / 4200.833).toFixed(4)  // from dimensions
+    return form.area_feddan  // manual entry
+  }
+
   const create = useMutation({
     mutationFn: () => fieldsApi.create({
       code: form.code.trim(),
       name: form.name.trim(),
-      area_feddan: Number(form.area_feddan) || 0,
+      area_feddan: Number(calcAreaFeddan()) || 0,
       season_id:   form.season_id ? Number(form.season_id) : undefined,
       location:    form.location || undefined,
       crop_type:   form.crop_type || undefined,
@@ -57,11 +91,18 @@ export default function FieldsPage() {
       landlord_name:   form.landlord_name || undefined,
       rent_per_feddan: form.rent_per_feddan ? Number(form.rent_per_feddan) : undefined,
       notes:       form.notes || undefined,
+      // Geo — from polygon or manual
+      center_lat:        form.center_lat  ? Number(form.center_lat)  : undefined,
+      center_lng:        form.center_lng  ? Number(form.center_lng)  : undefined,
+      geofence_radius_m: form.geofence_radius_m ? Number(form.geofence_radius_m) : 150,
+      boundary_geojson:  form.boundary_geojson  || undefined,
+      length_m:    form.length_m ? Number(form.length_m) : undefined,
+      width_m:     form.width_m  ? Number(form.width_m)  : undefined,
     }),
     onSuccess: (res: { success: boolean; error?: string }) => {
       if (!res.success) { setErr(res.error ?? 'خطأ'); return }
       qc.invalidateQueries({ queryKey: ['fields'] })
-      setOpen(false); setForm(EMPTY); setErr('')
+      setOpen(false); setForm(EMPTY); setErr(''); setGeoResult(null)
     },
   })
 
@@ -114,6 +155,7 @@ export default function FieldsPage() {
                 <th className="th">نوع المحصول</th>
                 <th className="th">نوع الري</th>
                 <th className="th">المالك</th>
+                <th className="th">GPS</th>
                 <th className="th">الحالة</th>
               </tr>
             </thead>
@@ -127,6 +169,11 @@ export default function FieldsPage() {
                   <td className="td">{f.crop_type ?? '—'}</td>
                   <td className="td">{f.irrigation_type ?? '—'}</td>
                   <td className="td">{f.landlord_name ?? '—'}</td>
+                  <td className="td text-center">
+                    {f.center_lat != null
+                      ? <span title={`${f.center_lat}, ${f.center_lng} — نطاق ${f.geofence_radius_m}م`} className="text-emerald-600"><Navigation size={14} /></span>
+                      : <span className="text-gray-300">—</span>}
+                  </td>
                   <td className="td">
                     {f.is_active
                       ? <span className="badge badge-green flex items-center gap-1 w-fit"><CheckCircle size={12}/> نشطة</span>
@@ -200,6 +247,66 @@ export default function FieldsPage() {
             <label className="label">ملاحظات</label>
             <textarea className="input" rows={2} value={form.notes} onChange={e => sf({ notes: e.target.value })} />
           </div>
+
+          {/* ── GeoJSON Drawer — الطريقة الصحيحة لرسم حدود القطعة ── */}
+          <div className="col-span-2 border-t pt-4 mt-1">
+            <GeoJSONFieldDrawer
+              onResult={handleGeoResult}
+              currentResult={geoResult}
+            />
+            {/* Show auto-filled values after drawing */}
+            {geoResult && (
+              <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
+                <div>
+                  <p className="text-xs text-gray-500 mb-1">المساحة (محسوبة تلقائياً)</p>
+                  <p className="font-semibold text-emerald-700">{formatFeddan(geoResult.area_feddan)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500 mb-1">نطاق القبول عند الوصول</p>
+                  <input className="input" type="number" min="50" max="2000"
+                    value={form.geofence_radius_m}
+                    onChange={e => sf({ geofence_radius_m: e.target.value })}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Manual fallback: dimensions OR direct area ── */}
+          {!geoResult && (
+            <div className="col-span-2 border-t pt-4 mt-1">
+              <p className="text-xs text-gray-400 mb-3">
+                ▸ بدون رسم الحدود: أدخل المساحة مباشرةً (أو الأبعاد بالمتر)
+              </p>
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="label">المساحة (فدان) — مباشر</label>
+                  <input className="input" type="number" step="0.01"
+                    value={form.area_feddan} onChange={e => sf({ area_feddan: e.target.value })} placeholder="5.5" />
+                </div>
+                <div>
+                  <label className="label">الطول (متر)</label>
+                  <input className="input" type="number" min="0" step="0.1"
+                    value={form.length_m} onChange={e => sf({ length_m: e.target.value })} placeholder="500" />
+                </div>
+                <div>
+                  <label className="label">العرض (متر)</label>
+                  <input className="input" type="number" min="0" step="0.1"
+                    value={form.width_m} onChange={e => sf({ width_m: e.target.value })} placeholder="200" />
+                </div>
+              </div>
+              {form.length_m && form.width_m && (
+                <p className="text-xs text-emerald-600 mt-1.5">
+                  ≈ {(parseFloat(form.length_m) * parseFloat(form.width_m) / 4200.833).toFixed(3)} فدان
+                </p>
+              )}
+              <div className="mt-3">
+                <label className="label">نطاق القبول (متر)</label>
+                <input className="input w-32" type="number" min="50" max="2000"
+                  value={form.geofence_radius_m} onChange={e => sf({ geofence_radius_m: e.target.value })} />
+              </div>
+            </div>
+          )}
         </div>
 
         {err && <p className="text-red-600 text-sm mt-3">{err}</p>}
