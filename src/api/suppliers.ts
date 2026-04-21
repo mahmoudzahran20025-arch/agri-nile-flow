@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
 import { glSupplierTransaction, getOpenPeriod } from '../lib/gl'
+import { logAudit } from '../lib/audit'
 
 const suppliers = new Hono<{ Bindings: Env }>()
 suppliers.use('*', authMiddleware)
@@ -195,6 +196,15 @@ suppliers.post('/:code/transactions', async (c) => {
 
   await glSupplierTransaction(c.env.DB, company_id, txnId, b.entry_type, b.amount,
     b.transaction_date, `${b.expense_category ?? b.entry_type} — ${supplierRow?.name ?? code}`, userId)
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'CREATE',
+    table_name: 'supplier_transactions', record_id: txnId,
+    new_value: {
+      entry_type: b.entry_type, supplier: code, amount: b.amount,
+      date: b.transaction_date, doc: b.document_number,
+    },
+  })
 
   return c.json({ success: true, data: null }, 201)
 })

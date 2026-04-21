@@ -262,7 +262,7 @@ gl.get('/trial-balance', async (c) => {
   const end   = c.req.query('end')
 
   let entryWhere = 'e.is_posted = 1 AND e.company_id = ?'
-  const p: unknown[] = [company_id, company_id]
+  const p: unknown[] = [company_id]
   if (start) { entryWhere += ' AND e.entry_date >= ?'; p.push(start) }
   if (end)   { entryWhere += ' AND e.entry_date <= ?'; p.push(end) }
 
@@ -295,7 +295,7 @@ gl.get('/income-statement', async (c) => {
   const end   = c.req.query('end')
 
   let entryWhere = 'e.is_posted = 1 AND e.company_id = ?'
-  const p: unknown[] = [company_id, company_id]
+  const p: unknown[] = [company_id]
   if (start) { entryWhere += ' AND e.entry_date >= ?'; p.push(start) }
   if (end)   { entryWhere += ' AND e.entry_date <= ?'; p.push(end) }
 
