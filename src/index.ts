@@ -20,6 +20,8 @@ import auditRoutes      from './api/audit'
 import stagingRoutes    from './api/staging'
 import hrRoutes         from './api/hr'
 import docsRoutes       from './api/documents'
+import calendarRoutes   from './api/calendar'
+import financeRoutes    from './api/finance'
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -65,6 +67,8 @@ app.route('/api/audit',      auditRoutes)
 app.route('/api/staging',    stagingRoutes)
 app.route('/api/hr',         hrRoutes)
 app.route('/api/documents',  docsRoutes)
+app.route('/api/calendar',   calendarRoutes)
+app.route('/api/finance',    financeRoutes)
 
 // ─── Health Check ─────────────────────────────────────────────
 app.get('/api/health', (c) => c.json({ status: 'ok', ts: new Date().toISOString() }))
@@ -87,4 +91,28 @@ app.onError((err, c) => {
   return c.json({ success: false, error: 'خطأ في الخادم' }, 500)
 })
 
-export default app
+export default {
+  fetch: app.fetch,
+
+  // ─── Scheduled Cron Handler ─────────────────────────────────
+  // يشتغل كل يوم الساعة 10 مساءً UTC (تقريباً منتصف الليل بتوقيت القاهرة)
+  // يحوّل جميع مهام الزيارات المعلقة من أيام سابقة إلى "missed"
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil((async () => {
+      try {
+        const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+
+        // تحويل كل location_tasks بتاريخ أقدم من اليوم وحالتها pending → missed
+        const result = await env.DB.prepare(
+          `UPDATE location_tasks
+           SET status = 'missed'
+           WHERE status = 'pending' AND task_date < ?`
+        ).bind(today).run()
+
+        console.log(`[Cron] Marked ${result.meta.changes ?? 0} overdue location tasks as missed (${today})`)
+      } catch (err) {
+        console.error('[Cron] Failed to mark missed tasks:', err)
+      }
+    })())
+  },
+}

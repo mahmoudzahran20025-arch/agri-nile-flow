@@ -5,6 +5,7 @@ interface GLLine {
   debit:        number
   credit:       number
   description?: string
+  center_code?: number
 }
 
 interface PostEntryOpts {
@@ -33,29 +34,35 @@ export async function getOpenPeriod(db: D1Database, company_id: number, date: st
   return row?.id ?? null
 }
 
-export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promise<void> {
+export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promise<number | null> {
   const totalDebit  = opts.lines.reduce((s, l) => s + l.debit, 0)
   const totalCredit = opts.lines.reduce((s, l) => s + l.credit, 0)
-  if (Math.abs(totalDebit - totalCredit) > 0.01) return  // unbalanced — skip silently
+  if (Math.abs(totalDebit - totalCredit) > 0.01) return null  // unbalanced — skip silently
 
   try {
     const periodId = await getOpenPeriod(db, opts.company_id, opts.entry_date)
     const entry    = await db
       .prepare(`INSERT INTO journal_entries
-                (company_id, period_id, entry_date, description, ref_type, ref_id, created_by)
-                VALUES (?,?,?,?,?,?,?)`)
+                (company_id, period_id, entry_date, description, ref_type, ref_id, is_posted, created_by)
+                VALUES (?,?,?,?,?,?,1,?)`)
       .bind(opts.company_id, periodId, opts.entry_date, opts.description,
             opts.ref_type, opts.ref_id, opts.created_by ?? null).run()
 
     const entryId = entry.meta.last_row_id
     for (const l of opts.lines) {
       await db.prepare(
-        `INSERT INTO journal_entry_lines (entry_id, company_id, account_code, debit, credit, description)
-         VALUES (?,?,?,?,?,?)`
-      ).bind(entryId, opts.company_id, l.account_code, l.debit, l.credit, l.description ?? null).run()
+        `INSERT INTO journal_entry_lines
+         (entry_id, company_id, account_code, debit, credit, description, center_code)
+         VALUES (?,?,?,?,?,?,?)`
+      ).bind(
+        entryId, opts.company_id, l.account_code,
+        l.debit, l.credit, l.description ?? null, l.center_code ?? null
+      ).run()
     }
+    return entryId
   } catch {
     // GL failure must never break the source transaction
+    return null
   }
 }
 
@@ -70,7 +77,7 @@ export async function glCashTransaction(
   date: string,
   narration: string,
   created_by?: number,
-) {
+): Promise<number | null> {
   const cashAcc    = await getMapping(db, company_id, 'cash')
   const contraAcc  = direction === 'د'
     ? await getMapping(db, company_id, 'revenue_default')
@@ -88,7 +95,7 @@ export async function glCashTransaction(
         { account_code: cashAcc,   debit: 0,       credit: amount, description: narration },
       ]
 
-  await postAutoEntry(db, { company_id, entry_date: date, description: narration,
+  return await postAutoEntry(db, { company_id, entry_date: date, description: narration,
     ref_type: 'cash_transaction', ref_id, lines, created_by })
 }
 
@@ -101,7 +108,7 @@ export async function glSupplierTransaction(
   date: string,
   description: string,
   created_by?: number,
-) {
+): Promise<number | null> {
   const apAcc      = await getMapping(db, company_id, 'accounts_payable')
   const expenseAcc = await getMapping(db, company_id, 'expense_default')
 
@@ -119,7 +126,7 @@ export async function glSupplierTransaction(
         { account_code: expenseAcc, debit: 0,       credit: amount, description },
       ]
 
-  await postAutoEntry(db, { company_id, entry_date: date, description,
+  return await postAutoEntry(db, { company_id, entry_date: date, description,
     ref_type: 'supplier_transaction', ref_id, lines, created_by })
 }
 
@@ -132,7 +139,7 @@ export async function glInventoryMovement(
   date: string,
   item_name: string,
   created_by?: number,
-) {
+): Promise<number | null> {
   const invAcc     = await getMapping(db, company_id, 'inventory')
   const apAcc      = await getMapping(db, company_id, 'accounts_payable')
   const expenseAcc = await getMapping(db, company_id, 'expense_default')
@@ -156,8 +163,8 @@ export async function glInventoryMovement(
         { account_code: invAcc,               debit: 0,     credit: value, description: desc },
       ]
 
-  if (movement_type === 'اضافة' && !apAcc) return
+  if (movement_type === 'اضافة' && !apAcc) return null
 
-  await postAutoEntry(db, { company_id, entry_date: date, description: desc,
+  return await postAutoEntry(db, { company_id, entry_date: date, description: desc,
     ref_type: 'inventory_movement', ref_id, lines, created_by })
 }

@@ -1,7 +1,8 @@
 export type Env = {
-  DB:         D1Database
-  JWT_SECRET: string
-  APP_ENV:    string
+  DB:          D1Database
+  JWT_SECRET:  string
+  APP_ENV:     string
+  DOCS_BUCKET: R2Bucket
 }
 
 export type JwtPayload = {

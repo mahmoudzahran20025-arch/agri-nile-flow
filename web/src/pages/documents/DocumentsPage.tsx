@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   FileText, Plus, AlertTriangle, Search, RefreshCw,
-  Clock, Trash2, Edit3,
+  Clock, Trash2, Edit3, Upload, Download, X,
 } from 'lucide-react'
 import {
   documentsApi, DOC_TYPE_LABELS, DOC_STATUS_LABELS,
@@ -189,6 +189,8 @@ export default function DocumentsPage() {
   const [showAdd,     setShowAdd]     = useState(false)
   const [editing,     setEditing]     = useState<Document | null>(null)
   const [renewing,    setRenewing]    = useState<Document | null>(null)
+  const [uploading,   setUploading]   = useState<Document | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const { data: docs  = [], isLoading } = useQuery({
     queryKey: ['documents', typeFilter, statusFilter],
@@ -217,6 +219,14 @@ export default function DocumentsPage() {
   const deleteMut = useMutation({
     mutationFn: (id: number) => documentsApi.remove(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['documents'] }),
+  })
+
+  const uploadMut = useMutation({
+    mutationFn: ({ id, file }: { id: number; file: File }) => documentsApi.uploadFile(id, file),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['documents'] })
+      setUploading(null)
+    },
   })
 
   const filtered = docs.filter(d =>
@@ -374,6 +384,20 @@ export default function DocumentsPage() {
                             className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg">
                             <RefreshCw size={14} />
                           </button>
+                          {doc.file_r2_key ? (
+                            <a
+                              href={documentsApi.downloadUrl(doc.id)}
+                              target="_blank" rel="noopener noreferrer"
+                              title="تحميل الملف"
+                              className="p-1.5 text-brand-600 hover:bg-brand-50 rounded-lg inline-flex">
+                              <Download size={14} />
+                            </a>
+                          ) : (
+                            <button onClick={() => setUploading(doc)} title="رفع ملف"
+                              className="p-1.5 text-gray-400 hover:text-brand-600 hover:bg-brand-50 rounded-lg">
+                              <Upload size={14} />
+                            </button>
+                          )}
                           <button onClick={() => setEditing(doc)} title="تعديل"
                             className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg">
                             <Edit3 size={14} />
@@ -432,6 +456,52 @@ export default function DocumentsPage() {
 
       {/* Renew Modal */}
       {renewing && <RenewModal doc={renewing} onClose={() => setRenewing(null)} />}
+
+      {/* Upload Modal */}
+      {uploading && (
+        <Modal open onClose={() => setUploading(null)} title={`رفع ملف — ${uploading.title}`}>
+          <div className="space-y-4 p-1">
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-800">
+              الأنواع المسموح بها: PDF, صور (JPG/PNG/WebP), Word, Excel — الحد الأقصى 20 MB
+            </div>
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-brand-400 hover:bg-brand-50 transition-colors"
+            >
+              <Upload size={28} className="mx-auto mb-2 text-gray-400" />
+              <p className="text-sm text-gray-500">اضغط لاختيار ملف أو اسحب الملف هنا</p>
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx"
+              className="hidden"
+              onChange={e => {
+                const file = e.target.files?.[0]
+                if (file) uploadMut.mutate({ id: uploading.id, file })
+              }}
+            />
+            {uploadMut.isPending && (
+              <div className="flex items-center gap-2 text-sm text-gray-600 justify-center">
+                <svg className="animate-spin h-4 w-4 text-brand-600" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
+                  <path fill="currentColor" className="opacity-75" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                جاري رفع الملف...
+              </div>
+            )}
+            {uploadMut.isError && (
+              <div className="flex items-center gap-2 text-sm text-red-600">
+                <X size={14} /> {(uploadMut.error as Error)?.message ?? 'فشل الرفع'}
+              </div>
+            )}
+            <button onClick={() => setUploading(null)}
+              className="w-full border border-gray-300 rounded-lg py-2 text-sm text-gray-600 hover:bg-gray-50">
+              إلغاء
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

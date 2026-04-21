@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev":      "vite",
-    "build":    "tsc --noEmit && vite build",
-    "preview":  "vite preview"
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",
@@ -16,6 +16,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0",
+    "recharts": "^3.8.1",
     "zustand": "^5.0.2"
   },
   "devDependencies": {

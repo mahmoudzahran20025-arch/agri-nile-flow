@@ -11,6 +11,15 @@ database_id   = "2dd5cfe6-b694-46bd-9cb8-adf1bc7c27af"
 [vars]
 APP_ENV    = "production"
 
+# ── Cron Triggers ─────────────────────────────────────────────
+# تشتغل كل يوم الساعة 10 مساءً UTC (منتصف الليل بتوقيت القاهرة)
+[triggers]
+crons = ["0 22 * * *"]
+
+[[r2_buckets]]
+binding     = "DOCS_BUCKET"
+bucket_name = "agri-nile-docs"
+
 [dev]
 port           = 8787
 local_protocol = "http"

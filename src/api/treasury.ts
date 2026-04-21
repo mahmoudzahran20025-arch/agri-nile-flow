@@ -16,6 +16,7 @@ treasury.get('/transactions', async (c) => {
   const seasonId  = c.req.query('season_id')
   const month     = c.req.query('month')
   const year      = c.req.query('year')
+  const search    = c.req.query('search')
   const offset    = (page - 1) * size
 
   let where   = 'WHERE company_id = ?'
@@ -25,6 +26,7 @@ treasury.get('/transactions', async (c) => {
   if (seasonId)  { where += ' AND season_id = ?';  binds.push(seasonId) }
   if (month)     { where += ' AND month = ?';      binds.push(Number(month)) }
   if (year)      { where += ' AND year = ?';       binds.push(Number(year)) }
+  if (search)    { where += ' AND (narration LIKE ? OR recipient_name LIKE ?)'; const like = `%${search}%`; binds.push(like, like) }
 
   const [rows, cnt] = await Promise.all([
     c.env.DB.prepare(
@@ -114,9 +116,14 @@ treasury.post('/transactions', async (c) => {
     .bind(company_id).first<{id:number}>()
   const txnId = lastRowPost?.id ?? 0
 
-  // Auto-post GL entry (fire-and-forget)
-  await glCashTransaction(c.env.DB, company_id, txnId,
+  // Auto-post GL entry + link back to cash_transaction
+  const glEntryId = await glCashTransaction(c.env.DB, company_id, txnId,
     b.direction, b.amount, b.transaction_date, b.narration, userId)
+  if (glEntryId) {
+    await c.env.DB.prepare(
+      'UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ?'
+    ).bind(glEntryId, txnId).run()
+  }
 
   // Audit log
   void logAudit(c.env.DB, {

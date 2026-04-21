@@ -15,6 +15,7 @@ export interface Document {
   file_r2_key?: string
   file_name?: string
   file_size_kb?: number
+  file_mime_type?: string
   status: 'active' | 'expired' | 'renewed' | 'cancelled'
   notes?: string
   created_by?: number
@@ -84,4 +85,32 @@ export const documentsApi = {
 
   renew: (id: number, issue_date?: string, expiry_date?: string) =>
     unwrap(api.patch<null>(`/documents/${id}/renew`, { issue_date, expiry_date })),
+
+  // R2 file upload — sends multipart/form-data
+  uploadFile: async (id: number, file: File): Promise<{ r2Key: string; file_name: string; file_size_kb: number }> => {
+    const token = localStorage.getItem('agro_token')
+    const BASE = window.location.hostname.endsWith('pages.dev')
+      ? 'https://agri-nile-flow.mahm-zahran22.workers.dev/api'
+      : '/api'
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await fetch(`${BASE}/documents/${id}/upload`, {
+      method: 'PUT',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: fd,
+    })
+    const json = await res.json() as { success: boolean; data?: { r2Key: string; file_name: string; file_size_kb: number }; error?: string }
+    if (!json.success) throw new Error(json.error ?? 'فشل الرفع')
+    return json.data!
+  },
+
+  // Get download URL (uses the /download endpoint which streams from R2)
+  downloadUrl: (id: number): string => {
+    const BASE = window.location.hostname.endsWith('pages.dev')
+      ? 'https://agri-nile-flow.mahm-zahran22.workers.dev/api'
+      : '/api'
+    return `${BASE}/documents/${id}/download`
+  },
+
+  removeFile: (id: number) => unwrap(api.delete<null>(`/documents/${id}/file`)),
 }

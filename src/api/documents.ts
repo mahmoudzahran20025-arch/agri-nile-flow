@@ -182,4 +182,115 @@ docs.patch('/:id/renew', async (c) => {
   return c.json({ success: true, data: null })
 })
 
+// ─────────────────────────────────────────────────────────────
+// PUT /documents/:id/upload  — Upload file to R2
+// Content-Type: multipart/form-data  field: file
+// ─────────────────────────────────────────────────────────────
+docs.put('/:id/upload', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+
+  const row = await c.env.DB.prepare(
+    'SELECT id, file_r2_key FROM documents WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ id: number; file_r2_key: string | null }>()
+  if (!row) return c.json({ success: false, error: 'المستند غير موجود' }, 404)
+
+  const formData = await c.req.formData()
+  const file = formData.get('file') as File | null
+  if (!file) return c.json({ success: false, error: 'الملف مطلوب' }, 400)
+
+  // Security: restrict MIME types
+  const ALLOWED_MIME = [
+    'application/pdf',
+    'image/jpeg', 'image/png', 'image/webp',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ]
+  if (!ALLOWED_MIME.includes(file.type)) {
+    return c.json({ success: false, error: 'نوع الملف غير مسموح — يُسمح بـ PDF وصور وملفات Office فقط' }, 400)
+  }
+
+  // Max 20 MB
+  const MAX_BYTES = 20 * 1024 * 1024
+  const arrayBuffer = await file.arrayBuffer()
+  if (arrayBuffer.byteLength > MAX_BYTES) {
+    return c.json({ success: false, error: 'حجم الملف يتجاوز 20 ميجابايت' }, 400)
+  }
+
+  // Delete old R2 object if exists
+  if (row.file_r2_key) {
+    await c.env.DOCS_BUCKET.delete(row.file_r2_key).catch(() => {})
+  }
+
+  // New key: company/docId/timestamp_filename
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? 'bin'
+  const r2Key = `${company_id}/${id}/${Date.now()}.${ext}`
+
+  await c.env.DOCS_BUCKET.put(r2Key, arrayBuffer, {
+    httpMetadata: { contentType: file.type },
+  })
+
+  const sizeKb = Math.round(arrayBuffer.byteLength / 1024)
+  await c.env.DB.prepare(`
+    UPDATE documents
+    SET file_r2_key = ?, file_name = ?, file_size_kb = ?, file_mime_type = ?, updated_at = datetime('now')
+    WHERE id = ? AND company_id = ?
+  `).bind(r2Key, file.name, sizeKb, file.type, id, company_id).run()
+
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPDATE', table_name: 'documents', record_id: id })
+  return c.json({ success: true, data: { r2Key, file_name: file.name, file_size_kb: sizeKb } })
+})
+
+// ─────────────────────────────────────────────────────────────
+// GET /documents/:id/download  — Stream file from R2
+// ─────────────────────────────────────────────────────────────
+docs.get('/:id/download', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+
+  const row = await c.env.DB.prepare(
+    'SELECT file_r2_key, file_name, file_mime_type FROM documents WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ file_r2_key: string | null; file_name: string | null; file_mime_type: string | null }>()
+
+  if (!row)             return c.json({ success: false, error: 'المستند غير موجود' }, 404)
+  if (!row.file_r2_key) return c.json({ success: false, error: 'لم يُرفق ملف بهذا المستند' }, 404)
+
+  const obj = await c.env.DOCS_BUCKET.get(row.file_r2_key)
+  if (!obj) return c.json({ success: false, error: 'الملف غير موجود في المخزن' }, 404)
+
+  const headers = new Headers()
+  headers.set('Content-Type', row.file_mime_type ?? 'application/octet-stream')
+  headers.set('Content-Disposition', `inline; filename="${row.file_name ?? 'document'}"`)
+  headers.set('Cache-Control', 'private, max-age=3600')
+
+  return new Response(obj.body, { headers })
+})
+
+// ─────────────────────────────────────────────────────────────
+// DELETE /documents/:id/file  — Remove file from R2 only
+// ─────────────────────────────────────────────────────────────
+docs.delete('/:id/file', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+
+  const row = await c.env.DB.prepare(
+    'SELECT file_r2_key FROM documents WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ file_r2_key: string | null }>()
+  if (!row) return c.json({ success: false, error: 'المستند غير موجود' }, 404)
+
+  if (row.file_r2_key) {
+    await c.env.DOCS_BUCKET.delete(row.file_r2_key).catch(() => {})
+  }
+
+  await c.env.DB.prepare(`
+    UPDATE documents SET file_r2_key = NULL, file_name = NULL, file_size_kb = NULL, file_mime_type = NULL
+    WHERE id = ? AND company_id = ?
+  `).bind(id, company_id).run()
+
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPDATE', table_name: 'documents', record_id: id })
+  return c.json({ success: true, data: null })
+})
+
 export default docs
