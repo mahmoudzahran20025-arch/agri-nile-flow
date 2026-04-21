@@ -87,3 +87,4 @@ temp/
 *.tmp
 _tmp
 .cache/
+.history/
