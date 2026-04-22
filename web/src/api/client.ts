@@ -151,7 +151,13 @@ export const inventoryApi = {
   balances:    (warehouse?: string) =>
     unwrap(api.get<unknown[]>(`/inventory/balances${warehouse ? `?warehouse=${encodeURIComponent(warehouse)}` : ''}`)),
   warehouses:  () => unwrap(api.get<string[]>('/inventory/warehouses')),
-  list:        (p: { page?: number; size?: number; warehouse?: string; item_code?: number; type?: string; start?: string; end?: string }) =>
+  reorderAlerts: () =>
+    unwrap(api.get<Array<{
+      item_code: number; item_name: string; unit: string | null
+      current_balance: number; consumed_active_orders: number
+      consumption_pct: number; active_order_count: number
+    }>>('/inventory/reorder-alerts')),
+  list:        (p: { page?: number; size?: number; warehouse?: string; item_code?: number; type?: string; start?: string; end?: string; field_id?: number; season_id?: number; work_order_id?: number }) =>
     unwrap(api.get<Paginated<unknown>>(paginatedUrl('/inventory/movements', p))),
   create:      (body: unknown) => api.post('/inventory/movements', body),
   createBatch: (body: {
@@ -160,9 +166,14 @@ export const inventoryApi = {
     movement_type:    string
     supplier_code?:   number
     document_number?: number
+    season_id?:       number
+    field_id?:        number
+    work_order_id?:   number
     notes?:           string
     items: Array<{ item_code: number; quantity: number; unit_price?: number; notes?: string }>
   }) => api.post('/inventory/movements/batch', body),
+  costByField: (season_id?: number) =>
+    unwrap(api.get<unknown[]>(`/inventory/cost-by-field${season_id ? `?season_id=${season_id}` : ''}`)),
   itemStock:   (code: number, warehouse?: string) =>
     unwrap(api.get<{ by_warehouse: unknown[]; total_qty: number; total_value: number; avg_cost: number }>(
       `/inventory/item/${code}/stock${warehouse ? `?warehouse=${encodeURIComponent(warehouse)}` : ''}`
@@ -176,6 +187,8 @@ export const configApi = {
   seasons:          () => unwrap(api.get('/config/seasons')),
   createSeason:     (body: unknown) => api.post('/config/seasons', body),
   updateSeasonStatus:(id: number, status: string) => api.patch(`/config/seasons/${id}/status`, { status }),
+  seasonCloseCheck: (id: number) => unwrap(api.get(`/config/seasons/${id}/close-check`)),
+  closeSeason:      (id: number, close_notes?: string) => unwrap(api.post<{ id: number; status: string }>(`/config/seasons/${id}/close`, { close_notes })),
   items:            () => unwrap(api.get('/config/items')),
   createItem:       (body: unknown) => api.post('/config/items', body),
   costCenters:      () => unwrap(api.get('/config/cost_centers')),
@@ -210,6 +223,19 @@ export const employeesApi = {
 }
 
 // ─── Operations (أوامر العمل) ─────────────────────────────────
+
+export interface WOTemplate {
+  id: number; company_id: number
+  name: string; operation_type: string; description?: string
+  is_active: number; task_count?: number; created_at: string
+}
+
+export interface WOTemplateTask {
+  id: number; template_id: number; company_id: number
+  task_name: string; task_order: number
+  estimated_hours?: number; notes?: string
+}
+
 export const operationsApi = {
   listOrders:  (p?: { season_id?: number; field_id?: number; status?: string; page?: number; size?: number }) =>
     unwrap(api.get<unknown>(paginatedUrl('/operations/orders', p ?? {}))),
@@ -221,6 +247,30 @@ export const operationsApi = {
   deleteTask:  (id: number) => api.delete(`/operations/tasks/${id}`),
   summary:     (season_id?: number) =>
     unwrap(api.get<unknown[]>(`/operations/summary${season_id ? `?season_id=${season_id}` : ''}`)),
+
+  // Templates
+  listTemplates: () =>
+    unwrap(api.get<WOTemplate[]>('/operations/templates')),
+  getTemplate: (id: number) =>
+    unwrap(api.get<WOTemplate & { tasks: WOTemplateTask[] }>(`/operations/templates/${id}`)),
+  createTemplate: (body: {
+    name: string; operation_type: string; description?: string
+    tasks?: Array<{ task_name: string; estimated_hours?: number; notes?: string }>
+  }) => unwrap(api.post<{ id: number }>('/operations/templates', body)),
+  updateTemplate: (id: number, body: { name?: string; description?: string; is_active?: number }) =>
+    unwrap(api.patch<null>(`/operations/templates/${id}`, body)),
+  deleteTemplate: (id: number) =>
+    unwrap(api.delete<null>(`/operations/templates/${id}`)),
+  addTemplateTask: (tplId: number, body: { task_name: string; estimated_hours?: number; notes?: string }) =>
+    unwrap(api.post<{ id: number }>(`/operations/templates/${tplId}/tasks`, body)),
+  updateTemplateTask: (taskId: number, body: { task_name?: string; task_order?: number; estimated_hours?: number }) =>
+    unwrap(api.patch<null>(`/operations/template-tasks/${taskId}`, body)),
+  deleteTemplateTask: (taskId: number) =>
+    unwrap(api.delete<null>(`/operations/template-tasks/${taskId}`)),
+  useTemplate: (tplId: number, body: {
+    name?: string; planned_date: string
+    season_id?: number; field_id?: number; area_feddan?: number; notes?: string
+  }) => unwrap(api.post<{ id: number; task_count: number }>(`/operations/templates/${tplId}/use`, body)),
 }
 
 // ─── Contracts (العقود) ───────────────────────────────────────
@@ -240,6 +290,15 @@ export const contractsApi = {
 
   summary:        (season_id?: number) =>
     unwrap(api.get(`/contracts/summary${season_id ? `?season_id=${season_id}` : ''}`)),
+}
+
+// ─── Budgets (ميزانيات الحقول) ────────────────────────────────
+export const budgetsApi = {
+  list:   (season_id?: number) =>
+    unwrap(api.get<unknown[]>(`/budgets${season_id ? `?season_id=${season_id}` : ''}`)),
+  upsert: (body: { field_id: number; season_id: number; budget_per_feddan: number; notes?: string }) =>
+    api.post('/budgets', body),
+  remove: (id: number) => api.delete(`/budgets/${id}`),
 }
 
 // ─── Reports (التقارير التحليلية) ──────────────────────────────
@@ -284,6 +343,22 @@ export const reportsApi = {
       monthly_timeline:    Array<{ year: number; month: number; cash_out: number; supplier_credit: number }>
       totals: { cash_out: number; supplier_credit: number; supplier_debit: number; inventory_consumed: number; grand_total: number }
     }>(`/reports/season-summary?season_id=${season_id}`)),
+
+  seasonPnL: (season_id: number) =>
+    unwrap(api.get<{
+      season:            { id: number; name: string; season_type: string; start_date: string; end_date: string; status: string } | null
+      revenue:           { contracts_value: number; advance_collected: number; contracts_count: number }
+      costs:             { inventory: number; labor: number; cash_out: number; supplier_credit: number; total: number }
+      net_margin:        number
+      total_area:        number
+      margin_per_feddan: number | null
+      margin_pct:        number | null
+      by_field:          Array<{
+        id: number; code: string; field_name: string; area_feddan: number; crop_type: string | null
+        field_revenue: number; inv_cost: number; labor_cost: number
+        field_cost: number; field_margin: number; margin_per_feddan: number | null
+      }>
+    }>(`/reports/season-pnl?season_id=${season_id}`)),
 }
 
 // ─── GL (دفتر الأستاذ العام) ──────────────────────────────────
@@ -332,6 +407,16 @@ export const adminApi = {
   switchCompany: (companyId: number) =>
     api.post<{ token: string; user: { id: number; full_name: string; email: string; company_id: number; role: string }; company: { id: number; code: string; name: string } }>('/admin/switch/' + companyId, {}),
   companyUsers:  (id: number) => unwrap(api.get<unknown[]>(`/admin/companies/${id}/users`)),
+  overview:      () => unwrap(api.get<CompanyOverview[]>('/admin/overview')),
+}
+
+export interface CompanyOverview {
+  id: number; code: string; name: string; is_active: number
+  cash_balance:    number | null
+  active_season:   string | null; season_status: string | null
+  open_wo:         number; open_po_count: number; open_po_value: number
+  employee_count:  number; low_stock_count: number
+  last_activity:   string | null; health_score: number
 }
 
 // ─── Export (CSV) ─────────────────────────────────────────────

@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
 import { logAudit } from '../lib/audit'
-import { getOpenPeriod, glInventoryMovement } from '../lib/gl'
+import { getOpenPeriod, glInventoryMovement, glSupplierInvoice } from '../lib/gl'
 
 const finance = new Hono<{ Bindings: Env }>()
 finance.use('*', authMiddleware)
@@ -529,6 +529,253 @@ finance.get('/cash-tx-search', async (c) => {
   ).bind(...binds).all()
 
   return c.json({ success: true, data: results })
+})
+
+// ═══════════════════════════════════════════════════════════
+// SUPPLIER INVOICES — المطابقة الثلاثية (PO → GR → Invoice)
+// ═══════════════════════════════════════════════════════════
+
+// GET /finance/purchase-orders/:id/match
+// Returns PO items with qty_ordered / qty_received / qty_invoiced for 3-way match
+finance.get('/purchase-orders/:id/match', async (c) => {
+  const { company_id } = getUser(c)
+  const poId = Number(c.req.param('id'))
+
+  const po = await c.env.DB.prepare(
+    'SELECT * FROM purchase_orders WHERE id = ? AND company_id = ?'
+  ).bind(poId, company_id).first()
+  if (!po) return c.json({ success: false, error: 'طلب الشراء غير موجود' }, 404)
+
+  const [items, invoices] = await Promise.all([
+    c.env.DB.prepare(
+      'SELECT * FROM purchase_order_items WHERE po_id = ? ORDER BY id'
+    ).bind(poId).all(),
+
+    c.env.DB.prepare(`
+      SELECT si.id AS invoice_id, si.invoice_number, si.invoice_date,
+             si.total_amount, si.notes AS invoice_notes,
+             sii.po_item_id, sii.qty_invoiced, sii.unit_price AS invoice_unit_price
+      FROM supplier_invoices si
+      JOIN supplier_invoice_items sii ON sii.invoice_id = si.id
+      WHERE si.po_id = ? AND si.company_id = ?
+      ORDER BY si.invoice_date DESC, si.id DESC
+    `).bind(poId, company_id).all<{
+      invoice_id: number; invoice_number: string; invoice_date: string
+      total_amount: number; invoice_notes: string | null
+      po_item_id: number; qty_invoiced: number; invoice_unit_price: number
+    }>(),
+  ])
+
+  // Aggregate invoiced qty per po_item_id
+  const invoicedByItem = new Map<number, { qty: number; price: number; invoice_id: number; invoice_number: string }>()
+  for (const row of invoices.results) {
+    const existing = invoicedByItem.get(row.po_item_id)
+    if (existing) {
+      existing.qty += row.qty_invoiced
+    } else {
+      invoicedByItem.set(row.po_item_id, {
+        qty:            row.qty_invoiced,
+        price:          row.invoice_unit_price,
+        invoice_id:     row.invoice_id,
+        invoice_number: row.invoice_number,
+      })
+    }
+  }
+
+  // Build match rows
+  const matchRows = (items.results as Array<{
+    id: number; item_name: string; unit: string | null
+    qty_ordered: number; qty_received: number; unit_price: number
+  }>).map(item => {
+    const inv = invoicedByItem.get(item.id)
+    const qtyInv  = inv?.qty   ?? 0
+    const priceInv = inv?.price ?? item.unit_price
+
+    let match_status: 'matched' | 'price_variance' | 'qty_variance' | 'over_invoiced' | 'pending_invoice' | 'no_gr'
+    if (item.qty_received === 0) {
+      match_status = 'no_gr'
+    } else if (qtyInv === 0) {
+      match_status = 'pending_invoice'
+    } else if (qtyInv > item.qty_received) {
+      match_status = 'over_invoiced'
+    } else if (Math.abs(qtyInv - item.qty_received) > 0.001) {
+      match_status = 'qty_variance'
+    } else if (Math.abs(priceInv - item.unit_price) > 0.01) {
+      match_status = 'price_variance'
+    } else {
+      match_status = 'matched'
+    }
+
+    return {
+      po_item_id:     item.id,
+      item_name:      item.item_name,
+      unit:           item.unit,
+      qty_ordered:    item.qty_ordered,
+      qty_received:   item.qty_received,
+      qty_invoiced:   qtyInv,
+      po_unit_price:  item.unit_price,
+      inv_unit_price: priceInv,
+      match_status,
+      invoice_id:     inv?.invoice_id     ?? null,
+      invoice_number: inv?.invoice_number ?? null,
+    }
+  })
+
+  // Unique invoices list for this PO
+  const uniqueInvoices = [...new Map(
+    invoices.results.map(r => [r.invoice_id, {
+      id: r.invoice_id, number: r.invoice_number,
+      date: r.invoice_date, total: r.total_amount,
+    }])
+  ).values()]
+
+  return c.json({ success: true, data: { po, match_rows: matchRows, invoices: uniqueInvoices } })
+})
+
+// POST /finance/purchase-orders/:id/invoices
+finance.post('/purchase-orders/:id/invoices', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const poId = Number(c.req.param('id'))
+
+  const b = await c.req.json<{
+    invoice_number: string; invoice_date: string; notes?: string
+    items: Array<{ po_item_id: number; qty_invoiced: number; unit_price: number }>
+  }>()
+
+  if (!b.invoice_number || !b.invoice_date || !b.items?.length) {
+    return c.json({ success: false, error: 'رقم الفاتورة والتاريخ والبنود مطلوبة' }, 400)
+  }
+
+  const po = await c.env.DB.prepare(
+    'SELECT id, supplier_code FROM purchase_orders WHERE id = ? AND company_id = ?'
+  ).bind(poId, company_id).first<{ id: number; supplier_code: number | null }>()
+  if (!po) return c.json({ success: false, error: 'طلب الشراء غير موجود' }, 404)
+
+  const totalAmount = b.items.reduce((s, i) => s + i.qty_invoiced * i.unit_price, 0)
+
+  const invRes = await c.env.DB.prepare(
+    `INSERT INTO supplier_invoices
+     (company_id, po_id, invoice_number, invoice_date, supplier_code, total_amount, notes, created_by)
+     VALUES (?,?,?,?,?,?,?,?)`
+  ).bind(company_id, poId, b.invoice_number, b.invoice_date,
+         po.supplier_code ?? null, totalAmount, b.notes ?? null, userId).run()
+
+  const invoiceId = invRes.meta.last_row_id
+
+  await c.env.DB.batch(b.items.map(i =>
+    c.env.DB.prepare(
+      `INSERT INTO supplier_invoice_items (invoice_id, po_item_id, company_id, qty_invoiced, unit_price)
+       VALUES (?,?,?,?,?)`
+    ).bind(invoiceId, i.po_item_id, company_id, i.qty_invoiced, i.unit_price)
+  ))
+
+  void glSupplierInvoice(
+    c.env.DB, company_id, invoiceId, totalAmount, b.invoice_date,
+    `فاتورة مورد: ${b.invoice_number}`, userId,
+  )
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'CREATE',
+    table_name: 'supplier_invoices', record_id: invoiceId,
+    new_value: { po_id: poId, invoice_number: b.invoice_number, total: totalAmount },
+  })
+
+  return c.json({ success: true, data: { id: invoiceId } }, 201)
+})
+
+// ── AP Aging ──────────────────────────────────────────────────
+
+// GET /finance/ap-aging
+finance.get('/ap-aging', async (c) => {
+  const { company_id } = getUser(c)
+
+  const { results } = await c.env.DB.prepare(`
+    SELECT
+      si.id,
+      si.invoice_number,
+      si.invoice_date,
+      COALESCE(si.due_date_days, 30)             AS due_date_days,
+      DATE(si.invoice_date, '+' || COALESCE(si.due_date_days,30) || ' days') AS due_date,
+      si.total_amount,
+      COALESCE(si.paid_amount, 0)                AS paid_amount,
+      si.total_amount - COALESCE(si.paid_amount, 0) AS outstanding,
+      si.payment_date,
+      si.payment_ref,
+      po.po_number,
+      po.supplier_name,
+      CAST(
+        julianday('now') -
+        julianday(DATE(si.invoice_date, '+' || COALESCE(si.due_date_days,30) || ' days'))
+        AS INTEGER
+      ) AS days_overdue
+    FROM supplier_invoices si
+    LEFT JOIN purchase_orders po ON po.id = si.po_id AND po.company_id = si.company_id
+    WHERE si.company_id = ?
+      AND si.total_amount > COALESCE(si.paid_amount, 0)
+    ORDER BY due_date ASC
+  `).bind(company_id).all()
+
+  return c.json({ success: true, data: results })
+})
+
+// PATCH /finance/supplier-invoices/:id/pay
+finance.patch('/supplier-invoices/:id/pay', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const b = await c.req.json<{
+    paid_amount: number; payment_date?: string; payment_ref?: string
+  }>()
+
+  const inv = await c.env.DB.prepare(
+    'SELECT * FROM supplier_invoices WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ total_amount: number; paid_amount: number }>()
+  if (!inv) return c.json({ success: false, error: 'الفاتورة غير موجودة' }, 404)
+
+  const newPaid = Math.min(Number(b.paid_amount) || 0, inv.total_amount)
+  await c.env.DB.prepare(
+    `UPDATE supplier_invoices
+     SET paid_amount = ?, payment_date = COALESCE(?, payment_date),
+         payment_ref = COALESCE(?, payment_ref)
+     WHERE id = ? AND company_id = ?`
+  ).bind(newPaid, b.payment_date ?? null, b.payment_ref ?? null, id, company_id).run()
+
+  // GL: DR Accounts Payable / CR Cash
+  const today = (b.payment_date ?? new Date().toISOString().slice(0, 10))
+  const apAcc   = await c.env.DB.prepare(
+    'SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = ?'
+  ).bind(company_id, 'accounts_payable').first<{ account_code: string }>()
+  const cashAcc = await c.env.DB.prepare(
+    'SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = ?'
+  ).bind(company_id, 'cash').first<{ account_code: string }>()
+
+  if (apAcc && cashAcc) {
+    const periodId = await getOpenPeriod(c.env.DB, company_id, today)
+    if (periodId) {
+      try {
+        const je = await c.env.DB.prepare(
+          `INSERT INTO journal_entries (company_id, period_id, entry_date, description, ref_type, ref_id, is_posted, created_by)
+           VALUES (?,?,?,?,?,?,1,?)`
+        ).bind(company_id, periodId, today, `سداد فاتورة مورد #${id}`, 'supplier_payment', id, userId).run()
+        const eid = je.meta.last_row_id
+        await c.env.DB.prepare(
+          `INSERT INTO journal_entry_lines (entry_id, company_id, account_code, debit, credit, description)
+           VALUES (?,?,?,?,?,?)`
+        ).bind(eid, company_id, apAcc.account_code, newPaid, 0, `سداد فاتورة #${id}`).run()
+        await c.env.DB.prepare(
+          `INSERT INTO journal_entry_lines (entry_id, company_id, account_code, debit, credit, description)
+           VALUES (?,?,?,?,?,?)`
+        ).bind(eid, company_id, cashAcc.account_code, 0, newPaid, `سداد فاتورة #${id}`).run()
+      } catch { /* GL failure must not block payment */ }
+    }
+  }
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'UPDATE',
+    table_name: 'supplier_invoices', record_id: id,
+    new_value: { paid_amount: newPaid, payment_date: b.payment_date },
+  })
+
+  return c.json({ success: true, data: null })
 })
 
 export default finance

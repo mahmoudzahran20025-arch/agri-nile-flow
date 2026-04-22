@@ -41,7 +41,9 @@ export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promis
 
   try {
     const periodId = await getOpenPeriod(db, opts.company_id, opts.entry_date)
-    const entry    = await db
+
+    // Step 1: Insert the header to get the entry ID
+    const entry = await db
       .prepare(`INSERT INTO journal_entries
                 (company_id, period_id, entry_date, description, ref_type, ref_id, is_posted, created_by)
                 VALUES (?,?,?,?,?,?,1,?)`)
@@ -49,16 +51,20 @@ export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promis
             opts.ref_type, opts.ref_id, opts.created_by ?? null).run()
 
     const entryId = entry.meta.last_row_id
-    for (const l of opts.lines) {
-      await db.prepare(
+
+    // Step 2: Insert ALL lines atomically using db.batch()
+    const lineStmts = opts.lines.map(l =>
+      db.prepare(
         `INSERT INTO journal_entry_lines
          (entry_id, company_id, account_code, debit, credit, description, center_code)
          VALUES (?,?,?,?,?,?,?)`
       ).bind(
         entryId, opts.company_id, l.account_code,
         l.debit, l.credit, l.description ?? null, l.center_code ?? null
-      ).run()
-    }
+      )
+    )
+    await db.batch(lineStmts)
+
     return entryId
   } catch {
     // GL failure must never break the source transaction
@@ -83,7 +89,7 @@ export async function glCashTransaction(
     ? await getMapping(db, company_id, 'revenue_default')
     : await getMapping(db, company_id, 'expense_default')
 
-  if (!cashAcc || !contraAcc) return
+  if (!cashAcc || !contraAcc) return null
 
   const lines: GLLine[] = direction === 'د'
     ? [
@@ -112,7 +118,7 @@ export async function glSupplierTransaction(
   const apAcc      = await getMapping(db, company_id, 'accounts_payable')
   const expenseAcc = await getMapping(db, company_id, 'expense_default')
 
-  if (!apAcc || !expenseAcc) return
+  if (!apAcc || !expenseAcc) return null
 
   // 'د' = credit entry (دائن) = المورد أعطانا خدمة/بضاعة → DR Expense / CR AP
   // 'م' = debit entry (مدين)  = دفعنا للمورد → DR AP / CR Cash (but cash handled separately)
@@ -130,6 +136,32 @@ export async function glSupplierTransaction(
     ref_type: 'supplier_transaction', ref_id, lines, created_by })
 }
 
+// Supplier invoice (3-way match): DR Purchases / CR Accounts Payable
+export async function glSupplierInvoice(
+  db: D1Database,
+  company_id: number,
+  ref_id: number,
+  amount: number,
+  date: string,
+  description: string,
+  created_by?: number,
+): Promise<number | null> {
+  const purchasesAcc = await getMapping(db, company_id, 'purchases')
+                    ?? await getMapping(db, company_id, 'expense_default')
+  const apAcc        = await getMapping(db, company_id, 'accounts_payable')
+  if (!purchasesAcc || !apAcc || amount <= 0) return null
+
+  return await postAutoEntry(db, {
+    company_id, entry_date: date, description,
+    ref_type: 'supplier_invoice', ref_id,
+    lines: [
+      { account_code: purchasesAcc, debit: amount, credit: 0,      description },
+      { account_code: apAcc,        debit: 0,      credit: amount, description },
+    ],
+    created_by,
+  })
+}
+
 export async function glInventoryMovement(
   db: D1Database,
   company_id: number,
@@ -144,8 +176,8 @@ export async function glInventoryMovement(
   const apAcc      = await getMapping(db, company_id, 'accounts_payable')
   const expenseAcc = await getMapping(db, company_id, 'expense_default')
 
-  if (!invAcc) return
-  if (value <= 0) return
+  if (!invAcc) return null
+  if (value <= 0) return null
 
   const desc = movement_type === 'اضافة'
     ? `إضافة مخزون: ${item_name}`
@@ -167,4 +199,31 @@ export async function glInventoryMovement(
 
   return await postAutoEntry(db, { company_id, entry_date: date, description: desc,
     ref_type: 'inventory_movement', ref_id, lines, created_by })
+}
+
+
+// Payroll: DR Wages / CR Cash (uses mapping table, replaces hardcoded account codes)
+export async function glPayroll(
+  db: D1Database,
+  company_id: number,
+  ref_id: number,
+  amount: number,
+  date: string,
+  description: string,
+  created_by?: number,
+): Promise<number | null> {
+  const wagesAcc = await getMapping(db, company_id, 'wages')
+                ?? await getMapping(db, company_id, 'expense_default')
+  const cashAcc  = await getMapping(db, company_id, 'cash')
+  if (!wagesAcc || !cashAcc || amount <= 0) return null
+
+  return await postAutoEntry(db, {
+    company_id, entry_date: date, description,
+    ref_type: 'payroll_run', ref_id,
+    lines: [
+      { account_code: wagesAcc, debit: amount, credit: 0,      description },
+      { account_code: cashAcc,  debit: 0,      credit: amount, description },
+    ],
+    created_by,
+  })
 }

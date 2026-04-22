@@ -116,6 +116,8 @@ export interface InventoryMovement {
   document_number: number | null
   notes:         string | null
   season_id:     number | null
+  field_id:      number | null
+  work_order_id: number | null
   center_code:   number | null
   center_name:   string | null
 }

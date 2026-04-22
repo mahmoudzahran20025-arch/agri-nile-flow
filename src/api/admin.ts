@@ -138,4 +138,65 @@ admin.get('/companies/:id/users', async (c) => {
   return c.json({ success: true, data: results })
 })
 
+// GET /api/admin/overview — per-company health metrics (E-4)
+admin.get('/overview', async (c) => {
+  const { results: companies } = await c.env.DB.prepare(
+    'SELECT id, code, name, is_active FROM companies ORDER BY code'
+  ).all<{ id: number; code: string; name: string; is_active: number }>()
+
+  const rows = await Promise.all(companies.map(async co => {
+    const cid = co.id
+    const [cashRow, seasonRow, woRow, poRow, empRow, invRow, lastTxRow] = await Promise.all([
+      c.env.DB.prepare(
+        `SELECT running_balance FROM cash_transactions WHERE company_id = ? ORDER BY id DESC LIMIT 1`
+      ).bind(cid).first<{ running_balance: number }>(),
+      c.env.DB.prepare(
+        `SELECT name, status FROM seasons WHERE company_id = ? AND status IN ('active','harvesting') ORDER BY start_date DESC LIMIT 1`
+      ).bind(cid).first<{ name: string; status: string }>(),
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM work_orders WHERE company_id = ? AND status IN ('pending','in_progress')`
+      ).bind(cid).first<{ n: number }>(),
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n, COALESCE(SUM(total_amount),0) AS value FROM purchase_orders WHERE company_id = ? AND status IN ('draft','sent','partial')`
+      ).bind(cid).first<{ n: number; value: number }>(),
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM employees WHERE company_id = ? AND is_active = 1`
+      ).bind(cid).first<{ n: number }>(),
+      c.env.DB.prepare(
+        `SELECT COUNT(DISTINCT im.item_code) AS n
+         FROM inventory_movements im
+         JOIN items i ON i.code = im.item_code AND i.company_id = im.company_id
+         WHERE im.company_id = ? AND im.balance_qty IS NOT NULL
+           AND im.balance_qty <= i.reorder_point AND i.reorder_point > 0
+           AND im.id = (SELECT MAX(id) FROM inventory_movements WHERE item_code = im.item_code AND company_id = im.company_id)`
+      ).bind(cid).first<{ n: number }>(),
+      c.env.DB.prepare(
+        `SELECT MAX(created_at) AS last_at FROM cash_transactions WHERE company_id = ?`
+      ).bind(cid).first<{ last_at: string | null }>(),
+    ])
+
+    const health = Math.max(0, 100
+      - (woRow?.n ?? 0) * 2
+      - (poRow?.n ?? 0) * 3
+      - (invRow?.n ?? 0) * 3
+    )
+
+    return {
+      ...co,
+      cash_balance:    cashRow?.running_balance  ?? null,
+      active_season:   seasonRow?.name           ?? null,
+      season_status:   seasonRow?.status         ?? null,
+      open_wo:         woRow?.n   ?? 0,
+      open_po_count:   poRow?.n   ?? 0,
+      open_po_value:   poRow?.value ?? 0,
+      employee_count:  empRow?.n  ?? 0,
+      low_stock_count: invRow?.n  ?? 0,
+      last_activity:   lastTxRow?.last_at ?? null,
+      health_score:    health,
+    }
+  }))
+
+  return c.json({ success: true, data: rows })
+})
+
 export default admin

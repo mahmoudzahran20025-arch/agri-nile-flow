@@ -129,4 +129,111 @@ config.get('/companies', async (c) => {
   return c.json({ success: true, data: results })
 })
 
+// ── Season Close (E-3) ───────────────────────────────────────
+
+// GET /config/seasons/:id/close-check — pre-close validation checklist
+config.get('/seasons/:id/close-check', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+
+  const season = await c.env.DB.prepare(
+    'SELECT * FROM seasons WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ name: string; status: string; start_date: string; end_date: string }>()
+  if (!season) return c.json({ success: false, error: 'الموسم غير موجود' }, 404)
+
+  const [openWO, openPO, unmatchedBank, unpaidInv] = await Promise.all([
+    // Open work orders (still active)
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM work_orders
+       WHERE company_id = ? AND season_id = ? AND status IN ('pending','in_progress')`
+    ).bind(company_id, id).first<{ n: number }>(),
+
+    // Open POs (not finalized)
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM purchase_orders
+       WHERE company_id = ? AND status IN ('draft','sent','partial')`
+    ).bind(company_id).first<{ n: number }>(),
+
+    // Unmatched bank statements
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM bank_statements
+       WHERE company_id = ? AND is_matched = 0
+         AND statement_date BETWEEN ? AND ?`
+    ).bind(company_id, season.start_date, season.end_date).first<{ n: number }>(),
+
+    // Unpaid supplier invoices linked to this season's POs
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS n, COALESCE(SUM(si.total_amount - COALESCE(si.paid_amount,0)),0) AS total
+       FROM supplier_invoices si
+       JOIN purchase_orders po ON po.id = si.po_id AND po.company_id = si.company_id
+       WHERE si.company_id = ? AND si.total_amount > COALESCE(si.paid_amount, 0)`
+    ).bind(company_id).first<{ n: number; total: number }>(),
+  ])
+
+  const checks = [
+    {
+      key:    'open_work_orders',
+      label:  'أوامر العمل المفتوحة',
+      count:  openWO?.n ?? 0,
+      amount: null,
+      blocker: false,
+      ok:     (openWO?.n ?? 0) === 0,
+    },
+    {
+      key:    'open_po',
+      label:  'طلبات الشراء غير المكتملة',
+      count:  openPO?.n ?? 0,
+      amount: null,
+      blocker: false,
+      ok:     (openPO?.n ?? 0) === 0,
+    },
+    {
+      key:    'unmatched_bank',
+      label:  'حركات بنكية غير مطابقة',
+      count:  unmatchedBank?.n ?? 0,
+      amount: null,
+      blocker: false,
+      ok:     (unmatchedBank?.n ?? 0) === 0,
+    },
+    {
+      key:    'unpaid_invoices',
+      label:  'فواتير موردين غير مسددة',
+      count:  unpaidInv?.n ?? 0,
+      amount: unpaidInv?.total ?? 0,
+      blocker: false,
+      ok:     (unpaidInv?.n ?? 0) === 0,
+    },
+  ]
+
+  return c.json({
+    success: true,
+    data: {
+      season: { id, name: season.name, status: season.status },
+      checks,
+      can_close: season.status !== 'closed',
+    },
+  })
+})
+
+// POST /config/seasons/:id/close — formal season close
+config.post('/seasons/:id/close', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const { close_notes } = await c.req.json<{ close_notes?: string }>()
+
+  const season = await c.env.DB.prepare(
+    'SELECT status FROM seasons WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ status: string }>()
+  if (!season) return c.json({ success: false, error: 'الموسم غير موجود' }, 404)
+  if (season.status === 'closed') return c.json({ success: false, error: 'الموسم مغلق مسبقاً' }, 422)
+
+  await c.env.DB.prepare(
+    `UPDATE seasons
+     SET status = 'closed', closed_at = datetime('now'), closed_by = ?, close_notes = ?
+     WHERE id = ? AND company_id = ?`
+  ).bind(userId, close_notes ?? null, id, company_id).run()
+
+  return c.json({ success: true, data: { id, status: 'closed' } })
+})
+
 export default config
