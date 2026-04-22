@@ -9,6 +9,7 @@ import {
   financeApi,
   type PurchaseOrder, type POItem, type MatchStatus,
 } from '../../api/finance'
+import { suppliersApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -348,6 +349,7 @@ export default function PurchaseOrdersPage() {
   const [showInvoice, setShowInvoice] = useState<number | null>(null)
 
   const [form, setForm] = useState({
+    supplier_code: '' as string,
     supplier_name: '', order_date: new Date().toISOString().slice(0, 10),
     expected_date: '', notes: '',
   })
@@ -359,6 +361,12 @@ export default function PurchaseOrdersPage() {
     staleTime: 30_000,
   })
 
+  const { data: suppliersData } = useQuery({
+    queryKey: ['suppliers-list-po'],
+    queryFn:  () => suppliersApi.list({ size: 200 }),
+    staleTime: 120_000,
+  })
+
   const { data: detail, isLoading: detailLoading } = useQuery({
     queryKey: ['purchase-order', expandedId],
     queryFn:  () => financeApi.getPurchaseOrder(expandedId!),
@@ -367,7 +375,8 @@ export default function PurchaseOrdersPage() {
 
   const createMut = useMutation({
     mutationFn: () => financeApi.createPurchaseOrder({
-      supplier_name: form.supplier_name || undefined,
+      supplier_code:  form.supplier_code ? Number(form.supplier_code) : undefined,
+      supplier_name:  form.supplier_name || undefined,
       order_date:    form.order_date,
       expected_date: form.expected_date || undefined,
       notes:         form.notes || undefined,
@@ -383,7 +392,7 @@ export default function PurchaseOrdersPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['purchase-orders'] })
       setShowCreate(false)
-      setForm({ supplier_name: '', order_date: new Date().toISOString().slice(0, 10), expected_date: '', notes: '' })
+      setForm({ supplier_code: '', supplier_name: '', order_date: new Date().toISOString().slice(0, 10), expected_date: '', notes: '' })
       setFormItems([{ ...EMPTY_ITEM }])
     },
   })
@@ -502,13 +511,29 @@ export default function PurchaseOrdersPage() {
         <div className="space-y-4 p-1 max-h-[70vh] overflow-y-auto">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">اسم المورد</label>
-              <input
+              <label className="block text-sm font-medium text-gray-700 mb-1">المورد</label>
+              <select
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500"
-                placeholder="اسم شركة / مورد"
-                value={form.supplier_name}
-                onChange={e => setForm(f => ({ ...f, supplier_name: e.target.value }))}
-              />
+                value={form.supplier_code}
+                onChange={e => {
+                  const sel = (suppliersData?.data as Array<{ code: number; name: string }> ?? []).find(s => String(s.code) === e.target.value)
+                  setForm(f => ({ ...f, supplier_code: e.target.value, supplier_name: sel?.name ?? '' }))
+                }}
+              >
+                <option value="">— اختر المورد —</option>
+                {(suppliersData?.data as Array<{ code: number; name: string }> ?? []).map(s => (
+                  <option key={s.code} value={s.code}>{s.name}</option>
+                ))}
+                <option value="__other__">مورد آخر (إدخال يدوي)</option>
+              </select>
+              {form.supplier_code === '__other__' && (
+                <input
+                  className="mt-1.5 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500"
+                  placeholder="اسم المورد"
+                  value={form.supplier_name}
+                  onChange={e => setForm(f => ({ ...f, supplier_name: e.target.value }))}
+                />
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">تاريخ الطلب</label>

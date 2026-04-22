@@ -68,7 +68,7 @@ export default function CostCenterReportPage() {
             <BarChart3 size={22} className="text-blue-600" />
             تحليل تكاليف مراكز الإنتاج
           </h1>
-          <p className="text-sm text-slate-500 mt-0.5">إجمالي المصروفات النقدية وعمليات الموردين لكل بيفوت</p>
+          <p className="text-sm text-slate-500 mt-0.5">إجمالي المصروفات النقدية وعمليات الموردين وصرف المخزون لكل بيفوت</p>
         </div>
         <div className="flex items-center gap-3">
           <select
@@ -89,7 +89,7 @@ export default function CostCenterReportPage() {
       </div>
 
       {/* Summary KPIs */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="card p-4 text-center">
           <p className="text-xs text-slate-500 mb-1">إجمالي المصروفات</p>
           <p className="text-xl font-bold text-slate-900">{egp(grandTotal)}</p>
@@ -103,7 +103,13 @@ export default function CostCenterReportPage() {
         <div className="card p-4 text-center">
           <p className="text-xs text-slate-500 mb-1">مستحقات موردين</p>
           <p className="text-xl font-bold text-amber-700">
-            {egp(rows.reduce((s, r) => s + r.supplier_total, 0))}
+            {egp(rows.reduce((s, r) => s + (r.supplier_total ?? 0), 0))}
+          </p>
+        </div>
+        <div className="card p-4 text-center">
+          <p className="text-xs text-slate-500 mb-1">صرف مخزون</p>
+          <p className="text-xl font-bold text-green-700">
+            {egp(rows.reduce((s, r) => s + (r.inventory_total ?? 0), 0))}
           </p>
         </div>
       </div>
@@ -119,6 +125,7 @@ export default function CostCenterReportPage() {
                 <th className="px-4 py-3 text-right font-semibold text-slate-700 hidden md:table-cell">البيفوت</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-700">نقدي</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-700">موردين</th>
+                <th className="px-4 py-3 text-left font-semibold text-slate-700 hidden md:table-cell">مخزون</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-700 font-bold">الإجمالي</th>
                 <th className="px-4 py-3 text-right font-semibold text-slate-700">% من الكل</th>
                 <th className="px-4 py-3 hidden lg:table-cell"></th>
@@ -126,10 +133,10 @@ export default function CostCenterReportPage() {
             </thead>
             <tbody>
               {isLoading && (
-                <tr><td colSpan={8} className="py-12 text-center text-slate-400">جارٍ التحميل…</td></tr>
+                <tr><td colSpan={9} className="py-12 text-center text-slate-400">جارٍ التحميل…</td></tr>
               )}
               {!isLoading && rows.length === 0 && (
-                <tr><td colSpan={8} className="py-12 text-center text-slate-400">لا توجد بيانات للموسم المحدد</td></tr>
+                <tr><td colSpan={9} className="py-12 text-center text-slate-400">لا توجد بيانات للموسم المحدد</td></tr>
               )}
               {rows.map(row => (
                 <>
@@ -155,6 +162,9 @@ export default function CostCenterReportPage() {
                     <td className="px-4 py-3 text-left text-amber-700">
                       {row.supplier_total ? egp(row.supplier_total) : <span className="text-slate-300">—</span>}
                     </td>
+                    <td className="px-4 py-3 text-left text-green-700 hidden md:table-cell">
+                      {row.inventory_total ? egp(row.inventory_total) : <span className="text-slate-300">—</span>}
+                    </td>
                     <td className="px-4 py-3 text-left font-bold text-slate-900">
                       {egp(row.grand_total)}
                     </td>
@@ -174,7 +184,7 @@ export default function CostCenterReportPage() {
                   {/* Expanded detail row */}
                   {expandedRow === row.center_code && (
                     <tr key={`detail-${row.center_code}`}>
-                      <td colSpan={8} className="bg-slate-50 border-b border-slate-200">
+                      <td colSpan={9} className="bg-slate-50 border-b border-slate-200">
                         <div className="px-6 py-4">
                           {detailLoading ? (
                             <p className="text-slate-400 text-sm">جارٍ التحميل…</p>
@@ -246,7 +256,10 @@ export default function CostCenterReportPage() {
                     {egp(rows.reduce((s, r) => s + r.cash_total, 0))}
                   </td>
                   <td className="px-4 py-3 text-left text-amber-700">
-                    {egp(rows.reduce((s, r) => s + r.supplier_total, 0))}
+                    {egp(rows.reduce((s, r) => s + (r.supplier_total ?? 0), 0))}
+                  </td>
+                  <td className="px-4 py-3 text-left text-green-700 hidden md:table-cell">
+                    {egp(rows.reduce((s, r) => s + (r.inventory_total ?? 0), 0))}
                   </td>
                   <td className="px-4 py-3 text-left text-slate-900 text-base">
                     {egp(grandTotal)}

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MapPin, Plus, CheckCircle, XCircle, Navigation } from 'lucide-react'
+import { MapPin, Plus, CheckCircle, XCircle, Navigation, Pencil, TrendingUp } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { fieldsApi, configApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
 import { usePermission } from '../../hooks/usePermission'
@@ -10,16 +11,18 @@ import { formatFeddan } from '../../lib/geoUtils'
 
 interface Field {
   id: number; code: string; name: string; area_feddan: number
-  season_name?: string; crop_type?: string; irrigation_type?: string
-  landlord_name?: string; is_active: number
+  season_name?: string; season_id?: number; crop_type?: string; soil_type?: string
+  irrigation_type?: string; landlord_name?: string; rent_per_feddan?: number
+  location?: string; notes?: string; is_active: number
   center_lat?: number; center_lng?: number; geofence_radius_m?: number
-  boundary_geojson?: string
+  boundary_geojson?: string; center_code?: number
 }
 
 interface FieldForm {
   code: string; name: string; area_feddan: string; season_id: string
   location: string; crop_type: string; soil_type: string
   irrigation_type: string; landlord_name: string; rent_per_feddan: string; notes: string
+  center_code: string
   // Geo — auto-filled from GeoJSONFieldDrawer
   center_lat: string; center_lng: string; geofence_radius_m: string
   boundary_geojson: string
@@ -31,6 +34,7 @@ const EMPTY: FieldForm = {
   code: '', name: '', area_feddan: '', season_id: '',
   location: '', crop_type: '', soil_type: '',
   irrigation_type: '', landlord_name: '', rent_per_feddan: '', notes: '',
+  center_code: '',
   center_lat: '', center_lng: '', geofence_radius_m: '150',
   boundary_geojson: '',
   length_m: '', width_m: '',
@@ -43,11 +47,13 @@ const IRRIGATION = ['غمر','تنقيط','رش','ري بالأخاديد']
 export default function FieldsPage() {
   const { canWrite } = usePermission()
   const qc = useQueryClient()
-  const [open, setOpen]       = useState(false)
-  const [search, setSearch]   = useState('')
-  const [form, setForm]       = useState<FieldForm>(EMPTY)
-  const [err, setErr]         = useState('')
-  const [geoResult, setGeoResult] = useState<GeoFieldResult | null>(null)
+  const navigate = useNavigate()
+  const [open, setOpen]               = useState(false)
+  const [editField, setEditField]     = useState<Field | null>(null)
+  const [search, setSearch]           = useState('')
+  const [form, setForm]               = useState<FieldForm>(EMPTY)
+  const [err, setErr]                 = useState('')
+  const [geoResult, setGeoResult]     = useState<GeoFieldResult | null>(null)
 
   // When GeoJSONFieldDrawer gives us a result → auto-fill form
   const handleGeoResult = (res: GeoFieldResult) => {
@@ -68,6 +74,10 @@ export default function FieldsPage() {
   const { data: seasons = [] } = useQuery({
     queryKey: ['seasons'],
     queryFn:  configApi.seasons,
+  })
+  const { data: costCenters = [] } = useQuery({
+    queryKey: ['cost-centers'],
+    queryFn:  configApi.costCenters,
   })
 
   // Determine final area: polygon takes priority, then manual dimensions, then direct entry
@@ -91,6 +101,7 @@ export default function FieldsPage() {
       landlord_name:   form.landlord_name || undefined,
       rent_per_feddan: form.rent_per_feddan ? Number(form.rent_per_feddan) : undefined,
       notes:       form.notes || undefined,
+      center_code: form.center_code ? Number(form.center_code) : undefined,
       // Geo — from polygon or manual
       center_lat:        form.center_lat  ? Number(form.center_lat)  : undefined,
       center_lng:        form.center_lng  ? Number(form.center_lng)  : undefined,
@@ -105,6 +116,57 @@ export default function FieldsPage() {
       setOpen(false); setForm(EMPTY); setErr(''); setGeoResult(null)
     },
   })
+
+  const update = useMutation({
+    mutationFn: () => fieldsApi.update(editField!.id, {
+      name: form.name.trim(),
+      area_feddan: Number(calcAreaFeddan()) || undefined,
+      season_id:   form.season_id ? Number(form.season_id) : null,
+      location:    form.location || null,
+      crop_type:   form.crop_type || null,
+      soil_type:   form.soil_type || null,
+      irrigation_type: form.irrigation_type || null,
+      landlord_name:   form.landlord_name || null,
+      rent_per_feddan: form.rent_per_feddan ? Number(form.rent_per_feddan) : null,
+      notes:       form.notes || null,
+      center_code: form.center_code ? Number(form.center_code) : null,
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['fields'] })
+      setEditField(null); setForm(EMPTY); setErr(''); setGeoResult(null)
+    },
+  })
+
+  const toggleActive = useMutation({
+    mutationFn: (f: Field) => fieldsApi.update(f.id, { is_active: f.is_active ? 0 : 1 }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['fields'] }),
+  })
+
+  function openEdit(f: Field) {
+    setEditField(f)
+    setGeoResult(null)
+    setForm({
+      code:              f.code,
+      name:              f.name,
+      area_feddan:       String(f.area_feddan ?? ''),
+      season_id:         f.season_id ? String(f.season_id) : '',
+      location:          f.location ?? '',
+      crop_type:         f.crop_type ?? '',
+      soil_type:         f.soil_type ?? '',
+      irrigation_type:   f.irrigation_type ?? '',
+      landlord_name:     f.landlord_name ?? '',
+      rent_per_feddan:   f.rent_per_feddan ? String(f.rent_per_feddan) : '',
+      notes:             f.notes ?? '',
+      center_code:       f.center_code ? String(f.center_code) : '',
+      center_lat:        f.center_lat  ? String(f.center_lat)  : '',
+      center_lng:        f.center_lng  ? String(f.center_lng)  : '',
+      geofence_radius_m: f.geofence_radius_m ? String(f.geofence_radius_m) : '150',
+      boundary_geojson:  f.boundary_geojson ?? '',
+      length_m:          '',
+      width_m:           '',
+    })
+    setErr('')
+  }
 
   const sf = (f: Partial<FieldForm>) => setForm(p => ({ ...p, ...f }))
 
@@ -157,6 +219,7 @@ export default function FieldsPage() {
                 <th className="th">المالك</th>
                 <th className="th">GPS</th>
                 <th className="th">الحالة</th>
+                {canWrite('fields') && <th className="th">إجراءات</th>}
               </tr>
             </thead>
             <tbody>
@@ -179,6 +242,33 @@ export default function FieldsPage() {
                       ? <span className="badge badge-green flex items-center gap-1 w-fit"><CheckCircle size={12}/> نشطة</span>
                       : <span className="badge badge-red flex items-center gap-1 w-fit"><XCircle size={12}/> متوقفة</span>}
                   </td>
+                  {canWrite('fields') && (
+                    <td className="td">
+                      <div className="flex items-center gap-1">
+                        <button
+                          title="تعديل"
+                          onClick={() => openEdit(f)}
+                          className="p-1.5 rounded hover:bg-indigo-50 text-indigo-600 transition-colors"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button
+                          title={f.is_active ? 'إيقاف' : 'تفعيل'}
+                          onClick={() => toggleActive.mutate(f)}
+                          className={`p-1.5 rounded transition-colors ${f.is_active ? 'hover:bg-red-50 text-red-500' : 'hover:bg-green-50 text-green-600'}`}
+                        >
+                          {f.is_active ? <XCircle size={14} /> : <CheckCircle size={14} />}
+                        </button>
+                        <button
+                          title="تحليل التكاليف"
+                          onClick={() => navigate(`/inventory/cost-by-field?field_id=${f.id}`)}
+                          className="p-1.5 rounded hover:bg-amber-50 text-amber-600 transition-colors"
+                        >
+                          <TrendingUp size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -242,6 +332,15 @@ export default function FieldsPage() {
           <div>
             <label className="label">الموقع</label>
             <input className="input" value={form.location} onChange={e => sf({ location: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">مركز التكلفة</label>
+            <select className="input" value={form.center_code} onChange={e => sf({ center_code: e.target.value })}>
+              <option value="">— بدون مركز تكلفة —</option>
+              {(costCenters as { code: number; name: string }[]).map(cc => (
+                <option key={cc.code} value={cc.code}>{cc.code} — {cc.name}</option>
+              ))}
+            </select>
           </div>
           <div className="col-span-2">
             <label className="label">ملاحظات</label>
@@ -319,6 +418,88 @@ export default function FieldsPage() {
             disabled={create.isPending || !form.code || !form.name}
           >
             {create.isPending ? 'جاري الحفظ...' : 'حفظ'}
+          </button>
+        </div>
+      </Modal>
+
+      {/* Edit Modal */}
+      <Modal open={editField !== null} onClose={() => { setEditField(null); setForm(EMPTY); setErr('') }} title={`تعديل: ${editField?.name ?? ''}`} size="lg">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="label">اسم القطعة *</label>
+            <input className="input" value={form.name} onChange={e => sf({ name: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">المساحة (فدان)</label>
+            <input className="input" type="number" step="0.01" value={form.area_feddan} onChange={e => sf({ area_feddan: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">الموسم</label>
+            <select className="input" value={form.season_id} onChange={e => sf({ season_id: e.target.value })}>
+              <option value="">— اختر الموسم —</option>
+              {(seasons as { id: number; name: string }[]).map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">نوع المحصول</label>
+            <select className="input" value={form.crop_type} onChange={e => sf({ crop_type: e.target.value })}>
+              <option value="">— اختر —</option>
+              {CROPS.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">نوع التربة</label>
+            <select className="input" value={form.soil_type} onChange={e => sf({ soil_type: e.target.value })}>
+              <option value="">— اختر —</option>
+              {SOILS.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">نوع الري</label>
+            <select className="input" value={form.irrigation_type} onChange={e => sf({ irrigation_type: e.target.value })}>
+              <option value="">— اختر —</option>
+              {IRRIGATION.map(i => <option key={i} value={i}>{i}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">اسم المالك</label>
+            <input className="input" value={form.landlord_name} onChange={e => sf({ landlord_name: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">الإيجار (جنيه/فدان)</label>
+            <input className="input" type="number" value={form.rent_per_feddan} onChange={e => sf({ rent_per_feddan: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">الموقع</label>
+            <input className="input" value={form.location} onChange={e => sf({ location: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">مركز التكلفة</label>
+            <select className="input" value={form.center_code} onChange={e => sf({ center_code: e.target.value })}>
+              <option value="">— بدون مركز تكلفة —</option>
+              {(costCenters as { code: number; name: string }[]).map(cc => (
+                <option key={cc.code} value={cc.code}>{cc.code} — {cc.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="col-span-2">
+            <label className="label">ملاحظات</label>
+            <textarea className="input" rows={2} value={form.notes} onChange={e => sf({ notes: e.target.value })} />
+          </div>
+        </div>
+
+        {err && <p className="text-red-600 text-sm mt-3">{err}</p>}
+
+        <div className="flex justify-end gap-3 mt-6">
+          <button className="btn btn-ghost" onClick={() => { setEditField(null); setForm(EMPTY); setErr('') }}>إلغاء</button>
+          <button
+            className="btn btn-primary"
+            onClick={() => update.mutate()}
+            disabled={update.isPending || !form.name}
+          >
+            {update.isPending ? 'جاري الحفظ...' : 'حفظ التعديلات'}
           </button>
         </div>
       </Modal>

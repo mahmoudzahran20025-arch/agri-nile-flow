@@ -18,9 +18,12 @@ reports.get('/cost-centers', async (c) => {
   const seasonId  = rawSeason ? Number(rawSeason) : null
 
   // Use parameterized query to prevent SQL injection
-  const seasonWhere = seasonId ? 'AND season_id = ?' : ''
+  const seasonWhere    = seasonId ? 'AND season_id = ?' : ''
   const cashBinds: unknown[] = seasonId ? [company_id, seasonId] : [company_id]
   const supBinds:  unknown[] = seasonId ? [company_id, seasonId] : [company_id]
+  // Inventory: filter by field's season_id when seasonId provided
+  const invSeasonWhere = seasonId ? 'AND f.season_id = ?' : ''
+  const invBinds: unknown[] = seasonId ? [company_id, seasonId] : [company_id]
 
   // Cash transactions per center
   const cashQ = c.env.DB.prepare(`
@@ -59,25 +62,48 @@ reports.get('/cost-centers', async (c) => {
     supplier_total: number; supplier_count: number
   }>()
 
-  const [cashRes, supRes] = await Promise.all([cashQ, supQ])
+  // Inventory consumption per center (صرف movements via fields.center_code)
+  const invQ = c.env.DB.prepare(`
+    SELECT
+      f.center_code,
+      cc.name            AS center_name,
+      SUM(im.total_cost) AS inventory_total,
+      COUNT(im.id)       AS inventory_count
+    FROM inventory_movements im
+    JOIN fields f ON f.id = im.field_id AND f.company_id = im.company_id
+    LEFT JOIN cost_centers cc ON cc.code = f.center_code AND cc.company_id = f.company_id
+    WHERE im.company_id = ?
+      AND im.movement_type = 'صرف'
+      AND f.center_code IS NOT NULL
+      ${invSeasonWhere}
+    GROUP BY f.center_code
+  `).bind(...invBinds).all<{
+    center_code: number; center_name: string | null
+    inventory_total: number; inventory_count: number
+  }>()
+
+  const [cashRes, supRes, invRes] = await Promise.all([cashQ, supQ, invQ])
 
   // Merge by center_code
   const map = new Map<number, {
     center_code: number; center_name: string | null
     cash_total: number; cash_count: number
     supplier_total: number; supplier_count: number
+    inventory_total: number; inventory_count: number
     grand_total: number
   }>()
 
   for (const r of cashRes.results) {
     map.set(r.center_code, {
-      center_code:    r.center_code,
-      center_name:    r.center_name,
-      cash_total:     r.cash_total ?? 0,
-      cash_count:     r.cash_count ?? 0,
-      supplier_total: 0,
-      supplier_count: 0,
-      grand_total:    r.cash_total ?? 0,
+      center_code:     r.center_code,
+      center_name:     r.center_name,
+      cash_total:      r.cash_total ?? 0,
+      cash_count:      r.cash_count ?? 0,
+      supplier_total:  0,
+      supplier_count:  0,
+      inventory_total: 0,
+      inventory_count: 0,
+      grand_total:     r.cash_total ?? 0,
     })
   }
 
@@ -89,13 +115,36 @@ reports.get('/cost-centers', async (c) => {
       existing.grand_total    += r.supplier_total ?? 0
     } else {
       map.set(r.center_code, {
-        center_code:    r.center_code,
-        center_name:    r.center_name,
-        cash_total:     0,
-        cash_count:     0,
-        supplier_total: r.supplier_total ?? 0,
-        supplier_count: r.supplier_count ?? 0,
-        grand_total:    r.supplier_total ?? 0,
+        center_code:     r.center_code,
+        center_name:     r.center_name,
+        cash_total:      0,
+        cash_count:      0,
+        supplier_total:  r.supplier_total ?? 0,
+        supplier_count:  r.supplier_count ?? 0,
+        inventory_total: 0,
+        inventory_count: 0,
+        grand_total:     r.supplier_total ?? 0,
+      })
+    }
+  }
+
+  for (const r of invRes.results) {
+    const existing = map.get(r.center_code)
+    if (existing) {
+      existing.inventory_total  = r.inventory_total ?? 0
+      existing.inventory_count  = r.inventory_count ?? 0
+      existing.grand_total     += r.inventory_total ?? 0
+    } else {
+      map.set(r.center_code, {
+        center_code:     r.center_code,
+        center_name:     r.center_name,
+        cash_total:      0,
+        cash_count:      0,
+        supplier_total:  0,
+        supplier_count:  0,
+        inventory_total: r.inventory_total ?? 0,
+        inventory_count: r.inventory_count ?? 0,
+        grand_total:     r.inventory_total ?? 0,
       })
     }
   }

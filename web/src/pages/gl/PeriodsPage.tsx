@@ -89,18 +89,18 @@ export default function PeriodsPage() {
     <div className="p-4 md:p-6 space-y-6 max-w-5xl mx-auto" dir="rtl">
 
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="page-header">
         <div>
-          <h1 className="text-2xl font-bold text-gray-800">الفترات المالية</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
+          <h1 className="page-title">الفترات المالية</h1>
+          <p className="text-sm text-gray-500 mt-0.5 hidden sm:block">
             إدارة فتح وإغلاق الفترات المحاسبية — القيود محجوبة على الفترات المغلقة
           </p>
         </div>
         <button
           onClick={() => { setShowAdd(true); prefillCurrentMonth() }}
-          className="flex items-center gap-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+          className="btn-primary flex items-center gap-2"
         >
-          <Plus size={16} /> فترة جديدة
+          <Plus size={16} /> <span className="hidden sm:inline">فترة جديدة</span><span className="sm:hidden">جديدة</span>
         </button>
       </div>
 
@@ -273,41 +273,50 @@ function PeriodRow({
 }) {
   return (
     <div className={`
-      flex items-center gap-4 p-4 rounded-xl border transition-all
+      flex items-start sm:items-center gap-3 p-4 rounded-xl border transition-all
       ${period.is_closed
         ? 'bg-gray-50 border-gray-200'
         : 'bg-white border-emerald-200 shadow-sm'}
     `}>
-      <CalendarDays size={20} className={period.is_closed ? 'text-gray-400' : 'text-emerald-600'} />
+      <div className={`p-2 rounded-xl flex-shrink-0 ${period.is_closed ? 'bg-gray-100' : 'bg-emerald-50'}`}>
+        <CalendarDays size={18} className={period.is_closed ? 'text-gray-400' : 'text-emerald-600'} />
+      </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-semibold text-gray-800">{period.name}</span>
           {statusChip(period)}
-          <span className="text-xs text-gray-400">{TYPE_LABELS[period.period_type] ?? period.period_type}</span>
+          <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-md">{TYPE_LABELS[period.period_type] ?? period.period_type}</span>
         </div>
-        <p className="text-xs text-gray-500 mt-0.5">
-          {period.start_date} — {period.end_date}
-          {period.closed_at && ` · أُغلقت في ${period.closed_at.slice(0,10)}`}
+        <p className="text-xs text-gray-500 mt-1">
+          <span className="font-medium">{period.start_date}</span>
+          <span className="mx-1.5 text-gray-300">→</span>
+          <span className="font-medium">{period.end_date}</span>
+          {period.closed_at && (
+            <span className="mr-2 text-gray-400"> · أُغلقت {period.closed_at.slice(0,10)}</span>
+          )}
         </p>
       </div>
 
-      {period.is_closed ? (
-        <button
-          onClick={onReopen}
-          disabled={reopening}
-          className="flex items-center gap-1.5 text-xs border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-lg px-3 py-1.5 transition-colors"
-        >
-          {reopening ? <Loader2 size={12} className="animate-spin" /> : <Unlock size={12} />}
-          إعادة فتح
-        </button>
-      ) : (
-        <button
-          onClick={onClose}
-          className="flex items-center gap-1.5 text-xs border border-red-300 text-red-700 bg-red-50 hover:bg-red-100 rounded-lg px-3 py-1.5 transition-colors"
-        >
-          <Lock size={12} /> إغلاق الفترة
-        </button>
-      )}
+      <div className="flex-shrink-0">
+        {period.is_closed ? (
+          <button
+            onClick={onReopen}
+            disabled={reopening}
+            className="flex items-center gap-1.5 text-xs border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-lg px-3 py-2 transition-colors"
+          >
+            {reopening ? <Loader2 size={12} className="animate-spin" /> : <Unlock size={12} />}
+            <span className="hidden sm:inline">إعادة فتح</span><span className="sm:hidden">فتح</span>
+          </button>
+        ) : (
+          <button
+            onClick={onClose}
+            className="flex items-center gap-1.5 text-xs border border-red-300 text-red-700 bg-red-50 hover:bg-red-100 rounded-lg px-3 py-2 transition-colors"
+          >
+            <Lock size={12} />
+            <span className="hidden sm:inline">إغلاق الفترة</span><span className="sm:hidden">إغلاق</span>
+          </button>
+        )}
+      </div>
     </div>
   )
 }

@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
-import { glCashTransaction, getOpenPeriod } from '../lib/gl'
+import { glCashTransaction, getOpenPeriod, postAutoEntry } from '../lib/gl'
 import { logAudit } from '../lib/audit'
 
 const treasury = new Hono<{ Bindings: Env }>()
@@ -67,6 +67,7 @@ treasury.post('/transactions', async (c) => {
     recipient_name?: string; narration: string; amount: number
     supplier_code?: number; expense_code?: number; notes?: string
     season_id?: number; unit?: string; quantity?: number; unit_price?: number
+    status?: 'draft' | 'posted'
   }>()
 
   if (!b.transaction_date || !b.direction || !b.amount || !b.narration) {
@@ -75,6 +76,8 @@ treasury.post('/transactions', async (c) => {
   if (b.direction !== 'د' && b.direction !== 'م') {
     return c.json({ success: false, error: "الاتجاه يجب أن يكون 'د' أو 'م'" }, 400)
   }
+
+  const status = b.status ?? 'posted'
 
   // Validate open financial period
   const periodId = await getOpenPeriod(c.env.DB, company_id, b.transaction_date)
@@ -99,8 +102,8 @@ treasury.post('/transactions', async (c) => {
      (company_id, season_id, supplier_code, expense_code, transaction_date,
       direction, document_number, recipient_name, narration, amount,
       debit, credit, running_balance, unit, quantity, unit_price,
-      notes, year, month, created_by_user_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      notes, year, month, created_by_user_id, status)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(
     company_id, b.season_id ?? null, b.supplier_code ?? null, b.expense_code ?? null,
     b.transaction_date, b.direction, b.document_number ?? null,
@@ -108,7 +111,7 @@ treasury.post('/transactions', async (c) => {
     b.direction === 'م' ? b.amount : 0,
     b.direction === 'د' ? b.amount : 0,
     runningBalance, b.unit ?? null, b.quantity ?? null, b.unit_price ?? null,
-    b.notes ?? null, date.getFullYear(), date.getMonth() + 1, userId
+    b.notes ?? null, date.getFullYear(), date.getMonth() + 1, userId, status
   ).run()
 
   const lastRowPost = await c.env.DB
@@ -116,23 +119,26 @@ treasury.post('/transactions', async (c) => {
     .bind(company_id).first<{id:number}>()
   const txnId = lastRowPost?.id ?? 0
 
-  // Auto-post GL entry + link back to cash_transaction
-  const glEntryId = await glCashTransaction(c.env.DB, company_id, txnId,
-    b.direction, b.amount, b.transaction_date, b.narration, userId)
-  if (glEntryId) {
-    await c.env.DB.prepare(
-      'UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ?'
-    ).bind(glEntryId, txnId).run()
+  // Auto-post GL entry only for 'posted' status
+  let glEntryId: number | null = null
+  if (status === 'posted') {
+    glEntryId = await glCashTransaction(c.env.DB, company_id, txnId,
+      b.direction, b.amount, b.transaction_date, b.narration, userId)
+    if (glEntryId) {
+      await c.env.DB.prepare(
+        'UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ?'
+      ).bind(glEntryId, txnId).run()
+    }
   }
 
   // Audit log
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'CREATE',
     table_name: 'cash_transactions', record_id: txnId,
-    new_value: { direction: b.direction, amount: b.amount, narration: b.narration, date: b.transaction_date },
+    new_value: { direction: b.direction, amount: b.amount, narration: b.narration, date: b.transaction_date, status },
   })
 
-  return c.json({ success: true, data: { running_balance: runningBalance } }, 201)
+  return c.json({ success: true, data: { running_balance: runningBalance, gl_entry_id: glEntryId } }, 201)
 })
 
 // GET /api/treasury/supplier-payments?supplier_code=
@@ -168,15 +174,46 @@ treasury.post('/partners', async (c) => {
   const b = await c.req.json<{ name: string; capital_paid?: number; current_acct?: number }>()
   if (!b.name) return c.json({ success: false, error: 'الاسم مطلوب' }, 400)
 
+  const capitalPaid = b.capital_paid ?? 0
+  const currentAcct = b.current_acct ?? 0
+
   const result = await c.env.DB.prepare(
     'INSERT INTO partners (company_id, name, capital_paid, current_acct) VALUES (?,?,?,?)'
-  ).bind(company_id, b.name.trim(), b.capital_paid ?? 0, b.current_acct ?? 0).run()
+  ).bind(company_id, b.name.trim(), capitalPaid, currentAcct).run()
 
   const newId = result.meta.last_row_id as number
+
+  // GL entry for initial capital if > 0
+  if (capitalPaid > 0) {
+    const today = new Date().toISOString().slice(0, 10)
+    // Try to get equity account mapping, fallback to default
+    const equityMapping = await c.env.DB
+      .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'equity'")
+      .bind(company_id).first<{ account_code: string }>()
+    const cashMapping = await c.env.DB
+      .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'")
+      .bind(company_id).first<{ account_code: string }>()
+
+    if (equityMapping && cashMapping) {
+      await postAutoEntry(c.env.DB, {
+        company_id,
+        entry_date:  today,
+        description: `إضافة رأس مال شريك: ${b.name.trim()}`,
+        ref_type:    'partner_capital',
+        ref_id:      newId,
+        lines: [
+          { account_code: cashMapping.account_code,   debit: capitalPaid, credit: 0,           description: `رأس مال — ${b.name.trim()}` },
+          { account_code: equityMapping.account_code,  debit: 0,           credit: capitalPaid, description: `رأس مال — ${b.name.trim()}` },
+        ],
+        created_by: userId,
+      })
+    }
+  }
+
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'CREATE',
     table_name: 'partners', record_id: newId,
-    new_value: { name: b.name, capital_paid: b.capital_paid ?? 0 },
+    new_value: { name: b.name, capital_paid: capitalPaid },
   })
 
   return c.json({ success: true, data: { id: newId } }, 201)
@@ -187,6 +224,12 @@ treasury.patch('/partners/:id', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
   const b  = await c.req.json<{ name?: string; capital_paid?: number; current_acct?: number }>()
+
+  // Get current values BEFORE update for delta calculation
+  const current = await c.env.DB
+    .prepare('SELECT name, capital_paid, current_acct FROM partners WHERE id = ? AND company_id = ?')
+    .bind(id, company_id).first<{ name: string; capital_paid: number; current_acct: number }>()
+  if (!current) return c.json({ success: false, error: 'الشريك غير موجود' }, 404)
 
   const fields: string[] = []
   const values: unknown[] = []
@@ -200,6 +243,77 @@ treasury.patch('/partners/:id', async (c) => {
     .prepare(`UPDATE partners SET ${fields.join(', ')} WHERE id = ? AND company_id = ?`)
     .bind(...values, id, company_id).run()
 
+  // GL entries for equity changes
+  const today = new Date().toISOString().slice(0, 10)
+  const partnerName = b.name?.trim() ?? current.name
+
+  const equityMapping = await c.env.DB
+    .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'equity'")
+    .bind(company_id).first<{ account_code: string }>()
+  const cashMapping = await c.env.DB
+    .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'")
+    .bind(company_id).first<{ account_code: string }>()
+
+  if (equityMapping && cashMapping) {
+    // Capital change → DR/CR Cash vs Equity
+    if (b.capital_paid !== undefined) {
+      const delta = b.capital_paid - (current.capital_paid ?? 0)
+      if (Math.abs(delta) > 0.01) {
+        const desc = delta > 0
+          ? `زيادة رأس مال شريك: ${partnerName}`
+          : `تخفيض رأس مال شريك: ${partnerName}`
+        const absDelta = Math.abs(delta)
+
+        await postAutoEntry(c.env.DB, {
+          company_id,
+          entry_date:  today,
+          description: desc,
+          ref_type:    'partner_capital',
+          ref_id:      id,
+          lines: delta > 0
+            ? [
+                { account_code: cashMapping.account_code,   debit: absDelta, credit: 0,        description: desc },
+                { account_code: equityMapping.account_code,  debit: 0,        credit: absDelta, description: desc },
+              ]
+            : [
+                { account_code: equityMapping.account_code,  debit: absDelta, credit: 0,        description: desc },
+                { account_code: cashMapping.account_code,   debit: 0,        credit: absDelta, description: desc },
+              ],
+          created_by: userId,
+        })
+      }
+    }
+
+    // Current account change → DR/CR Cash vs Partner Current Account
+    if (b.current_acct !== undefined) {
+      const delta = b.current_acct - (current.current_acct ?? 0)
+      if (Math.abs(delta) > 0.01) {
+        const desc = delta > 0
+          ? `إيداع في حساب شريك جاري: ${partnerName}`
+          : `سحب من حساب شريك جاري: ${partnerName}`
+        const absDelta = Math.abs(delta)
+
+        await postAutoEntry(c.env.DB, {
+          company_id,
+          entry_date:  today,
+          description: desc,
+          ref_type:    'partner_current',
+          ref_id:      id,
+          lines: delta > 0
+            ? [
+                { account_code: cashMapping.account_code,   debit: absDelta, credit: 0,        description: desc },
+                { account_code: equityMapping.account_code,  debit: 0,        credit: absDelta, description: desc },
+              ]
+            : [
+                { account_code: equityMapping.account_code,  debit: absDelta, credit: 0,        description: desc },
+                { account_code: cashMapping.account_code,   debit: 0,        credit: absDelta, description: desc },
+              ],
+          created_by: userId,
+        })
+      }
+    }
+  }
+
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'UPDATE',
     table_name: 'partners', record_id: id, new_value: b,
@@ -209,3 +323,4 @@ treasury.patch('/partners/:id', async (c) => {
 })
 
 export default treasury
+

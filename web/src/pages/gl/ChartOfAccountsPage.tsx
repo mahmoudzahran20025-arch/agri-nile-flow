@@ -190,7 +190,7 @@ export default function ChartOfAccountsPage() {
     setOpenMapping(true)
   }
 
-  const accountCodes = list.filter(a => !a.is_header).map(a => a.code)
+  const leafAccounts = list.filter(a => !a.is_header)
 
   return (
     <div className="p-6 space-y-6">
@@ -387,7 +387,7 @@ export default function ChartOfAccountsPage() {
                 onChange={e => setMappingForm(p => ({ ...p, [m.key]: e.target.value }))}
               >
                 <option value="">— اختر حساباً —</option>
-                {accountCodes.map(c => <option key={c} value={c}>{c}</option>)}
+                {leafAccounts.map(a => <option key={a.code} value={a.code}>{a.code} — {a.name}</option>)}
               </select>
             </div>
           ))}

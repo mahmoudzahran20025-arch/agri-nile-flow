@@ -43,41 +43,158 @@ const STATUS_NEXT: Record<string, { label: string; value: string }[]> = {
 interface Account    { code: number; company_id: number; name: string }
 interface ExpenseType { code: number; company_id: number; name: string }
 
+// ─── Season Close Check Modal ────────────────────────────────
+function SeasonCloseModal({ season, open, onClose }: { season: Season; open: boolean; onClose: () => void }) {
+  const qc = useQueryClient()
+  const [closing, setClosing] = useState(false)
+  const [closeNotes, setCloseNotes] = useState('')
+
+  type CheckItem = { key: string; label: string; count: number; amount: number | null; ok: boolean; blocker: boolean }
+  type CloseCheckData = { season: { id: number; name: string; status: string }; checks: CheckItem[]; can_close: boolean }
+
+  const { data, isLoading } = useQuery<CloseCheckData>({
+    queryKey: ['season-close-check', season.id],
+    queryFn:  () => configApi.seasonCloseCheck(season.id) as Promise<CloseCheckData>,
+    enabled:  open,
+    staleTime: 10_000,
+  })
+
+  // Also check for draft transactions
+  const draftCashQ = useQuery<{ total: number; count: number }>({
+    queryKey: ['season-draft-cash', season.id],
+    queryFn: async () => {
+      // This is a lightweight check — we can't query directly without an API, so we use the checks from close-check
+      return { total: 0, count: 0 }
+    },
+    enabled: open,
+  })
+  void draftCashQ
+
+  const allChecks = data?.checks ?? []
+  const hasWarnings = allChecks.some(ch => !ch.ok)
+
+  const handleClose = async () => {
+    setClosing(true)
+    try {
+      await configApi.closeSeason(season.id, closeNotes || undefined)
+      await qc.invalidateQueries({ queryKey: ['seasons'] })
+      onClose()
+    } finally {
+      setClosing(false)
+    }
+  }
+
+  return (
+    <Modal open={open} title={`إغلاق الموسم: ${season.name}`} onClose={onClose} size="md">
+      <div className="space-y-4">
+        {isLoading ? (
+          <div className="p-8 text-center text-slate-400">جاري فحص البيانات...</div>
+        ) : (
+          <>
+            {/* Checklist */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">قائمة التحقق قبل الإغلاق</p>
+              {allChecks.map(ch => (
+                <div key={ch.key}
+                  className={`flex items-center gap-3 rounded-xl px-4 py-3 border
+                    ${ch.ok
+                      ? 'bg-green-50 border-green-200'
+                      : ch.blocker
+                        ? 'bg-red-50 border-red-200'
+                        : 'bg-amber-50 border-amber-200'}`}
+                >
+                  <span className={`text-lg ${ch.ok ? 'text-green-600' : ch.blocker ? 'text-red-500' : 'text-amber-500'}`}>
+                    {ch.ok ? '✓' : ch.blocker ? '✗' : '⚠'}
+                  </span>
+                  <div className="flex-1">
+                    <p className={`text-sm font-medium ${ch.ok ? 'text-green-800' : ch.blocker ? 'text-red-800' : 'text-amber-800'}`}>
+                      {ch.label}
+                    </p>
+                    {!ch.ok && (
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {ch.count} عنصر{ch.amount ? ` — ${new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(ch.amount)}` : ''}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {hasWarnings && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex gap-2 text-sm text-amber-800">
+                <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-500" />
+                <span>هناك عناصر مفتوحة. يمكنك الإغلاق ولكن يُنصح بمعالجتها أولاً.</span>
+              </div>
+            )}
+
+            {/* Close notes */}
+            <div>
+              <label className="label">ملاحظات الإغلاق (اختياري)</label>
+              <textarea className="input" rows={2} placeholder="أسباب الإغلاق أو ملاحظات..."
+                value={closeNotes} onChange={e => setCloseNotes(e.target.value)} />
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <button className="btn-secondary flex-1" onClick={onClose} disabled={closing}>إلغاء</button>
+              <button
+                className={`flex-1 btn ${hasWarnings ? 'bg-amber-600 hover:bg-amber-700' : 'bg-red-600 hover:bg-red-700'} text-white`}
+                onClick={handleClose} disabled={closing || !data?.can_close}
+              >
+                {closing ? 'جاري الإغلاق...' : hasWarnings ? 'إغلاق رغم التحذيرات' : 'تأكيد الإغلاق'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
 // ─── Season Status Dropdown ──────────────────────────────────
 function SeasonStatusMenu({ season }: { season: Season }) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
+  const [closeModalOpen, setCloseModalOpen] = useState(false)
   const actions = STATUS_NEXT[season.status] ?? []
   if (!actions.length) return null
 
   const change = async (status: string) => {
     setOpen(false)
+    if (status === 'closed') {
+      // Open close-check modal instead of direct close
+      setCloseModalOpen(true)
+      return
+    }
     await configApi.updateSeasonStatus(season.id, status)
     await qc.invalidateQueries({ queryKey: ['seasons'] })
   }
 
   return (
-    <div className="relative inline-block">
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-1 text-xs text-brand-600 hover:text-brand-800 hover:bg-brand-50 px-2 py-1 rounded-lg"
-      >
-        تغيير الحالة <ChevronDown size={12} />
-      </button>
-      {open && (
-        <div className="absolute left-0 top-full mt-1 bg-white rounded-lg shadow-lg border border-slate-200 z-10 min-w-[110px]">
-          {actions.map(a => (
-            <button
-              key={a.value}
-              onClick={() => change(a.value)}
-              className="block w-full text-right px-3 py-2 text-sm hover:bg-slate-50 text-slate-700"
-            >
-              {a.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <>
+      <div className="relative inline-block">
+        <button
+          onClick={() => setOpen(o => !o)}
+          className="flex items-center gap-1 text-xs text-brand-600 hover:text-brand-800 hover:bg-brand-50 px-2 py-1 rounded-lg"
+        >
+          تغيير الحالة <ChevronDown size={12} />
+        </button>
+        {open && (
+          <div className="absolute left-0 top-full mt-1 bg-white rounded-lg shadow-lg border border-slate-200 z-10 min-w-[110px]">
+            {actions.map(a => (
+              <button
+                key={a.value}
+                onClick={() => change(a.value)}
+                className={`block w-full text-right px-3 py-2 text-sm hover:bg-slate-50
+                  ${a.value === 'closed' ? 'text-red-600 font-medium' : 'text-slate-700'}`}
+              >
+                {a.value === 'closed' ? '🔒 ' : ''}{a.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <SeasonCloseModal season={season} open={closeModalOpen} onClose={() => setCloseModalOpen(false)} />
+    </>
   )
 }
 

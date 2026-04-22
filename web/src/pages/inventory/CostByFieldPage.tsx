@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import {
   Leaf, TrendingUp, Package, Wheat, AlertTriangle, CheckCircle,
   Target, Edit3, X, ChevronDown, ChevronUp, Minus,
@@ -196,6 +197,7 @@ function AlertStrip({ overBudget }: { overBudget: FieldCost[] }) {
 
 export default function CostByFieldPage() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [seasonId, setSeasonId] = useState('')
 
   // ── Data ──────────────────────────────────────────────────────
@@ -357,7 +359,8 @@ export default function CostByFieldPage() {
 
                 return (
                   <tr key={row.id}
-                    className={`transition-colors ${rowAlert ? 'bg-red-50/50 hover:bg-red-50' : 'hover:bg-slate-50'}`}
+                    onClick={() => navigate(`/inventory/movements?field_id=${row.id}`)}
+                    className={`cursor-pointer transition-colors ${rowAlert ? 'bg-red-50/50 hover:bg-red-50' : 'hover:bg-slate-50'}`}
                   >
                     {/* Field */}
                     <td className="px-4 py-3">
@@ -412,7 +415,7 @@ export default function CostByFieldPage() {
                     </td>
 
                     {/* Budget — inline editable */}
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                       <BudgetEditor
                         row={row}
                         saving={saving}

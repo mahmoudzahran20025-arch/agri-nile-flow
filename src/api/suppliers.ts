@@ -47,6 +47,48 @@ suppliers.get('/', async (c) => {
   })
 })
 
+// GET /api/suppliers/aging — 30/60/90+ day overdue analysis  (must be before /:code)
+suppliers.get('/aging', async (c) => {
+  const { company_id } = getUser(c)
+  const asOf = c.req.query('as_of') ?? new Date().toISOString().slice(0, 10)
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT s.code, s.name, s.activity,
+            COALESCE(SUM(t.credit), 0) - COALESCE(SUM(t.debit), 0) AS total_balance,
+            COALESCE(SUM(CASE WHEN t.transaction_date >= date(?, '-30 days') AND t.transaction_date <= ? THEN t.credit - t.debit ELSE 0 END), 0) AS current_0_30,
+            COALESCE(SUM(CASE WHEN t.transaction_date >= date(?, '-60 days') AND t.transaction_date < date(?, '-30 days') THEN t.credit - t.debit ELSE 0 END), 0) AS aged_31_60,
+            COALESCE(SUM(CASE WHEN t.transaction_date >= date(?, '-90 days') AND t.transaction_date < date(?, '-60 days') THEN t.credit - t.debit ELSE 0 END), 0) AS aged_61_90,
+            COALESCE(SUM(CASE WHEN t.transaction_date < date(?, '-90 days') THEN t.credit - t.debit ELSE 0 END), 0) AS aged_90_plus
+     FROM suppliers s
+     LEFT JOIN supplier_transactions t ON t.supplier_code = s.code AND t.company_id = s.company_id
+                                          AND t.transaction_date <= ?
+     WHERE s.company_id = ? AND s.is_active = 1
+     GROUP BY s.code, s.name, s.activity
+     HAVING total_balance <> 0
+     ORDER BY total_balance DESC
+    `
+  ).bind(
+    asOf, asOf,
+    asOf, asOf,
+    asOf, asOf,
+    asOf,
+    asOf, company_id,
+  ).all()
+
+  const totals = (results as Record<string, number>[]).reduce(
+    (acc, r) => ({
+      total_balance: acc.total_balance + (r.total_balance ?? 0),
+      current_0_30:  acc.current_0_30  + (r.current_0_30  ?? 0),
+      aged_31_60:    acc.aged_31_60    + (r.aged_31_60    ?? 0),
+      aged_61_90:    acc.aged_61_90    + (r.aged_61_90    ?? 0),
+      aged_90_plus:  acc.aged_90_plus  + (r.aged_90_plus  ?? 0),
+    }),
+    { total_balance: 0, current_0_30: 0, aged_31_60: 0, aged_61_90: 0, aged_90_plus: 0 },
+  )
+
+  return c.json({ success: true, data: { suppliers: results, totals, as_of: asOf } })
+})
+
 // GET /api/suppliers/:code
 suppliers.get('/:code', async (c) => {
   const { company_id } = getUser(c)
@@ -154,11 +196,14 @@ suppliers.post('/:code/transactions', async (c) => {
     unit?: string; quantity?: number; unit_price?: number; amount: number
     credit?: number; debit?: number; check_amount?: number; due_date?: string
     notes?: string; season_id?: number; center_code?: number; account_code?: number
+    status?: 'draft' | 'posted'
   }>()
 
   if (!b.transaction_date || !b.entry_type || b.amount == null) {
     return c.json({ success: false, error: 'التاريخ ونوع القيد والمبلغ مطلوبة' }, 400)
   }
+
+  const status = b.status ?? 'posted'
 
   const periodId = await getOpenPeriod(c.env.DB, company_id, b.transaction_date)
   if (!periodId) {
@@ -172,8 +217,8 @@ suppliers.post('/:code/transactions', async (c) => {
       transaction_date, entry_type, document_type, document_number,
       expense_category, equipment, unit, quantity, unit_price, amount,
       credit, debit, check_amount, due_date, notes, year, month,
-      created_by_user_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      created_by_user_id, status)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(
     company_id, b.season_id ?? null, code, b.account_code ?? null, b.center_code ?? null,
     b.transaction_date, b.entry_type, b.document_type ?? null, b.document_number ?? null,
@@ -182,7 +227,7 @@ suppliers.post('/:code/transactions', async (c) => {
     b.credit ?? (b.entry_type === 'د' ? b.amount : 0),
     b.debit  ?? (b.entry_type === 'م' ? b.amount : 0),
     b.check_amount ?? 0, b.due_date ?? null, b.notes ?? null,
-    date.getFullYear(), date.getMonth() + 1, userId
+    date.getFullYear(), date.getMonth() + 1, userId, status
   ).run()
 
   const lastSupTxn = await c.env.DB
@@ -190,70 +235,26 @@ suppliers.post('/:code/transactions', async (c) => {
     .bind(company_id, code).first<{id:number}>()
   const txnId = lastSupTxn?.id ?? 0
 
-  const supplierRow = await c.env.DB
-    .prepare('SELECT name FROM suppliers WHERE code = ? AND company_id = ?')
-    .bind(code, company_id).first<{name:string}>()
+  // Auto-post GL entry only for 'posted' status
+  if (status === 'posted') {
+    const supplierRow = await c.env.DB
+      .prepare('SELECT name FROM suppliers WHERE code = ? AND company_id = ?')
+      .bind(code, company_id).first<{name:string}>()
 
-  await glSupplierTransaction(c.env.DB, company_id, txnId, b.entry_type, b.amount,
-    b.transaction_date, `${b.expense_category ?? b.entry_type} — ${supplierRow?.name ?? code}`, userId)
+    await glSupplierTransaction(c.env.DB, company_id, txnId, b.entry_type, b.amount,
+      b.transaction_date, `${b.expense_category ?? b.entry_type} — ${supplierRow?.name ?? code}`, userId)
+  }
 
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'CREATE',
     table_name: 'supplier_transactions', record_id: txnId,
     new_value: {
       entry_type: b.entry_type, supplier: code, amount: b.amount,
-      date: b.transaction_date, doc: b.document_number,
+      date: b.transaction_date, doc: b.document_number, status,
     },
   })
 
   return c.json({ success: true, data: null }, 201)
-})
-
-// GET /api/suppliers/aging — 30/60/90+ day overdue analysis
-suppliers.get('/aging', async (c) => {
-  const { company_id } = getUser(c)
-  const asOf = c.req.query('as_of') ?? new Date().toISOString().slice(0, 10)
-
-  // Get suppliers with outstanding balances (credits > debits = we owe them)
-  const { results } = await c.env.DB.prepare(
-    `SELECT s.code, s.name, s.activity,
-            COALESCE(SUM(t.credit), 0) - COALESCE(SUM(t.debit), 0) AS total_balance,
-            -- Transactions in last 30 days
-            COALESCE(SUM(CASE WHEN t.transaction_date >= date(?, '-30 days') AND t.transaction_date <= ? THEN t.credit - t.debit ELSE 0 END), 0) AS current_0_30,
-            -- 31-60 days
-            COALESCE(SUM(CASE WHEN t.transaction_date >= date(?, '-60 days') AND t.transaction_date < date(?, '-30 days') THEN t.credit - t.debit ELSE 0 END), 0) AS aged_31_60,
-            -- 61-90 days
-            COALESCE(SUM(CASE WHEN t.transaction_date >= date(?, '-90 days') AND t.transaction_date < date(?, '-60 days') THEN t.credit - t.debit ELSE 0 END), 0) AS aged_61_90,
-            -- 90+ days
-            COALESCE(SUM(CASE WHEN t.transaction_date < date(?, '-90 days') THEN t.credit - t.debit ELSE 0 END), 0) AS aged_90_plus
-     FROM suppliers s
-     LEFT JOIN supplier_transactions t ON t.supplier_code = s.code AND t.company_id = s.company_id
-                                          AND t.transaction_date <= ?
-     WHERE s.company_id = ? AND s.is_active = 1
-     GROUP BY s.code, s.name, s.activity
-     HAVING total_balance <> 0
-     ORDER BY total_balance DESC
-    `
-  ).bind(
-    asOf, asOf,        // 0-30
-    asOf, asOf,        // 31-60
-    asOf, asOf,        // 61-90
-    asOf,              // 90+
-    asOf, company_id,  // filter
-  ).all()
-
-  const totals = (results as Record<string, number>[]).reduce(
-    (acc, r) => ({
-      total_balance: acc.total_balance + (r.total_balance ?? 0),
-      current_0_30:  acc.current_0_30  + (r.current_0_30  ?? 0),
-      aged_31_60:    acc.aged_31_60    + (r.aged_31_60    ?? 0),
-      aged_61_90:    acc.aged_61_90    + (r.aged_61_90    ?? 0),
-      aged_90_plus:  acc.aged_90_plus  + (r.aged_90_plus  ?? 0),
-    }),
-    { total_balance: 0, current_0_30: 0, aged_31_60: 0, aged_61_90: 0, aged_90_plus: 0 },
-  )
-
-  return c.json({ success: true, data: { suppliers: results, totals, as_of: asOf } })
 })
 
 export default suppliers

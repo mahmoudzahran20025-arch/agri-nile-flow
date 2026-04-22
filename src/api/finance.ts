@@ -249,7 +249,7 @@ finance.get('/purchase-orders', async (c) => {
        FROM purchase_orders po
        LEFT JOIN users    u1 ON u1.id = po.requested_by
        LEFT JOIN users    u2 ON u2.id = po.approved_by
-       LEFT JOIN suppliers s  ON s.id = po.supplier_code
+       LEFT JOIN suppliers s  ON s.code = po.supplier_code AND s.company_id = po.company_id
        ${where}
        ORDER BY po.order_date DESC, po.id DESC
        LIMIT ? OFFSET ?`
@@ -271,7 +271,7 @@ finance.get('/purchase-orders/:id', async (c) => {
        FROM purchase_orders po
        LEFT JOIN users    u1 ON u1.id = po.requested_by
        LEFT JOIN users    u2 ON u2.id = po.approved_by
-       LEFT JOIN suppliers s  ON s.id = po.supplier_code
+       LEFT JOIN suppliers s  ON s.code = po.supplier_code AND s.company_id = po.company_id
        WHERE po.id = ? AND po.company_id = ?`
     ).bind(id, company_id).first(),
     c.env.DB.prepare(

@@ -309,6 +309,7 @@ export const reportsApi = {
         center_code: number; center_name: string | null
         cash_total: number; cash_count: number
         supplier_total: number; supplier_count: number
+        inventory_total: number; inventory_count: number
         grand_total: number
       }>
       grand_total: number

@@ -62,8 +62,8 @@ calendar.get('/events', async (c) => {
     .prepare(`
       SELECT
         ce.*,
-        u1.name  AS created_by_name,
-        u2.name  AS assigned_to_user_name,
+        u1.full_name  AS created_by_name,
+        u2.full_name  AS assigned_to_user_name,
         e.name   AS assigned_to_employee_name,
         (SELECT COUNT(*) FROM event_attendees ea WHERE ea.event_id = ce.id) AS attendee_count
       FROM calendar_events ce
@@ -89,8 +89,8 @@ calendar.get('/events/:id', async (c) => {
     .prepare(`
       SELECT
         ce.*,
-        u1.name AS created_by_name,
-        u2.name AS assigned_to_user_name,
+        u1.full_name AS created_by_name,
+        u2.full_name AS assigned_to_user_name,
         e.name  AS assigned_to_employee_name
       FROM calendar_events ce
       LEFT JOIN users     u1 ON u1.id = ce.created_by
@@ -104,7 +104,7 @@ calendar.get('/events/:id', async (c) => {
 
   const { results: attendees } = await c.env.DB
     .prepare(`
-      SELECT ea.*, u.name AS user_name, e.name AS employee_name
+      SELECT ea.*, u.full_name AS user_name, e.name AS employee_name
       FROM event_attendees ea
       LEFT JOIN users     u ON u.id = ea.user_id
       LEFT JOIN employees e ON e.id = ea.employee_id

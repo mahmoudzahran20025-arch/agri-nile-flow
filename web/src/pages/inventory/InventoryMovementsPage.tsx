@@ -77,16 +77,17 @@ export default function InventoryMovementsPage() {
   const [itemCode,  setItemCode]  = useState('')
   const [fieldId,      setFieldId]      = useState('')
   const [workOrderId,  setWorkOrderId]  = useState('')
+  const [seasonId,     setSeasonId]     = useState('')
   const [startDate, setStart]     = useState(thisMonthStart())
   const [endDate,   setEnd]       = useState(today())
   const [addOpen,   setAddOpen]   = useState(false)
   const [sort,      setSort]      = useState<SortState | undefined>(undefined)
 
   const reset = () => {
-    setWarehouse(''); setMovType(''); setItemCode(''); setFieldId(''); setWorkOrderId('')
+    setWarehouse(''); setMovType(''); setItemCode(''); setFieldId(''); setWorkOrderId(''); setSeasonId('')
     setStart(thisMonthStart()); setEnd(today()); setPage(1); setSort(undefined)
   }
-  const isDirty = warehouse || movType || itemCode || fieldId || workOrderId || startDate !== thisMonthStart() || endDate !== today()
+  const isDirty = warehouse || movType || itemCode || fieldId || workOrderId || seasonId || startDate !== thisMonthStart() || endDate !== today()
 
   const { data: warehouses } = useQuery({
     queryKey: ['warehouses'],
@@ -102,6 +103,12 @@ export default function InventoryMovementsPage() {
     staleTime: 120_000,
   })
 
+  const { data: seasonsList = [] } = useQuery({
+    queryKey: ['seasons'],
+    queryFn:  configApi.seasons as () => Promise<{ id: number; name: string }[]>,
+    staleTime: 120_000,
+  })
+
   type WOOption = { id: number; name: string; operation_type: string }
   const { data: workOrdersList = [] } = useQuery({
     queryKey: ['operations', 'orders', 'all'],
@@ -111,7 +118,7 @@ export default function InventoryMovementsPage() {
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['inventory', 'movements', page, warehouse, movType, itemCode, fieldId, workOrderId, startDate, endDate],
+    queryKey: ['inventory', 'movements', page, warehouse, movType, itemCode, fieldId, workOrderId, seasonId, startDate, endDate],
     queryFn:  () => inventoryApi.list({
       page, size: 100,
       warehouse:      warehouse     || undefined,
@@ -119,6 +126,7 @@ export default function InventoryMovementsPage() {
       item_code:      itemCode      ? Number(itemCode)     : undefined,
       field_id:       fieldId       ? Number(fieldId)      : undefined,
       work_order_id:  workOrderId   ? Number(workOrderId)  : undefined,
+      season_id:      seasonId      ? Number(seasonId)     : undefined,
       start:          startDate     || undefined,
       end:            endDate       || undefined,
     } as Parameters<typeof inventoryApi.list>[0]) as Promise<{ data: InventoryMovement[]; total: number; page: number; page_size: number; has_more: boolean }>,
@@ -211,6 +219,16 @@ export default function InventoryMovementsPage() {
               <option value="">كل الحقول</option>
               {fieldsList.map(f => (
                 <option key={f.id} value={f.id}>{f.name}</option>
+              ))}
+            </select>
+          )}
+
+          {/* Season */}
+          {seasonsList.length > 0 && (
+            <select className="input w-40" value={seasonId} onChange={e => { setSeasonId(e.target.value); setPage(1) }}>
+              <option value="">كل المواسم</option>
+              {seasonsList.map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
           )}

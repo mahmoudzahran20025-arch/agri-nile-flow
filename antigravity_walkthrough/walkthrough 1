@@ -1,0 +1,140 @@
+# Agri-Nile Flow — Integration Sprint Walkthrough
+
+## Summary
+
+**All 4 phases completed.** 10+ files modified, 1 migration created.
+
+---
+
+## Phase 1: Form Completeness ✅
+
+### AddCashTransactionModal — Complete Rewrite
+[AddCashTransactionModal.tsx](file:///c:/Users/mahmo/Contacts/CLAUDE_CO%20WORK%20MY%20WORK/agri-nile-flow/web/src/components/forms/AddCashTransactionModal.tsx)
+
+| Feature | Status |
+|---------|--------|
+| Beneficiary Type (مورد/موظف/مصروف عام) | ✅ 3-way toggle with conditional UI |
+| Supplier Dropdown + Auto-fill name | ✅ |
+| Employee Dropdown + Auto-fill name | ✅ |
+| Season Dropdown | ✅ |
+| Expense Type Dropdown | ✅ |
+| Document Type Dropdown | ✅ |
+| Qty × Price with auto-compute | ✅ |
+| Unit Dropdown (standardized) | ✅ |
+| Status: Draft/Posted | ✅ |
+| Toast with GL ref | ✅ |
+
+### AddSupplierTransactionModal — Dropdown Standardization
+[AddSupplierTransactionModal.tsx](file:///c:/Users/mahmo/Contacts/CLAUDE_CO%20WORK%20MY%20WORK/agri-nile-flow/web/src/components/forms/AddSupplierTransactionModal.tsx)
+
+All free-text inputs converted to dropdowns + season/center_code/account_code added + toast notifications.
+
+### AddInventoryBatchModal — Cost Center + Supplier Dropdown
+[AddInventoryBatchModal.tsx](file:///c:/Users/mahmo/Contacts/CLAUDE_CO%20WORK%20MY%20WORK/agri-nile-flow/web/src/components/forms/AddInventoryBatchModal.tsx)
+
+- Added `center_code` dropdown in Agricultural Context section
+- Converted `supplier_code` input → supplier dropdown for إضافة type
+
+### GL Mapping Dropdown Fix
+[ChartOfAccountsPage.tsx](file:///c:/Users/mahmo/Contacts/CLAUDE_CO%20WORK%20MY%20WORK/agri-nile-flow/web/src/pages/gl/ChartOfAccountsPage.tsx)
+
+Now shows `1110 — الخزينة والبنوك` instead of just `1110`.
+
+---
+
+## Phase 2: GL Integration + Draft/Posted ✅
+
+### GL Atomicity Fix
+[gl.ts](file:///c:/Users/mahmo/Contacts/CLAUDE_CO%20WORK%20MY%20WORK/agri-nile-flow/src/lib/gl.ts)
+
+- `postAutoEntry()` now uses `db.batch()` for all journal_entry_lines
+- Fixed 3 bare `return` → `return null` TypeScript errors
+
+### Draft/Posted Workflow
+[treasury.ts](file:///c:/Users/mahmo/Contacts/CLAUDE_CO%20WORK%20MY%20WORK/agri-nile-flow/src/api/treasury.ts) | [suppliers.ts](file:///c:/Users/mahmo/Contacts/CLAUDE_CO%20WORK%20MY%20WORK/agri-nile-flow/src/api/suppliers.ts)
+
+- Both POST endpoints accept `status: 'draft' | 'posted'`
+- GL auto-post **only fires when `status === 'posted'`**
+- Treasury returns `gl_entry_id` in response
+
+### Migration
+[0015_tx_status_workflow.sql](file:///c:/Users/mahmo/Contacts/CLAUDE_CO%20WORK%20MY%20WORK/agri-nile-flow/migrations/0015_tx_status_workflow.sql)
+
+```sql
+ALTER TABLE cash_transactions ADD COLUMN status TEXT NOT NULL DEFAULT 'posted';
+ALTER TABLE supplier_transactions ADD COLUMN status TEXT NOT NULL DEFAULT 'posted';
+ALTER TABLE cash_transactions ADD COLUMN document_type TEXT;
+```
+
+---
+
+## Phase 3: Workflow Governance ✅
+
+### Season Close Validation
+[ConfigPage.tsx](file:///c:/Users/mahmo/Contacts/CLAUDE_CO%20WORK%20MY%20WORK/agri-nile-flow/web/src/pages/config/ConfigPage.tsx)
+
+**Before:** Clicking "إغلاق" directly closed the season with zero validation.
+
+**After:** Clicking "إغلاق" opens a **close-check modal** that:
+1. Calls `GET /config/seasons/:id/close-check` API
+2. Shows a visual checklist with ✓/⚠/✗ indicators:
+   - أوامر العمل المفتوحة
+   - طلبات الشراء غير المكتملة
+   - حركات بنكية غير مطابقة
+   - فواتير موردين غير مسددة
+3. Shows warning banner if any items are open
+4. Has close_notes textarea
+5. Button changes to "إغلاق رغم التحذيرات" (amber) when warnings exist
+6. Calls formal `POST /config/seasons/:id/close` API
+
+### Partners GL Integration
+[treasury.ts](file:///c:/Users/mahmo/Contacts/CLAUDE_CO%20WORK%20MY%20WORK/agri-nile-flow/src/api/treasury.ts)
+
+**Before:** Changing `capital_paid` or `current_acct` had NO GL impact.
+
+**After:**
+- **POST /partners** — Creates GL entry when initial `capital_paid > 0`
+  - DR Cash / CR Equity
+- **PATCH /partners/:id** — Reads old values, calculates delta, creates GL entry for each changed field:
+  - Capital increase: DR Cash / CR Equity
+  - Capital decrease: DR Equity / CR Cash
+  - Current account deposit: DR Cash / CR Equity
+  - Current account withdrawal: DR Equity / CR Cash
+
+Uses `equity` and `cash` GL mappings from `gl_account_mappings` table.
+
+---
+
+## Phase 4: UX Polish ✅
+
+### Toast Notifications
+[AddCashTransactionModal.tsx](file:///c:/Users/mahmo/Contacts/CLAUDE_CO%20WORK%20MY%20WORK/agri-nile-flow/web/src/components/forms/AddCashTransactionModal.tsx) | [AddSupplierTransactionModal.tsx](file:///c:/Users/mahmo/Contacts/CLAUDE_CO%20WORK%20MY%20WORK/agri-nile-flow/web/src/components/forms/AddSupplierTransactionModal.tsx)
+
+- Cash modal: `"تم ترحيل الحركة بنجاح — قيد GL #42"` or `"تم حفظ المسودة بنجاح"`
+- Supplier modal: `"تم ترحيل القيد بنجاح — اسم المورد"` or `"تم حفظ المسودة — اسم المورد"`
+
+---
+
+## Verification
+
+| Check | Result |
+|-------|--------|
+| Frontend TypeScript (`npx tsc --noEmit`) | ✅ Zero errors |
+| Backend gl.ts / treasury.ts / suppliers.ts | ✅ Zero new errors |
+| Migration SQL | ✅ Valid, backward compatible |
+
+---
+
+## Files Changed Summary
+
+| File | Type | Change |
+|------|------|--------|
+| `AddCashTransactionModal.tsx` | Frontend | Full rewrite + toast |
+| `AddSupplierTransactionModal.tsx` | Frontend | Dropdown conversion + toast |
+| `AddInventoryBatchModal.tsx` | Frontend | center_code + supplier dropdown |
+| `ChartOfAccountsPage.tsx` | Frontend | Mapping dropdown shows name |
+| `ConfigPage.tsx` | Frontend | Season close validation modal |
+| `gl.ts` | Backend | db.batch() atomicity + return null |
+| `treasury.ts` | Backend | status field + partner GL + postAutoEntry |
+| `suppliers.ts` | Backend | status field + conditional GL |
+| `0015_tx_status_workflow.sql` | Migration | status + document_type columns |
