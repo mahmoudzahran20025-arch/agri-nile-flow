@@ -1,0 +1,294 @@
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  Clock, Loader2, CheckCircle2, AlertTriangle,
+  AlertOctagon, DollarSign, X, CreditCard,
+} from 'lucide-react'
+import { financeApi, type APAgingRow } from '../../api/finance'
+import Modal from '../../components/ui/Modal'
+
+// ── Helpers ───────────────────────────────────────────────────
+function egp(n: number) {
+  return new Intl.NumberFormat('ar-EG', { minimumFractionDigits: 0 }).format(n)
+}
+
+function ageBucket(days: number): {
+  label: string; color: string; bg: string; border: string; icon: React.ReactNode
+} {
+  if (days <= 0)  return { label: 'جاري (غير مستحق)', color: 'text-emerald-700', bg: 'bg-emerald-50',  border: 'border-emerald-200', icon: <CheckCircle2 size={13} /> }
+  if (days <= 30) return { label: '1–30 يوم',          color: 'text-blue-700',    bg: 'bg-blue-50',     border: 'border-blue-200',    icon: <Clock        size={13} /> }
+  if (days <= 60) return { label: '31–60 يوم',         color: 'text-amber-700',   bg: 'bg-amber-50',    border: 'border-amber-200',   icon: <AlertTriangle size={13} /> }
+  if (days <= 90) return { label: '61–90 يوم',         color: 'text-orange-700',  bg: 'bg-orange-50',   border: 'border-orange-200',  icon: <AlertTriangle size={13} /> }
+  return               { label: '+90 يوم',             color: 'text-red-700',     bg: 'bg-red-50',      border: 'border-red-200',     icon: <AlertOctagon  size={13} /> }
+}
+
+// ════════════════════════════════════════════════════════════
+export default function APAgingPage() {
+  const qc = useQueryClient()
+  const [payModal, setPayModal] = useState<APAgingRow | null>(null)
+
+  const { data: rows = [], isLoading } = useQuery({
+    queryKey: ['ap-aging'],
+    queryFn:  financeApi.getAPAging,
+    staleTime: 30_000,
+  })
+
+  // Bucket totals
+  const buckets = [
+    { key: 'current', label: 'جاري',      filter: (r: APAgingRow) => r.days_overdue <= 0   },
+    { key: '1-30',    label: '1–30 يوم',  filter: (r: APAgingRow) => r.days_overdue > 0  && r.days_overdue <= 30  },
+    { key: '31-60',   label: '31–60 يوم', filter: (r: APAgingRow) => r.days_overdue > 30 && r.days_overdue <= 60  },
+    { key: '61-90',   label: '61–90 يوم', filter: (r: APAgingRow) => r.days_overdue > 60 && r.days_overdue <= 90  },
+    { key: '90+',     label: '+90 يوم',   filter: (r: APAgingRow) => r.days_overdue > 90 },
+  ]
+
+  const bucketColors = [
+    'border-emerald-200 bg-emerald-50 text-emerald-700',
+    'border-blue-200 bg-blue-50 text-blue-700',
+    'border-amber-200 bg-amber-50 text-amber-700',
+    'border-orange-200 bg-orange-50 text-orange-700',
+    'border-red-200 bg-red-50 text-red-700',
+  ]
+
+  const total = rows.reduce((s, r) => s + r.outstanding, 0)
+  const overdue = rows.filter(r => r.days_overdue > 0).reduce((s, r) => s + r.outstanding, 0)
+
+  return (
+    <div className="p-4 md:p-6 space-y-6 max-w-6xl mx-auto" dir="rtl">
+
+      {/* Header */}
+      <div>
+        <div className="flex items-center gap-2.5">
+          <div className="w-10 h-10 rounded-xl bg-red-600 flex items-center justify-center shadow-sm">
+            <CreditCard size={20} className="text-white" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">تقرير تقادم الذمم الدائنة</h1>
+            <p className="text-sm text-gray-500 mt-0.5">تحليل مستحقات الموردين حسب العمر الزمني</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <div className="col-span-2 md:col-span-1 p-4 rounded-2xl bg-gray-900 text-white">
+          <p className="text-2xl font-bold">{egp(total)}</p>
+          <p className="text-xs text-gray-400 mt-1">إجمالي المستحق ج.م</p>
+          {overdue > 0 && (
+            <p className="text-xs text-red-400 mt-1">{egp(overdue)} متأخر</p>
+          )}
+        </div>
+        {buckets.map((b, i) => {
+          const bRows = rows.filter(b.filter)
+          const bTotal = bRows.reduce((s, r) => s + r.outstanding, 0)
+          return (
+            <div key={b.key} className={`p-4 rounded-2xl border ${bucketColors[i]}`}>
+              <p className="text-xl font-bold">{egp(bTotal)}</p>
+              <p className="text-xs mt-1 opacity-80">{b.label}</p>
+              <p className="text-xs opacity-60">{bRows.length} فاتورة</p>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Table */}
+      {isLoading ? (
+        <div className="flex justify-center py-16 text-gray-400">
+          <Loader2 className="animate-spin" size={36} />
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="text-center py-20">
+          <div className="w-16 h-16 bg-emerald-50 rounded-3xl flex items-center justify-center mx-auto mb-4">
+            <CheckCircle2 size={28} className="text-emerald-500" />
+          </div>
+          <h3 className="text-lg font-bold text-gray-700 mb-1">لا توجد ذمم مستحقة</h3>
+          <p className="text-sm text-gray-400">جميع فواتير الموردين مسددة بالكامل</p>
+        </div>
+      ) : (
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-100 text-xs text-gray-500 font-semibold">
+                  <th className="text-right px-5 py-3">المورد</th>
+                  <th className="text-right px-4 py-3">الفاتورة</th>
+                  <th className="text-center px-4 py-3">تاريخ الفاتورة</th>
+                  <th className="text-center px-4 py-3">تاريخ الاستحقاق</th>
+                  <th className="text-center px-4 py-3">الحالة</th>
+                  <th className="text-left px-4 py-3">الإجمالي</th>
+                  <th className="text-left px-4 py-3">مسدد</th>
+                  <th className="text-left px-4 py-3">المتبقي</th>
+                  <th className="px-4 py-3"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {rows.map(row => {
+                  const bucket = ageBucket(row.days_overdue)
+                  return (
+                    <tr key={row.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-5 py-3">
+                        <p className="font-medium text-gray-800">{row.supplier_name ?? '—'}</p>
+                        {row.po_number && (
+                          <p className="text-xs text-gray-400">{row.po_number}</p>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs text-gray-700">{row.invoice_number}</td>
+                      <td className="px-4 py-3 text-center text-gray-600">{row.invoice_date}</td>
+                      <td className="px-4 py-3 text-center text-gray-600">{row.due_date}</td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`inline-flex items-center gap-1 text-xs rounded-full px-2.5 py-1 font-medium border ${bucket.bg} ${bucket.color} ${bucket.border}`}>
+                          {bucket.icon}
+                          {row.days_overdue > 0 ? `${row.days_overdue} يوم` : bucket.label}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-left font-medium text-gray-800">{egp(row.total_amount)}</td>
+                      <td className="px-4 py-3 text-left">
+                        <span className={row.paid_amount > 0 ? 'text-emerald-600 font-medium' : 'text-gray-300'}>
+                          {egp(row.paid_amount)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-left font-bold text-gray-900">{egp(row.outstanding)}</td>
+                      <td className="px-4 py-3">
+                        <button
+                          onClick={() => setPayModal(row)}
+                          className="flex items-center gap-1 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg px-2.5 py-1.5 transition-colors whitespace-nowrap"
+                        >
+                          <DollarSign size={11} /> تسجيل دفعة
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+              <tfoot>
+                <tr className="bg-gray-50 border-t-2 border-gray-200 font-bold text-sm">
+                  <td colSpan={5} className="px-5 py-3 text-gray-600">الإجمالي ({rows.length} فاتورة)</td>
+                  <td className="px-4 py-3 text-left text-gray-800">{egp(rows.reduce((s,r)=>s+r.total_amount,0))}</td>
+                  <td className="px-4 py-3 text-left text-emerald-700">{egp(rows.reduce((s,r)=>s+r.paid_amount,0))}</td>
+                  <td className="px-4 py-3 text-left text-gray-900">{egp(total)}</td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Pay modal */}
+      {payModal && (
+        <PayModal
+          row={payModal}
+          onClose={() => setPayModal(null)}
+          onSuccess={() => {
+            setPayModal(null)
+            qc.invalidateQueries({ queryKey: ['ap-aging'] })
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── Pay Modal ─────────────────────────────────────────────────
+function PayModal({
+  row, onClose, onSuccess,
+}: {
+  row: APAgingRow; onClose: () => void; onSuccess: () => void
+}) {
+  const [amount,  setAmount]  = useState(String(row.outstanding))
+  const [date,    setDate]    = useState(new Date().toISOString().slice(0, 10))
+  const [ref,     setRef]     = useState('')
+
+  const mut = useMutation({
+    mutationFn: () => financeApi.payInvoice(row.id, {
+      paid_amount:  Number(amount),
+      payment_date: date,
+      payment_ref:  ref || undefined,
+    }),
+    onSuccess,
+  })
+
+  const bucket = ageBucket(row.days_overdue)
+
+  return (
+    <Modal open onClose={onClose} title="تسجيل دفعة للمورد">
+      <div className="space-y-5 p-1">
+        {/* Invoice summary */}
+        <div className={`flex items-start gap-3 p-4 rounded-xl border ${bucket.border} ${bucket.bg}`}>
+          <div className={`mt-0.5 ${bucket.color}`}>{bucket.icon}</div>
+          <div className="flex-1">
+            <p className={`font-bold text-sm ${bucket.color}`}>
+              {row.supplier_name ?? 'مورد'} — {row.invoice_number}
+            </p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              تاريخ الاستحقاق: {row.due_date}
+              {row.days_overdue > 0 && ` · متأخر ${row.days_overdue} يوم`}
+            </p>
+          </div>
+          <div className="text-left shrink-0">
+            <p className="text-xs text-gray-400">المتبقي</p>
+            <p className="font-bold text-gray-900">{new Intl.NumberFormat('ar-EG',{minimumFractionDigits:0}).format(row.outstanding)} ج.م</p>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">مبلغ الدفعة *</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min="0.01" step="any" max={row.outstanding}
+                className="flex-1 border border-gray-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500"
+                value={amount}
+                onChange={e => setAmount(e.target.value)}
+              />
+              <button
+                onClick={() => setAmount(String(row.outstanding))}
+                className="text-xs text-indigo-600 hover:text-indigo-700 whitespace-nowrap px-2"
+              >
+                كل المبلغ
+              </button>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">تاريخ الدفع</label>
+              <input
+                type="date"
+                className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500"
+                value={date}
+                onChange={e => setDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">رقم المرجع</label>
+              <input
+                className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500"
+                placeholder="شيك / تحويل"
+                value={ref}
+                onChange={e => setRef(e.target.value)}
+              />
+            </div>
+          </div>
+        </div>
+
+        <p className="text-xs text-gray-400 bg-gray-50 rounded-lg px-3 py-2">
+          سيُنشأ قيد محاسبي تلقائياً: مدين الموردون / دائن الخزينة
+        </p>
+
+        <div className="flex gap-3 pt-1">
+          <button
+            onClick={() => mut.mutate()}
+            disabled={!amount || Number(amount) <= 0 || mut.isPending}
+            className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-xl py-2.5 text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+          >
+            {mut.isPending ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+            تسجيل الدفعة
+          </button>
+          <button onClick={onClose} className="px-4 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 flex items-center gap-1">
+            <X size={13} /> إلغاء
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}

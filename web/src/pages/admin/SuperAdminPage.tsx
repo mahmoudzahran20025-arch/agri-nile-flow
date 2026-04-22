@@ -1,7 +1,11 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Building2, Plus, Users, ArrowLeftRight, ToggleLeft, ToggleRight, ChevronDown, ChevronUp } from 'lucide-react'
-import { adminApi } from '../../api/client'
+import {
+  Building2, Plus, Users, ArrowLeftRight, ToggleLeft, ToggleRight,
+  ChevronDown, ChevronUp, LayoutDashboard, Loader2,
+  TrendingUp, AlertTriangle, Briefcase, Activity,
+} from 'lucide-react'
+import { adminApi, type CompanyOverview } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import Modal from '../../components/ui/Modal'
 import { useToast } from '../../contexts/ToastContext'
@@ -89,8 +93,10 @@ export default function SuperAdminPage() {
     field_supervisor: 'مشرف حقلي', viewer: 'مشاهدة فقط',
   }
 
+  const [activeTab, setActiveTab] = useState<'overview' | 'companies'>('overview')
+
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-6" dir="rtl">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -106,6 +112,31 @@ export default function SuperAdminPage() {
         </button>
       </div>
 
+      {/* Tabs */}
+      <div className="flex gap-1 bg-gray-100 rounded-xl p-1 w-fit">
+        {[
+          { key: 'overview',   label: 'نظرة عامة',     icon: <LayoutDashboard size={14} /> },
+          { key: 'companies',  label: 'قائمة الشركات', icon: <Building2       size={14} /> },
+        ].map(t => (
+          <button
+            key={t.key}
+            onClick={() => setActiveTab(t.key as typeof activeTab)}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              activeTab === t.key
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {t.icon} {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Overview tab */}
+      {activeTab === 'overview' && <CompanyOverviewGrid />}
+
+      {/* Companies list tab */}
+      {activeTab === 'companies' && <>
       {/* Summary stats */}
       <div className="grid grid-cols-3 gap-4">
         <div className="card p-4 text-center">
@@ -270,6 +301,114 @@ export default function SuperAdminPage() {
           </button>
         </div>
       </Modal>
+      </>}
+    </div>
+  )
+}
+
+// ── Company Overview Grid (E-4) ───────────────────────────────
+function HealthDot({ score }: { score: number }) {
+  const color = score >= 85 ? 'bg-emerald-500' : score >= 60 ? 'bg-amber-500' : 'bg-red-500'
+  return <span className={`w-2.5 h-2.5 rounded-full inline-block ${color}`} title={`${score}/100`} />
+}
+
+function CompanyOverviewGrid() {
+  const { data: rows = [], isLoading } = useQuery({
+    queryKey: ['admin-overview'],
+    queryFn:  adminApi.overview,
+    staleTime: 60_000,
+  })
+
+  if (isLoading) {
+    return <div className="flex justify-center py-16"><Loader2 className="animate-spin text-gray-400" size={32} /></div>
+  }
+
+  const active    = rows.filter(r => r.is_active)
+  const totalCash = active.reduce((s, r) => s + (r.cash_balance ?? 0), 0)
+  const totalWO   = active.reduce((s, r) => s + r.open_wo, 0)
+  const totalPO   = active.reduce((s, r) => s + r.open_po_value, 0)
+  const alerts    = active.filter(r => r.low_stock_count > 0 || r.open_wo > 5).length
+
+  return (
+    <div className="space-y-5">
+      {/* Fleet stats */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[
+          { label: 'إجمالي السيولة', value: `${egp(totalCash)} ج.م`, icon: <TrendingUp size={18} />, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
+          { label: 'أوامر عمل مفتوحة', value: String(totalWO), icon: <Activity size={18} />,    color: 'text-blue-600 bg-blue-50 border-blue-200' },
+          { label: 'قيمة مشتريات مفتوحة', value: `${egp(totalPO)} ج.م`, icon: <Briefcase size={18} />, color: 'text-amber-600 bg-amber-50 border-amber-200' },
+          { label: 'شركات تحتاج متابعة', value: String(alerts), icon: <AlertTriangle size={18} />, color: 'text-red-600 bg-red-50 border-red-200' },
+        ].map(s => (
+          <div key={s.label} className={`rounded-xl border p-4 flex items-center gap-3 ${s.color}`}>
+            {s.icon}
+            <div>
+              <p className="text-xl font-bold">{s.value}</p>
+              <p className="text-xs opacity-70 mt-0.5">{s.label}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Company cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {(rows as CompanyOverview[]).sort((a, b) => b.health_score - a.health_score).map(co => {
+          const healthColor = co.health_score >= 85 ? 'border-emerald-200' : co.health_score >= 60 ? 'border-amber-200' : 'border-red-200'
+          return (
+            <div key={co.id} className={`bg-white rounded-2xl border-2 ${healthColor} shadow-sm p-4 space-y-3`}>
+              {/* Header */}
+              <div className="flex items-start justify-between">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <HealthDot score={co.health_score} />
+                    <span className="text-xs font-mono text-gray-400">{co.code}</span>
+                    {!co.is_active && (
+                      <span className="text-[10px] bg-gray-100 text-gray-400 rounded-full px-1.5 py-0.5">غير نشط</span>
+                    )}
+                  </div>
+                  <p className="font-bold text-gray-800 text-sm mt-1 truncate">{co.name}</p>
+                  {co.active_season && (
+                    <p className="text-xs text-emerald-600 mt-0.5">{co.active_season}</p>
+                  )}
+                </div>
+                <div className="text-left shrink-0">
+                  <p className="text-lg font-bold text-gray-900">{egp(co.cash_balance)}</p>
+                  <p className="text-[10px] text-gray-400">ج.م خزينة</p>
+                </div>
+              </div>
+
+              {/* Metrics grid */}
+              <div className="grid grid-cols-3 gap-2 pt-2 border-t border-gray-100 text-center">
+                <div>
+                  <p className={`text-lg font-bold ${co.open_wo > 5 ? 'text-amber-600' : 'text-gray-800'}`}>{co.open_wo}</p>
+                  <p className="text-[10px] text-gray-400">أوامر مفتوحة</p>
+                </div>
+                <div>
+                  <p className="text-lg font-bold text-gray-800">{co.employee_count}</p>
+                  <p className="text-[10px] text-gray-400">موظف</p>
+                </div>
+                <div>
+                  <p className={`text-lg font-bold ${co.low_stock_count > 0 ? 'text-red-600' : 'text-gray-800'}`}>{co.low_stock_count}</p>
+                  <p className="text-[10px] text-gray-400">تنبيه مخزون</p>
+                </div>
+              </div>
+
+              {/* PO info */}
+              {co.open_po_count > 0 && (
+                <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2.5 py-1.5">
+                  {co.open_po_count} طلب شراء مفتوح · {egp(co.open_po_value)} ج.م
+                </p>
+              )}
+
+              {/* Last activity */}
+              {co.last_activity && (
+                <p className="text-[10px] text-gray-300 text-left">
+                  آخر نشاط: {co.last_activity.slice(0, 10)}
+                </p>
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

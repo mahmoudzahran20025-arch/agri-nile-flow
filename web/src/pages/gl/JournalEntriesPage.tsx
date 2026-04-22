@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { BookMarked, Plus, Trash2, ChevronDown } from 'lucide-react'
+import { BookMarked, Plus, Trash2, ChevronDown, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react'
 import { glApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 import Modal from '../../components/ui/Modal'
@@ -44,6 +44,18 @@ export default function JournalEntriesPage() {
   const [page,  setPage]  = useState(1)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [openNew, setOpenNew] = useState(false)
+  const [sortKey, setSortKey] = useState<'entry_date' | 'total_debit'>('entry_date')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+
+  const handleSortToggle = (key: 'entry_date' | 'total_debit') => {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortKey(key); setSortDir('asc') }
+  }
+
+  const SortIcon = ({ k }: { k: 'entry_date' | 'total_debit' }) => {
+    if (sortKey !== k) return <ArrowUpDown size={12} className="text-slate-300" />
+    return sortDir === 'asc' ? <ArrowUp size={12} className="text-brand-500" /> : <ArrowDown size={12} className="text-brand-500" />
+  }
 
   const [newEntry, setNewEntry] = useState({ entry_date: '', description: '' })
   const [lines, setLines]       = useState<NewLine[]>([
@@ -55,8 +67,17 @@ export default function JournalEntriesPage() {
     queryKey: ['gl-entries', page, start, end, refType],
     queryFn:  () => glApi.entries({ page, size: 50, start: start || undefined, end: end || undefined, ref_type: refType || undefined }),
   })
-  const entries = ((entriesData as { data?: JournalEntry[] })?.data ?? []) as JournalEntry[]
-  const total   = (entriesData as { total?: number })?.total ?? 0
+  const rawEntries = ((entriesData as { data?: JournalEntry[] })?.data ?? []) as JournalEntry[]
+  const total      = (entriesData as { total?: number })?.total ?? 0
+
+  const entries = useMemo(() => {
+    return [...rawEntries].sort((a, b) => {
+      const av = sortKey === 'total_debit' ? a.total_debit : a.entry_date
+      const bv = sortKey === 'total_debit' ? b.total_debit : b.entry_date
+      const cmp = typeof av === 'string' ? av.localeCompare(String(bv)) : Number(av) - Number(bv)
+      return sortDir === 'asc' ? cmp : -cmp
+    })
+  }, [rawEntries, sortKey, sortDir])
 
   const { data: detail } = useQuery({
     queryKey: ['gl-entry', selectedId],
@@ -140,6 +161,24 @@ export default function JournalEntriesPage() {
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Entries List */}
         <div className="lg:col-span-2 space-y-2">
+          {/* Sort bar */}
+          <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1 w-fit">
+            {([
+              { k: 'entry_date' as const, l: 'التاريخ' },
+              { k: 'total_debit' as const, l: 'المبلغ' },
+            ]).map(({ k, l }) => (
+              <button
+                key={k}
+                onClick={() => handleSortToggle(k)}
+                className={`flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-lg transition-all ${
+                  sortKey === k ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {l} <SortIcon k={k} />
+              </button>
+            ))}
+          </div>
+
           {isLoading && <p className="text-sm text-gray-400 text-center py-8">جاري التحميل...</p>}
           {entries.map(e => (
             <div

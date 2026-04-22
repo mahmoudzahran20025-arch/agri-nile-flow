@@ -3,8 +3,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ShoppingCart, Plus, Loader2, ChevronDown, ChevronUp,
   CheckCircle2, XCircle, Truck, Send, X, Package,
+  FileText, AlertTriangle, CheckCircle, AlertOctagon,
 } from 'lucide-react'
-import { financeApi, type PurchaseOrder, type POItem } from '../../api/finance'
+import {
+  financeApi,
+  type PurchaseOrder, type POItem, type MatchStatus,
+} from '../../api/finance'
 import Modal from '../../components/ui/Modal'
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -13,12 +17,21 @@ function fmtCurrency(n: number) {
 }
 
 const STATUS_MAP: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
-  draft:     { label: 'مسودة',         color: 'bg-gray-100 text-gray-600',    icon: <ShoppingCart size={11} /> },
-  sent:      { label: 'مُرسل للمورد', color: 'bg-blue-100 text-blue-700',    icon: <Send size={11} /> },
-  partial:   { label: 'استلام جزئي',  color: 'bg-amber-100 text-amber-700',  icon: <Package size={11} /> },
+  draft:     { label: 'مسودة',         color: 'bg-gray-100 text-gray-600',       icon: <ShoppingCart size={11} /> },
+  sent:      { label: 'مُرسل للمورد', color: 'bg-blue-100 text-blue-700',       icon: <Send size={11} /> },
+  partial:   { label: 'استلام جزئي',  color: 'bg-amber-100 text-amber-700',     icon: <Package size={11} /> },
   received:  { label: 'مستلم كامل',   color: 'bg-emerald-100 text-emerald-700', icon: <CheckCircle2 size={11} /> },
-  cancelled: { label: 'ملغي',          color: 'bg-red-100 text-red-600',      icon: <X size={11} /> },
-  closed:    { label: 'مغلق',          color: 'bg-slate-100 text-slate-500',  icon: <CheckCircle2 size={11} /> },
+  cancelled: { label: 'ملغي',          color: 'bg-red-100 text-red-600',         icon: <X size={11} /> },
+  closed:    { label: 'مغلق',          color: 'bg-slate-100 text-slate-500',     icon: <CheckCircle2 size={11} /> },
+}
+
+const MATCH_STATUS_CFG: Record<MatchStatus, { label: string; color: string; icon: React.ReactNode }> = {
+  matched:         { label: 'مطابق',          color: 'bg-emerald-100 text-emerald-700', icon: <CheckCircle size={11} /> },
+  price_variance:  { label: 'فرق سعر',        color: 'bg-amber-100 text-amber-700',    icon: <AlertTriangle size={11} /> },
+  qty_variance:    { label: 'فرق كمية',       color: 'bg-orange-100 text-orange-700',  icon: <AlertTriangle size={11} /> },
+  over_invoiced:   { label: 'زيادة فوترة',    color: 'bg-red-100 text-red-700',        icon: <AlertOctagon size={11} /> },
+  pending_invoice: { label: 'ينتظر فاتورة',   color: 'bg-blue-100 text-blue-700',      icon: <FileText size={11} /> },
+  no_gr:           { label: 'لم يُستلم',       color: 'bg-gray-100 text-gray-500',      icon: <Package size={11} /> },
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -30,11 +43,294 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
-interface POFormItem {
-  item_name: string; unit: string; qty_ordered: string; unit_price: string
+function MatchBadge({ status }: { status: MatchStatus }) {
+  const cfg = MATCH_STATUS_CFG[status] ?? MATCH_STATUS_CFG.pending_invoice
+  return (
+    <span className={`inline-flex items-center gap-1 text-xs rounded-full px-2 py-0.5 font-medium ${cfg.color}`}>
+      {cfg.icon} {cfg.label}
+    </span>
+  )
 }
 
+interface POFormItem { item_name: string; unit: string; qty_ordered: string; unit_price: string }
 const EMPTY_ITEM: POFormItem = { item_name: '', unit: 'قطعة', qty_ordered: '1', unit_price: '0' }
+
+// ── Three-Way Match Section ───────────────────────────────────
+function ThreeWayMatchSection({ poId, onInvoice }: { poId: number; onInvoice: () => void }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['po-match', poId],
+    queryFn:  () => financeApi.getPOMatch(poId),
+    staleTime: 30_000,
+  })
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center py-4 text-gray-400">
+        <Loader2 className="animate-spin" size={18} />
+      </div>
+    )
+  }
+  if (!data) return null
+
+  const { match_rows, invoices, po } = data
+  const canInvoice = ['partial', 'received'].includes(po.status)
+  const allMatched = match_rows.every(r => r.match_status === 'matched')
+  const hasVariance = match_rows.some(r => ['price_variance', 'qty_variance', 'over_invoiced'].includes(r.match_status))
+
+  return (
+    <div className="mt-4 border border-gray-200 rounded-xl overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-2.5 bg-indigo-50 border-b border-indigo-100">
+        <div className="flex items-center gap-2">
+          <FileText size={14} className="text-indigo-600" />
+          <span className="text-sm font-semibold text-indigo-800">مطابقة ثلاثية: PO → استلام → فاتورة</span>
+          {allMatched && (
+            <span className="text-xs bg-emerald-100 text-emerald-700 rounded-full px-2 py-0.5 font-medium">✓ مطابق تام</span>
+          )}
+          {hasVariance && (
+            <span className="text-xs bg-amber-100 text-amber-700 rounded-full px-2 py-0.5 font-medium">⚠ يوجد فروقات</span>
+          )}
+        </div>
+        {canInvoice && (
+          <button
+            onClick={onInvoice}
+            className="flex items-center gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg px-3 py-1.5 transition-colors"
+          >
+            <Plus size={11} /> تسجيل فاتورة
+          </button>
+        )}
+      </div>
+
+      {/* Match table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-gray-50 text-gray-500 font-medium border-b border-gray-100">
+              <th className="text-right px-4 py-2">الصنف</th>
+              <th className="text-center px-3 py-2">مطلوب</th>
+              <th className="text-center px-3 py-2">مستلم</th>
+              <th className="text-center px-3 py-2">مُفوتر</th>
+              <th className="text-center px-3 py-2">سعر PO</th>
+              <th className="text-center px-3 py-2">سعر فاتورة</th>
+              <th className="text-center px-3 py-2">رقم الفاتورة</th>
+              <th className="text-center px-4 py-2">الحالة</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {match_rows.map(row => {
+              const priceDiff = row.inv_unit_price > 0 ? row.inv_unit_price - row.po_unit_price : 0
+              return (
+                <tr key={row.po_item_id} className="hover:bg-gray-50 transition-colors">
+                  <td className="px-4 py-2.5 font-medium text-gray-800">{row.item_name}</td>
+                  <td className="px-3 py-2.5 text-center text-gray-600">{row.qty_ordered} {row.unit ?? ''}</td>
+                  <td className="px-3 py-2.5 text-center">
+                    <span className={row.qty_received >= row.qty_ordered ? 'text-emerald-600 font-medium' : row.qty_received > 0 ? 'text-amber-600' : 'text-gray-400'}>
+                      {row.qty_received}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-center">
+                    <span className={row.qty_invoiced > 0 ? 'text-indigo-600 font-medium' : 'text-gray-400'}>
+                      {row.qty_invoiced}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-center text-gray-600">{fmtCurrency(row.po_unit_price)}</td>
+                  <td className="px-3 py-2.5 text-center">
+                    {row.inv_unit_price > 0 ? (
+                      <span className={priceDiff !== 0 ? (priceDiff > 0 ? 'text-red-600 font-medium' : 'text-emerald-600 font-medium') : 'text-gray-600'}>
+                        {fmtCurrency(row.inv_unit_price)}
+                        {priceDiff !== 0 && (
+                          <span className="mr-1 text-[10px]">({priceDiff > 0 ? '+' : ''}{fmtCurrency(priceDiff)})</span>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="text-gray-300">—</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5 text-center text-gray-500">
+                    {row.invoice_number ?? <span className="text-gray-300">—</span>}
+                  </td>
+                  <td className="px-4 py-2.5 text-center">
+                    <MatchBadge status={row.match_status} />
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Invoices list */}
+      {invoices.length > 0 && (
+        <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100">
+          <p className="text-xs text-gray-500 font-medium mb-1.5">الفواتير المسجلة:</p>
+          <div className="flex flex-wrap gap-2">
+            {invoices.map(inv => (
+              <span key={inv.id} className="text-xs bg-white border border-gray-200 rounded-lg px-3 py-1 text-gray-700">
+                <span className="font-medium">{inv.number}</span>
+                <span className="text-gray-400 mr-1">· {inv.date} · {fmtCurrency(inv.total)} ج.م</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Invoice Modal ─────────────────────────────────────────────
+interface InvItem { po_item_id: number; item_name: string; qty_invoiced: string; unit_price: string }
+
+function InvoiceModal({
+  poId, onClose, onSuccess,
+}: {
+  poId: number; onClose: () => void; onSuccess: () => void
+}) {
+  const qc = useQueryClient()
+  const { data, isLoading } = useQuery({
+    queryKey: ['po-match', poId],
+    queryFn:  () => financeApi.getPOMatch(poId),
+    staleTime: 30_000,
+  })
+
+  const [form, setForm] = useState({
+    invoice_number: '',
+    invoice_date: new Date().toISOString().slice(0, 10),
+    notes: '',
+  })
+  const [items, setItems] = useState<InvItem[] | null>(null)
+
+  // Pre-fill items once match data loads
+  if (data && !items) {
+    setItems(
+      data.match_rows
+        .filter(r => r.match_status !== 'no_gr')
+        .map(r => ({
+          po_item_id:   r.po_item_id,
+          item_name:    r.item_name,
+          qty_invoiced: String(Math.max(0, r.qty_received - r.qty_invoiced)),
+          unit_price:   String(r.po_unit_price),
+        }))
+    )
+  }
+
+  const mut = useMutation({
+    mutationFn: () => financeApi.createInvoice(poId, {
+      invoice_number: form.invoice_number,
+      invoice_date:   form.invoice_date,
+      notes:          form.notes || undefined,
+      items: (items ?? [])
+        .filter(i => Number(i.qty_invoiced) > 0)
+        .map(i => ({
+          po_item_id:   i.po_item_id,
+          qty_invoiced: Number(i.qty_invoiced),
+          unit_price:   Number(i.unit_price),
+        })),
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['purchase-orders'] })
+      qc.invalidateQueries({ queryKey: ['po-match', poId] })
+      onSuccess()
+    },
+  })
+
+  const total = (items ?? []).reduce(
+    (s, i) => s + (Number(i.qty_invoiced) || 0) * (Number(i.unit_price) || 0), 0
+  )
+  const hasAnyQty = (items ?? []).some(i => Number(i.qty_invoiced) > 0)
+
+  return (
+    <Modal open onClose={onClose} title="تسجيل فاتورة مورد">
+      {isLoading || !items ? (
+        <div className="flex justify-center py-10"><Loader2 className="animate-spin text-gray-400" size={24} /></div>
+      ) : (
+        <div className="space-y-4 p-1 max-h-[72vh] overflow-y-auto">
+          {/* Header fields */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">رقم الفاتورة *</label>
+              <input
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500"
+                placeholder="INV-2024-001"
+                value={form.invoice_number}
+                onChange={e => setForm(f => ({ ...f, invoice_number: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">تاريخ الفاتورة</label>
+              <input
+                type="date"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500"
+                value={form.invoice_date}
+                onChange={e => setForm(f => ({ ...f, invoice_date: e.target.value }))}
+              />
+            </div>
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">ملاحظات</label>
+              <input
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500"
+                value={form.notes}
+                onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+              />
+            </div>
+          </div>
+
+          {/* Items */}
+          <div>
+            <div className="grid grid-cols-12 gap-1.5 text-xs text-gray-500 font-medium mb-1.5 px-1">
+              <span className="col-span-4">الصنف</span>
+              <span className="col-span-3 text-center">كمية مُفوترة</span>
+              <span className="col-span-3 text-center">سعر الوحدة</span>
+              <span className="col-span-2 text-left">الإجمالي</span>
+            </div>
+            <div className="space-y-2">
+              {items.map((item, idx) => (
+                <div key={item.po_item_id} className="grid grid-cols-12 gap-1.5 items-center bg-gray-50 rounded-lg p-2">
+                  <span className="col-span-4 text-sm text-gray-800 font-medium truncate">{item.item_name}</span>
+                  <input
+                    type="number" min="0" step="any"
+                    className="col-span-3 border border-gray-300 rounded px-2 py-1.5 text-sm text-center focus:ring-1 focus:ring-indigo-500"
+                    value={item.qty_invoiced}
+                    onChange={e => setItems(its => its!.map((it, i) => i === idx ? { ...it, qty_invoiced: e.target.value } : it))}
+                  />
+                  <input
+                    type="number" min="0" step="any"
+                    className="col-span-3 border border-gray-300 rounded px-2 py-1.5 text-sm text-center focus:ring-1 focus:ring-indigo-500"
+                    value={item.unit_price}
+                    onChange={e => setItems(its => its!.map((it, i) => i === idx ? { ...it, unit_price: e.target.value } : it))}
+                  />
+                  <span className="col-span-2 text-left text-xs text-gray-600 font-medium">
+                    {fmtCurrency((Number(item.qty_invoiced) || 0) * (Number(item.unit_price) || 0))}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 flex justify-end text-sm font-bold text-gray-800">
+              إجمالي الفاتورة: {fmtCurrency(total)} ج.م
+            </div>
+          </div>
+
+          {mut.isError && (
+            <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">
+              فشل الحفظ — تأكد من رقم الفاتورة والكميات
+            </p>
+          )}
+
+          <div className="flex gap-3 pt-2 sticky bottom-0 bg-white pb-1">
+            <button
+              onClick={() => mut.mutate()}
+              disabled={!form.invoice_number.trim() || !hasAnyQty || mut.isPending}
+              className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg py-2 text-sm font-medium transition-colors flex items-center justify-center gap-2"
+            >
+              {mut.isPending ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+              حفظ الفاتورة
+            </button>
+            <button onClick={onClose} className="px-4 border border-gray-300 rounded-lg text-sm text-gray-600 hover:bg-gray-50">إلغاء</button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
 
 // ════════════════════════════════════════════════════════════
 // Page
@@ -45,7 +341,11 @@ export default function PurchaseOrdersPage() {
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [showReceive, setShowReceive] = useState<PurchaseOrder | null>(null)
-  const [receiveItems, setReceiveItems] = useState<Array<{ item_id: number; item_name: string; qty_ordered: number; qty_received_so_far: number; qty_to_receive: string; warehouse: string }>>([])
+  const [receiveItems, setReceiveItems] = useState<Array<{
+    item_id: number; item_name: string; qty_ordered: number
+    qty_received_so_far: number; qty_to_receive: string; warehouse: string
+  }>>([])
+  const [showInvoice, setShowInvoice] = useState<number | null>(null)
 
   const [form, setForm] = useState({
     supplier_name: '', order_date: new Date().toISOString().slice(0, 10),
@@ -185,6 +485,7 @@ export default function PurchaseOrdersPage() {
                 onToggle={() => setExpandedId(expandedId === po.id ? null : po.id)}
                 onStatus={(status, notes) => statusMut.mutate({ id: po.id, status, notes })}
                 onReceive={() => openReceive(po)}
+                onInvoice={() => setShowInvoice(po.id)}
                 statusPending={statusMut.isPending}
               />
             ))}
@@ -245,7 +546,6 @@ export default function PurchaseOrdersPage() {
               </button>
             </div>
 
-            {/* Items Header */}
             <div className="grid grid-cols-12 gap-1.5 text-xs text-gray-500 font-medium mb-1 px-1">
               <span className="col-span-4">الصنف</span>
               <span className="col-span-2">الوحدة</span>
@@ -292,7 +592,6 @@ export default function PurchaseOrdersPage() {
               ))}
             </div>
 
-            {/* Total preview */}
             <div className="mt-3 flex justify-end text-sm font-bold text-gray-700">
               الإجمالي:{' '}
               {fmtCurrency(formItems.reduce((s, i) => s + (Number(i.qty_ordered) || 0) * (Number(i.unit_price) || 0), 0))} ج.م
@@ -373,6 +672,15 @@ export default function PurchaseOrdersPage() {
           </div>
         </Modal>
       )}
+
+      {/* Invoice Modal */}
+      {showInvoice && (
+        <InvoiceModal
+          poId={showInvoice}
+          onClose={() => setShowInvoice(null)}
+          onSuccess={() => setShowInvoice(null)}
+        />
+      )}
     </div>
   )
 }
@@ -380,7 +688,7 @@ export default function PurchaseOrdersPage() {
 // ── PO Row ────────────────────────────────────────────────────
 function PORow({
   po, expanded, detail, detailLoading,
-  onToggle, onStatus, onReceive, statusPending,
+  onToggle, onStatus, onReceive, onInvoice, statusPending,
 }: {
   po: PurchaseOrder
   expanded: boolean
@@ -389,11 +697,13 @@ function PORow({
   onToggle: () => void
   onStatus: (status: string, notes?: string) => void
   onReceive: () => void
+  onInvoice: () => void
   statusPending: boolean
 }) {
-  const canSend     = po.status === 'draft'
-  const canReceive  = ['sent','partial'].includes(po.status)
-  const canCancel   = ['draft','sent'].includes(po.status)
+  const canSend    = po.status === 'draft'
+  const canReceive = ['sent', 'partial'].includes(po.status)
+  const canCancel  = ['draft', 'sent'].includes(po.status)
+  const showMatch  = ['partial', 'received', 'closed'].includes(po.status)
 
   return (
     <div>
@@ -461,8 +771,13 @@ function PORow({
                 </table>
               )}
 
+              {/* 3-Way Match section */}
+              {showMatch && (
+                <ThreeWayMatchSection poId={po.id} onInvoice={onInvoice} />
+              )}
+
               {/* Action buttons */}
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2 mt-4">
                 {canSend && (
                   <button
                     onClick={() => onStatus('sent')}
