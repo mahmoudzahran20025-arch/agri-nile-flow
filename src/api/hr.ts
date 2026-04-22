@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
 import { logAudit } from '../lib/audit'
-import { postAutoEntry, getOpenPeriod } from '../lib/gl'
+import { postAutoEntry, getOpenPeriod, glPayroll } from '../lib/gl'
 
 const hr = new Hono<{ Bindings: Env }>()
 hr.use('*', authMiddleware)
@@ -576,31 +576,15 @@ hr.patch('/payroll/:id/approve', async (c) => {
     `UPDATE payroll_runs SET status = 'approved', approved_by = ? WHERE id = ?`
   ).bind(userId, id).run()
 
-  // Auto-post GL: Dr Wages / Cr Cash
+  // Auto-post GL via mapping table (DR Wages / CR Cash)
   const runDate = `${run.period_year}-${String(run.period_month).padStart(2,'0')}-28`
-  const payrollAcc = '5210'  // Default wages account
-  const cashAcc    = '1110'  // Default cash account
-  const periodId   = await getOpenPeriod(c.env.DB, company_id, runDate)
-  if (periodId) {
-    try {
-      const je = await c.env.DB.prepare(
-        `INSERT INTO journal_entries (company_id, period_id, entry_date, description, ref_type, ref_id, is_posted, created_by)
-         VALUES (?,?,?,?,?,?,1,?)`
-      ).bind(company_id, periodId, runDate, `مسيرة رواتب ${run.period_year}/${run.period_month}`, 'payroll_run', id, userId).run()
-      const entryId = je.meta.last_row_id
-      await c.env.DB.prepare(
-        `INSERT INTO journal_entry_lines (entry_id, company_id, account_code, debit, credit, description)
-         VALUES (?,?,?,?,?,?)`
-      ).bind(entryId, company_id, payrollAcc, run.total_net, 0, `أجور عمال - ${run.period_year}/${run.period_month}`).run()
-      await c.env.DB.prepare(
-        `INSERT INTO journal_entry_lines (entry_id, company_id, account_code, debit, credit, description)
-         VALUES (?,?,?,?,?,?)`
-      ).bind(entryId, company_id, cashAcc, 0, run.total_net, `أجور عمال - ${run.period_year}/${run.period_month}`).run()
-      await c.env.DB.prepare('UPDATE payroll_runs SET journal_entry_id = ? WHERE id = ?')
-        .bind(entryId, id).run()
-    } catch {
-      // GL failure must not block payroll approval
-    }
+  const glId = await glPayroll(
+    c.env.DB, company_id, id, run.total_net, runDate,
+    `مسيرة رواتب ${run.period_year}/${run.period_month}`, userId,
+  )
+  if (glId) {
+    await c.env.DB.prepare('UPDATE payroll_runs SET journal_entry_id = ? WHERE id = ?')
+      .bind(glId, id).run()
   }
 
   void logAudit(c.env.DB, { user_id: userId, company_id, action: 'APPROVE', table_name: 'payroll_runs', record_id: id })

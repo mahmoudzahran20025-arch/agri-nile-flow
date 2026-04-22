@@ -1,9 +1,19 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
+import { logAudit } from '../lib/audit'
 
 const operations = new Hono<{ Bindings: Env }>()
 operations.use('*', authMiddleware)
+
+// ── Lifecycle transition rules ────────────────────────────────
+const ALLOWED_TRANSITIONS: Record<string, string[]> = {
+  pending:     ['in_progress', 'cancelled'],
+  in_progress: ['done', 'cancelled'],
+  done:        ['costed', 'in_progress'],  // allow back to in_progress if mistake
+  costed:      [],                          // terminal state
+  cancelled:   [],                          // terminal state
+}
 
 // ── Work Orders ──────────────────────────────────────────────
 
@@ -17,18 +27,40 @@ operations.get('/orders', async (c) => {
   const size      = Math.min(100, Number(c.req.query('size') ?? 50))
   const offset    = (page - 1) * size
 
-  let sql = `SELECT wo.*, f.name AS field_name, s.name AS season_name
+  let sql = `SELECT wo.*,
+               f.name AS field_name, f.area_feddan,
+               s.name AS season_name,
+               COALESCE(SUM(wt.total_cost), 0) AS labor_cost,
+               COALESCE(im_costs.inv_cost, 0)  AS inventory_cost
              FROM work_orders wo
              LEFT JOIN fields f ON f.id = wo.field_id
              LEFT JOIN seasons s ON s.id = wo.season_id
+             LEFT JOIN work_tasks wt ON wt.work_order_id = wo.id
+             LEFT JOIN (
+               SELECT work_order_id, SUM(value_out) AS inv_cost
+               FROM inventory_movements
+               WHERE company_id = ? AND work_order_id IS NOT NULL
+               GROUP BY work_order_id
+             ) im_costs ON im_costs.work_order_id = wo.id
              WHERE wo.company_id = ?`
-  const params: unknown[] = [company_id]
+  const params: unknown[] = [company_id, company_id]
 
   if (season_id) { sql += ' AND wo.season_id = ?'; params.push(Number(season_id)) }
   if (field_id)  { sql += ' AND wo.field_id = ?';  params.push(Number(field_id)) }
   if (status)    { sql += ' AND wo.status = ?';    params.push(status) }
 
-  const countRow = await c.env.DB.prepare(sql.replace(/SELECT.*?FROM/, 'SELECT COUNT(*) AS n FROM').split('LIMIT')[0]).bind(...params).first<{ n: number }>()
+  sql += ' GROUP BY wo.id'
+
+  const countSql = `SELECT COUNT(DISTINCT wo.id) AS n FROM work_orders wo WHERE wo.company_id = ?` +
+    (season_id ? ' AND wo.season_id = ?' : '') +
+    (field_id  ? ' AND wo.field_id = ?'  : '') +
+    (status    ? ' AND wo.status = ?'    : '')
+  const countParams: unknown[] = [company_id]
+  if (season_id) countParams.push(Number(season_id))
+  if (field_id)  countParams.push(Number(field_id))
+  if (status)    countParams.push(status)
+
+  const countRow = await c.env.DB.prepare(countSql).bind(...countParams).first<{ n: number }>()
 
   sql += ` ORDER BY wo.planned_date DESC LIMIT ? OFFSET ?`
   params.push(size, offset)
@@ -37,7 +69,7 @@ operations.get('/orders', async (c) => {
   return c.json({ success: true, data: results, total: countRow?.n ?? 0, page, page_size: size })
 })
 
-// GET /api/operations/orders/:id  (with tasks)
+// GET /api/operations/orders/:id  (with tasks + inventory consumed)
 operations.get('/orders/:id', async (c) => {
   const { company_id } = getUser(c)
   const id = Number(c.req.param('id'))
@@ -57,8 +89,33 @@ operations.get('/orders/:id', async (c) => {
      WHERE wt.work_order_id = ? ORDER BY wt.task_date`
   ).bind(id).all()
 
-  const totalCost = tasks.reduce((s: number, t: Record<string, unknown>) => s + (Number(t.total_cost) || 0), 0)
-  return c.json({ success: true, data: { ...order, tasks, total_cost: totalCost } })
+  // Inventory consumed linked to this work order
+  const { results: inventory } = await c.env.DB.prepare(
+    `SELECT im.item_code, i.name AS item_name, i.unit,
+            SUM(im.qty_out)    AS qty_consumed,
+            SUM(im.value_out)  AS cost_consumed,
+            COUNT(*)           AS movement_count
+     FROM inventory_movements im
+     LEFT JOIN items i ON i.code = im.item_code AND i.company_id = im.company_id
+     WHERE im.work_order_id = ? AND im.company_id = ? AND im.movement_type = 'صرف'
+     GROUP BY im.item_code
+     ORDER BY cost_consumed DESC`
+  ).bind(id, company_id).all()
+
+  const laborCost     = tasks.reduce((s: number, t: Record<string, unknown>) => s + (Number(t.total_cost) || 0), 0)
+  const inventoryCost = inventory.reduce((s: number, r: Record<string, unknown>) => s + (Number(r.cost_consumed) || 0), 0)
+
+  return c.json({
+    success: true,
+    data: {
+      ...order,
+      tasks,
+      inventory,
+      labor_cost:     laborCost,
+      inventory_cost: inventoryCost,
+      total_cost:     laborCost + inventoryCost,
+    },
+  })
 })
 
 // POST /api/operations/orders
@@ -76,20 +133,51 @@ operations.post('/orders', async (c) => {
      planned_date, area_feddan, notes, created_by) VALUES (?,?,?,?,?,?,?,?,?)`
   ).bind(company_id, b.season_id ?? null, b.field_id ?? null, b.name, b.operation_type,
      b.planned_date, b.area_feddan ?? null, b.notes ?? null, userId).run()
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'CREATE',
+    table_name: 'work_orders', record_id: result.meta.last_row_id,
+    new_value: { name: b.name, type: b.operation_type, status: 'pending' },
+  })
+
   return c.json({ success: true, data: { id: result.meta.last_row_id } }, 201)
 })
 
-// PATCH /api/operations/orders/:id/status
+// PATCH /api/operations/orders/:id/status  — lifecycle transition
 operations.patch('/orders/:id/status', async (c) => {
-  const { company_id } = getUser(c)
+  const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
   const { status, actual_date } = await c.req.json<{ status: string; actual_date?: string }>()
-  const allowed = ['pending','in_progress','done','cancelled']
-  if (!allowed.includes(status)) return c.json({ success: false, error: 'حالة غير صالحة' }, 400)
+
+  const current = await c.env.DB.prepare(
+    'SELECT status FROM work_orders WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ status: string }>()
+
+  if (!current) return c.json({ success: false, error: 'أمر العمل غير موجود' }, 404)
+
+  const allowed = ALLOWED_TRANSITIONS[current.status] ?? []
+  if (!allowed.includes(status)) {
+    return c.json({
+      success: false,
+      error: `لا يمكن الانتقال من "${current.status}" إلى "${status}"`,
+      current_status: current.status,
+      allowed_next:   allowed,
+    }, 422)
+  }
+
   await c.env.DB.prepare(
-    'UPDATE work_orders SET status = ?, actual_date = ? WHERE id = ? AND company_id = ?'
+    `UPDATE work_orders
+     SET status = ?, actual_date = COALESCE(?, actual_date)
+     WHERE id = ? AND company_id = ?`
   ).bind(status, actual_date ?? null, id, company_id).run()
-  return c.json({ success: true, data: null })
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'UPDATE',
+    table_name: 'work_orders', record_id: id,
+    new_value: { status, previous_status: current.status, actual_date },
+  })
+
+  return c.json({ success: true, data: { id, status } })
 })
 
 // ── Work Tasks ───────────────────────────────────────────────
@@ -105,6 +193,16 @@ operations.post('/orders/:id/tasks', async (c) => {
   if (!b.task_date || !b.description) {
     return c.json({ success: false, error: 'التاريخ والوصف مطلوبان' }, 400)
   }
+
+  // Block task addition if order is costed or cancelled
+  const order = await c.env.DB.prepare(
+    'SELECT status FROM work_orders WHERE id = ? AND company_id = ?'
+  ).bind(orderId, company_id).first<{ status: string }>()
+  if (!order) return c.json({ success: false, error: 'أمر العمل غير موجود' }, 404)
+  if (['costed', 'cancelled'].includes(order.status)) {
+    return c.json({ success: false, error: 'لا يمكن إضافة مهام لأمر عمل مغلق أو ملغى' }, 422)
+  }
+
   const result = await c.env.DB.prepare(
     `INSERT INTO work_tasks (work_order_id, company_id, employee_id, task_date, description,
      quantity, unit, unit_cost, notes) VALUES (?,?,?,?,?,?,?,?,?)`
@@ -128,17 +226,192 @@ operations.get('/summary', async (c) => {
 
   let sql = `SELECT wo.operation_type,
                COUNT(*) AS order_count,
-               SUM(CASE WHEN wo.status = 'done' THEN 1 ELSE 0 END) AS done_count,
-               COALESCE(SUM(wt.total_cost),0) AS total_cost
+               SUM(CASE WHEN wo.status = 'done'   THEN 1 ELSE 0 END) AS done_count,
+               SUM(CASE WHEN wo.status = 'costed' THEN 1 ELSE 0 END) AS costed_count,
+               COALESCE(SUM(wt.total_cost), 0) AS labor_cost
              FROM work_orders wo
              LEFT JOIN work_tasks wt ON wt.work_order_id = wo.id
              WHERE wo.company_id = ?`
   const params: unknown[] = [company_id]
   if (season_id) { sql += ' AND wo.season_id = ?'; params.push(Number(season_id)) }
-  sql += ' GROUP BY wo.operation_type ORDER BY total_cost DESC'
+  sql += ' GROUP BY wo.operation_type ORDER BY labor_cost DESC'
 
   const { results } = await c.env.DB.prepare(sql).bind(...params).all()
   return c.json({ success: true, data: results })
+})
+
+// ── Work Order Templates ──────────────────────────────────────
+
+// GET /api/operations/templates
+operations.get('/templates', async (c) => {
+  const { company_id } = getUser(c)
+  const { results } = await c.env.DB.prepare(`
+    SELECT t.*,
+      (SELECT COUNT(*) FROM wo_template_tasks tt WHERE tt.template_id = t.id) AS task_count
+    FROM wo_templates t
+    WHERE t.company_id = ? AND t.is_active = 1
+    ORDER BY t.operation_type, t.name
+  `).bind(company_id).all()
+  return c.json({ success: true, data: results })
+})
+
+// GET /api/operations/templates/:id
+operations.get('/templates/:id', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const tpl = await c.env.DB.prepare(
+    'SELECT * FROM wo_templates WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first()
+  if (!tpl) return c.json({ success: false, error: 'النموذج غير موجود' }, 404)
+
+  const { results: tasks } = await c.env.DB.prepare(
+    'SELECT * FROM wo_template_tasks WHERE template_id = ? ORDER BY task_order, id'
+  ).bind(id).all()
+  return c.json({ success: true, data: { ...tpl, tasks } })
+})
+
+// POST /api/operations/templates
+operations.post('/templates', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const b = await c.req.json<{
+    name: string; operation_type: string; description?: string
+    tasks?: Array<{ task_name: string; estimated_hours?: number; notes?: string }>
+  }>()
+  if (!b.name || !b.operation_type)
+    return c.json({ success: false, error: 'الاسم ونوع العملية مطلوبان' }, 400)
+
+  const r = await c.env.DB.prepare(
+    `INSERT INTO wo_templates (company_id, name, operation_type, description, created_by)
+     VALUES (?, ?, ?, ?, ?)`
+  ).bind(company_id, b.name, b.operation_type, b.description ?? null, userId).run()
+
+  const tplId = r.meta.last_row_id
+  if (b.tasks && b.tasks.length > 0) {
+    for (let i = 0; i < b.tasks.length; i++) {
+      const t = b.tasks[i]
+      await c.env.DB.prepare(
+        `INSERT INTO wo_template_tasks (template_id, company_id, task_name, task_order, estimated_hours, notes)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).bind(tplId, company_id, t.task_name, i + 1, t.estimated_hours ?? null, t.notes ?? null).run()
+    }
+  }
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'CREATE',
+    table_name: 'wo_templates', record_id: tplId,
+    new_value: { name: b.name, operation_type: b.operation_type },
+  })
+  return c.json({ success: true, data: { id: tplId } }, 201)
+})
+
+// PATCH /api/operations/templates/:id
+operations.patch('/templates/:id', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const b = await c.req.json<{ name?: string; description?: string; is_active?: number }>()
+  const sets: string[] = []; const vals: unknown[] = []
+  if (b.name        !== undefined) { sets.push('name = ?');        vals.push(b.name) }
+  if (b.description !== undefined) { sets.push('description = ?'); vals.push(b.description) }
+  if (b.is_active   !== undefined) { sets.push('is_active = ?');   vals.push(b.is_active) }
+  if (sets.length === 0) return c.json({ success: true, data: null })
+  vals.push(id, company_id)
+  await c.env.DB.prepare(`UPDATE wo_templates SET ${sets.join(', ')} WHERE id = ? AND company_id = ?`).bind(...vals).run()
+  return c.json({ success: true, data: null })
+})
+
+// DELETE /api/operations/templates/:id
+operations.delete('/templates/:id', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  await c.env.DB.prepare('DELETE FROM wo_templates WHERE id = ? AND company_id = ?').bind(id, company_id).run()
+  return c.json({ success: true, data: null })
+})
+
+// POST /api/operations/templates/:id/tasks
+operations.post('/templates/:id/tasks', async (c) => {
+  const { company_id } = getUser(c)
+  const tplId = Number(c.req.param('id'))
+  const b = await c.req.json<{ task_name: string; estimated_hours?: number; notes?: string }>()
+  if (!b.task_name) return c.json({ success: false, error: 'اسم المهمة مطلوب' }, 400)
+
+  const maxRow = await c.env.DB.prepare(
+    'SELECT COALESCE(MAX(task_order),0) AS m FROM wo_template_tasks WHERE template_id = ?'
+  ).bind(tplId).first<{ m: number }>()
+
+  const r = await c.env.DB.prepare(
+    `INSERT INTO wo_template_tasks (template_id, company_id, task_name, task_order, estimated_hours, notes)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(tplId, company_id, b.task_name, (maxRow?.m ?? 0) + 1, b.estimated_hours ?? null, b.notes ?? null).run()
+  return c.json({ success: true, data: { id: r.meta.last_row_id } }, 201)
+})
+
+// PATCH /api/operations/template-tasks/:id
+operations.patch('/template-tasks/:id', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const b = await c.req.json<{ task_name?: string; task_order?: number; estimated_hours?: number; notes?: string }>()
+  const sets: string[] = []; const vals: unknown[] = []
+  if (b.task_name       !== undefined) { sets.push('task_name = ?');       vals.push(b.task_name) }
+  if (b.task_order      !== undefined) { sets.push('task_order = ?');      vals.push(b.task_order) }
+  if (b.estimated_hours !== undefined) { sets.push('estimated_hours = ?'); vals.push(b.estimated_hours) }
+  if (b.notes           !== undefined) { sets.push('notes = ?');           vals.push(b.notes) }
+  if (sets.length === 0) return c.json({ success: true, data: null })
+  vals.push(id, company_id)
+  await c.env.DB.prepare(`UPDATE wo_template_tasks SET ${sets.join(', ')} WHERE id = ? AND company_id = ?`).bind(...vals).run()
+  return c.json({ success: true, data: null })
+})
+
+// DELETE /api/operations/template-tasks/:id
+operations.delete('/template-tasks/:id', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  await c.env.DB.prepare('DELETE FROM wo_template_tasks WHERE id = ? AND company_id = ?').bind(id, company_id).run()
+  return c.json({ success: true, data: null })
+})
+
+// POST /api/operations/templates/:id/use  — create work order from template
+operations.post('/templates/:id/use', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const tplId = Number(c.req.param('id'))
+  const b = await c.req.json<{
+    name?: string; planned_date: string
+    season_id?: number; field_id?: number; area_feddan?: number; notes?: string
+  }>()
+  if (!b.planned_date) return c.json({ success: false, error: 'تاريخ التخطيط مطلوب' }, 400)
+
+  const tpl = await c.env.DB.prepare(
+    'SELECT * FROM wo_templates WHERE id = ? AND company_id = ?'
+  ).bind(tplId, company_id).first<{ name: string; operation_type: string }>()
+  if (!tpl) return c.json({ success: false, error: 'النموذج غير موجود' }, 404)
+
+  const { results: tplTasks } = await c.env.DB.prepare(
+    'SELECT * FROM wo_template_tasks WHERE template_id = ? ORDER BY task_order, id'
+  ).bind(tplId).all<{ task_name: string; notes: string | null }>()
+
+  const woResult = await c.env.DB.prepare(
+    `INSERT INTO work_orders (company_id, season_id, field_id, name, operation_type,
+     planned_date, area_feddan, notes, created_by) VALUES (?,?,?,?,?,?,?,?,?)`
+  ).bind(
+    company_id,
+    b.season_id ?? null, b.field_id ?? null,
+    b.name ?? tpl.name, tpl.operation_type,
+    b.planned_date, b.area_feddan ?? null, b.notes ?? null, userId
+  ).run()
+
+  const woId = woResult.meta.last_row_id
+  for (const t of tplTasks) {
+    await c.env.DB.prepare(
+      `INSERT INTO work_tasks (work_order_id, company_id, task_date, description, notes)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(woId, company_id, b.planned_date, t.task_name, t.notes ?? null).run()
+  }
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'CREATE',
+    table_name: 'work_orders', record_id: woId,
+    new_value: { name: b.name ?? tpl.name, from_template: tplId, task_count: tplTasks.length },
+  })
+  return c.json({ success: true, data: { id: woId, task_count: tplTasks.length } }, 201)
 })
 
 export default operations

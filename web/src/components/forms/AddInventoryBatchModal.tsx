@@ -2,10 +2,10 @@ import { useState, useCallback, useEffect } from 'react'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import {
   Plus, Trash2, AlertTriangle, CheckCircle,
-  ChevronRight, ChevronLeft, Package, Warehouse, Info,
+  ChevronRight, ChevronLeft, Package, Warehouse, Info, Leaf,
 } from 'lucide-react'
 import Modal from '../ui/Modal'
-import { inventoryApi, configApi } from '../../api/client'
+import { inventoryApi, configApi, fieldsApi, operationsApi, suppliersApi } from '../../api/client'
 import type { Item } from '../../types'
 
 // ─── Types ────────────────────────────────────────────────────
@@ -31,6 +31,10 @@ interface BatchForm {
   supplier_code:   string
   document_number: string
   notes:           string
+  season_id:       string
+  field_id:        string
+  work_order_id:   string
+  center_code:     string
 }
 
 interface Props {
@@ -100,6 +104,10 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
     supplier_code:   '',
     document_number: '',
     notes:           '',
+    season_id:       '',
+    field_id:        '',
+    work_order_id:   '',
+    center_code:     '',
   })
 
   const [lines, setLines] = useState<LineItem[]>([newLine()])
@@ -116,6 +124,10 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
         supplier_code:   '',
         document_number: '',
         notes:           '',
+        season_id:       '',
+        field_id:        '',
+        work_order_id:   '',
+        center_code:     '',
       })
       setLines([newLine()])
     }
@@ -140,6 +152,50 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
     queryFn:  configApi.items as () => Promise<Item[]>,
     enabled:  open,
     staleTime: 60_000,
+  })
+
+  const { data: seasons = [] } = useQuery({
+    queryKey: ['config', 'seasons'],
+    queryFn:  configApi.seasons as () => Promise<{ id: number; name: string; status: string }[]>,
+    enabled:  open,
+    staleTime: 120_000,
+  })
+
+  const { data: fields = [] } = useQuery({
+    queryKey: ['fields', 'list', form.season_id || null],
+    queryFn:  () => fieldsApi.list(form.season_id ? { season_id: Number(form.season_id) } : undefined) as Promise<{ id: number; name: string; code: string; area_feddan: number }[]>,
+    enabled:  open,
+    staleTime: 60_000,
+  })
+
+  type WorkOrderItem = { id: number; name: string; operation_type: string; status: string }
+  const { data: workOrders = [] } = useQuery({
+    queryKey: ['operations', 'orders', form.season_id || null, form.field_id || null],
+    queryFn:  () => operationsApi.listOrders({
+      season_id: form.season_id ? Number(form.season_id) : undefined,
+      field_id:  form.field_id  ? Number(form.field_id)  : undefined,
+      size: 100,
+    }) as Promise<{ data: WorkOrderItem[] }>,
+    enabled:  open && form.movement_type === 'صرف',
+    staleTime: 60_000,
+    select: (res) => (res as { data: WorkOrderItem[] }).data ?? [],
+  })
+
+  type CostCenterOption = { code: number; name: string }
+  const { data: costCenters = [] } = useQuery({
+    queryKey: ['config', 'cc'],
+    queryFn:  configApi.costCenters as () => Promise<CostCenterOption[]>,
+    enabled:  open,
+    staleTime: 120_000,
+  })
+
+  type SupplierOption = { code: number; name: string; activity?: string }
+  const { data: suppliersList = [] } = useQuery({
+    queryKey: ['suppliers-list-dropdown'],
+    queryFn:  () => suppliersApi.list({ size: 200 }) as Promise<{ data: SupplierOption[] }>,
+    enabled:  open && form.movement_type === 'اضافة',
+    staleTime: 60_000,
+    select: res => (res as unknown as { data: SupplierOption[] }).data ?? res,
   })
 
   // ─── Form helpers ──────────────────────────────────────────
@@ -242,6 +298,9 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
         warehouse:       form.warehouse,
         supplier_code:   form.supplier_code   ? Number(form.supplier_code)   : undefined,
         document_number: form.document_number ? Number(form.document_number) : undefined,
+        season_id:       form.season_id       ? Number(form.season_id)       : undefined,
+        field_id:        form.field_id        ? Number(form.field_id)        : undefined,
+        work_order_id:   form.work_order_id   ? Number(form.work_order_id)   : undefined,
         notes:           form.notes || undefined,
         items: lines.map(l => ({
           item_code:  Number(l.item_code),
@@ -339,10 +398,80 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
                 onChange={e => setF('document_number', e.target.value)} />
             </div>
             <div>
-              <label className="label">كود المورد</label>
-              <input type="number" className="input" placeholder="اختياري"
-                value={form.supplier_code}
-                onChange={e => setF('supplier_code', e.target.value)} />
+              <label className="label">المورد</label>
+              {form.movement_type === 'اضافة' && (suppliersList as SupplierOption[]).length > 0 ? (
+                <select className="input" value={form.supplier_code}
+                  onChange={e => setF('supplier_code', e.target.value)}>
+                  <option value="">— اختياري —</option>
+                  {(suppliersList as SupplierOption[]).map(s => (
+                    <option key={s.code} value={s.code}>
+                      {s.name}{s.activity ? ` (${s.activity})` : ''}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input type="number" className="input" placeholder="كود المورد (اختياري)"
+                  value={form.supplier_code}
+                  onChange={e => setF('supplier_code', e.target.value)} />
+              )}
+            </div>
+          </div>
+
+          {/* Season + Field — Agricultural Context */}
+          <div className="rounded-xl border border-brand-100 bg-brand-50 p-3 space-y-3">
+            <div className="flex items-center gap-2 text-brand-700 text-xs font-semibold">
+              <Leaf size={13} />
+              السياق الزراعي (اختياري)
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label text-xs">الموسم الزراعي</label>
+                <select className="input text-sm" value={form.season_id}
+                  onChange={e => { setF('season_id', e.target.value); setF('field_id', ''); setF('work_order_id', '') }}>
+                  <option value="">— بدون موسم —</option>
+                  {(seasons as { id: number; name: string; status: string }[]).map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}{s.status === 'active' ? ' ✓' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label text-xs">الأرض / الحقل</label>
+                <select className="input text-sm" value={form.field_id}
+                  onChange={e => { setF('field_id', e.target.value); setF('work_order_id', '') }}>
+                  <option value="">— بدون حقل —</option>
+                  {(fields as { id: number; name: string; code: string; area_feddan: number }[]).map(f => (
+                    <option key={f.id} value={f.id}>
+                      {f.name} ({f.area_feddan} فدان)
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            {!typeIsAdd && (
+              <div>
+                <label className="label text-xs">أمر العمل</label>
+                <select className="input text-sm" value={form.work_order_id}
+                  onChange={e => setF('work_order_id', e.target.value)}>
+                  <option value="">— بدون أمر عمل —</option>
+                  {(workOrders as WorkOrderItem[]).filter(wo => !['cancelled', 'costed'].includes(wo.status)).map(wo => (
+                    <option key={wo.id} value={wo.id}>
+                      {wo.name} — {wo.operation_type}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div>
+              <label className="label text-xs">مركز التكلفة</label>
+              <select className="input text-sm" value={form.center_code}
+                onChange={e => setF('center_code', e.target.value)}>
+                <option value="">— بدون مركز —</option>
+                {(costCenters as CostCenterOption[]).map(cc => (
+                  <option key={cc.code} value={cc.code}>{cc.code} — {cc.name}</option>
+                ))}
+              </select>
             </div>
           </div>
 
@@ -529,6 +658,31 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
                 <div className="flex gap-2">
                   <span className="text-slate-500">المورد:</span>
                   <span className="font-medium">#{form.supplier_code}</span>
+                </div>
+              )}
+              {form.season_id && (
+                <div className="flex gap-2">
+                  <span className="text-slate-500">الموسم:</span>
+                  <span className="font-medium text-brand-700">
+                    {(seasons as { id: number; name: string }[]).find(s => String(s.id) === form.season_id)?.name ?? `#${form.season_id}`}
+                  </span>
+                </div>
+              )}
+              {form.field_id && (
+                <div className="flex gap-2">
+                  <span className="text-slate-500">الحقل:</span>
+                  <span className="font-medium text-brand-700 flex items-center gap-1">
+                    <Leaf size={12} />
+                    {(fields as { id: number; name: string }[]).find(f => String(f.id) === form.field_id)?.name ?? `#${form.field_id}`}
+                  </span>
+                </div>
+              )}
+              {form.work_order_id && (
+                <div className="flex gap-2">
+                  <span className="text-slate-500">أمر العمل:</span>
+                  <span className="font-medium text-amber-700">
+                    {(workOrders as WorkOrderItem[]).find(wo => String(wo.id) === form.work_order_id)?.name ?? `#${form.work_order_id}`}
+                  </span>
                 </div>
               )}
               {form.notes && (

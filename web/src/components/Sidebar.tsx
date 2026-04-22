@@ -5,11 +5,11 @@ import {
   ClipboardList, UserCog, TrendingUp, MapPin, Wrench, Wheat,
   BookOpen, BookMarked, BarChart3, Building2, Shield, Target,
   CalendarDays, PieChart, Lock, Landmark, ShoppingCart, GitBranch, Scale,
-  ChevronDown,
+  ChevronDown, Layers, Link2, CreditCard,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useQuery } from '@tanstack/react-query'
-import { dashboardApi } from '../api/client'
+import { dashboardApi, inventoryApi } from '../api/client'
 import { useIsAuth } from '../store/appStore'
 import { useState } from 'react'
 
@@ -56,11 +56,13 @@ const NAV_SECTIONS: NavSection[] = [
       { to: '/suppliers',           icon: <Users           size={18} />, label: 'الموردين والعملاء' },
       { to: '/treasury',            icon: <Banknote        size={18} />, label: 'الخزينة' },
       { to: '/treasury/partners',   icon: <TrendingUp      size={18} />, label: 'الشركاء' },
-      { to: '/inventory',           icon: <Package         size={18} />, label: 'أرصدة المخازن' },
-      { to: '/inventory/movements', icon: <ClipboardList   size={18} />, label: 'حركات المخزون' },
-      { to: '/fields',              icon: <MapPin          size={18} />, label: 'قطع الأراضي' },
+      { to: '/inventory',                icon: <Package         size={18} />, label: 'أرصدة المخازن' },
+      { to: '/inventory/movements',      icon: <ClipboardList   size={18} />, label: 'حركات المخزون' },
+      { to: '/inventory/cost-by-field',  icon: <Wheat           size={18} />, label: 'تكلفة الفدان' },
+      { to: '/fields',                   icon: <MapPin          size={18} />, label: 'قطع الأراضي' },
       { to: '/fields/harvest',      icon: <Wheat           size={18} />, label: 'سجلات الحصاد' },
       { to: '/operations',          icon: <Wrench          size={18} />, label: 'أوامر العمل' },
+      { to: '/operations/templates',icon: <Layers          size={18} />, label: 'نماذج العمليات' },
       { to: '/contracts',           icon: <FileText        size={18} />, label: 'العقود' },
     ],
   },
@@ -85,6 +87,8 @@ const NAV_SECTIONS: NavSection[] = [
       { to: '/gl/periods',          icon: <Lock            size={18} />, label: 'الفترات المالية' },
       { to: '/treasury/bank',       icon: <Landmark        size={18} />, label: 'مطابقة البنك' },
       { to: '/treasury/po',         icon: <ShoppingCart    size={18} />, label: 'طلبات الشراء' },
+      { to: '/gl/mappings',         icon: <Link2           size={18} />, label: 'ربط الحسابات' },
+      { to: '/treasury/ap',         icon: <CreditCard      size={18} />, label: 'الذمم الدائنة' },
     ],
   },
   {
@@ -94,6 +98,8 @@ const NAV_SECTIONS: NavSection[] = [
       { to: '/reports/cost-centers',       icon: <Target        size={18} />, label: 'تكاليف البيفوتات' },
       { to: '/reports/suppliers-balance',  icon: <Scale         size={18} />, label: 'ميزان الموردين' },
       { to: '/reports/season-summary',     icon: <Leaf          size={18} />, label: 'ملخص الموسم' },
+      { to: '/reports/season-pnl',         icon: <TrendingUp    size={18} />, label: 'أرباح وخسائر' },
+      { to: '/reports/season-close',       icon: <Lock          size={18} />, label: 'إغلاق الموسم' },
     ],
   },
   {
@@ -121,9 +127,19 @@ export default function Sidebar() {
     queryFn:  () => dashboardApi.inventoryAlerts() as Promise<{ name: string; balance_qty: number }[]>,
     enabled:  isAuth,
     staleTime: 120_000,
-    refetchInterval: 300_000, // refresh every 5 min
+    refetchInterval: 300_000,
   })
-  const alertCount = alertsData.length
+
+  // Reorder alerts count
+  const { data: reorderData = [] } = useQuery({
+    queryKey: ['inventory', 'reorder-alerts'],
+    queryFn:  inventoryApi.reorderAlerts,
+    enabled:  isAuth,
+    staleTime: 120_000,
+    refetchInterval: 300_000,
+  })
+
+  const alertCount  = alertsData.length + reorderData.length
 
   const handleLogout = () => {
     logout()

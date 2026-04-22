@@ -52,6 +52,35 @@ export interface POItem {
   warehouse?: string
 }
 
+export type MatchStatus = 'matched' | 'price_variance' | 'qty_variance' | 'over_invoiced' | 'pending_invoice' | 'no_gr'
+
+export interface POMatchRow {
+  po_item_id:     number
+  item_name:      string
+  unit:           string | null
+  qty_ordered:    number
+  qty_received:   number
+  qty_invoiced:   number
+  po_unit_price:  number
+  inv_unit_price: number
+  match_status:   MatchStatus
+  invoice_id:     number | null
+  invoice_number: string | null
+}
+
+export interface POInvoiceSummary {
+  id: number; number: string; date: string; total: number
+}
+
+export interface APAgingRow {
+  id: number; invoice_number: string; invoice_date: string
+  due_date: string; due_date_days: number
+  total_amount: number; paid_amount: number; outstanding: number
+  payment_date?: string; payment_ref?: string
+  po_number?: string; supplier_name?: string
+  days_overdue: number
+}
+
 export interface CashTxSearchResult {
   id: number
   transaction_date: string
@@ -106,6 +135,20 @@ export const financeApi = {
     unwrap(api.patch<null>(`/finance/purchase-orders/${id}/status`, { status, notes })),
   receivePO: (id: number, items: Array<{ item_id: number; qty_received: number; warehouse?: string }>) =>
     unwrap(api.patch<{status:string}>(`/finance/purchase-orders/${id}/receive`, { items })),
+  getPOMatch: (id: number) =>
+    unwrap(api.get<{ po: PurchaseOrder; match_rows: POMatchRow[]; invoices: POInvoiceSummary[] }>(
+      `/finance/purchase-orders/${id}/match`
+    )),
+  createInvoice: (poId: number, body: {
+    invoice_number: string; invoice_date: string; notes?: string
+    items: Array<{ po_item_id: number; qty_invoiced: number; unit_price: number }>
+  }) => unwrap(api.post<{id:number}>(`/finance/purchase-orders/${poId}/invoices`, body)),
+
+  // AP Aging
+  getAPAging: () =>
+    unwrap(api.get<APAgingRow[]>('/finance/ap-aging')),
+  payInvoice: (id: number, body: { paid_amount: number; payment_date?: string; payment_ref?: string }) =>
+    unwrap(api.patch<null>(`/finance/supplier-invoices/${id}/pay`, body)),
 
   // Cash Transaction Search (for bank statement matching)
   searchCashTransactions: (params: { q?: string; direction?: string }) => {

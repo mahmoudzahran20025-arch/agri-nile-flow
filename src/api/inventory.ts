@@ -59,11 +59,18 @@ inventory.get('/movements', async (c) => {
   let where   = 'WHERE im.company_id = ?'
   const binds: unknown[] = [company_id]
 
+  const fieldId = c.req.query('field_id')
+  const seasonId = c.req.query('season_id')
+
   if (warehouse) { where += ' AND im.warehouse = ?';       binds.push(warehouse) }
   if (itemCode)  { where += ' AND im.item_code = ?';       binds.push(Number(itemCode)) }
   if (type)      { where += ' AND im.movement_type = ?';   binds.push(type) }
   if (start)     { where += ' AND im.movement_date >= ?';  binds.push(start) }
   if (end)       { where += ' AND im.movement_date <= ?';  binds.push(end) }
+  if (fieldId)   { where += ' AND im.field_id = ?';        binds.push(Number(fieldId)) }
+  if (seasonId)  { where += ' AND im.season_id = ?';       binds.push(Number(seasonId)) }
+  const workOrderId = c.req.query('work_order_id')
+  if (workOrderId) { where += ' AND im.work_order_id = ?'; binds.push(Number(workOrderId)) }
 
   const [rows, cnt] = await Promise.all([
     c.env.DB.prepare(
@@ -72,11 +79,15 @@ inventory.get('/movements', async (c) => {
               im.quantity, im.unit_price, im.qty_in, im.qty_out, im.balance_qty,
               im.value_in, im.value_out, im.balance_value,
               s.name AS supplier_name, im.document_number, im.notes,
-              im.season_id, im.center_code, cc.name AS center_name
+              im.season_id, im.field_id, f.name AS field_name,
+              im.work_order_id, wo.name AS work_order_name,
+              im.center_code, cc.name AS center_name
        FROM inventory_movements im
        LEFT JOIN items i ON i.code = im.item_code AND i.company_id = im.company_id
        LEFT JOIN suppliers s ON s.code = im.supplier_code AND s.company_id = im.company_id
        LEFT JOIN cost_centers cc ON cc.code = im.center_code AND cc.company_id = im.company_id
+       LEFT JOIN fields f ON f.id = im.field_id AND f.company_id = im.company_id
+       LEFT JOIN work_orders wo ON wo.id = im.work_order_id AND wo.company_id = im.company_id
        ${where}
        ORDER BY im.movement_date DESC, im.id DESC LIMIT ? OFFSET ?`
     ).bind(...binds, size, offset).all(),
@@ -100,7 +111,8 @@ inventory.post('/movements', async (c) => {
     movement_date: string; warehouse: string; movement_type: string
     item_code: number; quantity: number; unit_price?: number
     supplier_code?: number; document_number?: number; notes?: string
-    season_id?: number; center_code?: number; pack_capacity?: number; pack_count?: number
+    season_id?: number; field_id?: number; work_order_id?: number
+    center_code?: number; pack_capacity?: number; pack_count?: number
   }>()
 
   if (!b.movement_date || !b.warehouse || !b.movement_type || !b.item_code || !b.quantity) {
@@ -140,13 +152,14 @@ inventory.post('/movements', async (c) => {
   const date = new Date(b.movement_date)
   await c.env.DB.prepare(
     `INSERT INTO inventory_movements
-     (company_id, season_id, supplier_code, item_code, center_code, movement_date, warehouse,
-      movement_type, document_number, pack_capacity, pack_count, quantity, unit_price,
-      qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
+     (company_id, season_id, field_id, work_order_id, supplier_code, item_code, center_code,
+      movement_date, warehouse, movement_type, document_number, pack_capacity, pack_count,
+      quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
       notes, year, month, created_by_user_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(
-    company_id, b.season_id ?? null, b.supplier_code ?? null, b.item_code, b.center_code ?? null,
+    company_id, b.season_id ?? null, b.field_id ?? null, b.work_order_id ?? null,
+    b.supplier_code ?? null, b.item_code, b.center_code ?? null,
     b.movement_date, b.warehouse, b.movement_type, b.document_number ?? null,
     b.pack_capacity ?? null, b.pack_count ?? null, b.quantity, unitPrice,
     qtyIn, qtyOut, balQty, valueIn, valueOut, balVal,
@@ -220,6 +233,8 @@ inventory.post('/movements/batch', async (c) => {
     supplier_code?:  number
     document_number?: number
     season_id?:      number
+    field_id?:       number
+    work_order_id?:  number
     notes?:          string
     items: Array<{
       item_code:   number
@@ -317,13 +332,14 @@ inventory.post('/movements/batch', async (c) => {
   const stmts = lineResults.map(lr =>
     c.env.DB.prepare(
       `INSERT INTO inventory_movements
-       (company_id, season_id, supplier_code, item_code, movement_date, warehouse,
+       (company_id, season_id, field_id, work_order_id, supplier_code, item_code, movement_date, warehouse,
         movement_type, document_number, quantity, unit_price,
         qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
         notes, year, month, created_by_user_id, local_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
-      company_id, b.season_id ?? null, b.supplier_code ?? null, lr.item_code,
+      company_id, b.season_id ?? null, b.field_id ?? null, b.work_order_id ?? null,
+      b.supplier_code ?? null, lr.item_code,
       b.movement_date, b.warehouse, b.movement_type, b.document_number ?? null,
       lr.quantity, lr.unit_price,
       lr.qtyIn, lr.qtyOut, lr.balQty, lr.valueIn, lr.valueOut, lr.balVal,
@@ -383,6 +399,110 @@ inventory.get('/item/:code/card', async (c) => {
      FROM inventory_movements WHERE company_id = ? AND item_code = ? ${where}
      ORDER BY movement_date ASC, id ASC`
   ).bind(...binds).all()
+
+  return c.json({ success: true, data: results })
+})
+
+// GET /api/inventory/cost-by-field?season_id=
+inventory.get('/cost-by-field', async (c) => {
+  const { company_id } = getUser(c)
+  const seasonId = c.req.query('season_id')
+
+  const binds: unknown[] = [company_id, company_id]
+  let seasonFilter = ''
+  if (seasonId) {
+    seasonFilter = 'AND f.season_id = ?'
+    binds.push(Number(seasonId))
+  }
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT
+       f.id, f.code, f.name AS field_name, f.area_feddan, f.crop_type,
+       f.season_id,
+       s.name AS season_name,
+       COALESCE(SUM(CASE WHEN im.movement_type = 'صرف' THEN im.value_out ELSE 0 END), 0) AS total_consumed,
+       COALESCE(SUM(CASE WHEN im.movement_type = 'اضافة' THEN im.value_in  ELSE 0 END), 0) AS total_added,
+       COUNT(DISTINCT CASE WHEN im.movement_type = 'صرف' THEN im.item_code END)           AS items_consumed,
+       CASE WHEN f.area_feddan > 0
+            THEN COALESCE(SUM(CASE WHEN im.movement_type = 'صرف' THEN im.value_out ELSE 0 END), 0) / f.area_feddan
+            ELSE NULL END AS cost_per_feddan,
+       fsb.id          AS budget_id,
+       fsb.budget_per_feddan,
+       CASE
+         WHEN fsb.budget_per_feddan IS NULL OR fsb.budget_per_feddan = 0 OR f.area_feddan = 0 THEN NULL
+         ELSE ROUND(
+           (
+             (COALESCE(SUM(CASE WHEN im.movement_type = 'صرف' THEN im.value_out ELSE 0 END), 0) / f.area_feddan)
+             - fsb.budget_per_feddan
+           ) * 100.0 / fsb.budget_per_feddan,
+           1
+         )
+       END AS variance_pct
+     FROM fields f
+     LEFT JOIN seasons s ON s.id = f.season_id
+     LEFT JOIN inventory_movements im
+            ON im.field_id = f.id AND im.company_id = ?
+     LEFT JOIN field_season_budgets fsb
+            ON fsb.field_id = f.id AND fsb.company_id = f.company_id
+               AND fsb.season_id = f.season_id
+     WHERE f.company_id = ? ${seasonFilter}
+     GROUP BY f.id
+     ORDER BY
+       CASE WHEN fsb.budget_per_feddan IS NOT NULL THEN 0 ELSE 1 END,
+       variance_pct DESC,
+       total_consumed DESC`
+  ).bind(...binds).all()
+
+  return c.json({ success: true, data: results })
+})
+
+// GET /api/inventory/reorder-alerts
+// Items where consumption in active work orders >= current balance * 0.8
+inventory.get('/reorder-alerts', async (c) => {
+  const { company_id } = getUser(c)
+
+  const { results } = await c.env.DB.prepare(`
+    WITH last_balance AS (
+      -- Latest running balance per item (highest id = most recent movement)
+      SELECT im.item_code, im.balance_qty
+      FROM inventory_movements im
+      WHERE im.company_id = ?
+        AND im.id = (
+          SELECT MAX(id) FROM inventory_movements
+          WHERE item_code = im.item_code AND company_id = im.company_id
+        )
+    ),
+    active_consumption AS (
+      -- Total صرف qty per item linked to active work orders
+      SELECT im.item_code, SUM(im.qty_out) AS consumed_qty
+      FROM inventory_movements im
+      JOIN work_orders wo ON wo.id = im.work_order_id AND wo.company_id = im.company_id
+      WHERE im.company_id = ?
+        AND im.movement_type = 'صرف'
+        AND wo.status IN ('pending', 'in_progress', 'done')
+      GROUP BY im.item_code
+    )
+    SELECT
+      lb.item_code,
+      i.name     AS item_name,
+      i.unit,
+      lb.balance_qty  AS current_balance,
+      ac.consumed_qty AS consumed_active_orders,
+      ROUND(ac.consumed_qty * 100.0 / lb.balance_qty, 1) AS consumption_pct,
+      (SELECT COUNT(DISTINCT wo2.id)
+       FROM inventory_movements im2
+       JOIN work_orders wo2 ON wo2.id = im2.work_order_id AND wo2.company_id = im2.company_id
+       WHERE im2.item_code = lb.item_code AND im2.company_id = ?
+         AND im2.movement_type = 'صرف'
+         AND wo2.status IN ('pending', 'in_progress', 'done')
+      ) AS active_order_count
+    FROM last_balance lb
+    JOIN active_consumption ac ON ac.item_code = lb.item_code
+    JOIN items i ON i.code = lb.item_code AND i.company_id = ?
+    WHERE lb.balance_qty > 0
+      AND ac.consumed_qty >= lb.balance_qty * 0.8
+    ORDER BY consumption_pct DESC
+  `).bind(company_id, company_id, company_id, company_id).all()
 
   return c.json({ success: true, data: results })
 })

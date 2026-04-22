@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Package, ChevronDown, ChevronUp, Plus, Download, ExternalLink } from 'lucide-react'
+import { Package, ChevronDown, ChevronUp, Plus, Download, ExternalLink, AlertTriangle, X, Wrench } from 'lucide-react'
 import { inventoryApi, downloadCsv } from '../../api/client'
 import AddInventoryBatchModal from '../../components/forms/AddInventoryBatchModal'
 import { TableSkeleton } from '../../components/ui/Skeleton'
@@ -18,13 +18,21 @@ function num(n: number) {
 export default function WarehouseBalancesPage() {
   const { canWrite } = usePermission()
   const navigate     = useNavigate()
-  const [activeWarehouse, setActiveWarehouse] = useState<string | null>(null)
-  const [expanded,        setExpanded]        = useState<Set<string>>(new Set())
-  const [addOpen,         setAddOpen]         = useState(false)
+  const [activeWarehouse,    setActiveWarehouse]    = useState<string | null>(null)
+  const [expanded,           setExpanded]           = useState<Set<string>>(new Set())
+  const [addOpen,            setAddOpen]            = useState(false)
+  const [reorderDismissed,   setReorderDismissed]   = useState(false)
 
   const { data: warehouses } = useQuery({
     queryKey: ['warehouses'],
     queryFn:  inventoryApi.warehouses,
+  })
+
+  const { data: reorderAlerts = [] } = useQuery({
+    queryKey: ['inventory', 'reorder-alerts'],
+    queryFn:  inventoryApi.reorderAlerts,
+    staleTime: 120_000,
+    refetchInterval: 300_000,
   })
 
   const { data: balances, isLoading } = useQuery({
@@ -67,6 +75,59 @@ export default function WarehouseBalancesPage() {
           )}
         </div>
       </div>
+
+      {/* Reorder Alerts */}
+      {reorderAlerts.length > 0 && !reorderDismissed && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <div className="p-2 bg-amber-100 rounded-lg shrink-0">
+              <AlertTriangle size={16} className="text-amber-600" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-amber-800 mb-2">
+                تنبيه إعادة الطلب — {reorderAlerts.length} {reorderAlerts.length === 1 ? 'صنف' : 'أصناف'} على وشك النفاد
+              </p>
+              <p className="text-xs text-amber-600 mb-3">
+                استهلاك أوامر العمل النشطة تجاوز 80% من الرصيد الحالي
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {reorderAlerts.map(alert => {
+                  const critical = alert.consumption_pct >= 100
+                  return (
+                    <div key={alert.item_code}
+                      className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs border
+                        ${critical
+                          ? 'bg-red-50 border-red-200 text-red-800'
+                          : 'bg-white border-amber-200 text-amber-800'}`}
+                    >
+                      <Package size={12} className="shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold truncate">{alert.item_name}</p>
+                        <p className="text-[11px] opacity-75">
+                          رصيد: {new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(alert.current_balance)} {alert.unit ?? ''}
+                          {' · '}
+                          <Wrench size={9} className="inline" />
+                          {' '}{alert.active_order_count} أمر عمل
+                        </p>
+                      </div>
+                      <span className={`font-bold shrink-0 ${critical ? 'text-red-700' : 'text-amber-700'}`}>
+                        {Math.round(alert.consumption_pct)}%
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+            <button
+              onClick={() => setReorderDismissed(true)}
+              className="text-amber-400 hover:text-amber-600 transition-colors shrink-0 p-1"
+              title="إخفاء"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Warehouse tabs */}
       <div className="flex flex-wrap gap-2">

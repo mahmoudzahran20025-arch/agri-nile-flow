@@ -1,4 +1,4 @@
-import { ChevronRight, ChevronLeft, SearchX } from 'lucide-react'
+import { ChevronRight, ChevronLeft, SearchX, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react'
 
 export interface Column<T> {
   key:       keyof T | string
@@ -6,21 +6,29 @@ export interface Column<T> {
   render?:   (row: T) => React.ReactNode
   align?:    'right' | 'left' | 'center'
   width?:    string
-  minWidth?: string   // mobile hint: minimum column width for scroll
+  minWidth?: string
+  sortable?: boolean
+}
+
+export interface SortState {
+  key: string
+  dir: 'asc' | 'desc'
 }
 
 interface Props<T> {
-  columns:   Column<T>[]
-  data:      T[]
-  loading?:  boolean
-  total?:    number
-  page?:     number
-  pageSize?: number
-  onPage?:   (page: number) => void
-  rowKey:    (row: T) => string | number
+  columns:     Column<T>[]
+  data:        T[]
+  loading?:    boolean
+  total?:      number
+  page?:       number
+  pageSize?:   number
+  onPage?:     (page: number) => void
+  rowKey:      (row: T) => string | number
   onRowClick?: (row: T) => void
-  emptyText?: string
-  emptyIcon?: React.ReactNode
+  emptyText?:  string
+  emptyIcon?:  React.ReactNode
+  sort?:       SortState
+  onSort?:     (sort: SortState) => void
 }
 
 function getVal<T>(row: T, key: string): React.ReactNode {
@@ -57,29 +65,51 @@ function SkeletonRows({ cols, rows = 7 }: { cols: number; rows?: number }) {
 export default function DataTable<T>({
   columns, data, loading, total = 0, page = 1, pageSize = 50,
   onPage, rowKey, onRowClick, emptyText = 'لا توجد بيانات', emptyIcon,
+  sort, onSort,
 }: Props<T>) {
   const totalPages = Math.ceil(total / pageSize)
 
+  const handleSort = (key: string) => {
+    if (!onSort) return
+    if (sort?.key === key) {
+      onSort({ key, dir: sort.dir === 'asc' ? 'desc' : 'asc' })
+    } else {
+      onSort({ key, dir: 'asc' })
+    }
+  }
+
   return (
     <div className="card overflow-hidden">
-      {/*
-        overflow-x-auto  → enables horizontal scroll on mobile
-        -webkit-overflow-scrolling: touch → smooth iOS scroll (via inline style)
-      */}
       <div className="overflow-x-auto" style={{ WebkitOverflowScrolling: 'touch' }}>
         <table className="w-full text-sm" style={{ minWidth: '560px' }}>
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200">
-              {columns.map(col => (
-                <th
-                  key={String(col.key)}
-                  style={{ width: col.width, minWidth: col.minWidth }}
-                  className={`px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap
-                    ${col.align === 'left' ? 'text-left' : col.align === 'center' ? 'text-center' : 'text-right'}`}
-                >
-                  {col.header}
-                </th>
-              ))}
+              {columns.map(col => {
+                const isActive  = sort?.key === String(col.key)
+                const isSortable = col.sortable && !!onSort
+                return (
+                  <th
+                    key={String(col.key)}
+                    style={{ width: col.width, minWidth: col.minWidth }}
+                    onClick={isSortable ? () => handleSort(String(col.key)) : undefined}
+                    className={`px-4 py-3 text-xs font-semibold uppercase tracking-wide whitespace-nowrap
+                      ${col.align === 'left' ? 'text-left' : col.align === 'center' ? 'text-center' : 'text-right'}
+                      ${isSortable ? 'cursor-pointer select-none hover:bg-slate-100 transition-colors' : ''}
+                      ${isActive ? 'text-brand-600' : 'text-slate-500'}`}
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      {col.header}
+                      {isSortable && (
+                        isActive
+                          ? sort!.dir === 'asc'
+                            ? <ArrowUp size={13} className="text-brand-500" />
+                            : <ArrowDown size={13} className="text-brand-500" />
+                          : <ArrowUpDown size={13} className="text-slate-300" />
+                      )}
+                    </span>
+                  </th>
+                )
+              })}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
