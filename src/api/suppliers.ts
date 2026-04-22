@@ -126,7 +126,7 @@ suppliers.get('/:code/statement', async (c) => {
       `SELECT id, transaction_date, entry_type, document_type, document_number,
               expense_category, equipment, unit, quantity, unit_price, amount,
               credit, debit, check_amount, balance_no_checks, balance_with_checks,
-              notes, year, month
+              due_date, center_code, notes, year, month
        FROM supplier_transactions
        ${where}
        ORDER BY transaction_date ASC, id ASC

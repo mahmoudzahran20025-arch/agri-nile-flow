@@ -242,6 +242,50 @@ export const contractsApi = {
     unwrap(api.get(`/contracts/summary${season_id ? `?season_id=${season_id}` : ''}`)),
 }
 
+// ─── Reports (التقارير التحليلية) ──────────────────────────────
+export const reportsApi = {
+  costCenters: (season_id?: number) =>
+    unwrap(api.get<{
+      data: Array<{
+        center_code: number; center_name: string | null
+        cash_total: number; cash_count: number
+        supplier_total: number; supplier_count: number
+        grand_total: number
+      }>
+      grand_total: number
+    }>(`/reports/cost-centers${season_id ? `?season_id=${season_id}` : ''}`)),
+
+  costCenterDetail: (code: number, season_id?: number) =>
+    unwrap(api.get<{
+      cash_by_category: Array<{ expense_code: number; expense_name: string; total: number; cnt: number }>
+      sup_by_supplier:  Array<{ supplier_code: number; supplier_name: string; total: number; cnt: number }>
+      cash_timeline:    Array<{ year: number; month: number; total: number }>
+    }>(`/reports/cost-centers/${code}/detail${season_id ? `?season_id=${season_id}` : ''}`)),
+
+  supplierPayments: (p?: { supplier_code?: number; season_id?: number }) =>
+    unwrap(api.get<{
+      data:    unknown[]
+      summary: Array<{ supplier_code: number; supplier_name: string; total_credit: number; total_debit: number; balance: number }>
+    }>(paginatedUrl('/reports/supplier-payments', p ?? {}))),
+
+  suppliersBalance: (season_id?: number) =>
+    unwrap(api.get<Array<{
+      code: number; name: string; activity: string | null
+      total_credit: number; total_debit: number; balance: number; last_balance: number; tx_count: number
+    }>>(`/reports/suppliers-balance${season_id ? `?season_id=${season_id}` : ''}`)),
+
+  seasonSummary: (season_id: number) =>
+    unwrap(api.get<{
+      season:              unknown
+      by_cost_center:      Array<{ center_code: number; center_name: string; cash_total: number; supplier_total: number; inventory_total: number; grand_total: number }>
+      by_expense_type:     Array<{ expense_code: number; expense_name: string; total: number; cnt: number }>
+      by_supplier:         Array<{ supplier_code: number; supplier_name: string; activity: string | null; total_credit: number; total_debit: number; balance: number; tx_count: number }>
+      by_inventory_item:   Array<{ item_code: number; item_name: string; unit: string | null; total_qty_out: number; total_value_out: number }>
+      monthly_timeline:    Array<{ year: number; month: number; cash_out: number; supplier_credit: number }>
+      totals: { cash_out: number; supplier_credit: number; supplier_debit: number; inventory_consumed: number; grand_total: number }
+    }>(`/reports/season-summary?season_id=${season_id}`)),
+}
+
 // ─── GL (دفتر الأستاذ العام) ──────────────────────────────────
 export const glApi = {
   accounts:     (type?: string) =>

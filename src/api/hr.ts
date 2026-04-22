@@ -61,6 +61,19 @@ hr.patch('/branches/:id', async (c) => {
 // EMPLOYEE JOB DETAILS
 // ═══════════════════════════════════════════════════════════
 
+// GET all job details for org chart
+hr.get('/job-details', async (c) => {
+  const { company_id } = getUser(c)
+  const { results } = await c.env.DB
+    .prepare(`SELECT ejd.*, b.name AS branch_name
+              FROM employee_job_details ejd
+              LEFT JOIN branches b ON b.id = ejd.branch_id
+              WHERE ejd.company_id = ?
+              ORDER BY ejd.employee_id`)
+    .bind(company_id).all()
+  return c.json({ success: true, data: results })
+})
+
 hr.get('/job-details/:employee_id', async (c) => {
   const { company_id } = getUser(c)
   const empId = Number(c.req.param('employee_id'))

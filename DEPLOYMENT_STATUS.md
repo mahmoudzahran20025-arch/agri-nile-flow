@@ -1,5 +1,5 @@
 # 🚀 Agri-Nile Flow — Deployment Status Report
-**Date:** April 20, 2026 | **Status:** ✅ **LIVE IN PRODUCTION**
+**Date:** April 21, 2026 | **Version:** v1.1.0 | **Status:** ✅ **LIVE IN PRODUCTION**
 
 ---
 
@@ -8,7 +8,7 @@
 ```
 ┌─────────────────────────────────┐
 │   Frontend (Cloudflare Pages)   │
-│  https://fb7b4223.agri-...-dev  │
+│  https://9d3e43a2.agri-...-dev  │
 │    React 18 + TypeScript         │
 │    Vite + Tailwind + RTL         │
 └────────────┬────────────────────┘
@@ -28,7 +28,7 @@
 ┌────────────▼────────────────────┐
 │    D1 SQLite Database           │
 │ agri-nile-flow-data-lake        │
-│ 35 Tables • 1,065+ Records      │
+│ 35 Tables • 1,100+ Records      │
 └─────────────────────────────────┘
 ```
 
@@ -55,9 +55,9 @@ Response: { "status": "ok" }
 ### Frontend (Pages)
 | Property | Value |
 |----------|-------|
-| **URL** | https://fb7b4223.agri-nile-flow-lake.pages.dev |
+| **URL** | https://9d3e43a2.agri-nile-flow-lake.pages.dev |
 | **Status** | ✅ LIVE |
-| **Last Deploy** | April 20, 2026 |
+| **Last Deploy** | April 21, 2026 |
 | **Framework** | React 18 + Vite |
 | **Build Size** | ~2.8 MB (gzipped) |
 | **API Endpoint** | Auto-detected from origin |
@@ -77,33 +77,29 @@ Response: { "status": "ok" }
 
 ### Core Data Tables (With Records)
 ```
-suppliers                  10 records
-├─ supplier_transactions  286 records
+suppliers                  10 records (activity محدّث)
+├─ supplier_transactions    0 records (313 في الإكسيل — لم تُحمَّل بعد)
 │
 cash_transactions         69 records
 │
 inventory_movements      700 records
 ```
 
-### Master Tables
+### Master Tables (v1.1.0 — بيانات حقيقية)
 ```
 companies                  1 (نواة المستقبل)
 users                      1 (admin@nawa.eg)
 roles                      6 (super_admin, accountant, warehouse_mgr, etc.)
-permissions               23 (suppliers, treasury, inventory, fields, etc.)
-seasons                   Seed data
-items                     Seed data
-cost_centers              Seed data
-```
-
-### Phase 2 Tables (Ready for Use)
-```
-fields                     0 (جاهز للإضافة)
-employees                  0 (جاهز للإضافة)
-work_orders                0 (جاهز للإضافة)
-work_tasks                 0 (جاهز للإضافة)
-purchase_contracts         0 (جاهز للإضافة)
-sales_contracts            0 (جاهز للإضافة)
+permissions               23
+seasons                    2 (شتوي نشط + صيفي تخطيط)
+items                     62 (أسماء حقيقية من الإكسيل)
+cost_centers              15 (10 بيفوتات + إدارية + مالية)
+expense_types             92 (33001–36020)
+sub_locations              2 (جهاز مستقبل مصر + طايل مشحوت)
+branches                   2 (HQ + المزرعة)
+employees                  5 (أساسيون)
+fields                    10 (10 بيفوتات بتفاصيل زراعية)
+chart_of_accounts         44
 ```
 
 ---
@@ -120,7 +116,7 @@ sales_contracts            0 (جاهز للإضافة)
 
 **First Login URL:**
 ```
-https://fb7b4223.agri-nile-flow-lake.pages.dev
+https://9d3e43a2.agri-nile-flow-lake.pages.dev
 ```
 
 ---
@@ -143,7 +139,7 @@ https://fb7b4223.agri-nile-flow-lake.pages.dev
 ### CORS Configuration
 ```
 Allowed Origins:
-  ✓ https://fb7b4223.agri-nile-flow-lake.pages.dev
+  ✓ https://9d3e43a2.agri-nile-flow-lake.pages.dev
   ✓ http://localhost:5173
   ✓ http://localhost:4173
 ```

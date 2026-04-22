@@ -4,7 +4,8 @@ import {
   FileText, Settings, LogOut, Leaf, ChevronLeft,
   ClipboardList, UserCog, TrendingUp, MapPin, Wrench, Wheat,
   BookOpen, BookMarked, BarChart3, Building2, Shield, Target,
-  CalendarDays, PieChart, Lock, Landmark, ShoppingCart,
+  CalendarDays, PieChart, Lock, Landmark, ShoppingCart, GitBranch, Scale,
+  ChevronDown,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useQuery } from '@tanstack/react-query'
@@ -31,44 +32,77 @@ const ROLE_COLORS: Record<string, string> = {
 }
 
 interface NavItem {
-  to:      string
-  icon:    React.ReactNode
-  label:   string
-  badge?:  number
-  group?:  string
+  to:     string
+  icon:   React.ReactNode
+  label:  string
+  badge?: number
 }
 
-const NAV_ITEMS: NavItem[] = [
-  { to: '/dashboard',            icon: <LayoutDashboard size={20} />, label: 'لوحة التحكم' },
-  { to: '/suppliers',            icon: <Users           size={20} />, label: 'الموردين والعملاء' },
-  { to: '/treasury',             icon: <Banknote        size={20} />, label: 'الخزينة' },
-  { to: '/treasury/partners',    icon: <TrendingUp      size={20} />, label: 'الشركاء' },
-  { to: '/inventory',            icon: <Package         size={20} />, label: 'أرصدة المخازن' },
-  { to: '/inventory/movements',  icon: <ClipboardList   size={20} />, label: 'حركات المخزون' },
-  { to: '/fields',               icon: <MapPin          size={20} />, label: 'قطع الأراضي' },
-  { to: '/fields/harvest',       icon: <Wheat           size={20} />, label: 'سجلات الحصاد' },
-  { to: '/hr',                    icon: <Users           size={20} />, label: 'الموارد البشرية', group: 'HR' },
-  { to: '/hr/dashboard',          icon: <PieChart        size={20} />, label: 'داشبورد HR', group: 'HR' },
-  { to: '/hr/attendance',         icon: <ClipboardList   size={20} />, label: 'الحضور والانصراف', group: 'HR' },
-  { to: '/hr/location-tasks',     icon: <Target          size={20} />, label: 'مهام الزيارات', group: 'HR' },
-  { to: '/hr/leaves',             icon: <FileText        size={20} />, label: 'الإجازات والسلف', group: 'HR' },
-  { to: '/hr/payroll',            icon: <Banknote        size={20} />, label: 'مسيرات الرواتب', group: 'HR' },
-  { to: '/documents',             icon: <FileText        size={20} />, label: 'إدارة المستندات' },
-  { to: '/calendar',              icon: <CalendarDays    size={20} />, label: 'التقويم والمهام' },
-  { to: '/employees',             icon: <Users           size={20} />, label: 'الموظفون (قديم)' },
-  { to: '/operations',            icon: <Wrench          size={20} />, label: 'أوامر العمل' },
-  { to: '/contracts',            icon: <FileText        size={20} />, label: 'العقود' },
-  { to: '/gl/accounts',         icon: <BookOpen        size={20} />, label: 'شجرة الحسابات', group: 'GL' },
-  { to: '/gl/entries',          icon: <BookMarked      size={20} />, label: 'قيود اليومية', group: 'GL' },
-  { to: '/gl/statements',       icon: <BarChart3       size={20} />, label: 'القوائم المالية', group: 'GL' },
-  { to: '/gl/periods',          icon: <Lock            size={20} />, label: 'الفترات المالية', group: 'GL' },
-  { to: '/treasury/bank',       icon: <Landmark        size={20} />, label: 'مطابقة البنك' },
-  { to: '/treasury/po',         icon: <ShoppingCart    size={20} />, label: 'طلبات الشراء' },
-  { to: '/reports',              icon: <ClipboardList   size={20} />, label: 'التقارير' },
-  { to: '/reports/charts',       icon: <BarChart3       size={20} />, label: 'التقارير المرئية' },
-  { to: '/audit',                icon: <Shield          size={20} />, label: 'سجل المراجعة' },
-  { to: '/users',                icon: <UserCog         size={20} />, label: 'المستخدمون' },
-  { to: '/config',               icon: <Settings        size={20} />, label: 'الإعدادات' },
+interface NavSection {
+  key:      string
+  label:    string
+  icon?:    React.ReactNode
+  items:    NavItem[]
+}
+
+const NAV_SECTIONS: NavSection[] = [
+  {
+    key: 'main', label: 'الرئيسي', items: [
+      { to: '/dashboard',           icon: <LayoutDashboard size={18} />, label: 'لوحة التحكم' },
+    ],
+  },
+  {
+    key: 'ops', label: 'العمليات الزراعية', items: [
+      { to: '/suppliers',           icon: <Users           size={18} />, label: 'الموردين والعملاء' },
+      { to: '/treasury',            icon: <Banknote        size={18} />, label: 'الخزينة' },
+      { to: '/treasury/partners',   icon: <TrendingUp      size={18} />, label: 'الشركاء' },
+      { to: '/inventory',           icon: <Package         size={18} />, label: 'أرصدة المخازن' },
+      { to: '/inventory/movements', icon: <ClipboardList   size={18} />, label: 'حركات المخزون' },
+      { to: '/fields',              icon: <MapPin          size={18} />, label: 'قطع الأراضي' },
+      { to: '/fields/harvest',      icon: <Wheat           size={18} />, label: 'سجلات الحصاد' },
+      { to: '/operations',          icon: <Wrench          size={18} />, label: 'أوامر العمل' },
+      { to: '/contracts',           icon: <FileText        size={18} />, label: 'العقود' },
+    ],
+  },
+  {
+    key: 'hr', label: 'الموارد البشرية', items: [
+      { to: '/hr',                  icon: <Users           size={18} />, label: 'الموظفون' },
+      { to: '/hr/dashboard',        icon: <PieChart        size={18} />, label: 'داشبورد HR' },
+      { to: '/hr/org',              icon: <GitBranch       size={18} />, label: 'الهيكل التنظيمي' },
+      { to: '/hr/attendance',       icon: <ClipboardList   size={18} />, label: 'الحضور والانصراف' },
+      { to: '/hr/leaves',           icon: <FileText        size={18} />, label: 'الإجازات والسلف' },
+      { to: '/hr/payroll',          icon: <Banknote        size={18} />, label: 'مسيرات الرواتب' },
+      { to: '/hr/location-tasks',   icon: <Target          size={18} />, label: 'مهام الزيارات' },
+      { to: '/calendar',            icon: <CalendarDays    size={18} />, label: 'التقويم والمهام' },
+      { to: '/documents',           icon: <FileText        size={18} />, label: 'إدارة المستندات' },
+    ],
+  },
+  {
+    key: 'gl', label: 'المحاسبة', items: [
+      { to: '/gl/accounts',         icon: <BookOpen        size={18} />, label: 'شجرة الحسابات' },
+      { to: '/gl/entries',          icon: <BookMarked      size={18} />, label: 'قيود اليومية' },
+      { to: '/gl/statements',       icon: <BarChart3       size={18} />, label: 'القوائم المالية' },
+      { to: '/gl/periods',          icon: <Lock            size={18} />, label: 'الفترات المالية' },
+      { to: '/treasury/bank',       icon: <Landmark        size={18} />, label: 'مطابقة البنك' },
+      { to: '/treasury/po',         icon: <ShoppingCart    size={18} />, label: 'طلبات الشراء' },
+    ],
+  },
+  {
+    key: 'reports', label: 'التقارير والتحليل', items: [
+      { to: '/reports',                    icon: <ClipboardList size={18} />, label: 'التقارير' },
+      { to: '/reports/charts',             icon: <BarChart3     size={18} />, label: 'التقارير المرئية' },
+      { to: '/reports/cost-centers',       icon: <Target        size={18} />, label: 'تكاليف البيفوتات' },
+      { to: '/reports/suppliers-balance',  icon: <Scale         size={18} />, label: 'ميزان الموردين' },
+      { to: '/reports/season-summary',     icon: <Leaf          size={18} />, label: 'ملخص الموسم' },
+    ],
+  },
+  {
+    key: 'admin', label: 'الإدارة والنظام', items: [
+      { to: '/users',               icon: <UserCog         size={18} />, label: 'المستخدمون' },
+      { to: '/audit',               icon: <Shield          size={18} />, label: 'سجل المراجعة' },
+      { to: '/config',              icon: <Settings        size={18} />, label: 'الإعدادات' },
+    ],
+  },
 ]
 
 export default function Sidebar() {
@@ -76,6 +110,10 @@ export default function Sidebar() {
   const isAuth = useIsAuth()
   const navigate = useNavigate()
   const [collapsed, setCollapsed] = useState(false)
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({})
+
+  const toggleSection = (key: string) =>
+    setCollapsedSections(prev => ({ ...prev, [key]: !prev[key] }))
 
   // Low-stock alerts count
   const { data: alertsData = [] } = useQuery({
@@ -144,40 +182,65 @@ export default function Sidebar() {
       )}
 
       {/* Nav */}
-      <nav className="flex-1 py-4 overflow-y-auto space-y-1 px-2">
-        {NAV_ITEMS.map(item => {
-          const isInventory = item.to === '/inventory'
-          const badge = isInventory && alertCount > 0 ? alertCount : item.badge
+      <nav className="flex-1 py-3 overflow-y-auto px-2 space-y-1">
+        {NAV_SECTIONS.map(section => {
+          const sectionCollapsed = collapsedSections[section.key]
           return (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) => `
-                flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
-                transition-colors duration-150 group relative
-                ${isActive
-                  ? 'bg-brand-700 text-white'
-                  : 'text-brand-200 hover:bg-brand-800 hover:text-white'}
-                ${collapsed ? 'justify-center' : ''}
-              `}
-              title={collapsed ? item.label : undefined}
-            >
-              <span className="flex-shrink-0 relative">
-                {item.icon}
-                {collapsed && badge != null && (
-                  <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] rounded-full min-w-[16px] h-4 flex items-center justify-center px-0.5 leading-none">
-                    {badge > 99 ? '99+' : badge}
+            <div key={section.key}>
+              {/* Section header */}
+              {!collapsed && section.key !== 'main' && (
+                <button
+                  onClick={() => toggleSection(section.key)}
+                  className="w-full flex items-center justify-between px-2 py-1.5 mt-2 mb-0.5 rounded-md
+                             text-brand-400 hover:text-brand-200 transition-colors group"
+                >
+                  <span className="text-[10px] font-bold uppercase tracking-wider truncate">
+                    {section.label}
                   </span>
-                )}
-              </span>
-              {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
-              {!collapsed && badge != null && (
-                <span className={`text-white text-xs rounded-full px-1.5 py-0.5 min-w-[20px] text-center
-                  ${isInventory ? 'bg-orange-500' : 'bg-red-500'}`}>
-                  {badge > 99 ? '99+' : badge}
-                </span>
+                  <ChevronDown
+                    size={12}
+                    className={`shrink-0 transition-transform duration-200 ${sectionCollapsed ? '-rotate-90' : ''}`}
+                  />
+                </button>
               )}
-            </NavLink>
+              {/* Section items */}
+              {!sectionCollapsed && section.items.map(item => {
+                const isInventory = item.to === '/inventory'
+                const badge = isInventory && alertCount > 0 ? alertCount : item.badge
+                return (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={item.to === '/hr'}
+                    className={({ isActive }) => `
+                      flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium
+                      transition-colors duration-150 group relative
+                      ${isActive
+                        ? 'bg-brand-700 text-white'
+                        : 'text-brand-200 hover:bg-brand-800 hover:text-white'}
+                      ${collapsed ? 'justify-center' : ''}
+                    `}
+                    title={collapsed ? item.label : undefined}
+                  >
+                    <span className="flex-shrink-0 relative">
+                      {item.icon}
+                      {collapsed && badge != null && (
+                        <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] rounded-full min-w-[16px] h-4 flex items-center justify-center px-0.5 leading-none">
+                          {badge > 99 ? '99+' : badge}
+                        </span>
+                      )}
+                    </span>
+                    {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
+                    {!collapsed && badge != null && (
+                      <span className={`text-white text-xs rounded-full px-1.5 py-0.5 min-w-[20px] text-center
+                        ${isInventory ? 'bg-orange-500' : 'bg-red-500'}`}>
+                        {badge > 99 ? '99+' : badge}
+                      </span>
+                    )}
+                  </NavLink>
+                )
+              })}
+            </div>
           )
         })}
       </nav>

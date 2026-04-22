@@ -71,10 +71,12 @@ inventory.get('/movements', async (c) => {
               im.item_code, i.name AS item_name, i.unit,
               im.quantity, im.unit_price, im.qty_in, im.qty_out, im.balance_qty,
               im.value_in, im.value_out, im.balance_value,
-              s.name AS supplier_name, im.document_number, im.notes
+              s.name AS supplier_name, im.document_number, im.notes,
+              im.season_id, im.center_code, cc.name AS center_name
        FROM inventory_movements im
        LEFT JOIN items i ON i.code = im.item_code AND i.company_id = im.company_id
        LEFT JOIN suppliers s ON s.code = im.supplier_code AND s.company_id = im.company_id
+       LEFT JOIN cost_centers cc ON cc.code = im.center_code AND cc.company_id = im.company_id
        ${where}
        ORDER BY im.movement_date DESC, im.id DESC LIMIT ? OFFSET ?`
     ).bind(...binds, size, offset).all(),
@@ -98,7 +100,7 @@ inventory.post('/movements', async (c) => {
     movement_date: string; warehouse: string; movement_type: string
     item_code: number; quantity: number; unit_price?: number
     supplier_code?: number; document_number?: number; notes?: string
-    season_id?: number; pack_capacity?: number; pack_count?: number
+    season_id?: number; center_code?: number; pack_capacity?: number; pack_count?: number
   }>()
 
   if (!b.movement_date || !b.warehouse || !b.movement_type || !b.item_code || !b.quantity) {
@@ -138,13 +140,13 @@ inventory.post('/movements', async (c) => {
   const date = new Date(b.movement_date)
   await c.env.DB.prepare(
     `INSERT INTO inventory_movements
-     (company_id, season_id, supplier_code, item_code, movement_date, warehouse,
+     (company_id, season_id, supplier_code, item_code, center_code, movement_date, warehouse,
       movement_type, document_number, pack_capacity, pack_count, quantity, unit_price,
       qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
       notes, year, month, created_by_user_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(
-    company_id, b.season_id ?? null, b.supplier_code ?? null, b.item_code,
+    company_id, b.season_id ?? null, b.supplier_code ?? null, b.item_code, b.center_code ?? null,
     b.movement_date, b.warehouse, b.movement_type, b.document_number ?? null,
     b.pack_capacity ?? null, b.pack_count ?? null, b.quantity, unitPrice,
     qtyIn, qtyOut, balQty, valueIn, valueOut, balVal,

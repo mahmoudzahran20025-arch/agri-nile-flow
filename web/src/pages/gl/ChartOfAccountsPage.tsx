@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { BookOpen, Plus, Settings, Eye } from 'lucide-react'
+import { BookOpen, Plus, Settings, Eye, List, GitBranch, ChevronRight, ChevronDown } from 'lucide-react'
 import { glApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 import Modal from '../../components/ui/Modal'
@@ -21,6 +21,13 @@ const TYPE_BADGE: Record<string, string> = {
   asset: 'badge-blue', liability: 'badge-red', equity: 'badge-amber',
   revenue: 'badge-green', expense: 'badge-yellow',
 }
+const TYPE_COLOR: Record<string, { bg: string; text: string; border: string; dot: string }> = {
+  asset:     { bg: 'bg-blue-50',   text: 'text-blue-800',   border: 'border-blue-200',   dot: 'bg-blue-400' },
+  liability: { bg: 'bg-red-50',    text: 'text-red-800',    border: 'border-red-200',    dot: 'bg-red-400' },
+  equity:    { bg: 'bg-amber-50',  text: 'text-amber-800',  border: 'border-amber-200',  dot: 'bg-amber-400' },
+  revenue:   { bg: 'bg-emerald-50',text: 'text-emerald-800',border: 'border-emerald-200',dot: 'bg-emerald-400' },
+  expense:   { bg: 'bg-orange-50', text: 'text-orange-800', border: 'border-orange-200', dot: 'bg-orange-400' },
+}
 const MAPPING_KEYS = [
   { key: 'cash',             label: 'الخزينة والبنوك' },
   { key: 'accounts_payable', label: 'الذمم الدائنة (موردون)' },
@@ -29,12 +36,103 @@ const MAPPING_KEYS = [
   { key: 'expense_default',  label: 'المصروف الافتراضي' },
 ]
 
+// ── Build tree from flat list ────────────────────────────────
+interface AccountNode extends Account { children: AccountNode[] }
+
+function buildTree(accounts: Account[]): AccountNode[] {
+  const map: Record<string, AccountNode> = {}
+  const roots: AccountNode[] = []
+  for (const a of accounts) map[a.code] = { ...a, children: [] }
+  for (const a of accounts) {
+    if (a.parent_code && map[a.parent_code]) {
+      map[a.parent_code].children.push(map[a.code])
+    } else {
+      roots.push(map[a.code])
+    }
+  }
+  return roots
+}
+
+// ── Tree Node component ──────────────────────────────────────
+function AccountTreeNode({
+  node, navigate, depth = 0,
+}: { node: AccountNode; navigate: (p: string) => void; depth?: number }) {
+  const [open, setOpen] = useState(depth < 2)
+  const colors = TYPE_COLOR[node.account_type] ?? TYPE_COLOR.expense
+  const hasChildren = node.children.length > 0
+
+  return (
+    <div className="select-none">
+      <div
+        className={`flex items-center gap-2 py-1.5 px-2 rounded-lg group cursor-pointer
+          hover:bg-gray-50 transition-colors`}
+        style={{ paddingRight: `${8 + depth * 20}px` }}
+        onClick={() => hasChildren ? setOpen(o => !o) : navigate(`/gl/ledger/${node.code}`)}
+      >
+        {/* Toggle icon */}
+        <span className="w-4 shrink-0 text-gray-400">
+          {hasChildren
+            ? (open ? <ChevronDown size={14} /> : <ChevronRight size={14} />)
+            : <span className="inline-block w-3 h-px bg-gray-200 mr-1" />}
+        </span>
+
+        {/* Type dot */}
+        <span className={`w-2 h-2 rounded-full shrink-0 ${colors.dot}`} />
+
+        {/* Code */}
+        <span className="font-mono text-xs text-gray-400 w-14 shrink-0">{node.code}</span>
+
+        {/* Name */}
+        <span className={`text-sm flex-1 ${node.is_header ? 'font-semibold text-gray-800' : 'text-gray-700'}`}>
+          {node.name}
+        </span>
+
+        {/* Type badge — only on headers */}
+        {node.is_header && (
+          <span className={`text-xs px-2 py-0.5 rounded-full border shrink-0
+            ${colors.bg} ${colors.text} ${colors.border}`}>
+            {TYPE_AR[node.account_type] ?? node.account_type}
+          </span>
+        )}
+
+        {/* Child count */}
+        {hasChildren && (
+          <span className="text-xs text-gray-400 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+            {node.children.length}
+          </span>
+        )}
+
+        {/* Ledger link — leaf accounts */}
+        {!node.is_header && (
+          <button
+            onClick={e => { e.stopPropagation(); navigate(`/gl/ledger/${node.code}`) }}
+            className="opacity-0 group-hover:opacity-100 p-1 rounded text-brand-600 hover:bg-brand-50 transition-all shrink-0"
+            title="دفتر الأستاذ"
+          >
+            <Eye size={13} />
+          </button>
+        )}
+      </div>
+
+      {/* Children */}
+      {hasChildren && open && (
+        <div className={`mr-2 border-r-2 ${colors.border}`}>
+          {node.children.map(child => (
+            <AccountTreeNode key={child.code} node={child} navigate={navigate} depth={depth + 1} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ChartOfAccountsPage() {
   const { canWrite } = usePermission()
   const navigate = useNavigate()
   const qc = useQueryClient()
   const { toast } = useToast()
-  const [filter, setFilter] = useState('')
+  const [filter, setFilter]     = useState('')
+  const [viewMode, setViewMode] = useState<'table' | 'tree'>('tree')
   const [openAdd, setOpenAdd]       = useState(false)
   const [openMapping, setOpenMapping] = useState(false)
 
@@ -57,6 +155,8 @@ export default function ChartOfAccountsPage() {
   const filtered = filter
     ? list.filter(a => a.code.includes(filter) || a.name.includes(filter))
     : list
+
+  const tree = useMemo(() => buildTree(filter ? filtered : list), [list, filtered, filter])
 
   const createAcc = useMutation({
     mutationFn: () => glApi.createAccount(form),
@@ -101,6 +201,26 @@ export default function ChartOfAccountsPage() {
           <span className="badge badge-blue">{list.length} حساب</span>
         </div>
         <div className="flex items-center gap-2">
+          {/* View toggle */}
+          <div className="flex items-center bg-gray-100 rounded-lg p-1 gap-1">
+            <button
+              onClick={() => setViewMode('tree')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                viewMode === 'tree' ? 'bg-white shadow text-brand-700' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <GitBranch size={14} /> شجرة
+            </button>
+            <button
+              onClick={() => setViewMode('table')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                viewMode === 'table' ? 'bg-white shadow text-brand-700' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <List size={14} /> جدول
+            </button>
+          </div>
+
           {canWrite('gl') && (
             <button className="btn btn-ghost" onClick={openMappingModal}>
               <Settings size={16} /> إعدادات الربط
@@ -123,7 +243,29 @@ export default function ChartOfAccountsPage() {
 
       {isLoading ? (
         <p className="text-center text-gray-500 py-10">جاري التحميل...</p>
+      ) : viewMode === 'tree' ? (
+        /* ── Tree View ── */
+        <div className="card p-4 space-y-1">
+          {/* Legend */}
+          <div className="flex flex-wrap gap-3 pb-3 border-b mb-3">
+            {Object.entries(TYPE_AR).map(([k, label]) => {
+              const c = TYPE_COLOR[k]
+              return (
+                <span key={k} className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border
+                  ${c.bg} ${c.text} ${c.border}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
+                  {label}
+                </span>
+              )
+            })}
+          </div>
+          {tree.length === 0 && <p className="text-center text-gray-400 py-8">لا توجد نتائج</p>}
+          {tree.map(node => (
+            <AccountTreeNode key={node.code} node={node} navigate={navigate} depth={0} />
+          ))}
+        </div>
       ) : (
+        /* ── Table View ── */
         <div className="card overflow-hidden p-0">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b">
@@ -142,16 +284,12 @@ export default function ChartOfAccountsPage() {
                 <tr
                   key={a.code}
                   className={`border-b transition-colors ${
-                    a.is_header
-                      ? 'bg-gray-50 font-semibold'
-                      : 'hover:bg-gray-50'
+                    a.is_header ? 'bg-gray-50 font-semibold' : 'hover:bg-gray-50'
                   } ${!a.is_active ? 'opacity-40' : ''}`}
                 >
                   <td className="td">
-                    <span
-                      className="font-mono text-brand-700"
-                      style={{ paddingRight: `${(a.level - 1) * 16}px` }}
-                    >
+                    <span className="font-mono text-brand-700"
+                      style={{ paddingRight: `${(a.level - 1) * 16}px` }}>
                       {a.code}
                     </span>
                   </td>

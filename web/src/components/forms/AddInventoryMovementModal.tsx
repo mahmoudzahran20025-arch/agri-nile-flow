@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import Modal from '../ui/Modal'
 import { inventoryApi, configApi } from '../../api/client'
-import type { Item } from '../../types'
+import type { Item, Season, CostCenter } from '../../types'
 
 interface Props { open: boolean; onClose: () => void; defaultWarehouse?: string }
 
@@ -20,6 +20,8 @@ export default function AddInventoryMovementModal({ open, onClose, defaultWareho
     quantity:       '',
     unit_price:     '',
     document_number:'',
+    season_id:      '',
+    center_code:    '',
     notes:          '',
   })
 
@@ -32,6 +34,18 @@ export default function AddInventoryMovementModal({ open, onClose, defaultWareho
   const { data: items } = useQuery({
     queryKey: ['config', 'items'],
     queryFn:  configApi.items as () => Promise<Item[]>,
+    enabled:  open,
+  })
+
+  const { data: seasons } = useQuery({
+    queryKey: ['config', 'seasons'],
+    queryFn:  configApi.seasons as () => Promise<Season[]>,
+    enabled:  open,
+  })
+
+  const { data: costCenters } = useQuery({
+    queryKey: ['config', 'cost_centers'],
+    queryFn:  configApi.costCenters as () => Promise<CostCenter[]>,
     enabled:  open,
   })
 
@@ -55,6 +69,8 @@ export default function AddInventoryMovementModal({ open, onClose, defaultWareho
         quantity:        Number(form.quantity),
         unit_price:      form.unit_price ? Number(form.unit_price) : undefined,
         document_number: form.document_number ? Number(form.document_number) : undefined,
+        season_id:       form.season_id ? Number(form.season_id) : undefined,
+        center_code:     form.center_code ? Number(form.center_code) : undefined,
         notes:           form.notes.trim() || undefined,
       })
       if (!(res as { success: boolean }).success) {
@@ -67,7 +83,7 @@ export default function AddInventoryMovementModal({ open, onClose, defaultWareho
         return
       }
       await qc.invalidateQueries({ queryKey: ['inventory'] })
-      setForm({ movement_date: today(), movement_type: 'اضافة', warehouse: defaultWarehouse ?? '', item_code: '', quantity: '', unit_price: '', document_number: '', notes: '' })
+      setForm({ movement_date: today(), movement_type: 'اضافة', warehouse: defaultWarehouse ?? '', item_code: '', quantity: '', unit_price: '', document_number: '', season_id: '', center_code: '', notes: '' })
       onClose()
     } catch {
       setError('حدث خطأ في الاتصال')
@@ -140,6 +156,23 @@ export default function AddInventoryMovementModal({ open, onClose, defaultWareho
           </div>
         </div>
 
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="label">الموسم</label>
+            <select className="input" value={form.season_id} onChange={e => set('season_id', e.target.value)}>
+              <option value="">-- اختر الموسم --</option>
+              {(seasons ?? []).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">مركز التكلفة (البيفوت)</label>
+            <select className="input" value={form.center_code} onChange={e => set('center_code', e.target.value)}>
+              <option value="">-- اختر مركز التكلفة --</option>
+              {(costCenters ?? []).map(cc => <option key={cc.code} value={cc.code}>{cc.name}</option>)}
+            </select>
+          </div>
+        </div>
+
         <div>
           <label className="label">ملاحظات</label>
           <textarea className="input" rows={2} placeholder="ملاحظات..." value={form.notes}
@@ -158,3 +191,4 @@ export default function AddInventoryMovementModal({ open, onClose, defaultWareho
     </Modal>
   )
 }
+

@@ -36,11 +36,15 @@ import EmployeeProfilePage   from './pages/hr/EmployeeProfilePage'
 import AttendancePage        from './pages/hr/AttendancePage'
 import LeavesAdvancesPage    from './pages/hr/LeavesAdvancesPage'
 import PayrollPage           from './pages/hr/PayrollPage'
+import OrgChartPage          from './pages/hr/OrgChartPage'
 import DocumentsPage         from './pages/documents/DocumentsPage'
 import HarvestPage           from './pages/fields/HarvestPage'
 import LocationTasksPage     from './pages/hr/LocationTasksPage'
 import HrDashboardPage       from './pages/hr/HrDashboardPage'
 import CalendarPage          from './pages/calendar/CalendarPage'
+import CostCenterReportPage  from './pages/reports/CostCenterReportPage'
+import SuppliersBalancePage  from './pages/reports/SuppliersBalancePage'
+import SeasonSummaryPage     from './pages/reports/SeasonSummaryPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuth = useIsAuth()
@@ -98,6 +102,7 @@ export default function App() {
         <Route path="hr/attendance"           element={<AttendancePage />} />
         <Route path="hr/leaves"               element={<LeavesAdvancesPage />} />
         <Route path="hr/payroll"              element={<PayrollPage />} />
+        <Route path="hr/org"                  element={<OrgChartPage />} />
         <Route path="hr/location-tasks"       element={<LocationTasksPage />} />
 
         {/* Calendar & Tasks */}
@@ -127,6 +132,9 @@ export default function App() {
         {/* Reports */}
         <Route path="reports" element={<ReportsPage />} />
         <Route path="reports/charts" element={<ChartsPage />} />
+        <Route path="reports/cost-centers" element={<CostCenterReportPage />} />
+        <Route path="reports/suppliers-balance" element={<SuppliersBalancePage />} />
+        <Route path="reports/season-summary" element={<SeasonSummaryPage />} />
 
         {/* Super Admin */}
         <Route path="admin" element={<SuperAdminPage />} />

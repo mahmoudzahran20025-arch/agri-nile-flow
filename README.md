@@ -1,16 +1,57 @@
 # Agri-Nile Flow 🌾
+**نظام ERP زراعي متكامل — نواة المستقبل**  
+**الإصدار:** v1.1.0 | **آخر تحديث:** 21 أبريل 2026
 
-A robust financial and inventory management system for agricultural companies, built with Cloudflare Workers, D1, and React.
+نظام إدارة مالي ومخزني متخصص للشركات الزراعية المصرية، مبني على Cloudflare Edge (Workers + D1 + Pages).
 
-## 🚀 Features
-- **One-Piece-Flow Architecture**: Atomic transactions for financial integrity.
-- **Remote-First Development**: Seamlessly test local code against production databases.
-- **D1 Database**: High-performance edge database.
+---
 
-## 🛠 Tech Stack
-- **Backend**: Hono (Cloudflare Workers)
-- **Frontend**: React + Vite + Tailwind CSS
-- **Database**: Cloudflare D1 (SQLite)
+## 🚀 الميزات الرئيسية
+- **خزينة يومية:** تتبع الإيرادات والمصروفات مع كشف حساب كل مورد
+- **مخزون WAC:** 700 حركة مخزنية حقيقية + تكلفة متوسطة مرجحة
+- **مراكز التكلفة:** 10 بيفوتات (أراضي الدلتا الجديدة) مع تتبع التكاليف
+- **شجرة الحسابات + GL:** قيود يومية + ميزان مراجعة + قوائم مالية
+- **HR + هيكل تنظيمي:** موظفون + org chart تفاعلي
+- **Multi-tenant:** عزل كامل بين الشركات عبر JWT
+- **عربي RTL حقيقي:** واجهة عربية أصيلة لا مجرد ترجمة
 
-## 📖 Getting Started
-See [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) for instructions on how to run and deploy the project.
+## 🛠️ Stack التقني
+| المكون | التقنية |
+|--------|---------|
+| Backend | Hono 3.x على Cloudflare Workers |
+| Frontend | React 18 + TypeScript + Vite + Tailwind CSS |
+| Database | Cloudflare D1 (SQLite) — `agri-nile-flow-data-lake` |
+| Auth | JWT (HS256, 24h) + PBKDF2-SHA256 (100k iterations) |
+| State | TanStack Query v5 + Zustand |
+| Routing | React Router v6 |
+
+## 🔗 الروابط الحية
+| | الرابط |
+|--|--------|
+| **Backend** | https://agri-nile-flow.mahm-zahran22.workers.dev |
+| **Frontend** | https://9d3e43a2.agri-nile-flow-lake.pages.dev |
+| **دخول Admin** | `admin@nawa.eg` / `Admin@2025` / شركة: `NM-001` |
+
+## 📖 التوثيق
+| الملف | الغرض |
+|-------|-------|
+| [PROJECT_STATUS.md](PROJECT_STATUS.md) | ⭐ الحالة الكاملة + التقييم + خارطة العمل |
+| [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) | دليل التطوير اليومي + أوامر D1 |
+| [DEPLOYMENT_STATUS.md](DEPLOYMENT_STATUS.md) | روابط الإنتاج + تفاصيل API |
+| [CHANGELOG.md](CHANGELOG.md) | سجل التغييرات بالإصدارات |
+| [DOCUMENTATION_INDEX.md](DOCUMENTATION_INDEX.md) | دليل كل ملفات التوثيق |
+
+## ⚡ بدء التطوير
+```bash
+# Frontend محلي
+cd web && npm run dev
+
+# Deploy Backend
+npx wrangler deploy
+
+# Deploy Frontend
+cd web && npm run build && cd .. && npx wrangler pages deploy web/dist --project-name agri-nile-flow-lake
+
+# استعلام D1
+npx wrangler d1 execute agri-nile-flow-data-lake --remote --command "SELECT COUNT(*) FROM items;"
+```

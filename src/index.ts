@@ -22,6 +22,7 @@ import hrRoutes         from './api/hr'
 import docsRoutes       from './api/documents'
 import calendarRoutes   from './api/calendar'
 import financeRoutes    from './api/finance'
+import reportsRoutes    from './api/reports'
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -69,6 +70,7 @@ app.route('/api/hr',         hrRoutes)
 app.route('/api/documents',  docsRoutes)
 app.route('/api/calendar',   calendarRoutes)
 app.route('/api/finance',    financeRoutes)
+app.route('/api/reports',    reportsRoutes)
 
 // ─── Health Check ─────────────────────────────────────────────
 app.get('/api/health', (c) => c.json({ status: 'ok', ts: new Date().toISOString() }))

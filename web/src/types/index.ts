@@ -52,6 +52,7 @@ export interface SupplierTransaction {
   document_type:       string | null
   document_number:     number | null
   expense_category:    string | null
+  equipment:           string | null
   unit:                string | null
   quantity:            number | null
   unit_price:          number | null
@@ -61,6 +62,8 @@ export interface SupplierTransaction {
   check_amount:        number
   balance_no_checks:   number | null
   balance_with_checks: number | null
+  due_date:            string | null
+  center_code:         number | null
   notes:               string | null
   year:                number | null
   month:               number | null
@@ -112,6 +115,9 @@ export interface InventoryMovement {
   supplier_name: string | null
   document_number: number | null
   notes:         string | null
+  season_id:     number | null
+  center_code:   number | null
+  center_name:   string | null
 }
 
 export interface DashboardStats {

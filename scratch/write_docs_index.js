@@ -1,4 +1,7 @@
-# دليل التوثيق — Agri-Nile Flow
+const fs = require('fs');
+const path = require('path');
+
+const content = `# دليل التوثيق — Agri-Nile Flow
 **آخر تحديث:** 21 أبريل 2026 | **الإصدار:** v1.1.0
 
 > هذا الملف هو **نقطة البداية** لفهم المشروع. يُرشدك لكل ملف بحسب ما تحتاجه.
@@ -7,7 +10,7 @@
 
 ## 🗂️ هيكل ملفات التوثيق
 
-```
+\`\`\`
 agri-nile-flow/
 ├── README.md              ← نظرة عامة + روابط سريعة
 ├── PROJECT_STATUS.md      ← ⭐ الحالة الكاملة + التقييم + خارطة العمل
@@ -41,7 +44,7 @@ agri-nile-flow/
     ├── DATA_MIGRATION_ANALYSIS.md
     ├── DATA_QUALITY_MIGRATION_REPORT.md
     └── SYSTEM_STATUS.md
-```
+\`\`\`
 
 ---
 
@@ -76,3 +79,8 @@ agri-nile-flow/
 | docs/STRATEGIC_ANALYSIS.md | ✅ مرجعي | 20 أبريل 2026 |
 | docs/SYSTEM_ARCHITECTURE.md | ✅ مرجعي | 20 أبريل 2026 |
 | archive/* | 📦 مؤرشف | تاريخي |
+`;
+
+fs.writeFileSync(path.join(__dirname, '..', 'DOCUMENTATION_INDEX.md'), content, 'utf8');
+console.log('Written DOCUMENTATION_INDEX.md successfully');
+console.log('Lines:', content.split('\n').length);

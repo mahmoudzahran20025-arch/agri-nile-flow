@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] — April 21, 2026 (Master Data & Org Chart)
+
+### Features Added ✅
+- **HR — Org Chart Page** (`/hr/org`): شجرة تنظيمية تفاعلية — Branch → Department → Employees
+- **Backend** `GET /hr/job-details`: endpoint جديد يعيد كل بيانات الوظائف دفعة واحدة للـ org chart
+
+### Data ✅
+- **cost_centers**: 15 سجل — 10 بيفوتات (718/719/720/722/723 بوستر129، 1044/1047/1048/1049/1050 بوستر128) + إدارية + مالية
+- **expense_types**: 92 كود مصروف مستخرج مباشرة من إكسيل الخزينة
+- **sub_locations**: 2 موقع (جهاز مستقبل مصر + طايل مشحوت عرفة)
+- **items**: 62 صنف بأسماء حقيقية من إكسيل المخازن (تصحيح كامل للأسماء)
+- **fields**: 10 حقول / بيفوتات مع crop_type + irrigation_type + landlord_name
+- **suppliers**: تحديث حقل activity لكل المورديّن العشرة
+
+### Bug Fixes ✅
+- **ChartOfAccountsPage**: إزالة كود يتيم (orphan array items) كان يسبب 11 خطأ TypeScript
+
+### Infrastructure ✅
+- **R2 Bucket**: تعليق الـ R2 binding في wrangler.toml (مؤجل) لحل خطأ deployment 10042
+- **Documentation**: إعادة تنظيم كاملة — `archive/` للقديم، `docs/` للمرجعي، `PROJECT_STATUS.md` الجديد
+
+### Files Reorganized
+```
+archive/   ← SESSION_SUMMARY, WORK_COMPLETION_SUMMARY, DIAGNOSTIC_REPORT,
+             BEFORE_AFTER_COMPARISON, DATA_MIGRATION_ANALYSIS, وأخرى
+docs/      ← STRATEGIC_ANALYSIS, SYSTEM_ARCHITECTURE, ADVANCED_DATA_ENTRY_DESIGN,
+             FEATURE_GAP_ANALYSIS (كان excutive_paln.md), وأخرى
+root/      ← README, CHANGELOG, ROADMAP, DEPLOYMENT_STATUS,
+             PROJECT_STATUS (جديد), DEVELOPMENT_PLAN, SECURITY
+```
+
+---
+
 ## [1.0.0] — April 20, 2026 (Production Release)
 
 ### Infrastructure ✅

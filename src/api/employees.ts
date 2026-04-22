@@ -8,11 +8,29 @@ employees.use('*', authMiddleware)
 // GET /api/employees
 employees.get('/', async (c) => {
   const { company_id } = getUser(c)
-  const q = c.req.query('q')
-  let sql = 'SELECT * FROM employees WHERE company_id = ?'
+  const q           = c.req.query('q')
+  const branch_id   = c.req.query('branch_id')
+  const department  = c.req.query('department')
+  const is_active   = c.req.query('is_active')
+
+  let sql = `
+    SELECT e.*, jd.branch_id, jd.department, jd.contract_type, jd.position_level,
+           b.name AS branch_name
+    FROM employees e
+    LEFT JOIN employee_job_details jd ON jd.employee_id = e.id
+    LEFT JOIN hr_branches b ON b.id = jd.branch_id
+    WHERE e.company_id = ?`
   const params: unknown[] = [company_id]
-  if (q) { sql += ' AND (name LIKE ? OR role_title LIKE ?)'; params.push(`%${q}%`, `%${q}%`) }
-  sql += ' ORDER BY name'
+
+  if (q) {
+    sql += ' AND (e.name LIKE ? OR e.role_title LIKE ? OR e.national_id LIKE ?)'
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`)
+  }
+  if (branch_id) { sql += ' AND jd.branch_id = ?'; params.push(Number(branch_id)) }
+  if (department) { sql += ' AND jd.department = ?'; params.push(department) }
+  if (is_active !== undefined) { sql += ' AND e.is_active = ?'; params.push(Number(is_active)) }
+
+  sql += ' ORDER BY e.name'
   const { results } = await c.env.DB.prepare(sql).bind(...params).all()
   return c.json({ success: true, data: results })
 })
