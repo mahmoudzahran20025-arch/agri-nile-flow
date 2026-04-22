@@ -18,7 +18,7 @@ employees.get('/', async (c) => {
            b.name AS branch_name
     FROM employees e
     LEFT JOIN employee_job_details jd ON jd.employee_id = e.id
-    LEFT JOIN hr_branches b ON b.id = jd.branch_id
+    LEFT JOIN branches b ON b.id = jd.branch_id AND b.company_id = e.company_id
     WHERE e.company_id = ?`
   const params: unknown[] = [company_id]
 
