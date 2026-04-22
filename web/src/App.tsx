@@ -13,22 +13,25 @@ import CashJournalPage       from './pages/treasury/CashJournalPage'
 import WarehouseBalancesPage from './pages/inventory/WarehouseBalancesPage'
 import InventoryMovementsPage from './pages/inventory/InventoryMovementsPage'
 import ItemCardPage from './pages/inventory/ItemCardPage'
+import CostByFieldPage from './pages/inventory/CostByFieldPage'
 import UsersPage       from './pages/users/UsersPage'
 import PartnersPage    from './pages/treasury/PartnersPage'
 import ReportsPage     from './pages/ReportsPage'
 import ChartsPage      from './pages/reports/ChartsPage'
 import ConfigPage      from './pages/config/ConfigPage'
 import FieldsPage      from './pages/fields/FieldsPage'
-import EmployeesPage   from './pages/employees/EmployeesPage'
 import WorkOrdersPage  from './pages/operations/WorkOrdersPage'
+import WorkOrderTemplatesPage from './pages/operations/WorkOrderTemplatesPage'
 import ContractsPage   from './pages/contracts/ContractsPage'
 import ChartOfAccountsPage   from './pages/gl/ChartOfAccountsPage'
+import GLMappingsPage        from './pages/gl/GLMappingsPage'
 import JournalEntriesPage    from './pages/gl/JournalEntriesPage'
 import FinancialStatementsPage from './pages/gl/FinancialStatementsPage'
 import AccountLedgerPage     from './pages/gl/AccountLedgerPage'
 import PeriodsPage           from './pages/gl/PeriodsPage'
 import BankReconciliationPage from './pages/treasury/BankReconciliationPage'
 import PurchaseOrdersPage    from './pages/treasury/PurchaseOrdersPage'
+import APAgingPage           from './pages/treasury/APAgingPage'
 import SuperAdminPage        from './pages/admin/SuperAdminPage'
 import AuditLogPage          from './pages/audit/AuditLogPage'
 import EmployeeListPage      from './pages/hr/EmployeeListPage'
@@ -45,6 +48,8 @@ import CalendarPage          from './pages/calendar/CalendarPage'
 import CostCenterReportPage  from './pages/reports/CostCenterReportPage'
 import SuppliersBalancePage  from './pages/reports/SuppliersBalancePage'
 import SeasonSummaryPage     from './pages/reports/SeasonSummaryPage'
+import SeasonPnLPage        from './pages/reports/SeasonPnLPage'
+import SeasonClosePage      from './pages/reports/SeasonClosePage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuth = useIsAuth()
@@ -94,6 +99,7 @@ export default function App() {
         <Route path="inventory"                element={<WarehouseBalancesPage />} />
         <Route path="inventory/movements"      element={<InventoryMovementsPage />} />
         <Route path="inventory/item/:code"     element={<ItemCardPage />} />
+        <Route path="inventory/cost-by-field"  element={<CostByFieldPage />} />
 
         {/* HR Module */}
         <Route path="hr/dashboard"            element={<HrDashboardPage />} />
@@ -114,8 +120,8 @@ export default function App() {
         {/* Agricultural ERP */}
         <Route path="fields"          element={<FieldsPage />} />
         <Route path="fields/harvest"  element={<HarvestPage />} />
-        <Route path="employees"       element={<EmployeesPage />} />
         <Route path="operations" element={<WorkOrdersPage />} />
+        <Route path="operations/templates" element={<WorkOrderTemplatesPage />} />
         <Route path="contracts"  element={<ContractsPage />} />
 
         {/* General Ledger */}
@@ -124,6 +130,8 @@ export default function App() {
         <Route path="gl/entries"         element={<JournalEntriesPage />} />
         <Route path="gl/statements"      element={<FinancialStatementsPage />} />
         <Route path="gl/periods"         element={<PeriodsPage />} />
+        <Route path="gl/mappings"        element={<GLMappingsPage />} />
+        <Route path="treasury/ap"        element={<APAgingPage />} />
 
         {/* Finance */}
         <Route path="treasury/bank"      element={<BankReconciliationPage />} />
@@ -135,6 +143,8 @@ export default function App() {
         <Route path="reports/cost-centers" element={<CostCenterReportPage />} />
         <Route path="reports/suppliers-balance" element={<SuppliersBalancePage />} />
         <Route path="reports/season-summary" element={<SeasonSummaryPage />} />
+        <Route path="reports/season-pnl"     element={<SeasonPnLPage />} />
+        <Route path="reports/season-close"   element={<SeasonClosePage />} />
 
         {/* Super Admin */}
         <Route path="admin" element={<SuperAdminPage />} />
