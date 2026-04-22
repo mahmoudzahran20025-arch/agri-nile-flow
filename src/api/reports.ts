@@ -452,4 +452,162 @@ reports.get('/season-summary', async (c) => {
   })
 })
 
+// ─────────────────────────────────────────────────────────────────
+// GET /api/reports/season-pnl?season_id=1
+//
+// Full P&L: Revenue (sales contracts) vs Costs (inventory + labor + cash + supplier)
+// Returns totals + per-field breakdown
+// ─────────────────────────────────────────────────────────────────
+reports.get('/season-pnl', async (c) => {
+  const { company_id } = getUser(c)
+  const seasonId = c.req.query('season_id') ? Number(c.req.query('season_id')) : null
+
+  if (!seasonId) {
+    return c.json({ success: false, error: 'season_id مطلوب' }, 400)
+  }
+
+  const [
+    season,
+    revenueRow,
+    invCostRow,
+    laborCostRow,
+    cashCostRow,
+    supCostRow,
+    areaRow,
+    byField,
+  ] = await Promise.all([
+
+    // Season info
+    c.env.DB.prepare(
+      'SELECT id, name, season_type, start_date, end_date, status FROM seasons WHERE id = ? AND company_id = ?'
+    ).bind(seasonId, company_id).first<{
+      id: number; name: string; season_type: string
+      start_date: string; end_date: string; status: string
+    }>(),
+
+    // Revenue — sales contracts (quantity_ton * unit_price)
+    c.env.DB.prepare(`
+      SELECT
+        COUNT(*)                              AS contracts_count,
+        COALESCE(SUM(quantity_ton * unit_price), 0) AS contracts_value,
+        COALESCE(SUM(advance_paid), 0)        AS advance_collected
+      FROM sales_contracts
+      WHERE company_id = ? AND season_id = ?
+    `).bind(company_id, seasonId).first<{
+      contracts_count: number; contracts_value: number; advance_collected: number
+    }>(),
+
+    // Cost 1: Inventory consumed (صرف) linked to season
+    c.env.DB.prepare(`
+      SELECT COALESCE(SUM(value_out), 0) AS total
+      FROM inventory_movements
+      WHERE company_id = ? AND season_id = ? AND movement_type = 'صرف'
+    `).bind(company_id, seasonId).first<{ total: number }>(),
+
+    // Cost 2: Labor — work tasks linked to work orders in this season
+    c.env.DB.prepare(`
+      SELECT COALESCE(SUM(wt.total_cost), 0) AS total
+      FROM work_tasks wt
+      JOIN work_orders wo ON wo.id = wt.work_order_id AND wo.company_id = wt.company_id
+      WHERE wo.company_id = ? AND wo.season_id = ?
+    `).bind(company_id, seasonId).first<{ total: number }>(),
+
+    // Cost 3: Cash out (direct expenses)
+    c.env.DB.prepare(`
+      SELECT COALESCE(SUM(amount), 0) AS total
+      FROM cash_transactions
+      WHERE company_id = ? AND season_id = ? AND direction = 'OUT'
+    `).bind(company_id, seasonId).first<{ total: number }>(),
+
+    // Cost 4: Supplier credit (purchases on credit)
+    c.env.DB.prepare(`
+      SELECT COALESCE(SUM(credit), 0) AS total
+      FROM supplier_transactions
+      WHERE company_id = ? AND season_id = ?
+    `).bind(company_id, seasonId).first<{ total: number }>(),
+
+    // Total area for season
+    c.env.DB.prepare(`
+      SELECT COALESCE(SUM(area_feddan), 0) AS total
+      FROM fields WHERE company_id = ? AND season_id = ?
+    `).bind(company_id, seasonId).first<{ total: number }>(),
+
+    // Per-field P&L breakdown
+    c.env.DB.prepare(`
+      SELECT
+        f.id, f.code, f.name AS field_name, f.area_feddan, f.crop_type,
+        COALESCE(SUM(sc.quantity_ton * sc.unit_price), 0) AS field_revenue,
+        COALESCE(inv.inv_cost, 0)                        AS inv_cost,
+        COALESCE(lab.labor_cost, 0)                      AS labor_cost,
+        COALESCE(inv.inv_cost, 0) + COALESCE(lab.labor_cost, 0) AS field_cost,
+        COALESCE(SUM(sc.quantity_ton * sc.unit_price), 0)
+          - COALESCE(inv.inv_cost, 0)
+          - COALESCE(lab.labor_cost, 0)                  AS field_margin,
+        CASE WHEN f.area_feddan > 0
+          THEN (COALESCE(SUM(sc.quantity_ton * sc.unit_price), 0)
+                - COALESCE(inv.inv_cost, 0)
+                - COALESCE(lab.labor_cost, 0)) / f.area_feddan
+          ELSE NULL END                                  AS margin_per_feddan
+      FROM fields f
+      LEFT JOIN sales_contracts sc
+             ON sc.field_id = f.id AND sc.company_id = f.company_id AND sc.season_id = ?
+      LEFT JOIN (
+        SELECT field_id, SUM(value_out) AS inv_cost
+        FROM inventory_movements
+        WHERE company_id = ? AND season_id = ? AND movement_type = 'صرف'
+          AND field_id IS NOT NULL
+        GROUP BY field_id
+      ) inv ON inv.field_id = f.id
+      LEFT JOIN (
+        SELECT wo.field_id, SUM(wt.total_cost) AS labor_cost
+        FROM work_tasks wt
+        JOIN work_orders wo ON wo.id = wt.work_order_id AND wo.company_id = wt.company_id
+        WHERE wo.company_id = ? AND wo.season_id = ? AND wo.field_id IS NOT NULL
+        GROUP BY wo.field_id
+      ) lab ON lab.field_id = f.id
+      WHERE f.company_id = ? AND f.season_id = ?
+      GROUP BY f.id
+      ORDER BY field_margin DESC
+    `).bind(seasonId, company_id, seasonId, company_id, seasonId, company_id, seasonId).all<{
+      id: number; code: string; field_name: string; area_feddan: number; crop_type: string | null
+      field_revenue: number; inv_cost: number; labor_cost: number
+      field_cost: number; field_margin: number; margin_per_feddan: number | null
+    }>(),
+  ])
+
+  const revenue     = revenueRow?.contracts_value ?? 0
+  const invCost     = invCostRow?.total ?? 0
+  const laborCost   = laborCostRow?.total ?? 0
+  const cashCost    = cashCostRow?.total ?? 0
+  const supCost     = supCostRow?.total ?? 0
+  const totalCosts  = invCost + laborCost + cashCost + supCost
+  const netMargin   = revenue - totalCosts
+  const totalArea   = areaRow?.total ?? 0
+  const marginPF    = totalArea > 0 ? netMargin / totalArea : null
+
+  return c.json({
+    success: true,
+    data: {
+      season,
+      revenue: {
+        contracts_value:    revenue,
+        advance_collected:  revenueRow?.advance_collected ?? 0,
+        contracts_count:    revenueRow?.contracts_count   ?? 0,
+      },
+      costs: {
+        inventory:        invCost,
+        labor:            laborCost,
+        cash_out:         cashCost,
+        supplier_credit:  supCost,
+        total:            totalCosts,
+      },
+      net_margin:          netMargin,
+      total_area:          totalArea,
+      margin_per_feddan:   marginPF,
+      margin_pct:          revenue > 0 ? Math.round((netMargin / revenue) * 1000) / 10 : null,
+      by_field:            byField.results,
+    },
+  })
+})
+
 export default reports
