@@ -102,7 +102,7 @@ export const authApi = {
     unwrap(api.get<{ id: number; code: string; name: string }[]>(`/auth/companies?email=${encodeURIComponent(email)}`)),
 
   login: (email: string, password: string, company_id: number) =>
-    api.post<{ token: string; user: { id: number; full_name: string; email: string; company_id: number; role: string } }>('/auth/login', { email, password, company_id }),
+    api.post<{ token: string; user: { id: number; full_name: string; email: string; company_id: number; role: string }; permissions: string[] }>('/auth/login', { email, password, company_id }),
 
   me: () =>
     unwrap(api.get<{ user: { id: number; email: string; full_name: string }; company: { id: number; code: string; name: string }; role: string }>('/auth/me')),
@@ -130,15 +130,17 @@ export const suppliersApi = {
   statement:  (code: number, p: { page?: number; size?: number; season_id?: number; month?: number }) =>
     unwrap(api.get<Paginated<unknown>>(paginatedUrl(`/suppliers/${code}/statement`, p))),
   addTransaction: (code: number, body: unknown) => api.post(`/suppliers/${code}/transactions`, body),
+  postTransaction:(code: number, id: number) => unwrap(api.patch<null>(`/suppliers/${code}/transactions/${id}/post`, {})),
   aging:      (asOf?: string) => unwrap(api.get(`/suppliers/aging${asOf ? `?as_of=${asOf}` : ''}`)),
 }
 
 // ─── Treasury ─────────────────────────────────────────────────
 export const treasuryApi = {
   balance:        () => unwrap(api.get<{ balance: number }>('/treasury/balance')),
-  list:           (p: { page?: number; size?: number; direction?: string; month?: number; year?: number }) =>
+  list:           (p: { page?: number; size?: number; direction?: string; month?: number; year?: number; status?: string }) =>
     unwrap(api.get<Paginated<unknown>>(paginatedUrl('/treasury/transactions', p))),
   create:         (body: unknown) => api.post('/treasury/transactions', body),
+  post:           (id: number) => unwrap(api.patch<{ success: boolean; balance: number }>(`/treasury/transactions/${id}/post`, {})),
   payments:       (supplierCode?: number) =>
     unwrap(api.get(`/treasury/supplier-payments${supplierCode ? `?supplier_code=${supplierCode}` : ''}`)),
   partners:       () => unwrap(api.get('/treasury/partners')),
@@ -170,6 +172,8 @@ export const inventoryApi = {
     field_id?:        number
     work_order_id?:   number
     notes?:           string
+    payment_method?:  'cash' | 'credit'
+    center_code?:     number
     items: Array<{ item_code: number; quantity: number; unit_price?: number; notes?: string }>
   }) => api.post('/inventory/movements/batch', body),
   costByField: (season_id?: number) =>
@@ -396,8 +400,10 @@ export const glApi = {
 // ─── Audit Log ────────────────────────────────────────────────
 export const auditApi = {
   list: (p: { page?: number; size?: number; table?: string; action?: string; user_id?: number; start?: string; end?: string }) =>
-    unwrap(api.get<unknown>(paginatedUrl('/audit', p))),
-  stats: () => unwrap(api.get<unknown>('/audit/stats')),
+    unwrap(api.get<Paginated<any>>(paginatedUrl('/audit', p))),
+  errors: (p: { page?: number; size?: number; company_id?: string }) =>
+    unwrap(api.get<Paginated<any>>(paginatedUrl('/audit/errors', p))),
+  stats: () => unwrap(api.get<any>('/audit/stats')),
 }
 
 // ─── Admin (super_admin only) ─────────────────────────────────
@@ -405,8 +411,14 @@ export const adminApi = {
   companies:     () => unwrap(api.get<unknown[]>('/admin/companies')),
   createCompany: (body: unknown) => api.post('/admin/companies', body),
   updateCompany: (id: number, body: unknown) => api.patch(`/admin/companies/${id}`, body),
-  switchCompany: (companyId: number) =>
-    api.post<{ token: string; user: { id: number; full_name: string; email: string; company_id: number; role: string }; company: { id: number; code: string; name: string } }>('/admin/switch/' + companyId, {}),
+  switchCompany: async (companyId: number, setAuth: (token: string, user: any, company: any, role: string, permissions: string[]) => void) => {
+    const res = await api.post<any>(`/admin/switch/${companyId}`, {})
+    if (res.success) {
+      const d = res.data
+      setAuth(d.token, d.user, d.company, d.user.role, d.permissions ?? [])
+    }
+    return res
+  },
   companyUsers:  (id: number) => unwrap(api.get<unknown[]>(`/admin/companies/${id}/users`)),
   overview:      () => unwrap(api.get<CompanyOverview[]>('/admin/overview')),
 }

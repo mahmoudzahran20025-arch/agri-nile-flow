@@ -86,3 +86,36 @@ export function requireCompany(c: Context, requestedCompanyId?: number): number 
   }
   return user.company_id
 }
+
+/**
+ * RBAC Permission Guard
+ * Checks if the user's role has the required permission in the database.
+ */
+export async function hasPermission(c: Context<{ Bindings: Env }>, module: string, action: string): Promise<boolean> {
+  const user = getUser(c)
+  if (!user) return false
+  if (user.role === 'super_admin') return true
+
+  const db = c.env.DB
+  const permission = await db.prepare(`
+    SELECT 1 FROM role_permissions rp
+    JOIN roles r ON r.name = ?
+    JOIN permissions p ON p.module = ? AND p.action = ?
+    WHERE rp.role_id = r.id AND rp.permission_id = p.id
+  `).bind(user.role, module, action).first()
+
+  return !!permission
+}
+
+/**
+ * Middleware factory for permissions
+ */
+export function permissionGuard(module: string, action: string) {
+  return async (c: Context<{ Bindings: Env }>, next: Next) => {
+    const allowed = await hasPermission(c, module, action)
+    if (!allowed) {
+      return c.json({ success: false, error: `ليس لديك صلاحية لإجراء هذا العمل (${module}.${action})` }, 403)
+    }
+    await next()
+  }
+}

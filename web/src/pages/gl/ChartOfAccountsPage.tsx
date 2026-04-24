@@ -1,7 +1,7 @@
   import { useState, useMemo } from 'react'
   import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
   import { useNavigate } from 'react-router-dom'
-  import { BookOpen, Plus, Settings, Eye, List, GitBranch, ChevronRight, ChevronDown } from 'lucide-react'
+  import { BookOpen, Plus, Settings, Eye, List, GitBranch, ChevronRight, ChevronDown, Shield, Info } from 'lucide-react'
   import { glApi } from '../../api/client'
   import { useToast } from '../../contexts/ToastContext'
   import Modal from '../../components/ui/Modal'
@@ -127,7 +127,7 @@
   }
 
   export default function ChartOfAccountsPage() {
-    const { canWrite } = usePermission()
+    const { canRead, canWrite } = usePermission()
     const navigate = useNavigate()
     const qc = useQueryClient()
     const { toast } = useToast()
@@ -139,6 +139,16 @@
     const [form, setForm] = useState({
       code: '', name: '', account_type: 'expense', parent_code: '', notes: '',
     })
+
+    if (!canRead('gl')) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full p-20 text-center">
+          <Shield size={48} className="text-slate-300 mb-4" />
+          <h2 className="text-xl font-bold text-slate-800">غير مصرح لك بالوصول</h2>
+          <p className="text-slate-500">تحتاج لصلاحية 'gl.read' لعرض شجرة الحسابات.</p>
+        </div>
+      )
+    }
 
     const { data: accounts = [], isLoading } = useQuery({
       queryKey: ['gl-accounts'],
@@ -332,39 +342,52 @@
 
         {/* Add Account Modal */}
         <Modal open={openAdd} onClose={() => setOpenAdd(false)} title="إضافة حساب جديد" size="md">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="label">كود الحساب *</label>
-              <input className="input font-mono" value={form.code} onChange={e => setForm(p => ({ ...p, code: e.target.value }))} placeholder="5430" />
+          <div className="space-y-4">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700">
+              <Info size={14} className="inline ml-1" />
+              تأكد من اتباع هيكلية الأرقام (مثلاً: 1 للأصول، 2 للخصوم). الحساب الأب يجب أن يكون موجوداً ومعرفاً كـ "مجموعة".
             </div>
-            <div>
-              <label className="label">نوع الحساب *</label>
-              <select className="input" value={form.account_type} onChange={e => setForm(p => ({ ...p, account_type: e.target.value }))}>
-                <option value="asset">أصول</option>
-                <option value="liability">خصوم</option>
-                <option value="equity">حقوق ملكية</option>
-                <option value="revenue">إيرادات</option>
-                <option value="expense">مصروفات</option>
-              </select>
-            </div>
-            <div className="col-span-2">
-              <label className="label">اسم الحساب *</label>
-              <input className="input" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} placeholder="مصروفات وقود" />
-            </div>
-            <div>
-              <label className="label">الحساب الأب (كود)</label>
-              <input className="input font-mono" value={form.parent_code} onChange={e => setForm(p => ({ ...p, parent_code: e.target.value }))} placeholder="5400" />
-            </div>
-            <div>
-              <label className="label">ملاحظات</label>
-              <input className="input" value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} />
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">كود الحساب *</label>
+                <input className="input font-mono" value={form.code} onChange={e => setForm(p => ({ ...p, code: e.target.value }))} placeholder="5430" />
+              </div>
+              <div>
+                <label className="label">نوع الحساب *</label>
+                <select className="input" value={form.account_type} onChange={e => setForm(p => ({ ...p, account_type: e.target.value }))}>
+                  <option value="asset">أصول</option>
+                  <option value="liability">خصوم</option>
+                  <option value="equity">حقوق ملكية</option>
+                  <option value="revenue">إيرادات</option>
+                  <option value="expense">مصروفات</option>
+                </select>
+              </div>
+              <div className="col-span-2">
+                <label className="label">اسم الحساب *</label>
+                <input className="input" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} placeholder="مصروفات وقود" />
+              </div>
+              <div>
+                <label className="label">الحساب الأب (كود)</label>
+                <input className="input font-mono" value={form.parent_code} onChange={e => setForm(p => ({ ...p, parent_code: e.target.value }))} placeholder="5400" />
+                <p className="text-[10px] text-slate-400 mt-1">اتركه فارغاً للحسابات الرئيسية.</p>
+              </div>
+              <div>
+                <label className="label">ملاحظات</label>
+                <input className="input" value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} />
+              </div>
             </div>
           </div>
           <div className="flex justify-end gap-3 mt-6">
             <button className="btn btn-ghost" onClick={() => setOpenAdd(false)}>إلغاء</button>
             <button
               className="btn btn-primary"
-              onClick={() => createAcc.mutate()}
+              onClick={() => {
+                if (form.parent_code && !list.find(a => a.code === form.parent_code)) {
+                  toast('كود الأب غير موجود في الشجرة', 'error')
+                  return
+                }
+                createAcc.mutate()
+              }}
               disabled={createAcc.isPending || !form.code || !form.name}
             >
               {createAcc.isPending ? 'جاري الحفظ...' : 'حفظ'}

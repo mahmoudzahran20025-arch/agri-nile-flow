@@ -5,7 +5,7 @@ export async function logAudit(
   opts: {
     user_id:    number
     company_id: number
-    action:     'CREATE' | 'UPDATE' | 'DELETE' | 'CLOSE' | 'REOPEN' | 'LOGIN' | 'SWITCH'
+    action:     'CREATE' | 'UPDATE' | 'DELETE' | 'CLOSE' | 'REOPEN' | 'LOGIN' | 'SWITCH' | 'RECEIVE_PO' | 'UPSERT' | 'APPROVE' | 'CANCEL' | 'BULK_ATTENDANCE'
     table_name: string
     record_id?: number | null
     old_value?: unknown

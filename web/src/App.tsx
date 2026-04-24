@@ -34,6 +34,7 @@ import PurchaseOrdersPage    from './pages/treasury/PurchaseOrdersPage'
 import APAgingPage           from './pages/treasury/APAgingPage'
 import SuperAdminPage        from './pages/admin/SuperAdminPage'
 import AuditLogPage          from './pages/audit/AuditLogPage'
+import ErrorLogPage          from './pages/audit/ErrorLogPage'
 import EmployeeListPage      from './pages/hr/EmployeeListPage'
 import EmployeeProfilePage   from './pages/hr/EmployeeProfilePage'
 import AttendancePage        from './pages/hr/AttendancePage'
@@ -149,8 +150,9 @@ export default function App() {
         {/* Super Admin */}
         <Route path="admin" element={<SuperAdminPage />} />
 
-        {/* Audit Log */}
+        {/* Audit Log & Health */}
         <Route path="audit" element={<AuditLogPage />} />
+        <Route path="audit/errors" element={<ErrorLogPage />} />
 
         {/* Users */}
         <Route path="users" element={<UsersPage />} />

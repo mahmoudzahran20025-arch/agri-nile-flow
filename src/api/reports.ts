@@ -35,7 +35,8 @@ reports.get('/cost-centers', async (c) => {
     FROM cash_transactions ct
     LEFT JOIN cost_centers cc ON cc.code = ct.center_code AND cc.company_id = ct.company_id
     WHERE ct.company_id = ?
-      AND ct.direction = 'OUT'
+      AND ct.direction = 'م'
+      AND ct.status = 'posted'
       AND ct.center_code IS NOT NULL
       ${seasonWhere}
     GROUP BY ct.center_code
@@ -54,6 +55,7 @@ reports.get('/cost-centers', async (c) => {
     FROM supplier_transactions st
     LEFT JOIN cost_centers cc ON cc.code = st.center_code AND cc.company_id = st.company_id
     WHERE st.company_id = ?
+      AND st.status = 'posted'
       AND st.center_code IS NOT NULL
       ${seasonWhere}
     GROUP BY st.center_code
@@ -180,7 +182,7 @@ reports.get('/cost-centers/:code/detail', async (c) => {
         COUNT(ct.id)                       AS cnt
       FROM cash_transactions ct
       LEFT JOIN expense_types et ON et.code = ct.expense_code AND et.company_id = ct.company_id
-      WHERE ct.company_id = ? AND ct.center_code = ? AND ct.direction = 'OUT'
+      WHERE ct.company_id = ? AND ct.center_code = ? AND ct.direction = 'م' AND ct.status = 'posted'
         ${seasonWhere}
       GROUP BY expense_code
       ORDER BY total DESC
@@ -195,7 +197,7 @@ reports.get('/cost-centers/:code/detail', async (c) => {
         COUNT(st.id)    AS cnt
       FROM supplier_transactions st
       LEFT JOIN suppliers s ON s.code = st.supplier_code AND s.company_id = st.company_id
-      WHERE st.company_id = ? AND st.center_code = ?
+      WHERE st.company_id = ? AND st.center_code = ? AND st.status = 'posted'
         ${seasonWhere}
       GROUP BY st.supplier_code
       ORDER BY total DESC
@@ -205,7 +207,7 @@ reports.get('/cost-centers/:code/detail', async (c) => {
     c.env.DB.prepare(`
       SELECT year, month, SUM(amount) AS total
       FROM cash_transactions
-      WHERE company_id = ? AND center_code = ? AND direction = 'OUT'
+      WHERE company_id = ? AND center_code = ? AND direction = 'م' AND status = 'posted'
         ${seasonWhere}
       GROUP BY year, month
       ORDER BY year, month
@@ -238,6 +240,7 @@ reports.get('/supplier-payments', async (c) => {
 
   if (supplierCode) { where += ' AND st.supplier_code = ?'; binds.push(supplierCode) }
   if (seasonId)     { where += ' AND st.season_id = ?';    binds.push(seasonId) }
+  where += " AND st.status = 'posted'"
 
   const [statements, summary] = await Promise.all([
     c.env.DB.prepare(`
@@ -287,8 +290,9 @@ reports.get('/suppliers-balance', async (c) => {
   const { company_id } = getUser(c)
   const seasonId = c.req.query('season_id') ? Number(c.req.query('season_id')) : null
 
-  const seasonWhere = seasonId ? 'AND st.season_id = ?' : ''
-  const binds: unknown[] = seasonId ? [company_id, seasonId] : [company_id]
+  const seasonWhere  = seasonId ? 'AND st.season_id = ?' : ''
+  // SQL param order: seasonId (in JOIN ON clause) then company_id (in WHERE)
+  const queryBinds: unknown[] = seasonId ? [seasonId, company_id] : [company_id]
 
   const { results } = await c.env.DB.prepare(`
     SELECT
@@ -302,12 +306,12 @@ reports.get('/suppliers-balance', async (c) => {
       COUNT(st.id)                             AS tx_count
     FROM suppliers s
     LEFT JOIN supplier_transactions st
-      ON st.supplier_code = s.code AND st.company_id = s.company_id
+      ON st.supplier_code = s.code AND st.company_id = s.company_id AND st.status = 'posted'
       ${seasonWhere}
     WHERE s.company_id = ?
     GROUP BY s.code
     ORDER BY ABS(balance) DESC
-  `).bind(...(seasonId ? [seasonId, company_id] : [company_id])).all()
+  `).bind(...queryBinds).all()
 
   return c.json({ success: true, data: results })
 })
@@ -358,13 +362,13 @@ reports.get('/season-summary', async (c) => {
       LEFT JOIN (
         SELECT center_code, SUM(amount) AS cash_total
         FROM cash_transactions
-        WHERE company_id = ? AND direction = 'OUT' AND center_code IS NOT NULL ${seasonWhere}
+        WHERE company_id = ? AND direction = 'م' AND status = 'posted' AND center_code IS NOT NULL ${seasonWhere}
         GROUP BY center_code
       ) cash ON cash.center_code = cc.code
       LEFT JOIN (
         SELECT center_code, SUM(credit) AS sup_total
         FROM supplier_transactions
-        WHERE company_id = ? AND center_code IS NOT NULL ${seasonWhere}
+        WHERE company_id = ? AND status = 'posted' AND center_code IS NOT NULL ${seasonWhere}
         GROUP BY center_code
       ) sup ON sup.center_code = cc.code
       LEFT JOIN (
@@ -390,7 +394,7 @@ reports.get('/season-summary', async (c) => {
         COUNT(ct.id)                         AS cnt
       FROM cash_transactions ct
       LEFT JOIN expense_types et ON et.code = ct.expense_code AND et.company_id = ct.company_id
-      WHERE ct.company_id = ? AND ct.direction = 'OUT' ${seasonWhere}
+      WHERE ct.company_id = ? AND ct.direction = 'م' AND ct.status = 'posted' ${seasonWhere}
       GROUP BY ct.expense_code
       ORDER BY total DESC
     `).bind(...cashBinds).all<{
@@ -409,7 +413,7 @@ reports.get('/season-summary', async (c) => {
         COUNT(st.id)                           AS tx_count
       FROM suppliers s
       LEFT JOIN supplier_transactions st
-        ON st.supplier_code = s.code AND st.company_id = s.company_id
+        ON st.supplier_code = s.code AND st.company_id = s.company_id AND st.status = 'posted'
         ${seasonWhere ? 'AND ' + seasonWhere.slice(4) : ''}
       WHERE s.company_id = ?
       GROUP BY s.code
@@ -441,13 +445,13 @@ reports.get('/season-summary', async (c) => {
     // Cash total
     c.env.DB.prepare(`
       SELECT COALESCE(SUM(amount), 0) AS total
-      FROM cash_transactions WHERE company_id = ? AND direction = 'OUT' ${seasonWhere}
+      FROM cash_transactions WHERE company_id = ? AND direction = 'م' AND status = 'posted' ${seasonWhere}
     `).bind(...cashBinds).first<{ total: number }>(),
 
     // Supplier total credit
     c.env.DB.prepare(`
       SELECT COALESCE(SUM(credit), 0) AS credit, COALESCE(SUM(debit), 0) AS debit
-      FROM supplier_transactions WHERE company_id = ? ${seasonWhere}
+      FROM supplier_transactions WHERE company_id = ? AND status = 'posted' ${seasonWhere}
     `).bind(...supBinds).first<{ credit: number; debit: number }>(),
 
     // Inventory consumed value
@@ -463,10 +467,10 @@ reports.get('/season-summary', async (c) => {
         SUM(CASE WHEN src='sup'  THEN amount ELSE 0 END) AS supplier_credit
       FROM (
         SELECT year, month, amount, 'cash' AS src
-        FROM cash_transactions WHERE company_id = ? AND direction = 'OUT' ${seasonWhere}
+        FROM cash_transactions WHERE company_id = ? AND direction = 'م' AND status = 'posted' ${seasonWhere}
         UNION ALL
         SELECT year, month, credit AS amount, 'sup' AS src
-        FROM supplier_transactions WHERE company_id = ? ${seasonWhere}
+        FROM supplier_transactions WHERE company_id = ? AND status = 'posted' ${seasonWhere}
       )
       GROUP BY year, month
       ORDER BY year, month
@@ -522,6 +526,7 @@ reports.get('/season-pnl', async (c) => {
     laborCostRow,
     cashCostRow,
     supCostRow,
+    rentCostRow,
     areaRow,
     byField,
   ] = await Promise.all([
@@ -535,6 +540,7 @@ reports.get('/season-pnl', async (c) => {
     }>(),
 
     // Revenue — sales contracts (quantity_ton * unit_price)
+    // Excludes cancelled/draft contracts — only active, partial, and completed count as revenue
     c.env.DB.prepare(`
       SELECT
         COUNT(*)                              AS contracts_count,
@@ -542,6 +548,7 @@ reports.get('/season-pnl', async (c) => {
         COALESCE(SUM(advance_paid), 0)        AS advance_collected
       FROM sales_contracts
       WHERE company_id = ? AND season_id = ?
+        AND status NOT IN ('cancelled', 'draft')
     `).bind(company_id, seasonId).first<{
       contracts_count: number; contracts_value: number; advance_collected: number
     }>(),
@@ -561,18 +568,28 @@ reports.get('/season-pnl', async (c) => {
       WHERE wo.company_id = ? AND wo.season_id = ?
     `).bind(company_id, seasonId).first<{ total: number }>(),
 
-    // Cost 3: Cash out (direct expenses)
+    // Cost 3: Cash out (direct expenses) - EXCLUDING inventory purchases to avoid double counting
     c.env.DB.prepare(`
-      SELECT COALESCE(SUM(amount), 0) AS total
-      FROM cash_transactions
-      WHERE company_id = ? AND season_id = ? AND direction = 'OUT'
+      SELECT COALESCE(SUM(ct.amount), 0) AS total
+      FROM cash_transactions ct
+      LEFT JOIN gl_account_mappings gm ON gm.mapping_key = 'inventory' AND gm.company_id = ct.company_id
+      WHERE ct.company_id = ? AND ct.season_id = ? AND ct.direction = 'م' AND ct.status = 'posted'
+        AND (ct.supplier_code IS NULL) -- If it has a supplier, it's likely a credit/PO payment already in sub-ledger
     `).bind(company_id, seasonId).first<{ total: number }>(),
 
-    // Cost 4: Supplier credit (purchases on credit)
+    // Cost 4: Supplier transactions - ONLY non-inventory expenses to avoid double counting
     c.env.DB.prepare(`
       SELECT COALESCE(SUM(credit), 0) AS total
       FROM supplier_transactions
-      WHERE company_id = ? AND season_id = ?
+      WHERE company_id = ? AND season_id = ? AND status = 'posted'
+        AND document_type NOT IN ('purchase_order', 'inventory_receive')
+    `).bind(company_id, seasonId).first<{ total: number }>(),
+
+    // Cost 5: Land rent — rent_per_feddan × area_feddan for each field in this season
+    c.env.DB.prepare(`
+      SELECT COALESCE(SUM(rent_per_feddan * area_feddan), 0) AS total
+      FROM fields
+      WHERE company_id = ? AND season_id = ? AND rent_per_feddan > 0
     `).bind(company_id, seasonId).first<{ total: number }>(),
 
     // Total area for season
@@ -600,6 +617,7 @@ reports.get('/season-pnl', async (c) => {
       FROM fields f
       LEFT JOIN sales_contracts sc
              ON sc.field_id = f.id AND sc.company_id = f.company_id AND sc.season_id = ?
+             AND sc.status NOT IN ('cancelled', 'draft')
       LEFT JOIN (
         SELECT field_id, SUM(value_out) AS inv_cost
         FROM inventory_movements
@@ -629,7 +647,8 @@ reports.get('/season-pnl', async (c) => {
   const laborCost   = laborCostRow?.total ?? 0
   const cashCost    = cashCostRow?.total ?? 0
   const supCost     = supCostRow?.total ?? 0
-  const totalCosts  = invCost + laborCost + cashCost + supCost
+  const rentCost    = rentCostRow?.total ?? 0
+  const totalCosts  = invCost + laborCost + cashCost + supCost + rentCost
   const netMargin   = revenue - totalCosts
   const totalArea   = areaRow?.total ?? 0
   const marginPF    = totalArea > 0 ? netMargin / totalArea : null
@@ -648,6 +667,7 @@ reports.get('/season-pnl', async (c) => {
         labor:            laborCost,
         cash_out:         cashCost,
         supplier_credit:  supCost,
+        land_rent:        rentCost,
         total:            totalCosts,
       },
       net_margin:          netMargin,

@@ -87,12 +87,50 @@ app.notFound((c) => {
 })
 
 // ─── Global Error Handler ─────────────────────────────────────
-app.onError((err, c) => {
-  console.error('[Worker Error]', err.message)
+app.onError(async (err, c) => {
+  const method   = c.req.method
+  const endpoint = c.req.path
+  
+  console.error(`[Worker Error] ${method} ${endpoint}:`, err.message)
+
+  // Try to log the error to the database for observability
+  try {
+    // Get user and company if available (safe check)
+    let userId: number | null = null
+    let companyId: number | null = null
+    try {
+      const payload = c.get('jwtPayload') // Standard Hono JWT location if used
+      if (payload) {
+        userId = Number(payload.sub)
+        companyId = Number(payload.company_id)
+      }
+    } catch { /* ignore if no user context */ }
+
+    // Read body preview (limited length)
+    let bodyPreview = ''
+    try {
+      const body = await c.req.raw.clone().text()
+      bodyPreview = body.slice(0, 1000)
+    } catch { /* ignore */ }
+
+    await c.env.DB.prepare(
+      `INSERT INTO system_error_logs (company_id, user_id, endpoint, method, error_message, stack_trace, request_payload)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(companyId, userId, endpoint, method, err.message, err.stack ?? null, bodyPreview).run()
+  } catch (logErr) {
+    console.error('[Logging Failed]', logErr)
+  }
+
   if (err.message === 'FORBIDDEN') {
     return c.json({ success: false, error: 'غير مصرح بهذا الإجراء' }, 403)
   }
-  return c.json({ success: false, error: 'خطأ في الخادم' }, 500)
+  
+  // Return a clean error to the client
+  return c.json({ 
+    success: false, 
+    error: 'حدث خطأ غير متوقع في النظام',
+    trace_id: Date.now() // For user to report
+  }, 500)
 })
 
 export default {

@@ -71,13 +71,11 @@ export default function SuperAdminPage() {
   const handleSwitch = async (company: CompanyRow) => {
     setSwitching(company.id)
     try {
-      const res = await adminApi.switchCompany(company.id)
+      const res = await adminApi.switchCompany(company.id, setAuth)
       if (!(res as { success: boolean }).success) {
-        toast((res as { error: string }).error ?? 'خطأ في التبديل', 'error')
+        toast((res as { error: string }).error || 'فشل التبديل', 'error')
         return
       }
-      const d = (res as { success: true; data: { token: string; user: { id: number; full_name: string; email: string; company_id: number; role: string }; company: { id: number; code: string; name: string } } }).data
-      setAuth(d.token, d.user as never, d.company as never, d.user.role)
       toast(`تم التبديل إلى ${company.name}`, 'success')
       window.location.href = '/dashboard'
     } catch {

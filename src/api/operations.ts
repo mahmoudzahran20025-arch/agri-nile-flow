@@ -30,8 +30,8 @@ operations.get('/orders', async (c) => {
   let sql = `SELECT wo.*,
                f.name AS field_name, f.area_feddan,
                s.name AS season_name,
-               COALESCE(SUM(wt.total_cost), 0) AS labor_cost,
-               COALESCE(im_costs.inv_cost, 0)  AS inventory_cost
+               COALESCE(SUM(wt.quantity * wt.unit_cost), 0) AS labor_cost,
+               COALESCE(im_costs.inv_cost, 0)                AS inventory_cost
              FROM work_orders wo
              LEFT JOIN fields f ON f.id = wo.field_id
              LEFT JOIN seasons s ON s.id = wo.season_id
@@ -102,7 +102,7 @@ operations.get('/orders/:id', async (c) => {
      ORDER BY cost_consumed DESC`
   ).bind(id, company_id).all()
 
-  const laborCost     = tasks.reduce((s: number, t: Record<string, unknown>) => s + (Number(t.total_cost) || 0), 0)
+  const laborCost     = tasks.reduce((s: number, t: Record<string, unknown>) => s + ((Number(t.quantity) || 0) * (Number(t.unit_cost) || 0)), 0)
   const inventoryCost = inventory.reduce((s: number, r: Record<string, unknown>) => s + (Number(r.cost_consumed) || 0), 0)
 
   return c.json({
@@ -163,6 +163,33 @@ operations.patch('/orders/:id/status', async (c) => {
       current_status: current.status,
       allowed_next:   allowed,
     }, 422)
+  }
+
+  if (status === 'costed') {
+    try {
+      const order = await c.env.DB.prepare(
+        'SELECT center_code, actual_date FROM work_orders WHERE id = ? AND company_id = ?'
+      ).bind(id, company_id).first<{ center_code: number; actual_date: string }>()
+
+      const tasks = await c.env.DB.prepare(
+        'SELECT SUM(quantity * unit_cost) AS total_cost FROM work_tasks WHERE work_order_id = ?'
+      ).bind(id).first<{ total_cost: number }>()
+
+      const totalCost = tasks?.total_cost ?? 0
+
+      if (totalCost > 0) {
+        const { glWorkOrderLabor } = await import('../lib/gl')
+        await glWorkOrderLabor(
+          c.env.DB, company_id, id, totalCost,
+          actual_date ?? order?.actual_date ?? new Date().toISOString().slice(0, 10),
+          `تكلفة عمالة ميدانية: أمر عمل #${id}`,
+          userId,
+          order?.center_code
+        )
+      }
+    } catch (e: any) {
+      return c.json({ success: false, error: `فشل ترحيل التكاليف: ${e.message}` }, 400)
+    }
   }
 
   await c.env.DB.prepare(
@@ -228,7 +255,7 @@ operations.get('/summary', async (c) => {
                COUNT(*) AS order_count,
                SUM(CASE WHEN wo.status = 'done'   THEN 1 ELSE 0 END) AS done_count,
                SUM(CASE WHEN wo.status = 'costed' THEN 1 ELSE 0 END) AS costed_count,
-               COALESCE(SUM(wt.total_cost), 0) AS labor_cost
+               COALESCE(SUM(wt.quantity * wt.unit_cost), 0) AS labor_cost
              FROM work_orders wo
              LEFT JOIN work_tasks wt ON wt.work_order_id = wo.id
              WHERE wo.company_id = ?`

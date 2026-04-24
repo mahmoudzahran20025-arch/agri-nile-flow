@@ -45,7 +45,7 @@ export default function LoginPage() {
     try {
       const res = await authApi.login(email, password, selectedCompany.id)
       if (!res.success) { setError(res.error); return }
-      setAuth(res.data.token, res.data.user as never, selectedCompany, res.data.user.role)
+      setAuth(res.data.token, res.data.user as never, selectedCompany, res.data.user.role, res.data.permissions ?? [])
       navigate('/dashboard', { replace: true })
     } catch { setError('خطأ في الاتصال بالخادم') }
     finally { setLoading(false) }

@@ -6,7 +6,7 @@ import {
   TrendingUp, BarChart3,
 } from 'lucide-react'
 import { dashboardApi, glApi } from '../api/client'
-import { useSeasonId } from '../store/appStore'
+import { useSeasonId, useAbility } from '../store/appStore'
 import KPICard from '../components/ui/KPICard'
 import type { DashboardStats } from '../types'
 
@@ -28,6 +28,10 @@ function dateAr(iso: string) {
 export default function DashboardPage() {
   const seasonId = useSeasonId()
   const navigate = useNavigate()
+
+  const canReadFinance = useAbility('treasury', 'read')
+  const canReadReports = useAbility('reports', 'read')
+  const canReadInventory = useAbility('inventory', 'read')
 
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['dashboard', 'stats'],
@@ -90,68 +94,80 @@ export default function DashboardPage() {
 
       {/* KPI Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <KPICard
-          title="رصيد الخزينة"
-          value={statsLoading ? '…' : (stats?.cash_balance ?? 0)}
-          icon={Banknote}
-          color="green"
-          format="currency"
-          subtitle="آخر حركة مسجلة"
-          trend={cashInTrend}
-        />
-        <KPICard
-          title="إجمالي المديونية"
-          value={statsLoading ? '…' : Math.abs(stats?.net_payable ?? 0)}
-          icon={TrendingDown}
-          color="red"
-          format="currency"
-          subtitle="ما يستحق للموردين"
-          trend={cashOutTrend}
-          invertTrend
-        />
-        <KPICard
-          title="قيمة المخزون"
-          value={statsLoading ? '…' : (stats?.inventory_value ?? 0)}
-          icon={Package}
-          color="blue"
-          format="currency"
-          subtitle="إجمالي قيمة المخازن"
-        />
-        <KPICard
-          title="حقوق الشركاء"
-          value={statsLoading ? '…' : (stats?.partners_equity ?? 0)}
-          icon={Users}
-          color="amber"
-          format="currency"
-          subtitle="رأس المال + الجاري"
-        />
+        {canReadFinance && (
+          <>
+            <KPICard
+              title="رصيد الخزينة"
+              value={statsLoading ? '…' : (stats?.cash_balance ?? 0)}
+              icon={Banknote}
+              color="green"
+              format="currency"
+              subtitle="آخر حركة مسجلة"
+              trend={cashInTrend}
+            />
+            <KPICard
+              title="إجمالي المديونية"
+              value={statsLoading ? '…' : Math.abs(stats?.net_payable ?? 0)}
+              icon={TrendingDown}
+              color="red"
+              format="currency"
+              subtitle="ما يستحق للموردين"
+              trend={cashOutTrend}
+              invertTrend
+            />
+          </>
+        )}
+        
+        {canReadInventory && (
+          <KPICard
+            title="قيمة المخزون"
+            value={statsLoading ? '…' : (stats?.inventory_value ?? 0)}
+            icon={Package}
+            color="blue"
+            format="currency"
+            subtitle="إجمالي قيمة المخازن"
+          />
+        )}
+
+        {canReadFinance && (
+          <KPICard
+            title="حقوق الشركاء"
+            value={statsLoading ? '…' : (stats?.partners_equity ?? 0)}
+            icon={Users}
+            color="amber"
+            format="currency"
+            subtitle="رأس المال + الجاري"
+          />
+        )}
       </div>
 
       {/* GL Financial Summary — Year to Date */}
-      <div className="card p-5">
-        <div className="flex items-center gap-2 mb-4">
-          <BarChart3 size={18} className="text-brand-600" />
-          <h2 className="font-bold text-slate-800">الملخص المالي — منذ بداية العام</h2>
-          <span className="text-xs text-slate-400 mr-auto">
-            {new Date().getFullYear()}
-          </span>
+      {canReadReports && (
+        <div className="card p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <BarChart3 size={18} className="text-brand-600" />
+            <h2 className="font-bold text-slate-800">الملخص المالي — منذ بداية العام</h2>
+            <span className="text-xs text-slate-400 mr-auto">
+              {new Date().getFullYear()}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {/* Revenue */}
+            <KPICard title="إجمالي الإيرادات" value={totalRevenue} icon={TrendingUp} color="green" format="currency" subtitle="منذ بداية العام" />
+            {/* Expenses */}
+            <KPICard title="إجمالي المصروفات" value={totalExpenses} icon={TrendingDown} color="red" format="currency" subtitle="منذ بداية العام" invertTrend />
+            {/* Net Income */}
+            <KPICard
+              title="صافي الربح / الخسارة"
+              value={Math.abs(netIncome)}
+              icon={netIncome >= 0 ? TrendingUp : TrendingDown}
+              color={netIncome >= 0 ? 'green' : 'red'}
+              format="currency"
+              subtitle={netIncome < 0 ? '(خسارة)' : 'ربح صافي'}
+            />
+          </div>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {/* Revenue */}
-          <KPICard title="إجمالي الإيرادات" value={totalRevenue} icon={TrendingUp} color="green" format="currency" subtitle="منذ بداية العام" />
-          {/* Expenses */}
-          <KPICard title="إجمالي المصروفات" value={totalExpenses} icon={TrendingDown} color="red" format="currency" subtitle="منذ بداية العام" invertTrend />
-          {/* Net Income */}
-          <KPICard
-            title="صافي الربح / الخسارة"
-            value={Math.abs(netIncome)}
-            icon={netIncome >= 0 ? TrendingUp : TrendingDown}
-            color={netIncome >= 0 ? 'green' : 'red'}
-            format="currency"
-            subtitle={netIncome < 0 ? '(خسارة)' : 'ربح صافي'}
-          />
-        </div>
-      </div>
+      )}
 
       {/* Middle row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
+import { glContractAdvance } from '../lib/gl'
 
 const contracts = new Hono<{ Bindings: Env }>()
 contracts.use('*', authMiddleware)
@@ -128,6 +129,43 @@ contracts.patch('/sales/:id/status', async (c) => {
   return c.json({ success: true, data: null })
 })
 
+// POST /contracts/sales/:id/receive-advance
+// Records cash received as advance from buyer: DR Cash / CR Deferred Revenue.
+// Updates advance_paid and writes advance_gl_entry_id for audit traceability.
+contracts.post('/sales/:id/receive-advance', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const { amount, receipt_date, notes } = await c.req.json<{
+    amount: number; receipt_date: string; notes?: string
+  }>()
+
+  if (!amount || amount <= 0) return c.json({ success: false, error: 'المبلغ يجب أن يكون أكبر من صفر' }, 400)
+  if (!receipt_date)          return c.json({ success: false, error: 'تاريخ الاستلام مطلوب' }, 400)
+
+  const contract = await c.env.DB
+    .prepare('SELECT id, contract_number, advance_gl_entry_id FROM sales_contracts WHERE id = ? AND company_id = ?')
+    .bind(id, company_id).first<{ id: number; contract_number: string; advance_gl_entry_id: number | null }>()
+  if (!contract) return c.json({ success: false, error: 'العقد غير موجود' }, 404)
+  if (contract.advance_gl_entry_id) return c.json({ success: false, error: 'تم تسجيل دفعة مقدمة مسبقاً لهذا العقد' }, 409)
+
+  let glId: number | null = null
+  try {
+    glId = await glContractAdvance(
+      c.env.DB, company_id, id, amount, receipt_date,
+      `دفعة مقدمة عقد بيع #${contract.contract_number}${notes ? ` — ${notes}` : ''}`,
+      userId,
+    )
+  } catch (e: any) {
+    return c.json({ success: false, error: `فشل إنشاء القيد المحاسبي: ${e.message}` }, 400)
+  }
+
+  await c.env.DB.prepare(
+    'UPDATE sales_contracts SET advance_paid = ?, advance_gl_entry_id = ? WHERE id = ? AND company_id = ?'
+  ).bind(amount, glId, id, company_id).run()
+
+  return c.json({ success: true, data: { gl_entry_id: glId } })
+})
+
 // ── Summary (for dashboard) ──────────────────────────────────
 contracts.get('/summary', async (c) => {
   const { company_id } = getUser(c)
@@ -138,7 +176,7 @@ contracts.get('/summary', async (c) => {
 
   const [purchase, sales] = await Promise.all([
     c.env.DB.prepare(`SELECT COUNT(*) AS n, SUM(total_value) AS total, SUM(paid_value) AS paid FROM purchase_contracts WHERE company_id = ?${where}`).bind(...params.slice(0,1 + (season_id?1:0))).first<Record<string,number>>(),
-    c.env.DB.prepare(`SELECT COUNT(*) AS n, SUM(total_value) AS total, SUM(advance_paid) AS paid FROM sales_contracts WHERE company_id = ?${where}`).bind(...params.slice(season_id?2:1)).first<Record<string,number>>(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS n, SUM(quantity_ton * unit_price) AS total, SUM(advance_paid) AS paid FROM sales_contracts WHERE company_id = ?${where}`).bind(...params.slice(season_id?2:1)).first<Record<string,number>>(),
   ])
 
   return c.json({ success: true, data: { purchase, sales } })

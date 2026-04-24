@@ -229,6 +229,8 @@ CREATE TABLE IF NOT EXISTS supplier_transactions (
   is_offline_origin     INTEGER NOT NULL DEFAULT 0,
   device_id             TEXT,
   local_id              TEXT,
+  status                TEXT    NOT NULL DEFAULT 'posted',
+  journal_entry_id      INTEGER,
   created_at            TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_st_company_date    ON supplier_transactions(company_id, transaction_date);
@@ -236,6 +238,7 @@ CREATE INDEX IF NOT EXISTS idx_st_supplier        ON supplier_transactions(compa
 CREATE INDEX IF NOT EXISTS idx_st_center          ON supplier_transactions(company_id, center_code);
 CREATE INDEX IF NOT EXISTS idx_st_season          ON supplier_transactions(company_id, season_id);
 CREATE INDEX IF NOT EXISTS idx_st_year_month      ON supplier_transactions(company_id, year, month);
+CREATE INDEX IF NOT EXISTS idx_st_status          ON supplier_transactions(company_id, status);
 
 CREATE TABLE IF NOT EXISTS cash_transactions (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -268,12 +271,15 @@ CREATE TABLE IF NOT EXISTS cash_transactions (
   is_offline_origin    INTEGER NOT NULL DEFAULT 0,
   device_id            TEXT,
   local_id             TEXT,
+  status               TEXT    NOT NULL DEFAULT 'posted',
+  journal_entry_id     INTEGER,
   created_at           TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_ct_company_date ON cash_transactions(company_id, transaction_date);
 CREATE INDEX IF NOT EXISTS idx_ct_supplier     ON cash_transactions(company_id, supplier_code);
 CREATE INDEX IF NOT EXISTS idx_ct_season       ON cash_transactions(company_id, season_id);
 CREATE INDEX IF NOT EXISTS idx_ct_year_month   ON cash_transactions(company_id, year, month);
+CREATE INDEX IF NOT EXISTS idx_ct_status       ON cash_transactions(company_id, status);
 
 CREATE TABLE IF NOT EXISTS inventory_movements (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -313,12 +319,15 @@ CREATE TABLE IF NOT EXISTS inventory_movements (
   is_offline_origin    INTEGER NOT NULL DEFAULT 0,
   device_id            TEXT,
   local_id             TEXT,
+  status               TEXT    NOT NULL DEFAULT 'posted',
+  journal_entry_id     INTEGER,
   created_at           TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_im_company_date ON inventory_movements(company_id, movement_date);
 CREATE INDEX IF NOT EXISTS idx_im_item         ON inventory_movements(company_id, item_code);
 CREATE INDEX IF NOT EXISTS idx_im_warehouse    ON inventory_movements(company_id, warehouse);
 CREATE INDEX IF NOT EXISTS idx_im_season       ON inventory_movements(company_id, season_id);
+CREATE INDEX IF NOT EXISTS idx_im_status       ON inventory_movements(company_id, status);
 
 -- ────────────────────────────────────────────────────────────
 -- 5. SEED DATA — Roles & Permissions

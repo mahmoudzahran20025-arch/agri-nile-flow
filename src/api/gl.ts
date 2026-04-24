@@ -254,6 +254,30 @@ gl.get('/ledger/:code', async (c) => {
   return c.json({ success: true, data: { account, lines: linesWithBalance } })
 })
 
+// Builds a map: account code → set of all descendant codes (including itself)
+// Uses parent_code relationships — correct for any code scheme, not just numeric prefixes.
+function buildDescendants(accounts: { code: string; parent_code: string | null }[]): Map<string, Set<string>> {
+  const childrenOf = new Map<string, string[]>()
+  for (const acc of accounts) {
+    if (acc.parent_code) {
+      if (!childrenOf.has(acc.parent_code)) childrenOf.set(acc.parent_code, [])
+      childrenOf.get(acc.parent_code)!.push(acc.code)
+    }
+  }
+  const cache = new Map<string, Set<string>>()
+  function collect(code: string): Set<string> {
+    if (cache.has(code)) return cache.get(code)!
+    const set = new Set<string>([code])
+    for (const child of (childrenOf.get(code) ?? [])) {
+      for (const d of collect(child)) set.add(d)
+    }
+    cache.set(code, set)
+    return set
+  }
+  for (const acc of accounts) collect(acc.code)
+  return cache
+}
+
 // ── Trial Balance (ميزان المراجعة) ───────────────────────────
 
 gl.get('/trial-balance', async (c) => {
@@ -266,25 +290,49 @@ gl.get('/trial-balance', async (c) => {
   if (start) { entryWhere += ' AND e.entry_date >= ?'; p.push(start) }
   if (end)   { entryWhere += ' AND e.entry_date <= ?'; p.push(end) }
 
-  const { results } = await c.env.DB.prepare(
-    `SELECT a.code, a.name, a.account_type, a.normal_balance, a.level, a.is_header,
-            COALESCE(SUM(l.debit),  0) AS total_debit,
-            COALESCE(SUM(l.credit), 0) AS total_credit,
-            CASE WHEN a.normal_balance = 'debit'
-                 THEN COALESCE(SUM(l.debit),0) - COALESCE(SUM(l.credit),0)
-                 ELSE COALESCE(SUM(l.credit),0) - COALESCE(SUM(l.debit),0) END AS balance
+  // 1. Get raw leaf balances
+  const rawBalances = await c.env.DB.prepare(
+    `SELECT a.code, a.parent_code, a.is_header,
+            COALESCE(SUM(l.debit),  0) AS leaf_debit,
+            COALESCE(SUM(l.credit), 0) AS leaf_credit
      FROM chart_of_accounts a
      LEFT JOIN journal_entry_lines l ON l.account_code = a.code AND l.company_id = a.company_id
      LEFT JOIN journal_entries e ON e.id = l.entry_id AND ${entryWhere}
      WHERE a.company_id = ? AND a.is_active = 1
-     GROUP BY a.code, a.name, a.account_type, a.normal_balance, a.level, a.is_header
-     ORDER BY a.code`
-  ).bind(...p, company_id).all()
+     GROUP BY a.code`
+  ).bind(...p, company_id).all<{ code: string; parent_code: string | null; is_header: number; leaf_debit: number; leaf_credit: number }>()
 
-  const totalDebit  = (results as Record<string,number>[]).reduce((s,r) => s + (r.total_debit  ?? 0), 0)
-  const totalCredit = (results as Record<string,number>[]).reduce((s,r) => s + (r.total_credit ?? 0), 0)
+  // 2. Get all accounts to build the tree
+  const allAccounts = await c.env.DB.prepare(
+    'SELECT code, name, account_type, normal_balance, parent_code, level, is_header FROM chart_of_accounts WHERE company_id = ? AND is_active = 1 ORDER BY code'
+  ).bind(company_id).all<{ code: string; name: string; account_type: string; normal_balance: string; parent_code: string | null; level: number; is_header: number }>()
 
-  return c.json({ success: true, data: { accounts: results, total_debit: totalDebit, total_credit: totalCredit } })
+  // 3. Consolidate in code (Recursive)
+  const debitMap = new Map<string, number>()
+  const creditMap = new Map<string, number>()
+  for (const b of rawBalances.results) {
+    debitMap.set(b.code, b.leaf_debit)
+    creditMap.set(b.code, b.leaf_credit)
+  }
+
+  const descendants = buildDescendants(allAccounts.results)
+  const finalAccounts = allAccounts.results.map(acc => {
+    let totalD = 0; let totalC = 0
+    const descSet = descendants.get(acc.code) ?? new Set([acc.code])
+    for (const b of rawBalances.results) {
+      if (descSet.has(b.code)) {
+        totalD += b.leaf_debit
+        totalC += b.leaf_credit
+      }
+    }
+    const bal = acc.normal_balance === 'debit' ? (totalD - totalC) : (totalC - totalD)
+    return { ...acc, total_debit: totalD, total_credit: totalC, balance: bal }
+  })
+
+  const totalDebit  = rawBalances.results.reduce((s, r) => s + r.leaf_debit, 0)
+  const totalCredit = rawBalances.results.reduce((s, r) => s + r.leaf_credit, 0)
+
+  return c.json({ success: true, data: { accounts: finalAccounts, total_debit: totalDebit, total_credit: totalCredit } })
 })
 
 // ── Income Statement (قائمة الدخل / P&L) ─────────────────────
@@ -299,24 +347,38 @@ gl.get('/income-statement', async (c) => {
   if (start) { entryWhere += ' AND e.entry_date >= ?'; p.push(start) }
   if (end)   { entryWhere += ' AND e.entry_date <= ?'; p.push(end) }
 
-  const { results } = await c.env.DB.prepare(
-    `SELECT a.code, a.name, a.account_type, a.parent_code, a.level, a.is_header,
-            CASE WHEN a.account_type = 'revenue'
-                 THEN COALESCE(SUM(l.credit),0) - COALESCE(SUM(l.debit),0)
-                 ELSE COALESCE(SUM(l.debit),0)  - COALESCE(SUM(l.credit),0) END AS amount
+  // 1. Get raw leaf balances for Revenue/Expense
+  const raw = await c.env.DB.prepare(
+    `SELECT a.code, a.account_type,
+            SUM(CASE WHEN a.account_type = 'revenue' THEN (l.credit - l.debit) ELSE (l.debit - l.credit) END) AS amount
      FROM chart_of_accounts a
      LEFT JOIN journal_entry_lines l ON l.account_code = a.code AND l.company_id = a.company_id
      LEFT JOIN journal_entries e ON e.id = l.entry_id AND ${entryWhere}
      WHERE a.company_id = ? AND a.account_type IN ('revenue','expense') AND a.is_active = 1
-     GROUP BY a.code, a.name, a.account_type, a.parent_code, a.level, a.is_header
-     ORDER BY a.account_type DESC, a.code`
-  ).bind(...p, company_id).all()
+     GROUP BY a.code`
+  ).bind(...p, company_id).all<{ code: string; account_type: string; amount: number }>()
 
-  const rows = results as { code: string; name: string; account_type: string; is_header: number; amount: number }[]
-  const revenue  = rows.filter(r => r.account_type === 'revenue' && !r.is_header)
-  const expenses = rows.filter(r => r.account_type === 'expense' && !r.is_header)
-  const totalRevenue  = revenue.reduce((s, r)  => s + r.amount, 0)
-  const totalExpenses = expenses.reduce((s, r) => s + r.amount, 0)
+  // 2. Get all Revenue/Expense accounts
+  const allAccs = await c.env.DB.prepare(
+    `SELECT code, name, account_type, parent_code, level, is_header FROM chart_of_accounts
+     WHERE company_id = ? AND account_type IN ('revenue','expense') AND is_active = 1
+     ORDER BY account_type DESC, code`
+  ).bind(company_id).all<{ code: string; name: string; account_type: string; parent_code: string | null; level: number; is_header: number }>()
+
+  const descendants = buildDescendants(allAccs.results)
+  const finalRows = allAccs.results.map(acc => {
+    let sum = 0
+    const descSet = descendants.get(acc.code) ?? new Set([acc.code])
+    for (const r of raw.results) {
+      if (descSet.has(r.code)) sum += (r.amount ?? 0)
+    }
+    return { ...acc, amount: sum }
+  })
+
+  const revenue  = finalRows.filter(r => r.account_type === 'revenue')
+  const expenses = finalRows.filter(r => r.account_type === 'expense')
+  const totalRevenue  = raw.results.filter(r => r.account_type === 'revenue').reduce((s, r) => s + r.amount, 0)
+  const totalExpenses = raw.results.filter(r => r.account_type === 'expense').reduce((s, r) => s + r.amount, 0)
 
   return c.json({ success: true, data: {
     revenue, expenses, total_revenue: totalRevenue,
@@ -330,8 +392,9 @@ gl.get('/balance-sheet', async (c) => {
   const { company_id } = getUser(c)
   const asOf = c.req.query('as_of') ?? new Date().toISOString().slice(0,10)
 
-  const { results } = await c.env.DB.prepare(
-    `SELECT a.code, a.name, a.account_type, a.normal_balance, a.parent_code, a.level, a.is_header,
+  // 1. Get raw leaf balances for BS accounts
+  const raw = await c.env.DB.prepare(
+    `SELECT a.code, a.account_type, a.normal_balance,
             CASE WHEN a.normal_balance = 'debit'
                  THEN COALESCE(SUM(l.debit),0) - COALESCE(SUM(l.credit),0)
                  ELSE COALESCE(SUM(l.credit),0) - COALESCE(SUM(l.debit),0) END AS balance
@@ -339,18 +402,33 @@ gl.get('/balance-sheet', async (c) => {
      LEFT JOIN journal_entry_lines l ON l.account_code = a.code AND l.company_id = a.company_id
      LEFT JOIN journal_entries e ON e.id = l.entry_id AND e.is_posted = 1 AND e.entry_date <= ?
      WHERE a.company_id = ? AND a.account_type IN ('asset','liability','equity') AND a.is_active = 1
-     GROUP BY a.code, a.name, a.account_type, a.normal_balance, a.parent_code, a.level, a.is_header
-     ORDER BY a.code`
-  ).bind(asOf, company_id).all()
+     GROUP BY a.code`
+  ).bind(asOf, company_id).all<{ code: string; account_type: string; normal_balance: string; balance: number }>()
 
-  const rows = results as { code:string; name:string; account_type:string; is_header:number; balance:number }[]
-  const assets      = rows.filter(r => r.account_type === 'asset')
-  const liabilities = rows.filter(r => r.account_type === 'liability')
-  const equity      = rows.filter(r => r.account_type === 'equity')
+  // 2. Get all BS accounts
+  const allAccs = await c.env.DB.prepare(
+    `SELECT code, name, account_type, normal_balance, parent_code, level, is_header FROM chart_of_accounts
+     WHERE company_id = ? AND account_type IN ('asset','liability','equity') AND is_active = 1
+     ORDER BY code`
+  ).bind(company_id).all<{ code: string; name: string; account_type: string; normal_balance: string; parent_code: string | null; level: number; is_header: number }>()
 
-  const totalAssets      = assets.filter(r => !r.is_header).reduce((s, r) => s + r.balance, 0)
-  const totalLiabilities = liabilities.filter(r => !r.is_header).reduce((s, r) => s + r.balance, 0)
-  const totalEquity      = equity.filter(r => !r.is_header).reduce((s, r) => s + r.balance, 0)
+  const descendants = buildDescendants(allAccs.results)
+  const finalRows = allAccs.results.map(acc => {
+    let sum = 0
+    const descSet = descendants.get(acc.code) ?? new Set([acc.code])
+    for (const r of raw.results) {
+      if (descSet.has(r.code)) sum += (r.balance ?? 0)
+    }
+    return { ...acc, balance: sum }
+  })
+
+  const assets      = finalRows.filter(r => r.account_type === 'asset')
+  const liabilities = finalRows.filter(r => r.account_type === 'liability')
+  const equity      = finalRows.filter(r => r.account_type === 'equity')
+
+  const totalAssets      = raw.results.filter(r => r.account_type === 'asset').reduce((s, r) => s + r.balance, 0)
+  const totalLiabilities = raw.results.filter(r => r.account_type === 'liability').reduce((s, r) => s + r.balance, 0)
+  const totalEquity      = raw.results.filter(r => r.account_type === 'equity').reduce((s, r) => s + r.balance, 0)
 
   return c.json({ success: true, data: {
     assets, liabilities, equity,

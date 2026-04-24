@@ -10,8 +10,10 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
+    "@hono/zod-validator": "^0.7.6",
     "hono": "^4.6.0",
-    "recharts": "^3.8.1"
+    "recharts": "^3.8.1",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241127.0",

@@ -60,14 +60,20 @@ fields.get('/harvest/summary', async (c) => {
 
   let sql = `
     SELECT
-      f.id AS field_id, f.name AS field_name, f.code AS field_code, f.area_feddan,
-      COUNT(h.id)           AS harvest_count,
-      SUM(h.qty_tons)       AS total_tons,
-      AVG(h.qty_feddan)     AS avg_yield_per_feddan,
-      SUM(h.actual_cost)    AS total_cost,
-      SUM(h.revenue)        AS total_revenue,
-      SUM(h.profit)         AS total_profit,
-      AVG(h.cost_per_feddan) AS avg_cost_per_feddan
+      f.id AS field_id, f.name AS field_name, f.code AS field_code,
+      f.area_feddan, f.crop_type,
+      f.rent_per_feddan,
+      f.rent_per_feddan * f.area_feddan AS total_rent_cost,
+      COUNT(h.id)                       AS harvest_count,
+      COALESCE(SUM(h.qty_tons), 0)      AS total_tons,
+      AVG(h.qty_feddan)                 AS avg_yield_per_feddan,
+      COALESCE(SUM(h.actual_cost), 0)   AS total_cost,
+      COALESCE(SUM(h.revenue), 0)       AS total_revenue,
+      COALESCE(SUM(h.profit), 0)        AS total_profit,
+      AVG(h.cost_per_feddan)            AS avg_cost_per_feddan,
+      CASE WHEN COALESCE(SUM(h.qty_tons), 0) > 0
+           THEN COALESCE(SUM(h.actual_cost), 0) / SUM(h.qty_tons)
+           ELSE NULL END                AS cost_per_ton
     FROM fields f
     LEFT JOIN harvest_records h ON h.field_id = f.id AND h.company_id = ?
     WHERE f.company_id = ?`
@@ -171,6 +177,60 @@ fields.delete('/harvest/:id', async (c) => {
   return c.json({ success: true, data: null })
 })
 
+// GET /api/fields/harvest/cost-estimate?field_id=X&season_id=Y
+// Returns accumulated system-derived costs for a field+season (materials + labor + land rent).
+// Use this to pre-fill harvest_records.actual_cost rather than entering it manually.
+fields.get('/harvest/cost-estimate', async (c) => {
+  const { company_id } = getUser(c)
+  const field_id  = Number(c.req.query('field_id'))
+  const season_id = Number(c.req.query('season_id'))
+
+  if (!field_id || !season_id)
+    return c.json({ success: false, error: 'field_id و season_id مطلوبان' }, 400)
+
+  const [field, materialsRow, laborRow] = await Promise.all([
+    c.env.DB.prepare(
+      'SELECT area_feddan, rent_per_feddan, name, code FROM fields WHERE id = ? AND company_id = ?'
+    ).bind(field_id, company_id).first<{ area_feddan: number; rent_per_feddan: number; name: string; code: string }>(),
+
+    c.env.DB.prepare(
+      `SELECT COALESCE(SUM(value_out), 0) AS total
+       FROM inventory_movements
+       WHERE company_id = ? AND field_id = ? AND season_id = ? AND movement_type = 'صرف'`
+    ).bind(company_id, field_id, season_id).first<{ total: number }>(),
+
+    c.env.DB.prepare(
+      `SELECT COALESCE(SUM(wt.quantity * wt.unit_cost), 0) AS total
+       FROM work_tasks wt
+       JOIN work_orders wo ON wo.id = wt.work_order_id
+       WHERE wo.company_id = ? AND wo.field_id = ? AND wo.season_id = ? AND wo.status != 'cancelled'`
+    ).bind(company_id, field_id, season_id).first<{ total: number }>(),
+  ])
+
+  if (!field) return c.json({ success: false, error: 'القطعة غير موجودة' }, 404)
+
+  const materials_cost = materialsRow?.total ?? 0
+  const labor_cost     = laborRow?.total ?? 0
+  const land_rent      = (field.rent_per_feddan ?? 0) * (field.area_feddan ?? 0)
+  const total_cost     = materials_cost + labor_cost + land_rent
+
+  return c.json({
+    success: true,
+    data: {
+      field_id,
+      season_id,
+      field_name:      field.name,
+      field_code:      field.code,
+      area_feddan:     field.area_feddan,
+      materials_cost,
+      labor_cost,
+      land_rent,
+      total_cost,
+      note: 'لا تشمل المصروفات النقدية المدفوعة مباشرة (لا يوجد ربط مباشر بين المعاملات النقدية والقطعة)'
+    }
+  })
+})
+
 // ───────────────────────────────────────────────────────────
 
 // GET /api/fields/:id
@@ -186,7 +246,7 @@ fields.get('/:id', async (c) => {
 
 // POST /api/fields
 fields.post('/', async (c) => {
-  const { company_id, sub: userId } = getUser(c)
+  const { company_id } = getUser(c)
   const b = await c.req.json<{
     code: string; name: string; area_feddan: number; season_id?: number
     location?: string; crop_type?: string; soil_type?: string

@@ -1,8 +1,8 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
-import { authMiddleware, getUser } from '../middleware/auth'
+import { authMiddleware, getUser, permissionGuard } from '../middleware/auth'
 import { logAudit } from '../lib/audit'
-import { postAutoEntry, getOpenPeriod, glPayroll } from '../lib/gl'
+import { glPayroll, glWagesPayment } from '../lib/gl'
 
 const hr = new Hono<{ Bindings: Env }>()
 hr.use('*', authMiddleware)
@@ -62,7 +62,7 @@ hr.patch('/branches/:id', async (c) => {
 // ═══════════════════════════════════════════════════════════
 
 // GET all job details for org chart
-hr.get('/job-details', async (c) => {
+hr.get('/job-details', permissionGuard('hr', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const { results } = await c.env.DB
     .prepare(`SELECT ejd.*, b.name AS branch_name
@@ -74,7 +74,7 @@ hr.get('/job-details', async (c) => {
   return c.json({ success: true, data: results })
 })
 
-hr.get('/job-details/:employee_id', async (c) => {
+hr.get('/job-details/:employee_id', permissionGuard('hr', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const empId = Number(c.req.param('employee_id'))
   const row = await c.env.DB
@@ -86,7 +86,7 @@ hr.get('/job-details/:employee_id', async (c) => {
   return c.json({ success: true, data: row ?? null })
 })
 
-hr.put('/job-details/:employee_id', async (c) => {
+hr.put('/job-details/:employee_id', permissionGuard('hr', 'admin'), async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const empId = Number(c.req.param('employee_id'))
   const b = await c.req.json<{
@@ -339,7 +339,7 @@ hr.patch('/leave-requests/:id/reject', async (c) => {
 // SALARY ADVANCES (طلبات السلف)
 // ═══════════════════════════════════════════════════════════
 
-hr.get('/salary-advances', async (c) => {
+hr.get('/salary-advances', permissionGuard('hr', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const status = c.req.query('status')
   const empId  = c.req.query('employee_id')
@@ -360,7 +360,7 @@ hr.get('/salary-advances', async (c) => {
   return c.json({ success: true, data: results })
 })
 
-hr.post('/salary-advances', async (c) => {
+hr.post('/salary-advances', permissionGuard('hr', 'write'), async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const b = await c.req.json<{
     employee_id: number; request_date: string; amount: number
@@ -377,7 +377,7 @@ hr.post('/salary-advances', async (c) => {
   return c.json({ success: true, data: { id: r.meta.last_row_id } }, 201)
 })
 
-hr.patch('/salary-advances/:id/approve', async (c) => {
+hr.patch('/salary-advances/:id/approve', permissionGuard('hr', 'admin'), async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
   await c.env.DB.prepare(
@@ -402,7 +402,7 @@ hr.patch('/salary-advances/:id/reject', async (c) => {
 // PAYROLL RUNS (مسيرات الرواتب)
 // ═══════════════════════════════════════════════════════════
 
-hr.get('/payroll', async (c) => {
+hr.get('/payroll', permissionGuard('hr', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const { results } = await c.env.DB
     .prepare(`SELECT pr.*, u.full_name AS approved_by_name
@@ -414,18 +414,18 @@ hr.get('/payroll', async (c) => {
   return c.json({ success: true, data: results })
 })
 
-hr.get('/payroll/:id', async (c) => {
+hr.get('/payroll/:id', permissionGuard('hr', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const id = Number(c.req.param('id'))
   const [run, items] = await Promise.all([
     c.env.DB.prepare('SELECT * FROM payroll_runs WHERE id = ? AND company_id = ?')
       .bind(id, company_id).first(),
     c.env.DB.prepare(
-      `SELECT pi.*, e.name AS employee_name, e.national_id
+      `SELECT pi.*, COALESCE(e.name, '[موظف محذوف]') AS employee_name, e.national_id
        FROM payroll_items pi
-       JOIN employees e ON e.id = pi.employee_id
+       LEFT JOIN employees e ON e.id = pi.employee_id
        WHERE pi.payroll_run_id = ?
-       ORDER BY e.name`
+       ORDER BY employee_name`
     ).bind(id).all(),
   ])
   if (!run) return c.json({ success: false, error: 'المسيرة غير موجودة' }, 404)
@@ -433,7 +433,7 @@ hr.get('/payroll/:id', async (c) => {
 })
 
 // POST /api/hr/payroll/run — حساب مسيرة شهر
-hr.post('/payroll/run', async (c) => {
+hr.post('/payroll/run', permissionGuard('hr', 'admin'), async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const b = await c.req.json<{ year: number; month: number }>()
   if (!b.year || !b.month || b.month < 1 || b.month > 12) {
@@ -484,12 +484,22 @@ hr.post('/payroll/run', async (c) => {
     employee_id: number; working_days: number; absent_days: number; overtime_hours: number
   }>()
 
-  // Fetch approved advances for deduction
+  // Fetch approved advances still within repayment window.
+  // months_deducted counts completed payroll runs (approved/paid) that included this advance.
+  // Once months_deducted >= repay_months the advance is fully recovered and excluded.
   const { results: advances } = await c.env.DB.prepare(
-    `SELECT employee_id, SUM(amount / repay_months) AS monthly_deduct
-     FROM salary_advances
-     WHERE company_id = ? AND status = 'approved' AND cash_tx_id IS NULL
-     GROUP BY employee_id`
+    `SELECT sa.employee_id,
+            SUM(sa.amount / sa.repay_months) AS monthly_deduct
+     FROM salary_advances sa
+     WHERE sa.company_id = ? AND sa.status = 'approved'
+       AND (
+         SELECT COUNT(*) FROM payroll_runs pr
+         WHERE pr.company_id = sa.company_id
+           AND pr.status IN ('approved','paid')
+           AND pr.period_year * 12 + pr.period_month
+               > (strftime('%Y', sa.approved_at) * 12 + strftime('%m', sa.approved_at))
+       ) < sa.repay_months
+     GROUP BY sa.employee_id`
   ).bind(company_id).all<{ employee_id: number; monthly_deduct: number }>()
 
   const attMap = new Map(attendance.map(a => [a.employee_id, a]))
@@ -563,7 +573,7 @@ hr.post('/payroll/run', async (c) => {
   }, 201)
 })
 
-hr.patch('/payroll/:id/approve', async (c) => {
+hr.patch('/payroll/:id/approve', permissionGuard('hr', 'admin'), async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
 
@@ -572,22 +582,58 @@ hr.patch('/payroll/:id/approve', async (c) => {
   if (!run) return c.json({ success: false, error: 'المسيرة غير موجودة' }, 404)
   if (run.status !== 'draft') return c.json({ success: false, error: 'المسيرة ليست في حالة مسودة' }, 400)
 
-  await c.env.DB.prepare(
-    `UPDATE payroll_runs SET status = 'approved', approved_by = ? WHERE id = ?`
-  ).bind(userId, id).run()
-
-  // Auto-post GL via mapping table (DR Wages / CR Cash)
+  // GL FIRST — validate period and mappings before changing status
   const runDate = `${run.period_year}-${String(run.period_month).padStart(2,'0')}-28`
-  const glId = await glPayroll(
-    c.env.DB, company_id, id, run.total_net, runDate,
-    `مسيرة رواتب ${run.period_year}/${run.period_month}`, userId,
-  )
-  if (glId) {
-    await c.env.DB.prepare('UPDATE payroll_runs SET journal_entry_id = ? WHERE id = ?')
-      .bind(glId, id).run()
+  let glId: number | null = null
+  try {
+    glId = await glPayroll(
+      c.env.DB, company_id, id, run.total_net, runDate,
+      `مسيرة رواتب ${run.period_year}/${run.period_month}`, userId,
+    )
+  } catch (e: any) {
+    return c.json({ success: false, error: `فشل إنشاء القيد المحاسبي للمسيرة: ${e.message}` }, 400)
   }
 
-  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'APPROVE', table_name: 'payroll_runs', record_id: id })
+  // APPROVE only after GL succeeds
+  await c.env.DB.prepare(
+    `UPDATE payroll_runs SET status = 'approved', approved_by = ?, journal_entry_id = ? WHERE id = ?`
+  ).bind(userId, glId, id).run()
+
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'APPROVE', table_name: 'payroll_runs', record_id: id,
+    new_value: { total_net: run.total_net, gl_entry_id: glId } })
+  return c.json({ success: true, data: null })
+})
+
+// PATCH /hr/payroll/:id/pay — صرف الرواتب فعلياً (DR Wages Payable / CR Cash)
+hr.patch('/payroll/:id/pay', permissionGuard('hr', 'admin'), async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const { payment_date } = await c.req.json<{ payment_date?: string }>()
+
+  const run = await c.env.DB.prepare('SELECT * FROM payroll_runs WHERE id = ? AND company_id = ?')
+    .bind(id, company_id).first<{ status: string; total_net: number; period_year: number; period_month: number }>()
+  if (!run) return c.json({ success: false, error: 'المسيرة غير موجودة' }, 404)
+  if (run.status !== 'approved') return c.json({ success: false, error: 'يجب اعتماد المسيرة أولاً قبل الصرف' }, 400)
+
+  const payDate = payment_date ?? new Date().toISOString().slice(0, 10)
+
+  // GL: DR Wages Payable / CR Cash — closes the liability opened on approval
+  let glId: number | null = null
+  try {
+    glId = await glWagesPayment(
+      c.env.DB, company_id, id, run.total_net, payDate,
+      `صرف رواتب ${run.period_year}/${run.period_month}`, userId,
+    )
+  } catch (e: any) {
+    return c.json({ success: false, error: `فشل قيد صرف الرواتب: ${e.message}` }, 400)
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE payroll_runs SET status = 'paid', payment_date = ?, payment_gl_entry_id = ? WHERE id = ?`
+  ).bind(payDate, glId, id).run()
+
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPDATE', table_name: 'payroll_runs', record_id: id,
+    new_value: { status: 'paid', payment_date: payDate, gl_entry_id: glId } })
   return c.json({ success: true, data: null })
 })
 
@@ -648,7 +694,7 @@ hr.patch('/assets/:id/return', async (c) => {
 // EMPLOYEE PROFILE (موظف كامل — شامل كل التفاصيل)
 // ═══════════════════════════════════════════════════════════
 
-hr.get('/employees/:id/profile', async (c) => {
+hr.get('/employees/:id/profile', permissionGuard('hr', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const empId = Number(c.req.param('id'))
 

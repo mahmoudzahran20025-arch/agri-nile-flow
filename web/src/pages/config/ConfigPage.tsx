@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Settings, Calendar, Package, MapPin, BookOpen,
-  Tag, Plus, ChevronDown, Lock, LockOpen, AlertTriangle,
+  Tag, Plus, ChevronDown, Lock, LockOpen, AlertTriangle, Info, CheckCircle
 } from 'lucide-react'
 import { configApi, glApi } from '../../api/client'
 import { usePermission } from '../../hooks/usePermission'
@@ -13,7 +13,7 @@ import AddItemModal         from '../../components/forms/AddItemModal'
 import AddMasterRecordModal from '../../components/forms/AddMasterRecordModal'
 import type { Season, Item, CostCenter, FinancialPeriod } from '../../types'
 
-type Tab = 'seasons' | 'items' | 'cost_centers' | 'accounts' | 'expense_types' | 'periods'
+type Tab = 'seasons' | 'items' | 'cost_centers' | 'accounts' | 'expense_types' | 'periods' | 'mappings'
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'seasons',       label: 'المواسم',         icon: <Calendar size={16} /> },
@@ -22,6 +22,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'accounts',      label: 'الحسابات',         icon: <BookOpen size={16} /> },
   { id: 'expense_types', label: 'أنواع المصروفات',  icon: <Tag      size={16} /> },
   { id: 'periods',       label: 'الفترات المالية',  icon: <Lock     size={16} /> },
+  { id: 'mappings',      label: 'ربط الحسابات',     icon: <Settings size={16} /> },
 ]
 
 const STATUS_BADGE: Record<string, string> = {
@@ -492,6 +493,129 @@ function PeriodsTab({ canManage }: { canManage: boolean }) {
   )
 }
 
+// ─── Mappings Tab Content ────────────────────────────────────
+function MappingsTab({ canManage }: { canManage: boolean }) {
+  const qc = useQueryClient()
+  const [saving, setSaving] = useState(false)
+  const [error,  setError]  = useState('')
+  const [success, setSuccess] = useState(false)
+
+  // Fetch current mappings
+  const { data: mappings = [], isLoading: loadingMap } = useQuery<Array<{ mapping_key: string; account_code: number }>>({
+    queryKey: ['gl-mappings'],
+    queryFn:  () => glApi.mappings() as Promise<Array<{ mapping_key: string; account_code: number }>>,
+  })
+
+  // Fetch available GL accounts to choose from
+  const { data: accounts = [], isLoading: loadingAcc } = useQuery<Account[]>({
+    queryKey: ['config', 'accounts-dropdown'],
+    queryFn:  () => configApi.accounts() as Promise<Account[]>,
+  })
+
+  const [localMap, setLocalMap] = useState<Record<string, string>>({})
+
+  // Sync local state when data arrives
+  useEffect(() => {
+    if (mappings.length) {
+      const m: Record<string, string> = {}
+      mappings.forEach(x => { m[x.mapping_key] = String(x.account_code) })
+      setLocalMap(m)
+    }
+  }, [mappings])
+
+  const KEYS = [
+    { key: 'inventory',        label: 'حساب المخزون الرئيسي',    desc: 'يُستخدم في حركات الإضافة والصرف للمخازن' },
+    { key: 'cash',             label: 'حساب النقدية (الصندوق)', desc: 'يُستخدم في المشتريات النقدية للمخزون' },
+    { key: 'accounts_payable', label: 'حساب الموردين (الدائنون)',  desc: 'يُستخدم في المشتريات الآجلة للمخزون' },
+    { key: 'cogs',             label: 'حساب تكلفة الإنتاج (COGS)', desc: 'يُستخدم عند صرف مخزن مرتبط بأمر شغل' },
+    { key: 'expense_default',  label: 'حساب المصاريف العمومية', desc: 'يُستخدم عند صرف مخزن إداري أو غير مرنبط بإنتاج' },
+  ]
+
+  const handleSave = async () => {
+    setSaving(true)
+    setError('')
+    setSuccess(false)
+    try {
+      const payload = Object.entries(localMap).map(([k, v]) => ({
+        mapping_key: k,
+        account_code: Number(v)
+      })).filter(x => x.account_code > 0)
+
+      await glApi.saveMappings(payload)
+      await qc.invalidateQueries({ queryKey: ['gl-mappings'] })
+      setSuccess(true)
+      setTimeout(() => setSuccess(false), 3000)
+    } catch {
+      setError('فشل في حفظ الإعدادات')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const isLoading = loadingMap || loadingAcc
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex gap-3 text-sm text-blue-800">
+        <Info size={18} className="text-blue-500 shrink-0 mt-0.5" />
+        <div>
+          <p className="font-semibold">لماذا نربط الحسابات؟</p>
+          <p className="opacity-80">
+            هذا الربط يسمح للنظام بتوليد قيود محاسبية آمنة وتلقائية. بدون تحديد هذه الحسابات، لن يتمكن النظام من تسجيل حركات المخازن أو الخزينة في دفتر الأستاذ العام.
+          </p>
+        </div>
+      </div>
+
+      <div className="card overflow-hidden">
+        <div className="px-5 py-3.5 border-b border-slate-100 flex justify-between items-center">
+          <span className="text-sm font-semibold text-slate-700">توجيه الحسابات التلقائي</span>
+          {canManage && (
+            <button
+              className={`btn-primary px-5 py-1.5 text-xs gap-2 ${success ? 'bg-green-600' : ''}`}
+              onClick={handleSave}
+              disabled={saving || isLoading}
+            >
+              {saving ? 'جاري الحفظ...' : success ? <><CheckCircle size={14}/> تم الحفظ</> : 'حفظ الإعدادات'}
+            </button>
+          )}
+        </div>
+
+        {isLoading ? (
+          <div className="p-16 text-center text-slate-400">جاري التحميل...</div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {KEYS.map(k => (
+              <div key={k.key} className="flex flex-col md:flex-row md:items-center justify-between p-5 gap-4 hover:bg-slate-50 transition-colors">
+                <div className="max-w-md">
+                  <p className="font-medium text-slate-800 text-sm">{k.label}</p>
+                  <p className="text-xs text-slate-400 mt-1">{k.desc}</p>
+                </div>
+                <div className="w-full md:w-80">
+                  <select
+                    className="input text-sm py-1.5"
+                    disabled={!canManage}
+                    value={localMap[k.key] || ''}
+                    onChange={e => setLocalMap(prev => ({ ...prev, [k.key]: e.target.value }))}
+                  >
+                    <option value="">-- اختر حساب من الشجرة --</option>
+                    {accounts.map(acc => (
+                      <option key={acc.code} value={acc.code}>
+                        {acc.code} — {acc.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {error && <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg border border-red-200">{error}</p>}
+    </div>
+  )
+}
+
 // ─── Main Config Page ────────────────────────────────────────
 export default function ConfigPage() {
   const { canWrite } = usePermission()
@@ -711,6 +835,11 @@ export default function ConfigPage() {
       {/* Financial Periods */}
       {tab === 'periods' && (
         <PeriodsTab canManage={canWrite('gl')} />
+      )}
+
+      {/* GL Mappings */}
+      {tab === 'mappings' && (
+        <MappingsTab canManage={canWrite('config')} />
       )}
 
       {/* Modals */}

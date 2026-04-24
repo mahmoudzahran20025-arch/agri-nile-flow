@@ -342,8 +342,9 @@ export default function PurchaseOrdersPage() {
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [showReceive, setShowReceive] = useState<PurchaseOrder | null>(null)
+  const [receiveDate, setReceiveDate] = useState(new Date().toISOString().slice(0, 10))
   const [receiveItems, setReceiveItems] = useState<Array<{
-    item_id: number; item_name: string; qty_ordered: number
+    po_item_id: number; item_name: string; qty_ordered: number
     qty_received_so_far: number; qty_to_receive: string; warehouse: string
   }>>([])
   const [showInvoice, setShowInvoice] = useState<number | null>(null)
@@ -407,8 +408,8 @@ export default function PurchaseOrdersPage() {
   })
 
   const receiveMut = useMutation({
-    mutationFn: ({ poId, items }: { poId: number; items: Array<{ item_id: number; qty_received: number; warehouse?: string }> }) =>
-      financeApi.receivePO(poId, items),
+    mutationFn: ({ poId, received_date, items }: { poId: number; received_date: string; items: Array<{ po_item_id: number; qty_received: number; warehouse: string }> }) =>
+      financeApi.receivePO(poId, { received_date, items }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['purchase-orders'] })
       qc.invalidateQueries({ queryKey: ['purchase-order', expandedId] })
@@ -419,7 +420,7 @@ export default function PurchaseOrdersPage() {
   function openReceive(po: PurchaseOrder) {
     if (!detail?.items) return
     setReceiveItems(detail.items.map(i => ({
-      item_id:             i.id,
+      po_item_id:          i.id,
       item_name:           i.item_name,
       qty_ordered:         i.qty_ordered,
       qty_received_so_far: i.qty_received,
@@ -641,10 +642,23 @@ export default function PurchaseOrdersPage() {
       {showReceive && (
         <Modal open={!!showReceive} onClose={() => setShowReceive(null)} title={`استلام — ${showReceive.po_number}`}>
           <div className="space-y-4 p-1">
-            <p className="text-sm text-gray-600">أدخل الكميات المستلمة فعلياً والمخزن لكل صنف:</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-gray-500 mb-0.5 block font-medium">تاريخ الاستلام</label>
+                <input
+                  type="date"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-brand-500"
+                  value={receiveDate}
+                  onChange={e => setReceiveDate(e.target.value)}
+                />
+              </div>
+              <div className="flex items-end text-xs text-gray-400 pb-2">
+                سجل الكميات المستلمة والمخزن لكل صنف:
+              </div>
+            </div>
             <div className="space-y-3">
               {receiveItems.map((item, idx) => (
-                <div key={item.item_id} className="border border-gray-100 rounded-xl p-3 space-y-2 bg-gray-50">
+                <div key={item.po_item_id} className="border border-gray-100 rounded-xl p-3 space-y-2 bg-gray-50">
                   <p className="text-sm font-medium text-gray-800">{item.item_name}</p>
                   <p className="text-xs text-gray-400">
                     مطلوب: {item.qty_ordered} · مستلم سابقاً: {item.qty_received_so_far}
@@ -678,12 +692,13 @@ export default function PurchaseOrdersPage() {
               <button
                 onClick={() => receiveMut.mutate({
                   poId: showReceive.id,
+                  received_date: receiveDate,
                   items: receiveItems
                     .filter(i => Number(i.qty_to_receive) > 0)
                     .map(i => ({
-                      item_id:      i.item_id,
+                      po_item_id:   i.po_item_id,
                       qty_received: Number(i.qty_to_receive),
-                      warehouse:    i.warehouse || undefined,
+                      warehouse:    i.warehouse || 'المخزن الرئيسي', // default if empty
                     })),
                 })}
                 disabled={receiveItems.every(i => !Number(i.qty_to_receive)) || receiveMut.isPending}

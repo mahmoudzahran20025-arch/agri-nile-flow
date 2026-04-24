@@ -199,4 +199,63 @@ admin.get('/overview', async (c) => {
   return c.json({ success: true, data: rows })
 })
 
+// GET /api/admin/sanity-check — diagnostic tool to find inconsistencies
+admin.get('/sanity-check', async (c) => {
+  const { results: companies } = await c.env.DB.prepare('SELECT id, name FROM companies WHERE is_active = 1').all<{ id: number; name: string }>()
+  
+  const report = await Promise.all(companies.map(async co => {
+    const cid = co.id
+    
+    // 1. Inventory Check: Do stored balances match the movement history?
+    const invIssues = await c.env.DB.prepare(`
+      SELECT im.item_code, im.warehouse, im.balance_qty,
+             (SELECT SUM(qty_in - qty_out) FROM inventory_movements 
+              WHERE company_id = ? AND item_code = im.item_code AND warehouse = im.warehouse) AS calculated_qty
+      FROM inventory_movements im
+      WHERE im.company_id = ?
+        AND im.id = (SELECT MAX(id) FROM inventory_movements WHERE company_id = ? AND item_code = im.item_code AND warehouse = im.warehouse)
+      HAVING ABS(balance_qty - calculated_qty) > 0.0001
+    `).bind(cid, cid, cid).all()
+
+    // 2. Ledger Check: Is the trial balance balanced?
+    const glIssues = await c.env.DB.prepare(`
+      SELECT SUM(debit) AS total_debit, SUM(credit) AS total_credit
+      FROM journal_entry_lines
+      WHERE company_id = ?
+    `).bind(cid).first<{ total_debit: number; total_credit: number }>()
+
+    // 3. Supplier Check: Do supplier totals match transaction history?
+    const supIssues = await c.env.DB.prepare(`
+      SELECT st.supplier_code, st.balance_with_checks,
+             (SELECT SUM(credit - debit) FROM supplier_transactions 
+              WHERE company_id = ? AND supplier_code = st.supplier_code) AS calculated_bal
+      FROM supplier_transactions st
+      WHERE st.company_id = ?
+        AND st.id = (SELECT MAX(id) FROM supplier_transactions WHERE company_id = ? AND supplier_code = st.supplier_code)
+      HAVING ABS(balance_with_checks - calculated_bal) > 0.01
+    `).bind(cid, cid, cid).all()
+
+    // 4. Error Log Count (Last 24h)
+    const errorCount = await c.env.DB.prepare(`
+      SELECT COUNT(*) AS n FROM system_error_logs 
+      WHERE company_id = ? AND created_at > datetime('now', '-1 day')
+    `).bind(cid).first<{ n: number }>()
+
+    return {
+      company: co.name,
+      inventory_discrepancies: invIssues.results.length,
+      gl_out_of_balance: Math.abs((glIssues?.total_debit ?? 0) - (glIssues?.total_credit ?? 0)) > 0.01,
+      supplier_discrepancies: supIssues.results.length,
+      errors_last_24h: errorCount?.n ?? 0,
+      details: {
+        inv: invIssues.results,
+        sup: supIssues.results,
+        gl: glIssues
+      }
+    }
+  }))
+
+  return c.json({ success: true, data: report })
+})
+
 export default admin

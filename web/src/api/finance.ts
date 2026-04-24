@@ -133,8 +133,8 @@ export const financeApi = {
   }) => unwrap(api.post<{id:number; po_number:string}>('/finance/purchase-orders', b)),
   updatePOStatus: (id: number, status: string, notes?: string) =>
     unwrap(api.patch<null>(`/finance/purchase-orders/${id}/status`, { status, notes })),
-  receivePO: (id: number, items: Array<{ item_id: number; qty_received: number; warehouse?: string }>) =>
-    unwrap(api.patch<{status:string}>(`/finance/purchase-orders/${id}/receive`, { items })),
+  receivePO: (id: number, b: { received_date: string; items: Array<{ po_item_id: number; qty_received: number; warehouse: string }> }) =>
+    unwrap(api.post<{status:string}>(`/inventory/receive-po/${id}`, b)),
   getPOMatch: (id: number) =>
     unwrap(api.get<{ po: PurchaseOrder; match_rows: POMatchRow[]; invoices: POInvoiceSummary[] }>(
       `/finance/purchase-orders/${id}/match`

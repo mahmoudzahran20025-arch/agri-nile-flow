@@ -1,32 +1,39 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
-import { authMiddleware, getUser } from '../middleware/auth'
+import { authMiddleware, getUser, permissionGuard } from '../middleware/auth'
 import { glInventoryMovement, getOpenPeriod } from '../lib/gl'
+import { FinanceCore } from '../lib/finance_core'
 import { logAudit } from '../lib/audit'
 
 const inventory = new Hono<{ Bindings: Env }>()
 inventory.use('*', authMiddleware)
 
 // GET /api/inventory/balances?warehouse=
-inventory.get('/balances', async (c) => {
+inventory.get('/balances', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const warehouse = c.req.query('warehouse')
 
-  const whereWarehouse = warehouse ? 'AND im.warehouse = ?' : ''
-  const binds = warehouse ? [company_id, warehouse] : [company_id]
+  const whereWarehouse = warehouse ? 'AND warehouse = ?' : ''
+  const subWhere = warehouse ? 'AND warehouse = ?' : ''
+  const binds = warehouse 
+    ? [company_id, warehouse, company_id, warehouse] 
+    : [company_id, company_id]
 
   const { results } = await c.env.DB.prepare(
     `SELECT im.warehouse, im.item_code,
             i.name AS item_name, i.unit,
-            SUM(im.qty_in)    AS total_in,
-            SUM(im.qty_out)   AS total_out,
-            SUM(im.qty_in) - SUM(im.qty_out)     AS balance_qty,
-            SUM(im.value_in) - SUM(im.value_out)  AS balance_value
+            im.balance_qty,
+            im.balance_value,
+            im.center_code, im.field_id
      FROM inventory_movements im
      LEFT JOIN items i ON i.code = im.item_code AND i.company_id = im.company_id
-     WHERE im.company_id = ? ${whereWarehouse}
-     GROUP BY im.warehouse, im.item_code
-     HAVING balance_qty != 0
+     WHERE im.company_id = ? ${whereWarehouse.replace('warehouse', 'im.warehouse')}
+       AND im.id IN (
+         SELECT MAX(id) FROM inventory_movements
+         WHERE company_id = ? ${subWhere}
+         GROUP BY item_code, warehouse
+       )
+     HAVING im.balance_qty != 0
      ORDER BY im.warehouse, i.name`
   ).bind(...binds).all()
 
@@ -34,7 +41,7 @@ inventory.get('/balances', async (c) => {
 })
 
 // GET /api/inventory/warehouses
-inventory.get('/warehouses', async (c) => {
+inventory.get('/warehouses', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
 
   const { results } = await c.env.DB.prepare(
@@ -45,7 +52,7 @@ inventory.get('/warehouses', async (c) => {
 })
 
 // GET /api/inventory/movements?page=&size=&warehouse=&item_code=&type=&start=&end=
-inventory.get('/movements', async (c) => {
+inventory.get('/movements', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const page      = Math.max(1, Number(c.req.query('page') ?? 1))
   const size      = Math.min(200, Number(c.req.query('size') ?? 100))
@@ -105,7 +112,7 @@ inventory.get('/movements', async (c) => {
 })
 
 // POST /api/inventory/movements
-inventory.post('/movements', async (c) => {
+inventory.post('/movements', permissionGuard('inventory', 'create'), async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const b = await c.req.json<{
     movement_date: string; warehouse: string; movement_type: string
@@ -113,6 +120,7 @@ inventory.post('/movements', async (c) => {
     supplier_code?: number; document_number?: number; notes?: string
     season_id?: number; field_id?: number; work_order_id?: number
     center_code?: number; pack_capacity?: number; pack_count?: number
+    payment_method?: 'cash' | 'credit'
   }>()
 
   if (!b.movement_date || !b.warehouse || !b.movement_type || !b.item_code || !b.quantity) {
@@ -127,18 +135,52 @@ inventory.post('/movements', async (c) => {
     return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.movement_date}` }, 400)
   }
 
-  // Get current balance for this item in this warehouse
-  const balRow = await c.env.DB.prepare(
-    `SELECT SUM(qty_in) - SUM(qty_out) AS bal_qty,
-            SUM(value_in) - SUM(value_out) AS bal_val
-     FROM inventory_movements WHERE company_id = ? AND item_code = ? AND warehouse = ?`
-  ).bind(company_id, b.item_code, b.warehouse).first<{ bal_qty: number; bal_val: number }>()
+  // Auto-resolve center_code from field_id if missing
+  let centerCode = b.center_code
+  if (!centerCode && b.field_id) {
+    const field = await c.env.DB.prepare("SELECT center_code FROM fields WHERE id = ? AND company_id = ?")
+      .bind(b.field_id, company_id).first<{ center_code: number }>()
+    if (field?.center_code) centerCode = field.center_code
+  }
 
-  const prevQty = balRow?.bal_qty ?? 0
-  const prevVal = balRow?.bal_val ?? 0
+  // Pre-validate GL mappings to ensure atomicity
+  const invAcc = await c.env.DB.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'inventory'").bind(company_id).first()
+  if (!invAcc) return c.json({ success: false, error: 'GL_MAPPING_MISSING: حساب المخزون غير مربوط في الإعدادات.' }, 400)
+  if (b.movement_type === 'اضافة') {
+    const method = b.payment_method ?? 'credit'
+    if (method === 'credit') {
+      const apAcc = await c.env.DB.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'accounts_payable'").bind(company_id).first()
+      if (!apAcc) return c.json({ success: false, error: 'GL_MAPPING_MISSING: حساب الموردين غير مربوط.' }, 400)
+    } else {
+      const cashAcc = await c.env.DB.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'").bind(company_id).first()
+      if (!cashAcc) return c.json({ success: false, error: 'GL_MAPPING_MISSING: حساب النقدية غير مربوط.' }, 400)
+    }
+  }
 
-  if (b.movement_type === 'صرف' && b.quantity > prevQty) {
-    return c.json({ success: false, error: `الكمية المتاحة (${prevQty}) أقل من المطلوب (${b.quantity})`, code: 'INSUFFICIENT_STOCK' }, 409)
+  // Calculate running balance — find the immediately preceding transaction for this item+warehouse
+  const lastRow = await c.env.DB.prepare(
+    `SELECT balance_qty, balance_value FROM inventory_movements
+     WHERE company_id = ? AND item_code = ? AND warehouse = ? AND (movement_date < ? OR (movement_date = ? AND id < (SELECT MAX(id)+1 FROM inventory_movements)))
+     ORDER BY movement_date DESC, id DESC LIMIT 1`
+  ).bind(company_id, b.item_code, b.warehouse, b.movement_date, b.movement_date).first<{ balance_qty: number; balance_value: number }>()
+
+  const prevQty = lastRow?.balance_qty ?? 0
+  const prevVal = lastRow?.balance_value ?? 0
+
+  if (b.movement_type === 'صرف') {
+    if (b.quantity > prevQty) {
+      return c.json({ success: false, error: `الكمية المتاحة بتاريخ ${b.movement_date} هي (${prevQty})، والمطلوب (${b.quantity})`, code: 'INSUFFICIENT_STOCK' }, 409)
+    }
+    // Deep Check: Does this withdrawal cause any FUTURE record to go negative?
+    const minFutureBal = await c.env.DB.prepare(
+      `SELECT MIN(balance_qty) as min_bal FROM inventory_movements
+       WHERE company_id = ? AND item_code = ? AND warehouse = ?
+         AND (movement_date > ? OR (movement_date = ? AND id > (SELECT MAX(id) FROM inventory_movements WHERE movement_date = ?)))`
+    ).bind(company_id, b.item_code, b.warehouse, b.movement_date, b.movement_date, b.movement_date).first<{ min_bal: number | null }>()
+
+    if (minFutureBal && minFutureBal.min_bal !== null && minFutureBal.min_bal < b.quantity) {
+      return c.json({ success: false, error: `هذه الحركة ستؤدي لرصيد سالب في حركات مستقبلية (أدنى رصيد مستقبلي سيكون ${minFutureBal.min_bal})`, code: 'FUTURE_NEGATIVE_STOCK' }, 409)
+    }
   }
 
   const unitPrice = b.unit_price ?? (prevQty > 0 ? prevVal / prevQty : 0)
@@ -150,7 +192,7 @@ inventory.post('/movements', async (c) => {
   const balVal    = prevVal + valueIn - valueOut
 
   const date = new Date(b.movement_date)
-  await c.env.DB.prepare(
+  const result = await c.env.DB.prepare(
     `INSERT INTO inventory_movements
      (company_id, season_id, field_id, work_order_id, supplier_code, item_code, center_code,
       movement_date, warehouse, movement_type, document_number, pack_capacity, pack_count,
@@ -159,25 +201,61 @@ inventory.post('/movements', async (c) => {
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(
     company_id, b.season_id ?? null, b.field_id ?? null, b.work_order_id ?? null,
-    b.supplier_code ?? null, b.item_code, b.center_code ?? null,
+    b.supplier_code ?? null, b.item_code, centerCode ?? null,
     b.movement_date, b.warehouse, b.movement_type, b.document_number ?? null,
     b.pack_capacity ?? null, b.pack_count ?? null, b.quantity, unitPrice,
     qtyIn, qtyOut, balQty, valueIn, valueOut, balVal,
     b.notes ?? null, date.getFullYear(), date.getMonth() + 1, userId
   ).run()
 
-  const lastMov = await c.env.DB
-    .prepare('SELECT id FROM inventory_movements WHERE company_id = ? ORDER BY id DESC LIMIT 1')
-    .bind(company_id).first<{id:number}>()
-  const movId = lastMov?.id ?? 0
+  const movId = result.meta.last_row_id
+
+  // Propagate delta to all subsequent rows for this item+warehouse (Backdating fix)
+  const dQty = qtyIn - qtyOut
+  const dVal = valueIn - valueOut
+  await c.env.DB.prepare(
+    `UPDATE inventory_movements
+     SET balance_qty = balance_qty + ?, balance_value = balance_value + ?
+     WHERE company_id = ? AND item_code = ? AND warehouse = ?
+       AND (movement_date > ? OR (movement_date = ? AND id > ?))`
+  ).bind(dQty, dVal, company_id, b.item_code, b.warehouse, b.movement_date, b.movement_date, movId).run()
 
   const itemRow = await c.env.DB
     .prepare('SELECT name FROM items WHERE code = ? AND company_id = ?')
     .bind(b.item_code, company_id).first<{name:string}>()
 
   const glValue = b.movement_type === 'اضافة' ? valueIn : valueOut
-  await glInventoryMovement(c.env.DB, company_id, movId,
-    b.movement_type, glValue, b.movement_date, itemRow?.name ?? String(b.item_code), userId)
+  let glEntryId: number | null = null
+  try {
+    glEntryId = await glInventoryMovement(c.env.DB, company_id, movId,
+      b.movement_type, glValue, b.movement_date, itemRow?.name ?? String(b.item_code),
+      userId, centerCode, b.payment_method, b.work_order_id)
+  } catch (err: any) {
+    // Compensating transaction (Rollback)
+    await c.env.DB.prepare('DELETE FROM inventory_movements WHERE id = ?').bind(movId).run()
+    await c.env.DB.prepare(
+      `UPDATE inventory_movements
+       SET balance_qty = balance_qty - ?, balance_value = balance_value - ?
+       WHERE company_id = ? AND item_code = ? AND warehouse = ?
+         AND (movement_date > ? OR (movement_date = ? AND id > ?))`
+    ).bind(dQty, dVal, company_id, b.item_code, b.warehouse, b.movement_date, b.movement_date, movId).run()
+    throw new Error(`فشل إنشاء القيد المحاسبي وتم إلغاء الحركة المخزنية: ${err.message}`)
+  }
+
+  // Sync with Treasury if Cash Purchase
+  if (b.movement_type === 'اضافة' && b.payment_method === 'cash') {
+    await FinanceCore.recordCashMovement(c.env.DB, {
+      company_id, userId,
+      transaction_date: b.movement_date,
+      direction: 'م', // Out (Payment)
+      amount: valueIn,
+      narration: `شراء نقدي: ${itemRow?.name ?? b.item_code} (مخزن: ${b.warehouse})`,
+      document_number: b.document_number,
+      supplier_code: b.supplier_code,
+      center_code: centerCode,
+      notes: b.notes
+    })
+  }
 
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'CREATE',
@@ -188,7 +266,7 @@ inventory.post('/movements', async (c) => {
     },
   })
 
-  return c.json({ success: true, data: { balance_qty: balQty, balance_value: balVal } }, 201)
+  return c.json({ success: true, data: { balance_qty: balQty, balance_value: balVal, gl_entry_id: glEntryId } }, 201)
 })
 
 // GET /api/inventory/item/:code/stock?warehouse=
@@ -198,15 +276,20 @@ inventory.get('/item/:code/stock', async (c) => {
   const warehouse = c.req.query('warehouse')
 
   const where  = warehouse ? 'AND warehouse = ?' : ''
-  const binds: unknown[] = warehouse ? [company_id, code, warehouse] : [company_id, code]
+  const subWhere = warehouse ? 'AND warehouse = ?' : ''
+  const binds: unknown[] = warehouse 
+    ? [company_id, code, warehouse, company_id, code, warehouse] 
+    : [company_id, code, company_id, code]
 
   const { results } = await c.env.DB.prepare(
-    `SELECT warehouse,
-            SUM(qty_in)  - SUM(qty_out)   AS balance_qty,
-            SUM(value_in) - SUM(value_out) AS balance_value
-     FROM inventory_movements
-     WHERE company_id = ? AND item_code = ? ${where}
-     GROUP BY warehouse`
+    `SELECT warehouse, balance_qty, balance_value
+     FROM inventory_movements im
+     WHERE company_id = ? AND item_code = ? ${where.replace('warehouse', 'im.warehouse')}
+       AND id IN (
+         SELECT MAX(id) FROM inventory_movements
+         WHERE company_id = ? AND item_code = ? ${subWhere}
+         GROUP BY warehouse
+       )`
   ).bind(...binds).all<{ warehouse: string; balance_qty: number; balance_value: number }>()
 
   const totalQty = results.reduce((s, r) => s + (r.balance_qty ?? 0), 0)
@@ -227,15 +310,17 @@ inventory.get('/item/:code/stock', async (c) => {
 inventory.post('/movements/batch', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const b = await c.req.json<{
-    movement_date:   string
-    warehouse:       string
-    movement_type:   string
-    supplier_code?:  number
+    movement_date:    string
+    warehouse:        string
+    movement_type:    string
+    supplier_code?:   number
     document_number?: number
-    season_id?:      number
-    field_id?:       number
-    work_order_id?:  number
-    notes?:          string
+    season_id?:       number
+    field_id?:        number
+    work_order_id?:   number
+    notes?:           string
+    center_code?:     number
+    payment_method?:  'cash' | 'credit'
     items: Array<{
       item_code:   number
       quantity:    number
@@ -257,6 +342,28 @@ inventory.post('/movements/batch', async (c) => {
   const periodId = await getOpenPeriod(c.env.DB, company_id, b.movement_date)
   if (!periodId) {
     return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.movement_date}` }, 400)
+  }
+
+  // Pre-validate GL mappings to ensure atomicity
+  const invAcc = await c.env.DB.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'inventory'").bind(company_id).first()
+  if (!invAcc) return c.json({ success: false, error: 'GL_MAPPING_MISSING: حساب المخزون غير مربوط في الإعدادات.' }, 400)
+  if (b.movement_type === 'اضافة') {
+    const method = b.payment_method ?? 'credit'
+    if (method === 'credit') {
+      const apAcc = await c.env.DB.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'accounts_payable'").bind(company_id).first()
+      if (!apAcc) return c.json({ success: false, error: 'GL_MAPPING_MISSING: حساب الموردين غير مربوط.' }, 400)
+    } else {
+      const cashAcc = await c.env.DB.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'").bind(company_id).first()
+      if (!cashAcc) return c.json({ success: false, error: 'GL_MAPPING_MISSING: حساب النقدية غير مربوط.' }, 400)
+    }
+  }
+
+  // Auto-resolve center_code from field_id if missing
+  let centerCode = b.center_code
+  if (!centerCode && b.field_id) {
+    const field = await c.env.DB.prepare("SELECT center_code FROM fields WHERE id = ? AND company_id = ?")
+      .bind(b.field_id, company_id).first<{ center_code: number }>()
+    if (field?.center_code) centerCode = field.center_code
   }
 
   const date     = new Date(b.movement_date)
@@ -287,15 +394,16 @@ inventory.post('/movements/batch', async (c) => {
       return c.json({ success: false, error: `السطر ${i + 1}: كود الصنف والكمية مطلوبان` }, 400)
     }
 
-    const balRow = await c.env.DB.prepare(
-      `SELECT SUM(qty_in) - SUM(qty_out)   AS bal_qty,
-              SUM(value_in) - SUM(value_out) AS bal_val
-       FROM inventory_movements WHERE company_id = ? AND item_code = ? AND warehouse = ?`
-    ).bind(company_id, li.item_code, b.warehouse)
-      .first<{ bal_qty: number; bal_val: number }>()
+    // Calculate running balance per item for this date
+    const lastRow = await c.env.DB.prepare(
+      `SELECT balance_qty, balance_value FROM inventory_movements
+       WHERE company_id = ? AND item_code = ? AND warehouse = ? AND (movement_date < ? OR (movement_date = ? AND id < (SELECT MAX(id)+1 FROM inventory_movements)))
+       ORDER BY movement_date DESC, id DESC LIMIT 1`
+    ).bind(company_id, li.item_code, b.warehouse, b.movement_date, b.movement_date)
+      .first<{ balance_qty: number; balance_value: number }>()
 
-    const prevQty = balRow?.bal_qty ?? 0
-    const prevVal = balRow?.bal_val ?? 0
+    const prevQty = lastRow?.balance_qty ?? 0
+    const prevVal = lastRow?.balance_value ?? 0
 
     if (b.movement_type === 'صرف' && li.quantity > prevQty) {
       const itemRow = await c.env.DB
@@ -329,44 +437,101 @@ inventory.post('/movements/batch', async (c) => {
   }
 
   // Step 2: Batch insert all movements
-  const stmts = lineResults.map(lr =>
+  const insertStmts = lineResults.map(lr =>
     c.env.DB.prepare(
       `INSERT INTO inventory_movements
        (company_id, season_id, field_id, work_order_id, supplier_code, item_code, movement_date, warehouse,
         movement_type, document_number, quantity, unit_price,
         qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
-        notes, year, month, created_by_user_id, local_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        notes, year, month, created_by_user_id, local_id, center_code)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
       company_id, b.season_id ?? null, b.field_id ?? null, b.work_order_id ?? null,
       b.supplier_code ?? null, lr.item_code,
       b.movement_date, b.warehouse, b.movement_type, b.document_number ?? null,
       lr.quantity, lr.unit_price,
       lr.qtyIn, lr.qtyOut, lr.balQty, lr.valueIn, lr.valueOut, lr.balVal,
-      lr.lineNotes ?? b.notes ?? null, year, month, userId, lr.localId
+      lr.lineNotes ?? b.notes ?? null, year, month, userId, lr.localId, centerCode ?? null
     )
   )
-  await c.env.DB.batch(stmts)
+  await c.env.DB.batch(insertStmts)
 
-  // Step 3: Retrieve IDs & create GL entries
+  // Step 3: Retrieve inserted IDs and apply delta updates for backdating
   const { results: inserted } = await c.env.DB.prepare(
     `SELECT id, item_code, local_id FROM inventory_movements
      WHERE company_id = ? AND local_id LIKE ? ORDER BY id ASC`
   ).bind(company_id, `${batchKey}_%`)
     .all<{ id: number; item_code: number; local_id: string }>()
 
+  const deltaStmts = inserted.map(ins => {
+    const lr = lineResults.find(r => r.localId === ins.local_id)
+    if (!lr) return null
+    const dQty = lr.qtyIn - lr.qtyOut
+    const dVal = lr.valueIn - lr.valueOut
+    return c.env.DB.prepare(
+      `UPDATE inventory_movements
+       SET balance_qty = balance_qty + ?, balance_value = balance_value + ?
+       WHERE company_id = ? AND item_code = ? AND warehouse = ?
+         AND (movement_date > ? OR (movement_date = ? AND id > ?))`
+    ).bind(dQty, dVal, company_id, lr.item_code, b.warehouse, b.movement_date, b.movement_date, ins.id)
+  }).filter(Boolean) as any[]
+
+  if (deltaStmts.length > 0) await c.env.DB.batch(deltaStmts)
+
+  // Step 4: Create GL entries & Sync Treasury
+  let totalValue = 0
   for (const ins of inserted) {
     const lr = lineResults.find(r => r.localId === ins.local_id)
     if (!lr) continue
     const glValue = b.movement_type === 'اضافة' ? lr.valueIn : lr.valueOut
+    totalValue += glValue
+
     const itemRow = await c.env.DB
       .prepare('SELECT name FROM items WHERE code = ? AND company_id = ?')
       .bind(lr.item_code, company_id).first<{ name: string }>()
-    await glInventoryMovement(
-      c.env.DB, company_id, ins.id,
-      b.movement_type, glValue, b.movement_date,
-      itemRow?.name ?? String(lr.item_code), userId
-    )
+    
+    try {
+      await glInventoryMovement(
+        c.env.DB, company_id, ins.id,
+        b.movement_type, glValue, b.movement_date,
+        itemRow?.name ?? String(lr.item_code), userId, centerCode,
+        b.payment_method, b.work_order_id
+      )
+    } catch (err: any) {
+      // Compensating transaction (Rollback batch)
+      await c.env.DB.prepare('DELETE FROM inventory_movements WHERE company_id = ? AND local_id LIKE ?')
+        .bind(company_id, `${batchKey}_%`).run()
+      
+      // Revert balances
+      const rollbackStmts = inserted.map(i => {
+        const line = lineResults.find(r => r.localId === i.local_id)
+        if (!line) return null
+        return c.env.DB.prepare(
+          `UPDATE inventory_movements
+           SET balance_qty = balance_qty - ?, balance_value = balance_value - ?
+           WHERE company_id = ? AND item_code = ? AND warehouse = ?
+             AND (movement_date > ? OR (movement_date = ? AND id > ?))`
+        ).bind(line.qtyIn - line.qtyOut, line.valueIn - line.valueOut, company_id, line.item_code, b.warehouse, b.movement_date, b.movement_date, i.id)
+      }).filter(Boolean) as any[]
+      
+      if (rollbackStmts.length > 0) await c.env.DB.batch(rollbackStmts)
+      
+      throw new Error(`فشل إنشاء القيد المحاسبي وتم إلغاء حركة المخزن: ${err.message}`)
+    }
+  }
+
+  if (b.movement_type === 'اضافة' && b.payment_method === 'cash' && totalValue > 0) {
+    await FinanceCore.recordCashMovement(c.env.DB, {
+      company_id, userId,
+      transaction_date: b.movement_date,
+      direction: 'م', // Out
+      amount: totalValue,
+      narration: `شراء نقدي Batch (مخزن: ${b.warehouse}) - ${lineResults.length} صنف`,
+      document_number: b.document_number,
+      supplier_code: b.supplier_code,
+      center_code: centerCode,
+      notes: b.notes
+    })
   }
 
   return c.json({
@@ -505,6 +670,175 @@ inventory.get('/reorder-alerts', async (c) => {
   `).bind(company_id, company_id, company_id, company_id).all()
 
   return c.json({ success: true, data: results })
+})
+
+// POST /api/inventory/receive-po/:po_id — convert PO items into inventory movements automatically
+inventory.post('/receive-po/:po_id', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const poId = Number(c.req.param('po_id'))
+
+  const b = await c.req.json<{
+    received_date: string
+    notes?: string
+    items: Array<{
+      po_item_id: number
+      qty_received: number
+      warehouse:   string      // multi-warehouse: each line can target a different store
+      unit_price?: number      // override price if needed
+    }>
+  }>()
+
+  if (!b.received_date || !Array.isArray(b.items) || b.items.length === 0) {
+    return c.json({ success: false, error: 'التاريخ وبنود الاستلام مطلوبة' }, 400)
+  }
+
+  // 1. Validate PO exists and belongs to company
+  const po = await c.env.DB.prepare(
+    'SELECT id, status, supplier_code FROM purchase_orders WHERE id = ? AND company_id = ?'
+  ).bind(poId, company_id)
+    .first<{ id: number; status: string; supplier_code: number | null }>()
+
+  if (!po) return c.json({ success: false, error: 'طلب الشراء غير موجود' }, 404)
+  if (po.status === 'cancelled' || po.status === 'closed') {
+    return c.json({ success: false, error: `لا يمكن استلام طلب بحالة: ${po.status}` }, 400)
+  }
+
+  // 2. Validate open financial period
+  const periodId = await getOpenPeriod(c.env.DB, company_id, b.received_date)
+  if (!periodId) {
+    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.received_date}` }, 400)
+  }
+
+  // 3. Pre-validate GL mappings (inventory + AP required for accrual receipt)
+  const invAccChk = await c.env.DB.prepare(
+    "SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'inventory'"
+  ).bind(company_id).first()
+  if (!invAccChk) return c.json({ success: false, error: 'GL_MAPPING_MISSING: حساب المخزون غير مربوط.' }, 400)
+
+  const apAccChk = await c.env.DB.prepare(
+    "SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'accounts_payable'"
+  ).bind(company_id).first()
+  if (!apAccChk) return c.json({ success: false, error: 'GL_MAPPING_MISSING: حساب الموردين غير مربوط.' }, 400)
+
+  // 4. Validate and enrich each receive line
+  const enrichedLines: Array<{
+    po_item_id:   number
+    item_code:    number
+    item_name:    string
+    qty_received: number
+    unit_price:   number
+    warehouse:    string
+  }> = []
+
+  for (const item of b.items) {
+    const poItem = await c.env.DB.prepare(
+      `SELECT id, item_code, item_name, unit_price, qty_ordered, qty_received
+       FROM purchase_order_items WHERE id = ? AND po_id = ? AND company_id = ?`
+    ).bind(item.po_item_id, poId, company_id)
+      .first<{ id: number; item_code: number; item_name: string; unit_price: number; qty_ordered: number; qty_received: number }>()
+
+    if (!poItem) return c.json({ success: false, error: `البند ${item.po_item_id} غير موجود` }, 404)
+    
+    const remaining = poItem.qty_ordered - poItem.qty_received
+    if (item.qty_received > remaining) {
+      return c.json({ success: false, error: `الكمية المستلمة (${item.qty_received}) تتجاوز المتبقي (${remaining}) لبند ${poItem.item_name}` }, 409)
+    }
+
+    enrichedLines.push({
+      po_item_id:   item.po_item_id,
+      item_code:    poItem.item_code,
+      item_name:    poItem.item_name,
+      qty_received: item.qty_received,
+      unit_price:   item.unit_price ?? poItem.unit_price,
+      warehouse:    item.warehouse
+    })
+  }
+
+  // 5. Process receipt via FinanceCore (handles inventory, GL, and PO status)
+  const { movements, status: newStatus } = await FinanceCore.processPOReceipt(c.env.DB, {
+    company_id, userId, po_id: poId,
+    received_date: b.received_date,
+    supplier_code: po.supplier_code ?? undefined,
+    items: enrichedLines
+  })
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'RECEIVE_PO',
+    table_name: 'purchase_orders', record_id: poId,
+    new_value: { po_id: poId, lines_count: enrichedLines.length, status: newStatus },
+  })
+
+  return c.json({
+    success: true,
+    data: { po_id: poId, status: newStatus, movements_created: movements },
+  }, 201)
+})
+
+// POST /api/inventory/transfer — Move stock between warehouses atomically
+inventory.post('/transfer', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const b = await c.req.json<{
+    movement_date: string; item_code: number; quantity: number
+    from_warehouse: string; to_warehouse: string; notes?: string
+  }>()
+
+  if (!b.movement_date || !b.item_code || !b.quantity || !b.from_warehouse || !b.to_warehouse) {
+    return c.json({ success: false, error: 'كل البيانات (التاريخ، الصنف، الكمية، من، إلى) مطلوبة' }, 400)
+  }
+
+  const periodId = await getOpenPeriod(c.env.DB, company_id, b.movement_date)
+  if (!periodId) return c.json({ success: false, error: 'الفترة المالية مغلقة' }, 400)
+
+  // 1. Get Source Balance & Price
+  const srcBal = await c.env.DB.prepare(
+    `SELECT balance_qty, balance_value FROM inventory_movements
+     WHERE company_id = ? AND item_code = ? AND warehouse = ?
+     ORDER BY movement_date DESC, id DESC LIMIT 1`
+  ).bind(company_id, b.item_code, b.from_warehouse).first<{ balance_qty: number; balance_value: number }>()
+
+  if (!srcBal || srcBal.balance_qty < b.quantity) {
+    return c.json({ success: false, error: 'الرصيد في مخزن المصدر غير كافٍ' }, 409)
+  }
+
+  const avgPrice = srcBal.balance_value / srcBal.balance_qty
+  const totalValue = b.quantity * avgPrice
+
+  // 2. Get Destination Balance
+  const dstBal = await c.env.DB.prepare(
+    `SELECT balance_qty, balance_value FROM inventory_movements
+     WHERE company_id = ? AND item_code = ? AND warehouse = ?
+     ORDER BY movement_date DESC, id DESC LIMIT 1`
+  ).bind(company_id, b.item_code, b.to_warehouse).first<{ balance_qty: number; balance_value: number }>()
+
+  const dstPrevQty = dstBal?.balance_qty ?? 0
+  const dstPrevVal = dstBal?.balance_value ?? 0
+
+  const batchKey = `trf_${Date.now()}`
+  const yr = new Date(b.movement_date).getFullYear()
+  const mo = new Date(b.movement_date).getMonth() + 1
+
+  // 3. Atomic Batch: Out from Src, In to Dst
+  await c.env.DB.batch([
+    // OUT
+    c.env.DB.prepare(
+      `INSERT INTO inventory_movements (company_id, item_code, movement_date, warehouse, movement_type,
+       quantity, unit_price, qty_out, balance_qty, value_out, balance_value, notes, year, month, created_by_user_id, local_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(company_id, b.item_code, b.movement_date, b.from_warehouse, 'صرف',
+      b.quantity, avgPrice, b.quantity, srcBal.balance_qty - b.quantity, totalValue, srcBal.balance_value - totalValue,
+      `تحويل إلى ${b.to_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, `${batchKey}_out`),
+
+    // IN
+    c.env.DB.prepare(
+      `INSERT INTO inventory_movements (company_id, item_code, movement_date, warehouse, movement_type,
+       quantity, unit_price, qty_in, balance_qty, value_in, balance_value, notes, year, month, created_by_user_id, local_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(company_id, b.item_code, b.movement_date, b.to_warehouse, 'اضافة',
+      b.quantity, avgPrice, b.quantity, dstPrevQty + b.quantity, totalValue, dstPrevVal + totalValue,
+      `تحويل من ${b.from_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, `${batchKey}_in`)
+  ])
+
+  return c.json({ success: true, data: { transferred: b.quantity, price: avgPrice } })
 })
 
 export default inventory

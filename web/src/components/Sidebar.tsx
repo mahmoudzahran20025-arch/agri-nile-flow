@@ -2,10 +2,8 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Users, Banknote, Package,
   FileText, Settings, LogOut, Leaf, ChevronLeft,
-  ClipboardList, UserCog, TrendingUp, MapPin, Wrench, Wheat,
-  BookOpen, BookMarked, BarChart3, Building2, Shield, Target,
-  CalendarDays, PieChart, Lock, Landmark, ShoppingCart, GitBranch, Scale,
-  ChevronDown, Layers, Link2, CreditCard,
+  ClipboardList, UserCog, TrendingUp, MapPin, Wrench,
+  Building2, Shield, Activity, ChevronDown,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useQuery } from '@tanstack/react-query'
@@ -36,6 +34,7 @@ interface NavItem {
   icon:   React.ReactNode
   label:  string
   badge?: number
+  permission?: { module: string; action: string }
 }
 
 interface NavSection {
@@ -53,66 +52,35 @@ const NAV_SECTIONS: NavSection[] = [
   },
   {
     key: 'ops', label: 'العمليات الزراعية', items: [
-      { to: '/suppliers',           icon: <Users           size={18} />, label: 'الموردين والعملاء' },
-      { to: '/treasury',            icon: <Banknote        size={18} />, label: 'الخزينة' },
-      { to: '/treasury/partners',   icon: <TrendingUp      size={18} />, label: 'الشركاء' },
-      { to: '/inventory',                icon: <Package         size={18} />, label: 'أرصدة المخازن' },
-      { to: '/inventory/movements',      icon: <ClipboardList   size={18} />, label: 'حركات المخزون' },
-      { to: '/inventory/cost-by-field',  icon: <Wheat           size={18} />, label: 'تكلفة الفدان' },
-      { to: '/fields',                   icon: <MapPin          size={18} />, label: 'قطع الأراضي' },
-      { to: '/fields/harvest',      icon: <Wheat           size={18} />, label: 'سجلات الحصاد' },
-      { to: '/operations',          icon: <Wrench          size={18} />, label: 'أوامر العمل' },
-      { to: '/operations/templates',icon: <Layers          size={18} />, label: 'نماذج العمليات' },
-      { to: '/contracts',           icon: <FileText        size={18} />, label: 'العقود' },
-    ],
-  },
-  {
-    key: 'hr', label: 'الموارد البشرية', items: [
-      { to: '/hr',                  icon: <Users           size={18} />, label: 'الموظفون' },
-      { to: '/hr/dashboard',        icon: <PieChart        size={18} />, label: 'داشبورد HR' },
-      { to: '/hr/org',              icon: <GitBranch       size={18} />, label: 'الهيكل التنظيمي' },
-      { to: '/hr/attendance',       icon: <ClipboardList   size={18} />, label: 'الحضور والانصراف' },
-      { to: '/hr/leaves',           icon: <FileText        size={18} />, label: 'الإجازات والسلف' },
-      { to: '/hr/payroll',          icon: <Banknote        size={18} />, label: 'مسيرات الرواتب' },
-      { to: '/hr/location-tasks',   icon: <Target          size={18} />, label: 'مهام الزيارات' },
-      { to: '/calendar',            icon: <CalendarDays    size={18} />, label: 'التقويم والمهام' },
-      { to: '/documents',           icon: <FileText        size={18} />, label: 'إدارة المستندات' },
-    ],
-  },
-  {
-    key: 'gl', label: 'المحاسبة', items: [
-      { to: '/gl/accounts',         icon: <BookOpen        size={18} />, label: 'شجرة الحسابات' },
-      { to: '/gl/entries',          icon: <BookMarked      size={18} />, label: 'قيود اليومية' },
-      { to: '/gl/statements',       icon: <BarChart3       size={18} />, label: 'القوائم المالية' },
-      { to: '/gl/periods',          icon: <Lock            size={18} />, label: 'الفترات المالية' },
-      { to: '/treasury/bank',       icon: <Landmark        size={18} />, label: 'مطابقة البنك' },
-      { to: '/treasury/po',         icon: <ShoppingCart    size={18} />, label: 'طلبات الشراء' },
-      { to: '/gl/mappings',         icon: <Link2           size={18} />, label: 'ربط الحسابات' },
-      { to: '/treasury/ap',         icon: <CreditCard      size={18} />, label: 'الذمم الدائنة' },
+      { to: '/suppliers',           icon: <Users           size={18} />, label: 'الموردين والعملاء', permission: { module: 'suppliers', action: 'read' } },
+      { to: '/treasury',            icon: <Banknote        size={18} />, label: 'الخزينة', permission: { module: 'treasury', action: 'read' } },
+      { to: '/treasury/partners',   icon: <TrendingUp      size={18} />, label: 'الشركاء', permission: { module: 'treasury', action: 'read' } },
+      { to: '/inventory',                icon: <Package         size={18} />, label: 'أرصدة المخازن', permission: { module: 'inventory', action: 'read' } },
+      { to: '/inventory/movements',      icon: <ClipboardList   size={18} />, label: 'حركات المخزون', permission: { module: 'inventory', action: 'read' } },
+      { to: '/fields',                   icon: <MapPin          size={18} />, label: 'قطع الأراضي',   permission: { module: 'config', action: 'read' } },
+      { to: '/operations',          icon: <Wrench          size={18} />, label: 'أوامر العمل',   permission: { module: 'config', action: 'read' } },
+      { to: '/contracts',           icon: <FileText        size={18} />, label: 'العقود',        permission: { module: 'config', action: 'read' } },
     ],
   },
   {
     key: 'reports', label: 'التقارير والتحليل', items: [
-      { to: '/reports',                    icon: <ClipboardList size={18} />, label: 'التقارير' },
-      { to: '/reports/charts',             icon: <BarChart3     size={18} />, label: 'التقارير المرئية' },
-      { to: '/reports/cost-centers',       icon: <Target        size={18} />, label: 'تكاليف البيفوتات' },
-      { to: '/reports/suppliers-balance',  icon: <Scale         size={18} />, label: 'ميزان الموردين' },
-      { to: '/reports/season-summary',     icon: <Leaf          size={18} />, label: 'ملخص الموسم' },
-      { to: '/reports/season-pnl',         icon: <TrendingUp    size={18} />, label: 'أرباح وخسائر' },
-      { to: '/reports/season-close',       icon: <Lock          size={18} />, label: 'إغلاق الموسم' },
+      { to: '/reports',                    icon: <ClipboardList size={18} />, label: 'التقارير', permission: { module: 'reports', action: 'read' } },
+      { to: '/reports/season-summary',     icon: <Leaf          size={18} />, label: 'ملخص الموسم', permission: { module: 'reports', action: 'read' } },
+      { to: '/reports/season-pnl',         icon: <TrendingUp    size={18} />, label: 'أرباح وخسائر', permission: { module: 'reports', action: 'read' } },
     ],
   },
   {
     key: 'admin', label: 'الإدارة والنظام', items: [
-      { to: '/users',               icon: <UserCog         size={18} />, label: 'المستخدمون' },
-      { to: '/audit',               icon: <Shield          size={18} />, label: 'سجل المراجعة' },
-      { to: '/config',              icon: <Settings        size={18} />, label: 'الإعدادات' },
+      { to: '/users',               icon: <UserCog         size={18} />, label: 'المستخدمون', permission: { module: 'admin', action: 'users' } },
+      { to: '/audit',               icon: <Shield          size={18} />, label: 'سجل المراجعة', permission: { module: 'admin', action: 'audit' } },
+      { to: '/audit/errors',        icon: <Activity        size={18} />, label: 'صحة النظام',   permission: { module: 'admin', action: 'audit' } },
+      { to: '/config',              icon: <Settings        size={18} />, label: 'الإعدادات', permission: { module: 'config', action: 'read' } },
     ],
   },
 ]
 
 export default function Sidebar() {
-  const { company, user, role, logout } = useAppStore()
+  const { company, user, role, permissions, logout } = useAppStore()
   const isAuth = useIsAuth()
   const navigate = useNavigate()
   const [collapsed, setCollapsed] = useState(false)
@@ -200,6 +168,14 @@ export default function Sidebar() {
       {/* Nav */}
       <nav className="flex-1 py-3 overflow-y-auto px-2 space-y-1">
         {NAV_SECTIONS.map(section => {
+          const visibleItems = section.items.filter(item => {
+            if (!item.permission) return true
+            if (role === 'super_admin') return true
+            return permissions.includes(`${item.permission.module}.${item.permission.action}`)
+          })
+
+          if (visibleItems.length === 0) return null
+
           const sectionCollapsed = collapsedSections[section.key]
           return (
             <div key={section.key}>
@@ -220,7 +196,7 @@ export default function Sidebar() {
                 </button>
               )}
               {/* Section items */}
-              {!sectionCollapsed && section.items.map(item => {
+              {!sectionCollapsed && visibleItems.map(item => {
                 const isInventory = item.to === '/inventory'
                 const badge = isInventory && alertCount > 0 ? alertCount : item.badge
                 return (

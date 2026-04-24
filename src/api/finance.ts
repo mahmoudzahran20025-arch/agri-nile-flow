@@ -2,10 +2,34 @@ import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
 import { logAudit } from '../lib/audit'
-import { getOpenPeriod, glInventoryMovement, glSupplierInvoice } from '../lib/gl'
+import { getOpenPeriod, postAutoEntry, glInventoryMovement } from '../lib/gl'
+import { z } from 'zod'
+import { zValidator } from '@hono/zod-validator'
 
 const finance = new Hono<{ Bindings: Env }>()
 finance.use('*', authMiddleware)
+
+const poStatusSchema = z.object({
+  status: z.enum(['sent', 'partial', 'received', 'cancelled', 'closed']),
+  notes: z.string().optional().nullable(),
+})
+
+const poCreateSchema = z.object({
+  po_number: z.string().optional().nullable(),
+  supplier_code: z.number().optional().nullable(),
+  supplier_name: z.string().optional().nullable(),
+  order_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'صيغة التاريخ خاطئة'),
+  expected_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+  notes: z.string().optional().nullable(),
+  items: z.array(z.object({
+    item_code: z.union([z.string(), z.number()]).optional().nullable(),
+    item_name: z.string().min(2, 'اسم الصنف قصير جداً'),
+    unit: z.string().optional().nullable(),
+    qty_ordered: z.number().positive('الكمية يجب أن تكون موجبة'),
+    unit_price: z.number().nonnegative('السعر لا يمكن أن يكون سالباً'),
+    notes: z.string().optional().nullable(),
+  })).min(1, 'يجب إضافة صنف واحد على الأقل'),
+})
 
 // ═══════════════════════════════════════════════════════════
 // BANK ACCOUNTS — الحسابات البنكية
@@ -282,20 +306,9 @@ finance.get('/purchase-orders/:id', async (c) => {
   return c.json({ success: true, data: { ...po, items: items.results } })
 })
 
-finance.post('/purchase-orders', async (c) => {
+finance.post('/purchase-orders', zValidator('json', poCreateSchema), async (c) => {
   const { company_id, sub: userId } = getUser(c)
-  const b = await c.req.json<{
-    po_number?: string; supplier_code?: number; supplier_name?: string
-    order_date: string; expected_date?: string; notes?: string
-    items: Array<{
-      item_code?: string; item_name: string; unit?: string
-      qty_ordered: number; unit_price: number; notes?: string
-    }>
-  }>()
-
-  if (!b.order_date || !b.items?.length) {
-    return c.json({ success: false, error: 'التاريخ والبنود مطلوبة' }, 400)
-  }
+  const b = c.req.valid('json')
 
   // Auto-generate PO number if not provided
   const poNumber = b.po_number ?? await (async () => {
@@ -341,15 +354,11 @@ finance.post('/purchase-orders', async (c) => {
 })
 
 // PATCH status transitions: sent → partial → received → closed / cancelled
-finance.patch('/purchase-orders/:id/status', async (c) => {
+finance.patch('/purchase-orders/:id/status', zValidator('json', poStatusSchema), async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id   = Number(c.req.param('id'))
-  const { status, notes } = await c.req.json<{ status: string; notes?: string }>()
-
-  const valid = ['sent','partial','received','cancelled','closed']
-  if (!valid.includes(status)) {
-    return c.json({ success: false, error: 'الحالة غير صالحة' }, 400)
-  }
+  const b    = c.req.valid('json')
+  const { status, notes } = b
 
   const po = await c.env.DB
     .prepare('SELECT status FROM purchase_orders WHERE id = ? AND company_id = ?')
@@ -548,8 +557,8 @@ finance.get('/purchase-orders/:id/match', async (c) => {
 
   const [items, invoices] = await Promise.all([
     c.env.DB.prepare(
-      'SELECT * FROM purchase_order_items WHERE po_id = ? ORDER BY id'
-    ).bind(poId).all(),
+      'SELECT * FROM purchase_order_items WHERE po_id = ? AND company_id = ? ORDER BY id'
+    ).bind(poId, company_id).all(),
 
     c.env.DB.prepare(`
       SELECT si.id AS invoice_id, si.invoice_number, si.invoice_date,
@@ -651,6 +660,31 @@ finance.post('/purchase-orders/:id/invoices', async (c) => {
   ).bind(poId, company_id).first<{ id: number; supplier_code: number | null }>()
   if (!po) return c.json({ success: false, error: 'طلب الشراء غير موجود' }, 404)
 
+  // Validate financial period
+  const { getOpenPeriod, glSupplierInvoice } = await import('../lib/gl')
+  const periodId = await getOpenPeriod(c.env.DB, company_id, b.invoice_date)
+  if (!periodId) {
+    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.invoice_date}` }, 400)
+  }
+
+  // 3-Way Match Enforcement: Check existing invoiced qty vs received qty
+  for (const item of b.items) {
+    const poItem = await c.env.DB.prepare(
+      `SELECT item_name, qty_received, (SELECT COALESCE(SUM(qty_invoiced),0) FROM supplier_invoice_items WHERE po_item_id = ?) AS already_invoiced
+       FROM purchase_order_items WHERE id = ? AND po_id = ? AND company_id = ?`
+    ).bind(item.po_item_id, item.po_item_id, poId, company_id).first<{ item_name: string; qty_received: number; already_invoiced: number }>()
+
+    if (!poItem) return c.json({ success: false, error: `البند ${item.po_item_id} غير موجود` }, 404)
+    
+    const remainingToInvoice = poItem.qty_received - poItem.already_invoiced
+    if (item.qty_invoiced > remainingToInvoice) {
+      return c.json({ 
+        success: false, 
+        error: `الكمية المفوترة (${item.qty_invoiced}) تتجاوز المتبقي من الاستلام (${remainingToInvoice}) لبند ${poItem.item_name}. المطابقة الثلاثية مطلوبة.` 
+      }, 409)
+    }
+  }
+
   const totalAmount = b.items.reduce((s, i) => s + i.qty_invoiced * i.unit_price, 0)
 
   const invRes = await c.env.DB.prepare(
@@ -669,18 +703,23 @@ finance.post('/purchase-orders/:id/invoices', async (c) => {
     ).bind(invoiceId, i.po_item_id, company_id, i.qty_invoiced, i.unit_price)
   ))
 
-  void glSupplierInvoice(
+  const glEntryId = await glSupplierInvoice(
     c.env.DB, company_id, invoiceId, totalAmount, b.invoice_date,
     `فاتورة مورد: ${b.invoice_number}`, userId,
   )
 
+  if (glEntryId) {
+    await c.env.DB.prepare('UPDATE supplier_invoices SET journal_entry_id = ? WHERE id = ?')
+      .bind(glEntryId, invoiceId).run()
+  }
+
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'CREATE',
     table_name: 'supplier_invoices', record_id: invoiceId,
-    new_value: { po_id: poId, invoice_number: b.invoice_number, total: totalAmount },
+    new_value: { po_id: poId, invoice_number: b.invoice_number, total: totalAmount, gl_entry_id: glEntryId },
   })
 
-  return c.json({ success: true, data: { id: invoiceId } }, 201)
+  return c.json({ success: true, data: { id: invoiceId, gl_entry_id: glEntryId } }, 201)
 })
 
 // ── AP Aging ──────────────────────────────────────────────────
@@ -728,10 +767,31 @@ finance.patch('/supplier-invoices/:id/pay', async (c) => {
 
   const inv = await c.env.DB.prepare(
     'SELECT * FROM supplier_invoices WHERE id = ? AND company_id = ?'
-  ).bind(id, company_id).first<{ total_amount: number; paid_amount: number }>()
+  ).bind(id, company_id).first<{
+    total_amount: number; paid_amount: number
+    payment_date: string | null; payment_ref: string | null
+  }>()
   if (!inv) return c.json({ success: false, error: 'الفاتورة غير موجودة' }, 404)
 
   const newPaid = Math.min(Number(b.paid_amount) || 0, inv.total_amount)
+  const today   = b.payment_date ?? new Date().toISOString().slice(0, 10)
+
+  // Pre-validate GL mappings and open period before touching financial records
+  const [apRow, cashRow] = await Promise.all([
+    c.env.DB.prepare('SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = ?')
+      .bind(company_id, 'accounts_payable').first<{ account_code: string }>(),
+    c.env.DB.prepare('SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = ?')
+      .bind(company_id, 'cash').first<{ account_code: string }>(),
+  ])
+  if (!apRow || !cashRow) {
+    return c.json({ success: false, error: 'GL_MAPPING_MISSING: حسابات الدائنون أو الخزينة غير معرفة في إعدادات الحسابات' }, 400)
+  }
+  const periodId = await getOpenPeriod(c.env.DB, company_id, today)
+  if (!periodId) {
+    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${today}` }, 400)
+  }
+
+  // Update payment record
   await c.env.DB.prepare(
     `UPDATE supplier_invoices
      SET paid_amount = ?, payment_date = COALESCE(?, payment_date),
@@ -739,34 +799,25 @@ finance.patch('/supplier-invoices/:id/pay', async (c) => {
      WHERE id = ? AND company_id = ?`
   ).bind(newPaid, b.payment_date ?? null, b.payment_ref ?? null, id, company_id).run()
 
-  // GL: DR Accounts Payable / CR Cash
-  const today = (b.payment_date ?? new Date().toISOString().slice(0, 10))
-  const apAcc   = await c.env.DB.prepare(
-    'SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = ?'
-  ).bind(company_id, 'accounts_payable').first<{ account_code: string }>()
-  const cashAcc = await c.env.DB.prepare(
-    'SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = ?'
-  ).bind(company_id, 'cash').first<{ account_code: string }>()
-
-  if (apAcc && cashAcc) {
-    const periodId = await getOpenPeriod(c.env.DB, company_id, today)
-    if (periodId) {
-      try {
-        const je = await c.env.DB.prepare(
-          `INSERT INTO journal_entries (company_id, period_id, entry_date, description, ref_type, ref_id, is_posted, created_by)
-           VALUES (?,?,?,?,?,?,1,?)`
-        ).bind(company_id, periodId, today, `سداد فاتورة مورد #${id}`, 'supplier_payment', id, userId).run()
-        const eid = je.meta.last_row_id
-        await c.env.DB.prepare(
-          `INSERT INTO journal_entry_lines (entry_id, company_id, account_code, debit, credit, description)
-           VALUES (?,?,?,?,?,?)`
-        ).bind(eid, company_id, apAcc.account_code, newPaid, 0, `سداد فاتورة #${id}`).run()
-        await c.env.DB.prepare(
-          `INSERT INTO journal_entry_lines (entry_id, company_id, account_code, debit, credit, description)
-           VALUES (?,?,?,?,?,?)`
-        ).bind(eid, company_id, cashAcc.account_code, 0, newPaid, `سداد فاتورة #${id}`).run()
-      } catch { /* GL failure must not block payment */ }
-    }
+  // GL: DR Accounts Payable / CR Cash — balanced and batched via postAutoEntry
+  try {
+    await postAutoEntry(c.env.DB, {
+      company_id, entry_date: today,
+      description: `سداد فاتورة مورد #${id}`,
+      ref_type: 'supplier_payment', ref_id: id,
+      lines: [
+        { account_code: apRow.account_code,   debit: newPaid, credit: 0,       description: `سداد فاتورة #${id}` },
+        { account_code: cashRow.account_code, debit: 0,       credit: newPaid, description: `سداد فاتورة #${id}` },
+      ],
+      created_by: userId,
+    })
+  } catch (e: any) {
+    // Compensating rollback — restore original payment values
+    await c.env.DB.prepare(
+      `UPDATE supplier_invoices SET paid_amount = ?, payment_date = ?, payment_ref = ?
+       WHERE id = ? AND company_id = ?`
+    ).bind(inv.paid_amount, inv.payment_date, inv.payment_ref, id, company_id).run()
+    return c.json({ success: false, error: `فشل إنشاء القيد المحاسبي: ${e.message}` }, 400)
   }
 
   void logAudit(c.env.DB, {

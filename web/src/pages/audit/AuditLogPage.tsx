@@ -1,274 +1,342 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Shield, Filter, Download } from 'lucide-react'
+import { 
+  History, User, Database, 
+  ChevronRight, ChevronDown, ArrowRight, Clock,
+  Terminal, AlertCircle, Shield, Download
+} from 'lucide-react'
 import { auditApi, downloadCsv } from '../../api/client'
+import type { Company } from '../../types'
+import { useAppStore } from '../../store/appStore'
 
-function startOfMonth() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
-}
-function today() { return new Date().toISOString().slice(0, 10) }
-
-const ACTION_BADGE: Record<string, string> = {
-  CREATE: 'badge-green',
-  UPDATE: 'badge-blue',
-  DELETE: 'badge-red',
-  CLOSE:  'badge-amber',
-  REOPEN: 'badge-purple',
-  LOGIN:  'badge-slate',
-  SWITCH: 'badge-slate',
-}
-const ACTION_AR: Record<string, string> = {
-  CREATE: 'إنشاء',
-  UPDATE: 'تعديل',
-  DELETE: 'حذف',
-  CLOSE:  'إغلاق',
-  REOPEN: 'فتح',
-  LOGIN:  'تسجيل دخول',
-  SWITCH: 'تبديل شركة',
-}
-const TABLE_AR: Record<string, string> = {
-  cash_transactions:  'الخزينة',
-  supplier_transactions: 'المورد',
-  inventory_movements: 'المخزون',
-  journal_entries:    'القيود',
-  financial_periods:  'الفترات المالية',
-  partners:           'الشركاء',
-  users:              'المستخدمون',
-  suppliers:          'الموردون',
-  fields:             'الحقول',
-  employees:          'الموظفون',
-}
-
-interface AuditEntry {
-  id:         number
-  action:     string
+interface AuditLogEntry {
+  id: number
+  action: string
   table_name: string
-  record_id:  number | null
-  old_value:  string | null
-  new_value:  string | null
-  source:     string
+  record_id: number | null
+  old_value: string | null
+  new_value: string | null
+  source: string
   created_at: string
-  user_name:  string | null
-  user_email: string | null
-}
-
-interface AuditList {
-  data:      AuditEntry[]
-  total:     number
-  page:      number
-  page_size: number
-  has_more:  boolean
+  user_name: string
+  user_email: string
+  company_name: string
+  company_id: number
 }
 
 export default function AuditLogPage() {
-  const [page,      setPage]      = useState(1)
-  const [startDate, setStart]     = useState(startOfMonth())
-  const [endDate,   setEnd]       = useState(today())
-  const [filterTable, setFTable]  = useState('')
-  const [filterAction,setFAction] = useState('')
-  const [expanded,  setExpanded]  = useState<number | null>(null)
+  const { role } = useAppStore()
+  const [page, setPage] = useState(1)
+  const [filters, setFilters] = useState({
+    table: '',
+    action: '',
+    user_id: '',
+    company_id: 'all',
+    start: '',
+    end: ''
+  })
+  const [expandedId, setExpandedId] = useState<number | null>(null)
 
-  const { data, isLoading } = useQuery<AuditList>({
-    queryKey: ['audit', page, startDate, endDate, filterTable, filterAction],
-    queryFn:  () => auditApi.list({
-      page, size: 50,
-      start: startDate || undefined,
-      end:   endDate   || undefined,
-      table: filterTable  || undefined,
-      action: filterAction || undefined,
-    }) as Promise<AuditList>,
+  const { data: companies } = useQuery({
+    queryKey: ['admin-companies-list'],
+    queryFn: async () => {
+      if (role !== 'super_admin') return []
+      const res = await fetch('/api/admin/companies').then(r => r.json())
+      return res.data as Company[]
+    },
+    enabled: role === 'super_admin'
   })
 
-  const { data: statsRaw } = useQuery({
-    queryKey: ['audit-stats'],
-    queryFn:  () => auditApi.stats() as Promise<{
-      total: number
-      by_action: { action: string; cnt: number }[]
-      by_table:  { table_name: string; cnt: number }[]
-    }>,
+  const { data, isLoading } = useQuery({
+    queryKey: ['audit-logs', page, filters],
+    queryFn: () => auditApi.list({ 
+      ...filters, 
+      user_id: filters.user_id ? Number(filters.user_id) : undefined,
+      page, 
+      size: 20 
+    }),
   })
 
-  const stats = statsRaw
+  const entries = data?.data ?? []
+  const total   = data?.total ?? 0
 
-  const entries   = data?.data     ?? []
-  const total     = data?.total    ?? 0
-  const totalPages = Math.ceil(total / 50)
+  const ACTION_COLORS: Record<string, string> = {
+    CREATE: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+    UPDATE: 'bg-blue-50 text-blue-700 border-blue-100',
+    DELETE: 'bg-rose-50 text-rose-700 border-rose-100',
+    LOGIN:  'bg-indigo-50 text-indigo-700 border-indigo-100',
+    SWITCH: 'bg-amber-50 text-amber-700 border-amber-100',
+  }
 
-  const toggleExpand = (id: number) => setExpanded(prev => prev === id ? null : id)
+  const TABLE_LABELS: Record<string, string> = {
+    inventory_movements: 'حركات المخزون',
+    cash_transactions: 'حركات الخزينة',
+    suppliers: 'الموردين',
+    users: 'المستخدمين',
+    chart_of_accounts: 'دليل الحسابات',
+    seasons: 'المواسم',
+  }
+
+  function JsonDiff({ oldVal, newVal }: { oldVal: string | null, newVal: string | null }) {
+    try {
+      const oldObj = oldVal ? JSON.parse(oldVal) : null
+      const newObj = newVal ? JSON.parse(newVal) : null
+
+      if (!oldObj && newObj) {
+        return (
+          <div className="space-y-2">
+            <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">بيانات جديدة</p>
+            <pre className="text-xs bg-emerald-50/50 p-3 rounded-xl border border-emerald-100 overflow-auto max-h-60 font-mono">
+              {JSON.stringify(newObj, null, 2)}
+            </pre>
+          </div>
+        )
+      }
+
+      if (oldObj && newObj) {
+        const keys = Array.from(new Set([...Object.keys(oldObj), ...Object.keys(newObj)]))
+        return (
+          <div className="space-y-2">
+            <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest">تغييرات القيم</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {keys.map(k => {
+                const isDiff = JSON.stringify(oldObj[k]) !== JSON.stringify(newObj[k])
+                if (!isDiff) return null
+                return (
+                  <div key={k} className="flex flex-col gap-1 p-2 rounded-lg bg-white border border-slate-100 shadow-sm">
+                    <span className="text-[10px] font-bold text-slate-400">{k}</span>
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-rose-500 line-through truncate max-w-[100px]">{String(oldObj[k] ?? 'null')}</span>
+                      <ArrowRight size={10} className="text-slate-300" />
+                      <span className="text-emerald-600 font-bold truncate">{String(newObj[k] ?? 'null')}</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      }
+
+      return <span className="text-slate-400 italic text-xs">لا يوجد تفاصيل تقنية</span>
+    } catch {
+      return <span className="text-rose-400 text-xs">خطأ في تحليل البيانات</span>
+    }
+  }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6 animate-fade-in pb-10">
       {/* Header */}
-      <div className="page-header">
-        <div>
-          <h1 className="page-title flex items-center gap-2">
-            <Shield size={22} className="text-slate-400" />
-            سجل المراجعة
-          </h1>
-          <p className="text-sm text-slate-400 mt-0.5">
-            {total.toLocaleString('ar-EG')} سجل
-          </p>
+      <div className="glass p-6 rounded-3xl flex flex-col md:flex-row items-center justify-between gap-6">
+        <div className="flex items-center gap-4">
+          <div className="p-3 bg-indigo-100 text-indigo-600 rounded-2xl">
+            <History size={32} />
+          </div>
+          <div>
+            <h1 className="text-2xl font-black text-slate-900 tracking-tight">سجل المراجعة والتدقيق</h1>
+            <p className="text-slate-500 font-medium">تتبع جميع التغييرات والعمليات في النظام بدقة</p>
+          </div>
         </div>
-        <button
-          className="btn-secondary gap-2"
-          onClick={() => downloadCsv('/audit', 'سجل_المراجعة', {
-            start: startDate, end: endDate,
-            table: filterTable || undefined,
-            action: filterAction || undefined,
-          })}
+
+        <div className="flex items-center gap-3">
+           <button
+             className="btn-secondary gap-2 text-sm"
+             onClick={() => downloadCsv('/audit', 'سجل_المراجعة', filters)}
+           >
+             <Download size={16} /> تصدير CSV
+           </button>
+           <div className="px-4 py-2 bg-white rounded-xl border border-slate-100 shadow-sm">
+             <p className="text-[10px] font-black text-slate-400 uppercase">إجمالي العمليات</p>
+             <p className="text-lg font-black text-slate-800">{total.toLocaleString()}</p>
+           </div>
+        </div>
+      </div>
+
+      {/* Filters Bar */}
+      <div className="card p-4 flex flex-wrap items-end gap-4 shadow-sm border-slate-100">
+        <div className="flex-1 min-w-[200px]">
+          <label className="text-[10px] font-black text-slate-400 mb-1 block">البحث في الجدول</label>
+          <div className="relative">
+            <Database className="absolute right-3 top-2.5 text-slate-400" size={16} />
+            <select 
+              className="input pr-10 text-sm h-10"
+              value={filters.table}
+              onChange={e => setFilters(f => ({ ...f, table: e.target.value }))}
+            >
+              <option value="">جميع الجداول</option>
+              <option value="inventory_movements">المخزون</option>
+              <option value="cash_transactions">الخزينة</option>
+              <option value="suppliers">الموردين</option>
+              <option value="users">المستخدمين</option>
+              <option value="chart_of_accounts">دليل الحسابات</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="w-40">
+          <label className="text-[10px] font-black text-slate-400 mb-1 block">النوع</label>
+          <select 
+            className="input text-sm h-10"
+            value={filters.action}
+            onChange={e => setFilters(f => ({ ...f, action: e.target.value }))}
+          >
+            <option value="">جميع العمليات</option>
+            <option value="CREATE">إضافة</option>
+            <option value="UPDATE">تعديل</option>
+            <option value="DELETE">حذف</option>
+            <option value="LOGIN">دخول</option>
+          </select>
+        </div>
+
+        {role === 'super_admin' && (
+          <div className="w-52">
+            <label className="text-[10px] font-black text-slate-400 mb-1 block">الشركة</label>
+            <select 
+              className="input text-sm h-10 font-bold text-brand-700"
+              value={filters.company_id}
+              onChange={e => setFilters(f => ({ ...f, company_id: e.target.value }))}
+            >
+              <option value="all">جميع الشركات</option>
+              {companies?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <div className="w-36">
+            <label className="text-[10px] font-black text-slate-400 mb-1 block">من تاريخ</label>
+            <input 
+              type="date" 
+              className="input text-sm h-10" 
+              value={filters.start}
+              onChange={e => setFilters(f => ({ ...f, start: e.target.value }))}
+            />
+          </div>
+          <div className="w-36">
+            <label className="text-[10px] font-black text-slate-400 mb-1 block">إلى تاريخ</label>
+            <input 
+              type="date" 
+              className="input text-sm h-10" 
+              value={filters.end}
+              onChange={e => setFilters(f => ({ ...f, end: e.target.value }))}
+            />
+          </div>
+        </div>
+
+        <button 
+          onClick={() => { setFilters({ table: '', action: '', user_id: '', company_id: 'all', start: '', end: '' }); setPage(1) }}
+          className="btn-secondary h-10 px-4"
         >
-          <Download size={15} /> تصدير CSV
+          إعادة ضبط
         </button>
       </div>
 
-      {/* Stats row */}
-      {stats && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          {(stats.by_action ?? []).slice(0, 4).map(a => (
-            <div key={a.action} className="card p-4 text-center">
-              <span className={`inline-block mb-1 ${ACTION_BADGE[a.action] ?? 'badge-slate'}`}>
-                {ACTION_AR[a.action] ?? a.action}
-              </span>
-              <p className="text-2xl font-bold text-slate-900 mt-1">{a.cnt.toLocaleString('ar-EG')}</p>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Filters */}
-      <div className="card p-4">
-        <div className="flex items-center gap-2 flex-wrap">
-          <Filter size={15} className="text-slate-400" />
-          <input type="date" className="input w-auto text-sm" value={startDate}
-            onChange={e => { setStart(e.target.value); setPage(1) }} />
-          <span className="text-slate-400 text-sm">إلى</span>
-          <input type="date" className="input w-auto text-sm" value={endDate}
-            onChange={e => { setEnd(e.target.value); setPage(1) }} />
-          <select className="input w-auto text-sm" value={filterTable}
-            onChange={e => { setFTable(e.target.value); setPage(1) }}>
-            <option value="">كل الجداول</option>
-            {Object.entries(TABLE_AR).map(([k, v]) => (
-              <option key={k} value={k}>{v}</option>
-            ))}
-          </select>
-          <select className="input w-auto text-sm" value={filterAction}
-            onChange={e => { setFAction(e.target.value); setPage(1) }}>
-            <option value="">كل الإجراءات</option>
-            {Object.entries(ACTION_AR).map(([k, v]) => (
-              <option key={k} value={k}>{v}</option>
-            ))}
-          </select>
-          {(filterTable || filterAction) && (
-            <button className="btn-secondary text-xs py-1.5 px-3"
-              onClick={() => { setFTable(''); setFAction(''); setPage(1) }}>
-              مسح الفلاتر
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Table */}
-      <div className="card overflow-hidden">
+      {/* Main List */}
+      <div className="card overflow-hidden border-none shadow-xl">
         {isLoading ? (
-          <div className="p-16 text-center text-slate-400">جاري التحميل...</div>
+          <div className="flex flex-col items-center justify-center py-20 animate-pulse">
+            <Terminal className="text-slate-200 mb-4 animate-bounce" size={48} />
+            <p className="text-slate-400 font-bold italic text-sm tracking-widest uppercase">جاري استرجاع السجلات...</p>
+          </div>
+        ) : entries.length === 0 ? (
+          <div className="py-20 text-center">
+            <AlertCircle size={48} className="mx-auto text-slate-200 mb-4" />
+            <p className="text-slate-500 font-bold">لا توجد سجلات تطابق عوامل التصفية</p>
+          </div>
         ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50">
-              <tr>
-                {['التاريخ والوقت', 'المستخدم', 'الإجراء', 'الجدول', 'رقم السجل', 'التفاصيل'].map(h => (
-                  <th key={h} className="px-5 py-3 text-xs font-semibold text-slate-500 text-right">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {entries.map(entry => (
-                <>
-                  <tr key={entry.id} className="hover:bg-slate-50">
-                    <td className="px-5 py-3 text-slate-500 text-xs tabular-nums whitespace-nowrap">
-                      {new Date(entry.created_at).toLocaleString('ar-EG', {
-                        year: 'numeric', month: '2-digit', day: '2-digit',
-                        hour: '2-digit', minute: '2-digit',
-                      })}
-                    </td>
-                    <td className="px-5 py-3">
-                      <p className="font-medium text-slate-800 text-xs">{entry.user_name ?? '—'}</p>
-                      <p className="text-slate-400 text-xs">{entry.user_email ?? ''}</p>
-                    </td>
-                    <td className="px-5 py-3">
-                      <span className={ACTION_BADGE[entry.action] ?? 'badge-slate'}>
-                        {ACTION_AR[entry.action] ?? entry.action}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3 text-slate-600 text-xs">
-                      {TABLE_AR[entry.table_name] ?? entry.table_name}
-                    </td>
-                    <td className="px-5 py-3 text-slate-400 font-mono text-xs">
-                      {entry.record_id ?? '—'}
-                    </td>
-                    <td className="px-5 py-3">
-                      {(entry.new_value || entry.old_value) && (
-                        <button
-                          onClick={() => toggleExpand(entry.id)}
-                          className="text-xs text-brand-600 hover:text-brand-800 hover:underline"
-                        >
-                          {expanded === entry.id ? 'إخفاء' : 'عرض'}
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                  {expanded === entry.id && (
-                    <tr key={`${entry.id}-detail`} className="bg-slate-50">
-                      <td colSpan={6} className="px-5 py-3">
-                        <div className="grid grid-cols-2 gap-4 text-xs">
-                          {entry.old_value && (
-                            <div>
-                              <p className="font-semibold text-slate-500 mb-1">قبل التعديل</p>
-                              <pre className="bg-red-50 text-red-800 rounded-lg p-2 text-xs overflow-x-auto whitespace-pre-wrap">
-                                {JSON.stringify(JSON.parse(entry.old_value), null, 2)}
-                              </pre>
-                            </div>
-                          )}
-                          {entry.new_value && (
-                            <div>
-                              <p className="font-semibold text-slate-500 mb-1">بعد التعديل</p>
-                              <pre className="bg-green-50 text-green-800 rounded-lg p-2 text-xs overflow-x-auto whitespace-pre-wrap">
-                                {JSON.stringify(JSON.parse(entry.new_value), null, 2)}
-                              </pre>
-                            </div>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </>
-              ))}
-              {!entries.length && (
-                <tr>
-                  <td colSpan={6} className="px-5 py-16 text-center text-slate-400">
-                    لا توجد سجلات في هذه الفترة
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        )}
+          <div className="divide-y divide-slate-100">
+            {entries.map((entry: AuditLogEntry) => (
+              <div 
+                key={entry.id} 
+                className={`transition-all ${expandedId === entry.id ? 'bg-slate-50/80 shadow-inner' : 'hover:bg-slate-50/50'}`}
+              >
+                <div 
+                  className="p-4 flex items-center gap-4 cursor-pointer"
+                  onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
+                >
+                  <div className="w-10 h-10 flex-shrink-0 bg-white rounded-xl flex items-center justify-center shadow-sm border border-slate-100">
+                    {expandedId === entry.id ? <ChevronDown size={18} className="text-indigo-600" /> : <ChevronRight size={18} className="text-slate-400" />}
+                  </div>
 
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between px-5 py-3 border-t border-slate-100 bg-slate-50">
-            <span className="text-xs text-slate-400">
-              صفحة {page} من {totalPages} — {total.toLocaleString('ar-EG')} إجمالي
-            </span>
-            <div className="flex gap-2">
-              <button className="btn-secondary text-xs py-1.5 px-3" disabled={page === 1}
-                onClick={() => setPage(p => p - 1)}>السابق</button>
-              <button className="btn-secondary text-xs py-1.5 px-3" disabled={page >= totalPages}
-                onClick={() => setPage(p => p + 1)}>التالي</button>
-            </div>
+                  <div className="w-24 flex-shrink-0">
+                    <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border ${ACTION_COLORS[entry.action] ?? 'bg-slate-50 text-slate-600 border-slate-100'}`}>
+                      {entry.action}
+                    </span>
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-slate-800 text-sm truncate">
+                      {TABLE_LABELS[entry.table_name] ?? entry.table_name} 
+                      {entry.record_id && <span className="text-slate-400 mr-2">#{entry.record_id}</span>}
+                    </p>
+                    <div className="flex items-center gap-3 mt-1">
+                       <span className="flex items-center gap-1 text-xs text-slate-400">
+                         <User size={12} /> {entry.user_name}
+                       </span>
+                       <span className="text-slate-200">|</span>
+                       <span className="flex items-center gap-1 text-xs text-slate-400">
+                         <Clock size={12} /> {new Date(entry.created_at).toLocaleString('ar-EG')}
+                       </span>
+                    </div>
+                  </div>
+
+                  {role === 'super_admin' && (
+                    <div className="hidden lg:block w-40 text-right">
+                      <p className="text-[10px] font-black text-brand-600 uppercase tracking-widest truncate">{entry.company_name}</p>
+                    </div>
+                  )}
+
+                  <div className="hidden sm:flex items-center gap-1 text-xs font-bold text-slate-400 bg-slate-100/50 px-2 py-1 rounded-lg">
+                    <Shield size={12} /> {entry.source}
+                  </div>
+                </div>
+
+                {expandedId === entry.id && (
+                  <div className="px-16 pb-6 pt-2 animate-fade-in">
+                    <div className="glass p-6 rounded-2xl border-indigo-100 bg-white/80 space-y-6">
+                       <div className="flex items-start justify-between">
+                         <div className="space-y-1">
+                           <h4 className="text-sm font-black text-slate-800">تفاصيل العملية الفنية</h4>
+                           <p className="text-[10px] text-slate-400 font-mono">Log ID: {entry.id} • Table: {entry.table_name}</p>
+                         </div>
+                         <div className="flex gap-2">
+                           {entry.user_email && <span className="text-[10px] bg-slate-100 px-2 py-1 rounded font-mono text-slate-500">{entry.user_email}</span>}
+                         </div>
+                       </div>
+
+                       <JsonDiff oldVal={entry.old_value} newVal={entry.new_value} />
+                       
+                       <div className="pt-4 border-t border-slate-100 flex justify-between items-center">
+                         <span className="text-[10px] font-bold text-slate-300 italic">تم تسجيل هذا الإجراء تلقائياً بواسطة محرك التدقيق لنظام Agri-Nile</span>
+                         <button className="text-xs font-black text-indigo-600 hover:underline">عرض جميع حركات هذا السجل</button>
+                       </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </div>
+
+      {/* Pagination */}
+      {total > 20 && (
+        <div className="flex items-center justify-center gap-2 mt-8">
+           <button 
+             disabled={page === 1}
+             onClick={() => setPage(p => p - 1)}
+             className="btn-secondary h-10 px-4 disabled:opacity-50"
+           >السابق</button>
+           <div className="px-4 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-700">
+             صفحة {page} من {Math.ceil(total / 20)}
+           </div>
+           <button 
+             disabled={page * 20 >= total}
+             onClick={() => setPage(p => p + 1)}
+             className="btn-secondary h-10 px-4 disabled:opacity-50"
+           >التالي</button>
+        </div>
+      )}
     </div>
   )
 }

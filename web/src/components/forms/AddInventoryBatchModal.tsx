@@ -35,6 +35,7 @@ interface BatchForm {
   field_id:        string
   work_order_id:   string
   center_code:     string
+  payment_method:  'cash' | 'credit'
 }
 
 interface Props {
@@ -108,6 +109,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
     field_id:        '',
     work_order_id:   '',
     center_code:     '',
+    payment_method:  'credit',
   })
 
   const [lines, setLines] = useState<LineItem[]>([newLine()])
@@ -128,6 +130,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
         field_id:        '',
         work_order_id:   '',
         center_code:     '',
+        payment_method:  'credit',
       })
       setLines([newLine()])
     }
@@ -301,6 +304,8 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
         season_id:       form.season_id       ? Number(form.season_id)       : undefined,
         field_id:        form.field_id        ? Number(form.field_id)        : undefined,
         work_order_id:   form.work_order_id   ? Number(form.work_order_id)   : undefined,
+        payment_method:  form.payment_method,
+        center_code:     form.center_code     ? Number(form.center_code)     : undefined,
         notes:           form.notes || undefined,
         items: lines.map(l => ({
           item_code:  Number(l.item_code),
@@ -416,6 +421,36 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
               )}
             </div>
           </div>
+
+          {/* Payment Method (for Additions only) */}
+          {typeIsAdd && (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+              <label className="label text-xs mb-2">طريقة الدفع للمخزون</label>
+              <div className="flex gap-2">
+                <button type="button"
+                  className={`flex-1 py-2 px-3 rounded-lg border text-sm font-medium transition-all flex items-center justify-center gap-2
+                    ${form.payment_method === 'credit'
+                      ? 'bg-white border-brand-500 text-brand-700 shadow-sm'
+                      : 'bg-transparent border-slate-200 text-slate-400 hover:border-slate-300'}`}
+                  onClick={() => setF('payment_method', 'credit')}>
+                  <span>💳 آجل (على حساب المورد)</span>
+                </button>
+                <button type="button"
+                  className={`flex-1 py-2 px-3 rounded-lg border text-sm font-medium transition-all flex items-center justify-center gap-2
+                    ${form.payment_method === 'cash'
+                      ? 'bg-white border-green-500 text-green-700 shadow-sm'
+                      : 'bg-transparent border-slate-200 text-slate-400 hover:border-slate-300'}`}
+                  onClick={() => setF('payment_method', 'cash')}>
+                  <span>💵 نقدي (من الخزينة)</span>
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-400 mt-2 px-1">
+                {form.payment_method === 'cash'
+                  ? 'سيتم خصم قيمة المشتريات من رصيد الخزينة مباشرة.'
+                  : 'سيتم إضافة القيمة لمديونية المورد وسحبها لاحقاً عبر سداد الموردين.'}
+              </p>
+            </div>
+          )}
 
           {/* Season + Field — Agricultural Context */}
           <div className="rounded-xl border border-brand-100 bg-brand-50 p-3 space-y-3">
@@ -658,6 +693,14 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
                 <div className="flex gap-2">
                   <span className="text-slate-500">المورد:</span>
                   <span className="font-medium">#{form.supplier_code}</span>
+                </div>
+              )}
+              {typeIsAdd && (
+                <div className="flex gap-2">
+                  <span className="text-slate-500">طريقة الدفع:</span>
+                  <span className={`font-bold ${form.payment_method === 'cash' ? 'text-green-600' : 'text-brand-600'}`}>
+                    {form.payment_method === 'cash' ? '💵 نقدي' : '💳 آجل'}
+                  </span>
                 </div>
               )}
               {form.season_id && (

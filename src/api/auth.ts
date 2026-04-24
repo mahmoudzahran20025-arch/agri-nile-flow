@@ -70,13 +70,29 @@ auth.get('/me', async (c) => {
 
   const user = await c.env.DB
     .prepare('SELECT id, email, full_name, phone FROM users WHERE id = ?')
-    .bind(payload.sub).first()
+    .bind(payload.sub).first<{ id: number; email: string; full_name: string; phone: string }>()
 
   const company = await c.env.DB
     .prepare('SELECT id, code, name FROM companies WHERE id = ?')
     .bind(payload.company_id).first()
 
-  return c.json({ success: true, data: { user, company, role: payload.role } })
+  // Fetch permissions for this user/role
+  let permissions: string[] = []
+  if (payload.role === 'super_admin') {
+    const all = await c.env.DB.prepare('SELECT module, action FROM permissions').all<{ module: string; action: string }>()
+    permissions = all.results.map(p => `${p.module}.${p.action}`)
+  } else {
+    const rows = await c.env.DB.prepare(`
+      SELECT p.module, p.action 
+      FROM role_permissions rp
+      JOIN roles r ON r.name = ?
+      JOIN permissions p ON p.id = rp.permission_id
+      WHERE rp.role_id = r.id
+    `).bind(payload.role).all<{ module: string; action: string }>()
+    permissions = rows.results.map(p => `${p.module}.${p.action}`)
+  }
+
+  return c.json({ success: true, data: { user, company, role: payload.role, permissions } })
 })
 
 // GET /api/auth/companies?email=...

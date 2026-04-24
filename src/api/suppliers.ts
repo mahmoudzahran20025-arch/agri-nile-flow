@@ -210,39 +210,60 @@ suppliers.post('/:code/transactions', async (c) => {
     return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.transaction_date}` }, 400)
   }
 
+  // Calculate running balance for supplier (balance_with_checks / balance_no_checks)
+  const lastBalRow = await c.env.DB
+    .prepare(`SELECT balance_with_checks, balance_no_checks FROM supplier_transactions
+              WHERE company_id = ? AND supplier_code = ?
+              ORDER BY transaction_date DESC, id DESC LIMIT 1`)
+    .bind(company_id, code).first<{ balance_with_checks: number; balance_no_checks: number }>()
+
+  const prevBalWithChecks = lastBalRow?.balance_with_checks ?? 0
+  const prevBalNoChecks   = lastBalRow?.balance_no_checks   ?? 0
+  const credit = b.credit ?? (b.entry_type === 'د' ? b.amount : 0)
+  const debit  = b.debit  ?? (b.entry_type === 'م' ? b.amount : 0)
+  const checkAmt = b.check_amount ?? 0
+  const newBalNoChecks   = prevBalNoChecks   + credit - debit
+  const newBalWithChecks = prevBalWithChecks + credit - debit + checkAmt
+
   const date = new Date(b.transaction_date)
-  await c.env.DB.prepare(
+  const result = await c.env.DB.prepare(
     `INSERT INTO supplier_transactions
      (company_id, season_id, supplier_code, account_code, center_code,
       transaction_date, entry_type, document_type, document_number,
       expense_category, equipment, unit, quantity, unit_price, amount,
-      credit, debit, check_amount, due_date, notes, year, month,
-      created_by_user_id, status)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      credit, debit, check_amount, balance_no_checks, balance_with_checks,
+      due_date, notes, year, month, created_by_user_id, status)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(
     company_id, b.season_id ?? null, code, b.account_code ?? null, b.center_code ?? null,
     b.transaction_date, b.entry_type, b.document_type ?? null, b.document_number ?? null,
     b.expense_category ?? null, b.equipment ?? null, b.unit ?? null,
     b.quantity ?? null, b.unit_price ?? null, b.amount,
-    b.credit ?? (b.entry_type === 'د' ? b.amount : 0),
-    b.debit  ?? (b.entry_type === 'م' ? b.amount : 0),
-    b.check_amount ?? 0, b.due_date ?? null, b.notes ?? null,
+    credit, debit, checkAmt, newBalNoChecks, newBalWithChecks,
+    b.due_date ?? null, b.notes ?? null,
     date.getFullYear(), date.getMonth() + 1, userId, status
   ).run()
 
-  const lastSupTxn = await c.env.DB
-    .prepare('SELECT id FROM supplier_transactions WHERE company_id = ? AND supplier_code = ? ORDER BY id DESC LIMIT 1')
-    .bind(company_id, code).first<{id:number}>()
-  const txnId = lastSupTxn?.id ?? 0
+  const txnId = result.meta.last_row_id
 
   // Auto-post GL entry only for 'posted' status
   if (status === 'posted') {
-    const supplierRow = await c.env.DB
-      .prepare('SELECT name FROM suppliers WHERE code = ? AND company_id = ?')
-      .bind(code, company_id).first<{name:string}>()
+    try {
+      const supplierRow = await c.env.DB
+        .prepare('SELECT name FROM suppliers WHERE code = ? AND company_id = ?')
+        .bind(code, company_id).first<{name:string}>()
 
-    await glSupplierTransaction(c.env.DB, company_id, txnId, b.entry_type, b.amount,
-      b.transaction_date, `${b.expense_category ?? b.entry_type} — ${supplierRow?.name ?? code}`, userId)
+      await glSupplierTransaction(c.env.DB, company_id, txnId, b.entry_type, b.amount,
+        b.transaction_date, `${b.expense_category ?? b.entry_type} — ${supplierRow?.name ?? code}`, userId, b.center_code)
+    } catch (e: any) {
+      await c.env.DB.prepare(
+        "UPDATE supplier_transactions SET status = 'draft' WHERE id = ?"
+      ).bind(txnId).run()
+      return c.json({ 
+        success: false, 
+        error: `تم حفظ الفاتورة كمسودة، لكن فشل إنشاء القيد المحاسبي: ${e.message}` 
+      }, 400)
+    }
   }
 
   void logAudit(c.env.DB, {
@@ -255,6 +276,48 @@ suppliers.post('/:code/transactions', async (c) => {
   })
 
   return c.json({ success: true, data: null }, 201)
+})
+
+// PATCH /api/suppliers/:code/transactions/:id/post — Approve and post a draft invoice
+suppliers.patch('/:code/transactions/:id/post', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const code = Number(c.req.param('code'))
+  const id   = Number(c.req.param('id'))
+
+  const txn = await c.env.DB
+    .prepare("SELECT * FROM supplier_transactions WHERE id = ? AND company_id = ? AND status = 'draft'")
+    .bind(id, company_id).first<any>()
+
+  if (!txn) return c.json({ success: false, error: 'المسودة غير موجودة أو تم ترحيلها بالفعل' }, 404)
+
+  try {
+    const supplierRow = await c.env.DB
+      .prepare('SELECT name FROM suppliers WHERE code = ? AND company_id = ?')
+      .bind(code, company_id).first<{name:string}>()
+
+    // 1. Post to GL
+    await glSupplierTransaction(
+      c.env.DB, company_id, id, txn.entry_type, txn.amount,
+      txn.transaction_date, `${txn.expense_category ?? txn.entry_type} — ${supplierRow?.name ?? code}`, 
+      userId, txn.center_code
+    )
+
+    // 2. Update status to posted
+    await c.env.DB
+      .prepare("UPDATE supplier_transactions SET status = 'posted' WHERE id = ?")
+      .bind(id).run()
+
+    void logAudit(c.env.DB, {
+      user_id: userId, company_id, action: 'UPDATE',
+      table_name: 'supplier_transactions', record_id: id,
+      new_value: { status: 'posted' },
+      source: 'governance_workflow'
+    })
+
+    return c.json({ success: true, data: null })
+  } catch (e: any) {
+    return c.json({ success: false, error: `فشل ترحيل الحركة: ${e.message}` }, 400)
+  }
 })
 
 export default suppliers

@@ -3,13 +3,13 @@ import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
   Leaf, Banknote, Users, Package, TrendingDown, Download,
-  ChevronDown, ChevronRight, MapPin, BarChart3,
+  ChevronDown, ChevronRight, MapPin, BarChart3, Info,
 } from 'lucide-react'
 import { reportsApi, configApi } from '../../api/client'
 import type { Season } from '../../types'
 
 function egp(n: number | null | undefined) {
-  if (n == null) return '—'
+  if (n == null) return '0 ج.م'
   return new Intl.NumberFormat('ar-EG', {
     style: 'currency', currency: 'EGP', maximumFractionDigits: 0,
   }).format(n)
@@ -57,7 +57,7 @@ export default function SeasonSummaryPage() {
 
     if (tabId === 'cost_centers') {
       rows = [['مركز التكلفة', 'نقدي', 'موردين', 'مخزون', 'الإجمالي', '%'],
-              ...costCenters.map(r => [r.center_name, r.cash_total, r.supplier_total, r.inventory_total, r.grand_total, pct(r.grand_total, grand)])]
+              ...costCenters.map(r => [r.center_name || 'غير محدد', r.cash_total, r.supplier_total, r.inventory_total, r.grand_total, pct(r.grand_total, grand)])]
       filename = 'مراكز_التكلفة'
     } else if (tabId === 'suppliers') {
       rows = [['كود', 'المورد', 'النشاط', 'دائن', 'مدين', 'الرصيد'],
@@ -86,427 +86,492 @@ export default function SeasonSummaryPage() {
   }
 
   const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
-    { id: 'overview',      label: 'ملخص عام',          icon: <BarChart3  size={16} /> },
-    { id: 'cost_centers',  label: 'مراكز التكلفة',     icon: <MapPin     size={16} /> },
-    { id: 'expense_types', label: 'أنواع المصروفات',   icon: <Banknote   size={16} /> },
-    { id: 'suppliers',     label: 'الموردين',           icon: <Users      size={16} /> },
-    { id: 'inventory',     label: 'المخزون المنصرف',   icon: <Package    size={16} /> },
+    { id: 'overview',      label: 'نظرة عامة',          icon: <BarChart3  size={18} /> },
+    { id: 'cost_centers',  label: 'مراكز التكلفة',     icon: <MapPin     size={18} /> },
+    { id: 'expense_types', label: 'بنود المصروفات',   icon: <Banknote   size={18} /> },
+    { id: 'suppliers',     label: 'كشف الموردين',      icon: <Users      size={18} /> },
+    { id: 'inventory',     label: 'استهلاك المخزون',   icon: <Package    size={18} /> },
   ]
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-            <Leaf className="text-brand-600" size={26} />
-            ملخص الموسم الزراعي
-          </h1>
-          {season && (
-            <p className="text-sm text-slate-500 mt-1">
-              {season.name} — {new Date(season.start_date).toLocaleDateString('ar-EG')} إلى {new Date(season.end_date).toLocaleDateString('ar-EG')}
-              <span className={`mr-2 badge ${season.status === 'active' ? 'badge-green' : 'badge-blue'}`}>{season.status === 'active' ? 'جارٍ' : 'مغلق'}</span>
-            </p>
-          )}
+    <div className="space-y-8 animate-fade-in pb-10">
+      {/* Header Section */}
+      <div className="glass rounded-3xl p-6 flex flex-col md:flex-row items-center justify-between gap-6">
+        <div className="flex items-center gap-4 text-center md:text-right">
+          <div className="p-3 bg-brand-100 text-brand-600 rounded-2xl">
+            <Leaf size={32} />
+          </div>
+          <div>
+            <h1 className="text-3xl font-black text-slate-900 tracking-tight">تحليلات الموسم الزراعي</h1>
+            {season ? (
+              <div className="flex items-center gap-2 mt-1 text-slate-500 font-medium">
+                <span>{season.name}</span>
+                <span className="text-slate-300">•</span>
+                <span className={`badge ${season.status === 'active' ? 'badge-green' : 'badge-blue'}`}>
+                  {season.status === 'active' ? 'موسم جارٍ' : 'موسم مغلق'}
+                </span>
+              </div>
+            ) : (
+              <p className="text-slate-400">اختر موسماً لعرض التحليلات</p>
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-3">
-          <select
-            className="input text-sm w-52"
-            value={seasonId}
-            onChange={e => setSeasonId(Number(e.target.value))}
+
+        <div className="flex items-center gap-3 w-full md:w-auto">
+          <div className="relative flex-1 md:flex-initial">
+            <select
+              className="input pr-10 min-w-[200px] font-bold text-slate-700 h-12 shadow-sm"
+              value={seasonId}
+              onChange={e => setSeasonId(Number(e.target.value))}
+            >
+              {(seasons ?? []).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <button 
+            onClick={() => downloadCsv(tab)} 
+            className="btn-secondary h-12 px-6 rounded-xl border-slate-200 hover:border-brand-500 group"
           >
-            {(seasons ?? []).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          <button onClick={() => downloadCsv(tab)} className="btn-secondary flex items-center gap-2 text-sm">
-            <Download size={16} /> تصدير
+            <Download size={18} className="group-hover:translate-y-0.5 transition-transform" /> 
+            <span>تصدير البيانات</span>
           </button>
         </div>
       </div>
 
-      {/* KPI row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/* KPI Dynamic Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         {[
-          { label: 'إجمالي النقدي', value: totals?.cash_out, color: 'blue',   icon: <Banknote size={20} /> },
-          { label: 'مستحقات الموردين', value: totals?.supplier_credit, color: 'amber', icon: <Users    size={20} /> },
-          { label: 'مدفوع للموردين',   value: totals?.supplier_debit,  color: 'green', icon: <TrendingDown size={20} /> },
-          { label: 'تكلفة المخزون',    value: totals?.inventory_consumed, color: 'violet', icon: <Package size={20} /> },
-        ].map(({ label, value, color, icon }) => (
-          <div key={label} className={`card p-4 border-r-4 border-${color}-500`}>
-            <div className="flex items-center gap-2 mb-1">
-              <span className={`text-${color}-500`}>{icon}</span>
-              <span className="text-xs text-slate-500">{label}</span>
+          { label: 'سيولة نقدية خارجة', value: totals?.cash_out, color: 'blue',   icon: <Banknote size={24} />, bg: 'bg-blue-50' },
+          { label: 'مديونية للموردين', value: totals?.supplier_credit, color: 'amber', icon: <Users    size={24} />, bg: 'bg-amber-50' },
+          { label: 'مدفوعات مسددة',   value: totals?.supplier_debit,  color: 'emerald', icon: <TrendingDown size={24} />, bg: 'bg-emerald-50' },
+          { label: 'مخزون مستهلك',    value: totals?.inventory_consumed, color: 'indigo', icon: <Package size={24} />, bg: 'bg-indigo-50' },
+        ].map(({ label, value, color, icon, bg }) => (
+          <div key={label} className="card group p-6 overflow-hidden relative">
+            <div className={`absolute top-0 right-0 w-1.5 h-full bg-${color}-500 transition-all group-hover:w-2`} />
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-sm font-bold text-slate-500 mb-1">{label}</p>
+                <h3 className={`text-2xl font-black text-${color}-600 tracking-tight`}>
+                  {isLoading ? <div className="h-8 w-24 bg-slate-100 animate-pulse rounded" /> : egp(value)}
+                </h3>
+              </div>
+              <div className={`p-3 ${bg} text-${color}-600 rounded-2xl`}>{icon}</div>
             </div>
-            <p className={`text-lg font-bold text-${color}-700`}>
-              {isLoading ? '...' : egp(value)}
-            </p>
             {!isLoading && grand > 0 && value != null && (
-              <p className="text-xs text-slate-400 mt-0.5">{pct(value, grand)} من الإجمالي</p>
+              <div className="mt-4 flex items-center gap-2">
+                <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                  <div className={`h-full bg-${color}-500`} style={{ width: pct(value, grand) }} />
+                </div>
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{pct(value, grand)}</span>
+              </div>
             )}
           </div>
         ))}
       </div>
 
-      {/* Grand total bar */}
+      {/* Master Breakdown Card */}
       {!isLoading && grand > 0 && (
-        <div className="card p-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-slate-700">إجمالي تكاليف الموسم</span>
-            <span className="text-xl font-bold text-brand-700">{egp(grand)}</span>
+        <div className="card p-8 bg-gradient-to-br from-slate-900 to-slate-800 text-white border-none shadow-2xl">
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
+            <div>
+              <p className="text-slate-400 font-bold uppercase tracking-widest text-xs mb-2">إجمالي تكلفة الموسم</p>
+              <h2 className="text-5xl font-black text-white tracking-tighter">
+                {egp(grand)}
+              </h2>
+            </div>
+            <div className="flex gap-6">
+              <div className="text-right">
+                <p className="text-xs text-slate-400 mb-1">نقدي</p>
+                <p className="text-blue-400 font-bold">{pct(totals?.cash_out ?? 0, grand)}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-slate-400 mb-1">موردين</p>
+                <p className="text-amber-400 font-bold">{pct(totals?.supplier_credit ?? 0, grand)}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-slate-400 mb-1">مخزون</p>
+                <p className="text-indigo-400 font-bold">{pct(totals?.inventory_consumed ?? 0, grand)}</p>
+              </div>
+            </div>
           </div>
-          <div className="h-3 bg-slate-100 rounded-full overflow-hidden flex">
-            {[
-              { val: totals?.cash_out ?? 0,             color: 'bg-blue-500' },
-              { val: totals?.supplier_credit ?? 0,      color: 'bg-amber-500' },
-              { val: totals?.inventory_consumed ?? 0,   color: 'bg-violet-500' },
-            ].map(({ val, color }, i) => (
-              <div key={i} className={`${color} h-full transition-all`} style={{ width: `${(val / grand) * 100}%` }} />
-            ))}
+          
+          <div className="h-4 bg-white/10 rounded-full overflow-hidden flex shadow-inner">
+            <div className="bg-blue-500 h-full transition-all duration-1000" style={{ width: pct(totals?.cash_out ?? 0, grand) }} />
+            <div className="bg-amber-500 h-full transition-all duration-1000" style={{ width: pct(totals?.supplier_credit ?? 0, grand) }} />
+            <div className="bg-indigo-500 h-full transition-all duration-1000" style={{ width: pct(totals?.inventory_consumed ?? 0, grand) }} />
           </div>
-          <div className="flex gap-4 mt-2 text-xs text-slate-500">
-            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block" /> نقدي {pct(totals?.cash_out ?? 0, grand)}</span>
-            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block" /> موردين {pct(totals?.supplier_credit ?? 0, grand)}</span>
-            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-violet-500 inline-block" /> مخزون {pct(totals?.inventory_consumed ?? 0, grand)}</span>
+          
+          <div className="mt-6 flex flex-wrap gap-6 text-sm text-slate-300">
+             <div className="flex items-center gap-2">
+               <div className="w-3 h-3 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]" />
+               <span>نفقات نقدية مباشرة</span>
+             </div>
+             <div className="flex items-center gap-2">
+               <div className="w-3 h-3 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]" />
+               <span>ذمم دائنة (آجل)</span>
+             </div>
+             <div className="flex items-center gap-2">
+               <div className="w-3 h-3 rounded-full bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.5)]" />
+               <span>مستلزمات إنتاج مخزنية</span>
+             </div>
           </div>
         </div>
       )}
 
-      {/* Tabs */}
-      <div className="border-b border-slate-200">
-        <div className="flex gap-1 overflow-x-auto">
-          {TABS.map(t => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
-                tab === t.id
-                  ? 'border-brand-500 text-brand-600'
-                  : 'border-transparent text-slate-500 hover:text-slate-700'
-              }`}
-            >
-              {t.icon}{t.label}
-            </button>
-          ))}
-        </div>
+      {/* Modern Tabs Navigation */}
+      <div className="flex items-center gap-2 bg-slate-100/50 p-1.5 rounded-2xl w-fit">
+        {TABS.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all duration-300 ${
+              tab === t.id
+                ? 'bg-white text-brand-600 shadow-md translate-y-[-1px]'
+                : 'text-slate-500 hover:text-slate-700 hover:bg-white/50'
+            }`}
+          >
+            {t.icon}
+            <span>{t.label}</span>
+          </button>
+        ))}
       </div>
 
-      {isLoading && <div className="flex items-center justify-center h-40 text-slate-400">جاري التحميل...</div>}
-      {isError   && <div className="text-red-500 text-center py-8">حدث خطأ في تحميل البيانات</div>}
+      {/* Main Content Area */}
+      <div className="min-h-[400px]">
+        {isLoading && (
+          <div className="flex flex-col items-center justify-center py-20 animate-pulse">
+            <Leaf className="text-slate-200 mb-4 animate-bounce" size={64} />
+            <p className="text-slate-400 font-bold">جاري تحليل بيانات الموسم...</p>
+          </div>
+        )}
+        
+        {isError && (
+          <div className="glass p-12 text-center rounded-3xl border-rose-100">
+            <div className="bg-rose-100 text-rose-600 p-4 rounded-full w-fit mx-auto mb-4">
+              <Info size={32} />
+            </div>
+            <h3 className="text-xl font-bold text-slate-800">تعذر تحميل التقارير</h3>
+            <p className="text-slate-500 mt-2">يرجى التحقق من اتصالك بالإنترنت أو صلاحيات الوصول.</p>
+          </div>
+        )}
 
-      {/* ─── Tab: Overview ─── */}
-      {!isLoading && tab === 'overview' && (
-        <div className="space-y-4">
-          {/* Monthly timeline */}
-          {timeline.length > 0 && (
-            <div className="card p-5">
-              <h3 className="text-sm font-semibold text-slate-700 mb-4">التسلسل الزمني الشهري</h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-200">
-                      <th className="py-2 text-right text-slate-500 font-medium">الشهر</th>
-                      <th className="py-2 text-left text-blue-600 font-medium">نقدي</th>
-                      <th className="py-2 text-left text-amber-600 font-medium">موردين</th>
-                      <th className="py-2 text-left text-slate-600 font-medium">الإجمالي</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-50">
-                    {timeline.map(row => {
-                      const rowTotal = (row.cash_out ?? 0) + (row.supplier_credit ?? 0)
-                      return (
-                        <tr key={`${row.year}-${row.month}`} className="hover:bg-slate-50">
-                          <td className="py-2 text-slate-700 font-medium">
-                            {MONTH_AR[(row.month ?? 1) - 1]} {row.year}
-                          </td>
-                          <td className="py-2 text-left text-blue-700">{egp(row.cash_out)}</td>
-                          <td className="py-2 text-left text-amber-700">{egp(row.supplier_credit)}</td>
-                          <td className="py-2 text-left font-bold text-slate-800">{egp(rowTotal)}</td>
+        {/* ─── Tab: Overview ─── */}
+        {!isLoading && tab === 'overview' && (
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            <div className="xl:col-span-2 space-y-6">
+               {/* Timeline Card */}
+               <div className="card p-6">
+                 <div className="flex items-center justify-between mb-6">
+                   <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
+                     <TrendingDown className="text-brand-500" />
+                     المصروفات الشهرية
+                   </h3>
+                 </div>
+                 <div className="overflow-hidden">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="bg-slate-50 rounded-xl overflow-hidden">
+                          <th className="th py-4">الشهر</th>
+                          <th className="th py-4 text-left">نقدية</th>
+                          <th className="th py-4 text-left">آجل</th>
+                          <th className="th py-4 text-left">الإجمالي</th>
                         </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50">
+                        {timeline.length > 0 ? timeline.map(row => {
+                          const rowTotal = (row.cash_out ?? 0) + (row.supplier_credit ?? 0)
+                          return (
+                            <tr key={`${row.year}-${row.month}`} className="hover:bg-slate-50 transition-colors group">
+                              <td className="td py-4 font-bold text-slate-700">
+                                {MONTH_AR[(row.month ?? 1) - 1]} {row.year}
+                              </td>
+                              <td className="td py-4 text-left text-blue-600 font-medium">{egp(row.cash_out)}</td>
+                              <td className="td py-4 text-left text-amber-600 font-medium">{egp(row.supplier_credit)}</td>
+                              <td className="td py-4 text-left">
+                                <span className="bg-slate-100 px-3 py-1.5 rounded-lg font-black text-slate-800 group-hover:bg-brand-50 group-hover:text-brand-700 transition-colors">
+                                  {egp(rowTotal)}
+                                </span>
+                              </td>
+                            </tr>
+                          )
+                        }) : (
+                          <tr><td colSpan={4} className="td py-10 text-center text-slate-400">لا توجد حركات مسجلة لهذا الموسم</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                 </div>
+               </div>
             </div>
-          )}
 
-          {/* Top suppliers snapshot */}
-          {suppliers.slice(0, 5).length > 0 && (
-            <div className="card p-5">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-slate-700">أكبر 5 موردين</h3>
-                <button onClick={() => setTab('suppliers')} className="text-xs text-brand-600 hover:underline">عرض الكل</button>
-              </div>
-              <div className="space-y-2">
-                {suppliers.slice(0, 5).map(r => (
-                  <div key={r.supplier_code} className="flex items-center gap-3">
-                    <span className="text-sm text-slate-700 w-48 truncate">{r.supplier_name}</span>
-                    <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-amber-400 rounded-full"
-                        style={{ width: `${Math.min((r.total_credit / (suppliers[0]?.total_credit || 1)) * 100, 100)}%` }}
-                      />
-                    </div>
-                    <span className="text-xs font-semibold text-amber-700 w-28 text-left">{egp(r.total_credit)}</span>
+            <div className="space-y-6">
+               {/* Top Suppliers Snapshot */}
+               <div className="card p-6">
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="font-black text-slate-800">أبرز الموردين</h3>
+                    <button onClick={() => setTab('suppliers')} className="text-xs font-bold text-brand-600 hover:text-brand-700">عرض الكل</button>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ─── Tab: Cost Centers ─── */}
-      {!isLoading && tab === 'cost_centers' && (
-        <div className="card overflow-hidden">
-          {costCenters.length === 0 ? (
-            <div className="text-center py-16 text-slate-400">
-              <MapPin size={40} className="mx-auto mb-3 opacity-30" />
-              <p>لا توجد بيانات مراكز تكلفة لهذا الموسم</p>
-              <p className="text-xs mt-1">تأكد من ربط المعاملات بـ center_code</p>
-            </div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 border-b border-slate-200">
-                <tr>
-                  <th className="px-4 py-3 text-right text-slate-600 font-medium">مركز التكلفة</th>
-                  <th className="px-4 py-3 text-left text-blue-600 font-medium w-32">نقدي</th>
-                  <th className="px-4 py-3 text-left text-amber-600 font-medium w-32">موردين</th>
-                  <th className="px-4 py-3 text-left text-violet-600 font-medium w-32">مخزون</th>
-                  <th className="px-4 py-3 text-left text-slate-700 font-medium w-32">الإجمالي</th>
-                  <th className="px-4 py-3 text-right text-slate-500 font-medium w-28">%</th>
-                  <th className="px-4 py-3 w-8"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {costCenters.map(r => (
-                  <>
-                    <tr
-                      key={r.center_code}
-                      className="hover:bg-slate-50 cursor-pointer"
-                      onClick={() => setExpandedCenter(expandedCenter === r.center_code ? null : r.center_code)}
-                    >
-                      <td className="px-4 py-3 font-medium text-slate-800">{r.center_name}</td>
-                      <td className="px-4 py-3 text-left text-blue-700">{r.cash_total > 0 ? egp(r.cash_total) : '—'}</td>
-                      <td className="px-4 py-3 text-left text-amber-700">{r.supplier_total > 0 ? egp(r.supplier_total) : '—'}</td>
-                      <td className="px-4 py-3 text-left text-violet-700">{r.inventory_total > 0 ? egp(r.inventory_total) : '—'}</td>
-                      <td className="px-4 py-3 text-left font-bold text-slate-800">{egp(r.grand_total)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2 justify-end">
-                          <div className="w-20 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                            <div className="h-full bg-brand-500 rounded-full" style={{ width: pct(r.grand_total, grand) }} />
-                          </div>
-                          <span className="text-xs text-slate-500 w-10 text-right">{pct(r.grand_total, grand)}</span>
+                  <div className="space-y-5">
+                    {suppliers.slice(0, 5).map((r, i) => (
+                      <div key={r.supplier_code} className="relative">
+                        <div className="flex justify-between items-center mb-1.5">
+                          <span className="text-sm font-bold text-slate-700 truncate">{r.supplier_name}</span>
+                          <span className="text-xs font-black text-amber-600">{egp(r.total_credit)}</span>
                         </div>
-                      </td>
-                      <td className="px-4 py-3 text-slate-400">
-                        {expandedCenter === r.center_code ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      </td>
-                    </tr>
-                    {expandedCenter === r.center_code && (
-                      <tr key={`${r.center_code}-expand`}>
-                        <td colSpan={7} className="bg-slate-50 px-8 py-3">
-                          <div className="grid grid-cols-3 gap-4 text-xs">
-                            <div>
-                              <p className="font-semibold text-blue-700 mb-1">نقدي</p>
-                              <p>{egp(r.cash_total)}</p>
+                        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                          <div 
+                            className={`h-full rounded-full ${i === 0 ? 'bg-amber-500' : 'bg-slate-300'}`}
+                            style={{ width: pct(r.total_credit, suppliers[0]?.total_credit || 1) }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                    {suppliers.length === 0 && <p className="text-center py-6 text-slate-400 text-sm italic">لا يوجد موردون نشطون</p>}
+                  </div>
+               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ─── Tab: Cost Centers ─── */}
+        {!isLoading && tab === 'cost_centers' && (
+          <div className="card overflow-hidden border-none shadow-xl">
+             <table className="w-full">
+                <thead className="bg-slate-50/80 backdrop-blur-sm">
+                  <tr>
+                    <th className="th py-5">مركز التكلفة / الحقل</th>
+                    <th className="th py-5 text-left text-blue-600">نقدية</th>
+                    <th className="th py-5 text-left text-amber-600">آجل</th>
+                    <th className="th py-5 text-left text-indigo-600">مخزن</th>
+                    <th className="th py-5 text-left text-slate-900">إجمالي النفقات</th>
+                    <th className="th py-5 text-center">الوزن النسبي</th>
+                    <th className="th py-5 w-10"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {costCenters.length > 0 ? costCenters.map(r => (
+                    <React.Fragment key={r.center_code}>
+                      <tr 
+                        className={`hover:bg-brand-50/30 cursor-pointer transition-colors ${expandedCenter === r.center_code ? 'bg-brand-50/50' : ''}`}
+                        onClick={() => setExpandedCenter(expandedCenter === r.center_code ? null : r.center_code)}
+                      >
+                        <td className="td py-5">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-brand-600 shadow-sm border border-slate-100">
+                              <MapPin size={20} />
                             </div>
-                            <div>
-                              <p className="font-semibold text-amber-700 mb-1">موردين</p>
-                              <p>{egp(r.supplier_total)}</p>
-                            </div>
-                            <div>
-                              <p className="font-semibold text-violet-700 mb-1">مخزون منصرف</p>
-                              <p>{egp(r.inventory_total)}</p>
-                            </div>
+                            <span className="font-black text-slate-800">{r.center_name || 'مصروفات عامة / غير مخصصة'}</span>
                           </div>
-                          <button
-                            className="mt-2 text-xs text-brand-600 hover:underline"
-                            onClick={(e) => { e.stopPropagation(); navigate(`/reports/cost-centers?center=${r.center_code}&season=${seasonId}`) }}
-                          >
-                            عرض التفاصيل الكاملة ←
-                          </button>
+                        </td>
+                        <td className="td py-5 text-left text-blue-600 font-bold">{r.cash_total > 0 ? egp(r.cash_total) : '—'}</td>
+                        <td className="td py-5 text-left text-amber-600 font-bold">{r.supplier_total > 0 ? egp(r.supplier_total) : '—'}</td>
+                        <td className="td py-5 text-left text-indigo-600 font-bold">{r.inventory_total > 0 ? egp(r.inventory_total) : '—'}</td>
+                        <td className="td py-5 text-left">
+                           <span className="text-lg font-black text-slate-900">{egp(r.grand_total)}</span>
+                        </td>
+                        <td className="td py-5">
+                           <div className="flex items-center justify-center gap-3">
+                             <div className="w-24 h-2 bg-slate-100 rounded-full overflow-hidden shadow-inner">
+                               <div className="h-full bg-brand-500 rounded-full" style={{ width: pct(r.grand_total, grand) }} />
+                             </div>
+                             <span className="text-[11px] font-black text-brand-600 w-10">{pct(r.grand_total, grand)}</span>
+                           </div>
+                        </td>
+                        <td className="td py-5 text-slate-400">
+                           {expandedCenter === r.center_code ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
                         </td>
                       </tr>
-                    )}
-                  </>
-                ))}
-              </tbody>
-              <tfoot className="bg-slate-50 border-t-2 border-slate-300">
-                <tr>
-                  <td className="px-4 py-3 font-bold text-slate-700">الإجمالي</td>
-                  <td className="px-4 py-3 text-left font-bold text-blue-700">{egp(totals?.cash_out)}</td>
-                  <td className="px-4 py-3 text-left font-bold text-amber-700">{egp(totals?.supplier_credit)}</td>
-                  <td className="px-4 py-3 text-left font-bold text-violet-700">{egp(totals?.inventory_consumed)}</td>
-                  <td className="px-4 py-3 text-left font-bold text-brand-700">{egp(grand)}</td>
-                  <td className="px-4 py-3 text-right text-xs text-slate-500">100%</td>
-                  <td></td>
-                </tr>
-              </tfoot>
-            </table>
-          )}
-        </div>
-      )}
+                      {expandedCenter === r.center_code && (
+                        <tr className="bg-white/50">
+                          <td colSpan={7} className="p-0 overflow-hidden">
+                            <div className="p-8 border-x-4 border-brand-500 bg-brand-50/20 animate-fade-in">
+                               <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                                  <div className="glass p-4 rounded-2xl">
+                                    <p className="text-[10px] uppercase font-black text-blue-500 mb-2 tracking-widest">تحليل النقدية</p>
+                                    <p className="text-xl font-bold text-slate-800">{egp(r.cash_total)}</p>
+                                    <p className="text-xs text-slate-400 mt-1">تشمل الأجور والمشتريات المباشرة</p>
+                                  </div>
+                                  <div className="glass p-4 rounded-2xl">
+                                    <p className="text-[10px] uppercase font-black text-amber-500 mb-2 tracking-widest">تحليل المديونية</p>
+                                    <p className="text-xl font-bold text-slate-800">{egp(r.supplier_total)}</p>
+                                    <p className="text-xs text-slate-400 mt-1">فواتير آجلة لم يتم تسويتها</p>
+                                  </div>
+                                  <div className="glass p-4 rounded-2xl">
+                                    <p className="text-[10px] uppercase font-black text-indigo-500 mb-2 tracking-widest">تحليل المخزون</p>
+                                    <p className="text-xl font-bold text-slate-800">{egp(r.inventory_total)}</p>
+                                    <p className="text-xs text-slate-400 mt-1">قيمة الأسمدة والمبيدات المنصرفة</p>
+                                  </div>
+                               </div>
+                               <div className="mt-6 flex justify-end">
+                                 <button 
+                                   onClick={(e) => { e.stopPropagation(); navigate(`/reports/cost-centers/${r.center_code}?season_id=${seasonId}`) }}
+                                   className="btn-primary"
+                                 >
+                                   استعراض التحليل التفصيلي لهذا المركز
+                                 </button>
+                               </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  )) : (
+                    <tr><td colSpan={7} className="td py-20 text-center text-slate-400">لا توجد بيانات مراكز تكلفة متاحة</td></tr>
+                  )}
+                </tbody>
+             </table>
+          </div>
+        )}
 
-      {/* ─── Tab: Expense Types ─── */}
-      {!isLoading && tab === 'expense_types' && (
-        <div className="card overflow-hidden">
-          {expenseTypes.length === 0 ? (
-            <div className="text-center py-16 text-slate-400"><p>لا توجد بيانات مصروفات</p></div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 border-b border-slate-200">
+        {/* Other tabs follow same premium pattern... */}
+        {!isLoading && tab === 'expense_types' && (
+          <div className="card overflow-hidden shadow-xl border-none">
+            <table className="w-full">
+              <thead className="bg-slate-50">
                 <tr>
-                  <th className="px-4 py-3 text-right text-slate-600 font-medium">نوع المصروف</th>
-                  <th className="px-4 py-3 text-left text-blue-600 font-medium w-36">إجمالي نقدي</th>
-                  <th className="px-4 py-3 text-center text-slate-500 font-medium w-20">معاملات</th>
-                  <th className="px-4 py-3 text-right text-slate-500 font-medium w-36">النسبة</th>
+                  <th className="th py-5">بند المصروف</th>
+                  <th className="th py-5 text-left text-blue-600">القيمة النقدية</th>
+                  <th className="th py-5 text-center">عدد العمليات</th>
+                  <th className="th py-5 text-right">الوزن من النقدية</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {expenseTypes.map(r => (
-                  <tr key={r.expense_code} className="hover:bg-slate-50">
-                    <td className="px-4 py-3 font-medium text-slate-800">{r.expense_name}</td>
-                    <td className="px-4 py-3 text-left text-blue-700 font-semibold">{egp(r.total)}</td>
-                    <td className="px-4 py-3 text-center"><span className="badge-blue">{r.cnt}</span></td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2 justify-end">
-                        <div className="w-24 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                          <div className="h-full bg-blue-400 rounded-full" style={{ width: pct(r.total, totals?.cash_out ?? 1) }} />
+                {expenseTypes.length > 0 ? expenseTypes.map(r => (
+                  <tr key={r.expense_code} className="hover:bg-slate-50 transition-colors">
+                    <td className="td py-5">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center text-blue-600 border border-blue-100">
+                          <Banknote size={20} />
                         </div>
-                        <span className="text-xs text-slate-500 w-10 text-right">{pct(r.total, totals?.cash_out ?? 1)}</span>
+                        <span className="font-black text-slate-800">{r.expense_name || 'مصروفات غير مصنفة'}</span>
                       </div>
                     </td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot className="bg-slate-50 border-t-2 border-slate-300">
-                <tr>
-                  <td className="px-4 py-3 font-bold text-slate-700">الإجمالي</td>
-                  <td className="px-4 py-3 text-left font-bold text-blue-700">{egp(totals?.cash_out)}</td>
-                  <td className="px-4 py-3 text-center text-slate-500 text-xs">{expenseTypes.reduce((s, r) => s + r.cnt, 0)}</td>
-                  <td className="px-4 py-3 text-right text-xs text-slate-500">100%</td>
-                </tr>
-              </tfoot>
-            </table>
-          )}
-        </div>
-      )}
-
-      {/* ─── Tab: Suppliers ─── */}
-      {!isLoading && tab === 'suppliers' && (
-        <div className="card overflow-hidden">
-          {suppliers.length === 0 ? (
-            <div className="text-center py-16 text-slate-400"><p>لا توجد بيانات موردين</p></div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 border-b border-slate-200">
-                <tr>
-                  <th className="px-4 py-3 text-right text-slate-600 font-medium">المورد</th>
-                  <th className="px-4 py-3 text-right text-slate-500 font-medium w-28">النشاط</th>
-                  <th className="px-4 py-3 text-left text-amber-600 font-medium w-36">دائن (مستحق)</th>
-                  <th className="px-4 py-3 text-left text-blue-600 font-medium w-36">مدين (سُدِّد)</th>
-                  <th className="px-4 py-3 text-left text-slate-600 font-medium w-32">الرصيد</th>
-                  <th className="px-4 py-3 text-center text-slate-500 font-medium w-20">معاملات</th>
-                  <th className="px-4 py-3 text-right text-slate-500 font-medium w-32">%</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {suppliers.map(r => (
-                  <tr
-                    key={r.supplier_code}
-                    className="hover:bg-slate-50 cursor-pointer"
-                    onClick={() => navigate(`/suppliers/${r.supplier_code}`)}
-                  >
-                    <td className="px-4 py-3 font-medium text-slate-800">{r.supplier_name}</td>
-                    <td className="px-4 py-3 text-slate-500 text-xs">{r.activity ?? '—'}</td>
-                    <td className="px-4 py-3 text-left text-amber-700 font-semibold">{egp(r.total_credit)}</td>
-                    <td className="px-4 py-3 text-left text-blue-700">{r.total_debit > 0 ? egp(r.total_debit) : '—'}</td>
-                    <td className="px-4 py-3 text-left">
-                      <span className={`font-bold text-xs ${r.balance > 0 ? 'text-red-600' : 'text-green-700'}`}>
-                        {egp(Math.abs(r.balance))} {r.balance > 0 ? '(علينا)' : '(لنا)'}
+                    <td className="td py-5 text-left text-blue-700 font-black text-lg">{egp(r.total)}</td>
+                    <td className="td py-5 text-center">
+                      <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs font-black">
+                        {r.cnt} حركة
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-center"><span className="badge-blue">{r.tx_count}</span></td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2 justify-end">
-                        <div className="w-20 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                          <div className="h-full bg-amber-400 rounded-full" style={{ width: pct(r.total_credit, totals?.supplier_credit ?? 1) }} />
+                    <td className="td py-5">
+                      <div className="flex items-center gap-3 justify-end">
+                        <div className="w-32 h-2 bg-slate-100 rounded-full overflow-hidden">
+                          <div className="h-full bg-blue-500" style={{ width: pct(r.total, totals?.cash_out ?? 1) }} />
                         </div>
-                        <span className="text-xs text-slate-500 w-10 text-right">{pct(r.total_credit, totals?.supplier_credit ?? 1)}</span>
+                        <span className="text-xs font-black text-slate-400 w-10">{pct(r.total, totals?.cash_out ?? 1)}</span>
                       </div>
                     </td>
                   </tr>
-                ))}
+                )) : (
+                  <tr><td colSpan={4} className="td py-20 text-center text-slate-400">لا توجد بيانات مصروفات</td></tr>
+                )}
               </tbody>
-              <tfoot className="bg-slate-50 border-t-2 border-slate-300">
-                <tr>
-                  <td className="px-4 py-3 font-bold text-slate-700">الإجمالي</td>
-                  <td></td>
-                  <td className="px-4 py-3 text-left font-bold text-amber-700">{egp(totals?.supplier_credit)}</td>
-                  <td className="px-4 py-3 text-left font-bold text-blue-700">{egp(totals?.supplier_debit)}</td>
-                  <td className="px-4 py-3 text-left font-bold text-red-700">{egp((totals?.supplier_credit ?? 0) - (totals?.supplier_debit ?? 0))}</td>
-                  <td className="px-4 py-3 text-center text-slate-500 text-xs">{suppliers.reduce((s, r) => s + r.tx_count, 0)}</td>
-                  <td className="px-4 py-3 text-right text-xs text-slate-500">100%</td>
-                </tr>
-              </tfoot>
             </table>
-          )}
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* ─── Tab: Inventory ─── */}
-      {!isLoading && tab === 'inventory' && (
-        <div className="card overflow-hidden">
-          {invItems.length === 0 ? (
-            <div className="text-center py-16 text-slate-400">
-              <Package size={40} className="mx-auto mb-3 opacity-30" />
-              <p>لا توجد حركات صرف مخزون مرتبطة بهذا الموسم</p>
-              <p className="text-xs mt-1">ارتبط حركات المخزون بـ season_id عند الإضافة</p>
-            </div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 border-b border-slate-200">
+        {/* Suppliers Tab */}
+        {!isLoading && tab === 'suppliers' && (
+          <div className="card overflow-hidden shadow-xl border-none">
+            <table className="w-full">
+              <thead className="bg-slate-50">
                 <tr>
-                  <th className="px-4 py-3 text-right text-slate-600 font-medium">الصنف</th>
-                  <th className="px-4 py-3 text-right text-slate-500 font-medium w-20">الوحدة</th>
-                  <th className="px-4 py-3 text-left text-violet-600 font-medium w-36">الكمية المنصرفة</th>
-                  <th className="px-4 py-3 text-left text-violet-700 font-medium w-36">القيمة</th>
-                  <th className="px-4 py-3 text-right text-slate-500 font-medium w-36">النسبة</th>
+                  <th className="th py-5">المورد والنشاط</th>
+                  <th className="th py-5 text-left text-amber-600">إجمالي التعامل (دائن)</th>
+                  <th className="th py-5 text-left text-emerald-600">المسدد (مدين)</th>
+                  <th className="th py-5 text-left text-slate-900">الرصيد المتبقي</th>
+                  <th className="th py-5 text-right w-40">توزيع التكلفة</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {invItems.map(r => (
-                  <tr key={r.item_code} className="hover:bg-slate-50">
-                    <td className="px-4 py-3 font-medium text-slate-800">{r.item_name}</td>
-                    <td className="px-4 py-3 text-slate-500">{r.unit ?? '—'}</td>
-                    <td className="px-4 py-3 text-left text-violet-700 font-semibold">
-                      {new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(r.total_qty_out)}
-                    </td>
-                    <td className="px-4 py-3 text-left text-violet-800 font-bold">{egp(r.total_value_out)}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2 justify-end">
-                        <div className="w-20 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                          <div className="h-full bg-violet-400 rounded-full" style={{ width: pct(r.total_value_out, totals?.inventory_consumed ?? 1) }} />
+                {suppliers.length > 0 ? suppliers.map(r => (
+                  <tr 
+                    key={r.supplier_code} 
+                    className="hover:bg-slate-50 cursor-pointer transition-colors"
+                    onClick={() => navigate(`/suppliers/${r.supplier_code}`)}
+                  >
+                    <td className="td py-5">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center text-amber-600 border border-amber-100">
+                          <Users size={20} />
                         </div>
-                        <span className="text-xs text-slate-500 w-10 text-right">{pct(r.total_value_out, totals?.inventory_consumed ?? 1)}</span>
+                        <div>
+                          <p className="font-black text-slate-800 leading-none mb-1">{r.supplier_name}</p>
+                          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{r.activity || 'نشاط غير محدد'}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="td py-5 text-left text-amber-700 font-black">{egp(r.total_credit)}</td>
+                    <td className="td py-5 text-left text-emerald-600 font-bold">{r.total_debit > 0 ? egp(r.total_debit) : '—'}</td>
+                    <td className="td py-5 text-left">
+                      <div className={`px-3 py-1.5 rounded-lg inline-block font-black text-sm ${r.balance > 0 ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                        {egp(Math.abs(r.balance))} {r.balance > 0 ? 'مستحق له' : 'سداد زائد'}
+                      </div>
+                    </td>
+                    <td className="td py-5">
+                      <div className="flex items-center gap-3 justify-end">
+                        <div className="w-24 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                          <div className="h-full bg-amber-500" style={{ width: pct(r.total_credit, totals?.supplier_credit ?? 1) }} />
+                        </div>
+                        <span className="text-[10px] font-black text-slate-400 w-8">{pct(r.total_credit, totals?.supplier_credit ?? 1)}</span>
                       </div>
                     </td>
                   </tr>
-                ))}
+                )) : (
+                  <tr><td colSpan={5} className="td py-20 text-center text-slate-400">لا توجد تعاملات مع موردين</td></tr>
+                )}
               </tbody>
-              <tfoot className="bg-slate-50 border-t-2 border-slate-300">
-                <tr>
-                  <td className="px-4 py-3 font-bold text-slate-700">الإجمالي</td>
-                  <td></td>
-                  <td></td>
-                  <td className="px-4 py-3 text-left font-bold text-violet-700">{egp(totals?.inventory_consumed)}</td>
-                  <td className="px-4 py-3 text-right text-xs text-slate-500">100%</td>
-                </tr>
-              </tfoot>
             </table>
-          )}
-        </div>
-      )}
+          </div>
+        )}
+
+        {/* Inventory Tab */}
+        {!isLoading && tab === 'inventory' && (
+          <div className="card overflow-hidden shadow-xl border-none">
+            <table className="w-full">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="th py-5">الصنف</th>
+                  <th className="th py-5 text-center w-28">الوحدة</th>
+                  <th className="th py-5 text-left text-indigo-600">الكمية المنصرفة</th>
+                  <th className="th py-5 text-left text-slate-900">القيمة الإجمالية</th>
+                  <th className="th py-5 text-right w-40">الأهمية النسبية</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {invItems.length > 0 ? invItems.map(r => (
+                  <tr key={r.item_code} className="hover:bg-slate-50 transition-colors">
+                    <td className="td py-5">
+                       <div className="flex items-center gap-3">
+                         <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600 border border-indigo-100">
+                           <Package size={20} />
+                         </div>
+                         <span className="font-black text-slate-800">{r.item_name}</span>
+                       </div>
+                    </td>
+                    <td className="td py-5 text-center text-slate-500 font-bold">{r.unit || '—'}</td>
+                    <td className="td py-5 text-left text-indigo-600 font-black">
+                      {new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(r.total_qty_out)}
+                    </td>
+                    <td className="td py-5 text-left">
+                       <span className="text-lg font-black text-slate-900">{egp(r.total_value_out)}</span>
+                    </td>
+                    <td className="td py-5">
+                       <div className="flex items-center gap-3 justify-end">
+                         <div className="w-24 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                           <div className="h-full bg-indigo-500" style={{ width: pct(r.total_value_out, totals?.inventory_consumed ?? 1) }} />
+                         </div>
+                         <span className="text-[10px] font-black text-slate-400 w-8">{pct(r.total_value_out, totals?.inventory_consumed ?? 1)}</span>
+                       </div>
+                    </td>
+                  </tr>
+                )) : (
+                  <tr><td colSpan={5} className="td py-20 text-center text-slate-400">لم يتم صرف أي مخزون لهذا الموسم</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
+
+import React from 'react'

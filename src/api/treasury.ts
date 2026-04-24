@@ -1,19 +1,39 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
-import { glCashTransaction, getOpenPeriod, postAutoEntry } from '../lib/gl'
+import { postAutoEntry } from '../lib/gl'
+import { FinanceCore } from '../lib/finance_core'
 import { logAudit } from '../lib/audit'
+
+import { z } from 'zod'
+import { zValidator } from '@hono/zod-validator'
 
 const treasury = new Hono<{ Bindings: Env }>()
 treasury.use('*', authMiddleware)
 
-// GET /api/treasury/transactions?page=&size=&direction=&season_id=&month=&year=
+const transactionSchema = z.object({
+  transaction_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'التاريخ يجب أن يكون بصيغة YYYY-MM-DD'),
+  direction: z.enum(['د', 'م'], { message: "الاتجاه يجب أن يكون 'د' (دائن/وارد) أو 'م' (مدين/صادر)" }),
+  amount: z.number().positive('المبلغ يجب أن يكون أكبر من صفر'),
+  narration: z.string().min(3, 'البيان يجب أن يكون 3 أحرف على الأقل'),
+  recipient_name: z.string().optional().nullable(),
+  document_number: z.number().optional().nullable(),
+  supplier_code: z.number().optional().nullable(),
+  center_code: z.number().optional().nullable(),
+  season_id: z.number().optional().nullable(),
+  status: z.enum(['draft', 'posted']).optional().default('posted'),
+  notes: z.string().optional().nullable(),
+  expense_code: z.number().optional().nullable(),
+})
+
+// GET /api/treasury/transactions?page=&size=&direction=&season_id=&month=&year=&status=
 treasury.get('/transactions', async (c) => {
   const { company_id } = getUser(c)
   const page      = Math.max(1, Number(c.req.query('page') ?? 1))
   const size      = Math.min(200, Number(c.req.query('size') ?? 100))
   const direction = c.req.query('direction')
   const seasonId  = c.req.query('season_id')
+  const status    = c.req.query('status')
   const month     = c.req.query('month')
   const year      = c.req.query('year')
   const search    = c.req.query('search')
@@ -24,6 +44,7 @@ treasury.get('/transactions', async (c) => {
 
   if (direction) { where += ' AND direction = ?';  binds.push(direction) }
   if (seasonId)  { where += ' AND season_id = ?';  binds.push(seasonId) }
+  if (status)    { where += ' AND status = ?';     binds.push(status) }
   if (month)     { where += ' AND month = ?';      binds.push(Number(month)) }
   if (year)      { where += ' AND year = ?';       binds.push(Number(year)) }
   if (search)    { where += ' AND (narration LIKE ? OR recipient_name LIKE ?)'; const like = `%${search}%`; binds.push(like, like) }
@@ -31,7 +52,7 @@ treasury.get('/transactions', async (c) => {
   const [rows, cnt] = await Promise.all([
     c.env.DB.prepare(
       `SELECT id, transaction_date, direction, document_number, recipient_name,
-              narration, amount, debit, credit, running_balance, year, month, notes
+              narration, amount, debit, credit, running_balance, year, month, notes, status
        FROM cash_transactions ${where}
        ORDER BY transaction_date ASC, id ASC LIMIT ? OFFSET ?`
     ).bind(...binds, size, offset).all(),
@@ -53,102 +74,59 @@ treasury.get('/balance', async (c) => {
 
   const row = await c.env.DB
     .prepare(`SELECT running_balance FROM cash_transactions
-              WHERE company_id = ? ORDER BY transaction_date DESC, id DESC LIMIT 1`)
+              WHERE company_id = ? AND status = 'posted'
+              ORDER BY transaction_date DESC, id DESC LIMIT 1`)
     .bind(company_id).first<{ running_balance: number }>()
 
   return c.json({ success: true, data: { balance: row?.running_balance ?? 0 } })
 })
 
 // POST /api/treasury/transactions
-treasury.post('/transactions', async (c) => {
+treasury.post('/transactions', zValidator('json', transactionSchema), async (c) => {
   const { company_id, sub: userId } = getUser(c)
-  const b = await c.req.json<{
-    transaction_date: string; direction: string; document_number?: number
-    recipient_name?: string; narration: string; amount: number
-    supplier_code?: number; expense_code?: number; notes?: string
-    season_id?: number; unit?: string; quantity?: number; unit_price?: number
-    status?: 'draft' | 'posted'
-  }>()
+  const b = c.req.valid('json')
 
-  if (!b.transaction_date || !b.direction || !b.amount || !b.narration) {
-    return c.json({ success: false, error: 'التاريخ والاتجاه والمبلغ والبيان مطلوبة' }, 400)
+  try {
+    const { txnId, balance } = await FinanceCore.recordCashMovement(c.env.DB, {
+      company_id, userId,
+      transaction_date: b.transaction_date,
+      direction: b.direction,
+      amount: b.amount,
+      narration: b.narration,
+      recipient_name: b.recipient_name,
+      document_number: b.document_number,
+      supplier_code: b.supplier_code,
+      center_code: b.center_code,
+      season_id: b.season_id,
+      expense_code: b.expense_code,
+      notes: b.notes,
+      status: b.status,
+    })
+
+    return c.json({ success: true, data: { running_balance: balance, id: txnId } }, 201)
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 400)
   }
-  if (b.direction !== 'د' && b.direction !== 'م') {
-    return c.json({ success: false, error: "الاتجاه يجب أن يكون 'د' أو 'م'" }, 400)
+})
+
+ treasury.patch('/transactions/:id/post', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+
+  try {
+    const result = await FinanceCore.postCashMovement(c.env.DB, company_id, id, userId)
+    
+    void logAudit(c.env.DB, {
+      user_id: userId, company_id, action: 'UPDATE',
+      table_name: 'cash_transactions', record_id: id,
+      new_value: { status: 'posted' },
+      source: 'governance_workflow'
+    })
+
+    return c.json({ success: true, data: result })
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 400)
   }
-
-  const status = b.status ?? 'posted'
-
-  // Validate open financial period
-  const periodId = await getOpenPeriod(c.env.DB, company_id, b.transaction_date)
-  if (!periodId) {
-    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.transaction_date} — تحقق من إعدادات الفترات المالية` }, 400)
-  }
-
-  // Calculate running balance — find the immediately preceding transaction by date order
-  // to correctly handle backdated entries (not just last row globally)
-  const lastRow = await c.env.DB
-    .prepare(`SELECT running_balance FROM cash_transactions
-              WHERE company_id = ? AND transaction_date <= ?
-              ORDER BY transaction_date DESC, id DESC LIMIT 1`)
-    .bind(company_id, b.transaction_date).first<{ running_balance: number }>()
-
-  const prevBalance   = lastRow?.running_balance ?? 0
-  const runningBalance = b.direction === 'د'
-    ? prevBalance + b.amount
-    : prevBalance - b.amount
-
-  const date = new Date(b.transaction_date)
-  await c.env.DB.prepare(
-    `INSERT INTO cash_transactions
-     (company_id, season_id, supplier_code, expense_code, transaction_date,
-      direction, document_number, recipient_name, narration, amount,
-      debit, credit, running_balance, unit, quantity, unit_price,
-      notes, year, month, created_by_user_id, status)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).bind(
-    company_id, b.season_id ?? null, b.supplier_code ?? null, b.expense_code ?? null,
-    b.transaction_date, b.direction, b.document_number ?? null,
-    b.recipient_name ?? null, b.narration, b.amount,
-    b.direction === 'م' ? b.amount : 0,
-    b.direction === 'د' ? b.amount : 0,
-    runningBalance, b.unit ?? null, b.quantity ?? null, b.unit_price ?? null,
-    b.notes ?? null, date.getFullYear(), date.getMonth() + 1, userId, status
-  ).run()
-
-  const lastRowPost = await c.env.DB
-    .prepare('SELECT id FROM cash_transactions WHERE company_id = ? ORDER BY id DESC LIMIT 1')
-    .bind(company_id).first<{id:number}>()
-  const txnId = lastRowPost?.id ?? 0
-
-  // Propagate balance delta to all rows that come AFTER this transaction (backdated entry fix)
-  const delta = b.direction === 'د' ? b.amount : -b.amount
-  await c.env.DB
-    .prepare(`UPDATE cash_transactions
-              SET running_balance = running_balance + ?
-              WHERE company_id = ? AND (transaction_date > ? OR (transaction_date = ? AND id > ?))`)
-    .bind(delta, company_id, b.transaction_date, b.transaction_date, txnId).run()
-
-  // Auto-post GL entry only for 'posted' status
-  let glEntryId: number | null = null
-  if (status === 'posted') {
-    glEntryId = await glCashTransaction(c.env.DB, company_id, txnId,
-      b.direction, b.amount, b.transaction_date, b.narration, userId)
-    if (glEntryId) {
-      await c.env.DB.prepare(
-        'UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ?'
-      ).bind(glEntryId, txnId).run()
-    }
-  }
-
-  // Audit log
-  void logAudit(c.env.DB, {
-    user_id: userId, company_id, action: 'CREATE',
-    table_name: 'cash_transactions', record_id: txnId,
-    new_value: { direction: b.direction, amount: b.amount, narration: b.narration, date: b.transaction_date, status },
-  })
-
-  return c.json({ success: true, data: { running_balance: runningBalance, gl_entry_id: glEntryId } }, 201)
 })
 
 // GET /api/treasury/supplier-payments?supplier_code=
@@ -205,17 +183,14 @@ treasury.post('/partners', async (c) => {
       .bind(company_id).first<{ account_code: string }>()
 
     if (equityMapping && cashMapping) {
-      await postAutoEntry(c.env.DB, {
-        company_id,
-        entry_date:  today,
-        description: `إضافة رأس مال شريك: ${b.name.trim()}`,
-        ref_type:    'partner_capital',
-        ref_id:      newId,
-        lines: [
-          { account_code: cashMapping.account_code,   debit: capitalPaid, credit: 0,           description: `رأس مال — ${b.name.trim()}` },
-          { account_code: equityMapping.account_code,  debit: 0,           credit: capitalPaid, description: `رأس مال — ${b.name.trim()}` },
-        ],
-        created_by: userId,
+      // Record Cash Movement (which also handles GL entry)
+      await FinanceCore.recordCashMovement(c.env.DB, {
+        company_id, userId,
+        transaction_date: today,
+        direction: 'د',
+        amount: capitalPaid,
+        narration: `إضافة رأس مال شريك: ${b.name.trim()}`,
+        contraAccount: equityMapping.account_code // link to equity instead of revenue
       })
     }
   }

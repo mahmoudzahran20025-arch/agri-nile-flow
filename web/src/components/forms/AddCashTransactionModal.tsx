@@ -35,6 +35,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
     notes:            '',
     supplier_code:    '',
     season_id:        '',
+    center_code:      '',
     expense_code:     '',
     unit:             '',
     quantity:         '',
@@ -49,7 +50,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
       setForm({
         transaction_date: today(), direction: 'م', narration: '', amount: '',
         document_number: '', document_type: '', recipient_name: '', notes: '',
-        supplier_code: '', season_id: '', expense_code: '',
+        supplier_code: '', season_id: '', center_code: '', expense_code: '',
         unit: '', quantity: '', unit_price: '', status: 'draft',
       })
       setBeneficiaryType('supplier')
@@ -89,6 +90,14 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
   const { data: expenseTypes = [] } = useQuery({
     queryKey: ['config', 'expense_types'],
     queryFn:  configApi.expenseTypes as () => Promise<ExpenseOption[]>,
+    enabled:  open,
+    staleTime: 120_000,
+  })
+
+  type CenterOption = { code: number; name: string }
+  const { data: costCenters = [] } = useQuery({
+    queryKey: ['config', 'cost_centers'],
+    queryFn:  configApi.costCenters as () => Promise<CenterOption[]>,
     enabled:  open,
     staleTime: 120_000,
   })
@@ -137,6 +146,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
         supplier_code:    beneficiaryType === 'supplier' && form.supplier_code
                             ? Number(form.supplier_code) : undefined,
         season_id:        form.season_id ? Number(form.season_id) : undefined,
+        center_code:      form.center_code ? Number(form.center_code) : undefined,
         expense_code:     form.expense_code ? Number(form.expense_code) : undefined,
         unit:             form.unit.trim() || undefined,
         quantity:         form.quantity ? Number(form.quantity) : undefined,
@@ -281,8 +291,8 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
             onChange={e => set('narration', e.target.value)} required />
         </div>
 
-        {/* ── Season + Expense Type ──────────────────────── */}
-        <div className="grid grid-cols-2 gap-3">
+        {/* ── Season + Cost Center + Expense Type ───────── */}
+        <div className="grid grid-cols-3 gap-3">
           <div>
             <label className="label">الموسم الزراعي</label>
             <select className="input" value={form.season_id}
@@ -292,6 +302,16 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
                 <option key={s.id} value={s.id}>
                   {s.name}{s.status === 'active' ? ' ✓' : ''}
                 </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">مركز التكلفة</label>
+            <select className="input" value={form.center_code}
+              onChange={e => set('center_code', e.target.value)}>
+              <option value="">— بدون مركز —</option>
+              {(costCenters as CenterOption[]).map(cc => (
+                <option key={cc.code} value={cc.code}>{cc.name}</option>
               ))}
             </select>
           </div>

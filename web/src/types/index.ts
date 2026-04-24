@@ -67,6 +67,7 @@ export interface SupplierTransaction {
   notes:               string | null
   year:                number | null
   month:               number | null
+  status?:             'draft' | 'posted'
 }
 
 export interface CashTransaction {
@@ -82,6 +83,7 @@ export interface CashTransaction {
   running_balance: number | null
   year:            number | null
   month:           number | null
+  status?:         'draft' | 'posted'
   notes:           string | null
 }
 
