@@ -76,12 +76,23 @@ migrate/**/*.xlsx
 # ============================================================
 # Logs
 # ============================================================
-logs/
+audit_log.txt
+seed_coa.sql
 *.log
 
 # ============================================================
-# Temporary Files
+# Temporary Files & AI Scratchpads
 # ============================================================
+scratch/
+table_counts.json
+*.json
+!package.json
+!package-lock.json
+!wrangler.json
+!tsconfig.json
+!web/package.json
+!web/tsconfig.json
+
 tmp/
 temp/
 *.tmp
