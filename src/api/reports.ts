@@ -67,7 +67,7 @@ reports.get('/cost-centers', async (c) => {
     SELECT
       f.center_code,
       cc.name            AS center_name,
-      SUM(im.total_cost) AS inventory_total,
+      SUM(im.value_out)  AS inventory_total,
       COUNT(im.id)       AS inventory_count
     FROM inventory_movements im
     JOIN fields f ON f.id = im.field_id AND f.company_id = im.company_id
@@ -555,7 +555,7 @@ reports.get('/season-pnl', async (c) => {
 
     // Cost 2: Labor — work tasks linked to work orders in this season
     c.env.DB.prepare(`
-      SELECT COALESCE(SUM(wt.total_cost), 0) AS total
+      SELECT COALESCE(SUM(wt.quantity * wt.unit_cost), 0) AS total
       FROM work_tasks wt
       JOIN work_orders wo ON wo.id = wt.work_order_id AND wo.company_id = wt.company_id
       WHERE wo.company_id = ? AND wo.season_id = ?
@@ -608,7 +608,7 @@ reports.get('/season-pnl', async (c) => {
         GROUP BY field_id
       ) inv ON inv.field_id = f.id
       LEFT JOIN (
-        SELECT wo.field_id, SUM(wt.total_cost) AS labor_cost
+        SELECT wo.field_id, SUM(wt.quantity * wt.unit_cost) AS labor_cost
         FROM work_tasks wt
         JOIN work_orders wo ON wo.id = wt.work_order_id AND wo.company_id = wt.company_id
         WHERE wo.company_id = ? AND wo.season_id = ? AND wo.field_id IS NOT NULL

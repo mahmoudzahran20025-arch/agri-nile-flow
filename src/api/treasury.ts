@@ -85,11 +85,13 @@ treasury.post('/transactions', async (c) => {
     return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.transaction_date} — تحقق من إعدادات الفترات المالية` }, 400)
   }
 
-  // Calculate running balance
+  // Calculate running balance — find the immediately preceding transaction by date order
+  // to correctly handle backdated entries (not just last row globally)
   const lastRow = await c.env.DB
     .prepare(`SELECT running_balance FROM cash_transactions
-              WHERE company_id = ? ORDER BY transaction_date DESC, id DESC LIMIT 1`)
-    .bind(company_id).first<{ running_balance: number }>()
+              WHERE company_id = ? AND transaction_date <= ?
+              ORDER BY transaction_date DESC, id DESC LIMIT 1`)
+    .bind(company_id, b.transaction_date).first<{ running_balance: number }>()
 
   const prevBalance   = lastRow?.running_balance ?? 0
   const runningBalance = b.direction === 'د'
@@ -118,6 +120,14 @@ treasury.post('/transactions', async (c) => {
     .prepare('SELECT id FROM cash_transactions WHERE company_id = ? ORDER BY id DESC LIMIT 1')
     .bind(company_id).first<{id:number}>()
   const txnId = lastRowPost?.id ?? 0
+
+  // Propagate balance delta to all rows that come AFTER this transaction (backdated entry fix)
+  const delta = b.direction === 'د' ? b.amount : -b.amount
+  await c.env.DB
+    .prepare(`UPDATE cash_transactions
+              SET running_balance = running_balance + ?
+              WHERE company_id = ? AND (transaction_date > ? OR (transaction_date = ? AND id > ?))`)
+    .bind(delta, company_id, b.transaction_date, b.transaction_date, txnId).run()
 
   // Auto-post GL entry only for 'posted' status
   let glEntryId: number | null = null

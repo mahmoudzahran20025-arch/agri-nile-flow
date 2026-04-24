@@ -66,6 +66,10 @@ export default function SeasonClosePage() {
           الموسم <span className="font-semibold text-gray-800">{checkData?.season.name}</span> مغلق الآن.
           لا يمكن إضافة معاملات جديدة لهذا الموسم.
         </p>
+        <div className="mb-6 text-right bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">
+          <p className="font-semibold mb-1">⚠️ تذكير — الفترات المالية منفصلة</p>
+          <p>إغلاق الموسم الزراعي لا يُغلق الفترة المالية المحاسبية تلقائياً. لإغلاق الفترة المالية توجَّه إلى <strong>دفتر الأستاذ ← الفترات المالية</strong>.</p>
+        </div>
         <button
           onClick={() => { setDone(false); setSelectedId(''); setNotes(''); setConfirmed(false) }}
           className="text-sm text-indigo-600 hover:text-indigo-700 underline"
