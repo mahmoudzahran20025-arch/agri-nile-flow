@@ -5,6 +5,8 @@ import OfflineBanner        from '../components/OfflineBanner'
 import PeriodWarningBanner  from '../components/PeriodWarningBanner'
 import GlobalSearch          from '../components/GlobalSearch'
 import MobileNav             from '../components/MobileNav'
+import QuickEntryFAB         from '../components/QuickEntryFAB'
+import KeyboardShortcuts     from '../components/KeyboardShortcuts'
 
 export default function RootLayout() {
   return (
@@ -30,6 +32,10 @@ export default function RootLayout() {
 
       {/* Mobile bottom nav — visible only on small screens */}
       <MobileNav />
+
+      {/* Global overlays */}
+      <QuickEntryFAB />
+      <KeyboardShortcuts />
     </div>
   )
 }

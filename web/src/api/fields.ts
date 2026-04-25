@@ -97,6 +97,13 @@ export const fieldsApi = {
   createHarvest: (body: Omit<HarvestRecord, 'id' | 'company_id' | 'created_at' | 'field_name' | 'field_code'>): Promise<HarvestRecord> =>
     unwrap(api.post<HarvestRecord>('/fields/harvest', body)),
 
+  costEstimate: (field_id: number, season_id: number): Promise<{
+    field_id: number; season_id: number; field_name: string; field_code: string
+    area_feddan: number; materials_cost: number; labor_cost: number
+    land_rent: number; total_cost: number; note: string
+  }> =>
+    unwrap(api.get(`/fields/harvest/cost-estimate?field_id=${field_id}&season_id=${season_id}`)),
+
   updateHarvest: (id: number, body: Partial<HarvestRecord>): Promise<HarvestRecord> =>
     unwrap(api.patch<HarvestRecord>(`/fields/harvest/${id}`, body)),
 

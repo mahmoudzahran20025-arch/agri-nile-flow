@@ -2,10 +2,12 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Wheat, Plus, Loader2, TrendingUp, TrendingDown,
-  DollarSign, Scale, BarChart3, Trash2, Edit3,
+  DollarSign, Scale, BarChart3, Trash2, Edit3, Calculator,
 } from 'lucide-react'
 import { fieldsApi, QUALITY_LABELS } from '../../api/fields'
 import type { HarvestRecord } from '../../api/fields'
+import { configApi } from '../../api/client'
+import type { Season } from '../../types'
 import Modal from '../../components/ui/Modal'
 
 function fmt(n: number | null | undefined, dec = 1) {
@@ -40,14 +42,16 @@ function KPI({ label, value, sub, icon: Icon, color }: {
 interface HarvestFormProps {
   initial?: Partial<HarvestRecord>
   fields: Array<{ id: number; name: string; code: string; area_feddan: number }>
+  seasons: Season[]
   onSubmit: (data: Omit<HarvestRecord, 'id' | 'company_id' | 'created_at'>) => void
   loading: boolean
   onClose: () => void
 }
 
-function HarvestForm({ initial, fields, onSubmit, loading, onClose }: HarvestFormProps) {
+function HarvestForm({ initial, fields, seasons, onSubmit, loading, onClose }: HarvestFormProps) {
   const [form, setForm] = useState({
     field_id:      String(initial?.field_id ?? (fields[0]?.id ?? '')),
+    season_id:     String(initial?.season_id ?? ''),
     harvest_date:  initial?.harvest_date  ?? new Date().toISOString().slice(0, 10),
     crop_name:     initial?.crop_name     ?? '',
     variety:       initial?.variety       ?? '',
@@ -59,6 +63,21 @@ function HarvestForm({ initial, fields, onSubmit, loading, onClose }: HarvestFor
     sell_price_ton:String(initial?.sell_price_ton ?? ''),
     notes:         initial?.notes ?? '',
   })
+
+  type CostEstimate = { materials_cost: number; labor_cost: number; land_rent: number; total_cost: number; note: string }
+  const [costEst, setCostEst]       = useState<CostEstimate | null>(null)
+  const [costLoading, setCostLoading] = useState(false)
+
+  async function handleCostEstimate() {
+    if (!form.field_id || !form.season_id) return
+    setCostLoading(true)
+    try {
+      const est = await fieldsApi.costEstimate(Number(form.field_id), Number(form.season_id))
+      setCostEst(est)
+      setForm(p => ({ ...p, actual_cost: String(Math.round(est.total_cost)) }))
+    } catch { /* ignore */ }
+    finally { setCostLoading(false) }
+  }
 
   const selectedField = fields.find(f => f.id === Number(form.field_id))
   const qtyTons = Number(form.qty_tons) || 0
@@ -77,6 +96,7 @@ function HarvestForm({ initial, fields, onSubmit, loading, onClose }: HarvestFor
     e.preventDefault()
     onSubmit({
       field_id:      Number(form.field_id),
+      season_id:     form.season_id ? Number(form.season_id) : undefined,
       harvest_date:  form.harvest_date,
       crop_name:     form.crop_name.trim(),
       variety:       form.variety || undefined,
@@ -111,6 +131,20 @@ function HarvestForm({ initial, fields, onSubmit, loading, onClose }: HarvestFor
             className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500" />
         </div>
       </div>
+
+      {/* الموسم */}
+      {seasons.length > 0 && (
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">الموسم الزراعي</label>
+          <select value={form.season_id} onChange={f('season_id')}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500">
+            <option value="">— اختر الموسم (لحساب التكلفة) —</option>
+            {seasons.map(s => (
+              <option key={s.id} value={s.id}>{s.name} ({s.season_type})</option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {/* المحصول + الصنف */}
       <div className="grid grid-cols-2 gap-3">
@@ -164,7 +198,20 @@ function HarvestForm({ initial, fields, onSubmit, loading, onClose }: HarvestFor
       {/* التكاليف والإيراد */}
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">تكلفة الموسم (ج.م)</label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="text-xs font-medium text-gray-500">تكلفة الموسم (ج.م)</label>
+            {form.field_id && form.season_id && (
+              <button
+                type="button"
+                onClick={handleCostEstimate}
+                disabled={costLoading}
+                className="flex items-center gap-1 text-xs text-teal-700 bg-teal-50 border border-teal-200 rounded-md px-2 py-0.5 hover:bg-teal-100 disabled:opacity-50"
+              >
+                {costLoading ? <Loader2 size={10} className="animate-spin" /> : <Calculator size={10} />}
+                احسب من النظام
+              </button>
+            )}
+          </div>
           <input type="number" step="0.01" min="0" value={form.actual_cost} onChange={f('actual_cost')}
             className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500" />
         </div>
@@ -174,6 +221,33 @@ function HarvestForm({ initial, fields, onSubmit, loading, onClose }: HarvestFor
             className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500" />
         </div>
       </div>
+
+      {/* Cost estimate breakdown */}
+      {costEst && (
+        <div className="rounded-xl border border-teal-200 bg-teal-50/60 p-3 text-xs space-y-1.5">
+          <p className="font-semibold text-teal-800 flex items-center gap-1.5">
+            <Calculator size={12} /> تفصيلة التكلفة المحسوبة من النظام
+          </p>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="bg-white rounded-lg p-2 border border-teal-100">
+              <p className="text-gray-400">مستلزمات</p>
+              <p className="font-bold text-gray-800">{fmtMoney(costEst.materials_cost)} ج.م</p>
+            </div>
+            <div className="bg-white rounded-lg p-2 border border-teal-100">
+              <p className="text-gray-400">عمالة</p>
+              <p className="font-bold text-gray-800">{fmtMoney(costEst.labor_cost)} ج.م</p>
+            </div>
+            <div className="bg-white rounded-lg p-2 border border-teal-100">
+              <p className="text-gray-400">إيجار أرض</p>
+              <p className="font-bold text-gray-800">{fmtMoney(costEst.land_rent)} ج.م</p>
+            </div>
+          </div>
+          <div className="flex justify-between items-center pt-0.5">
+            <span className="text-teal-700 font-bold">الإجمالي: {fmtMoney(costEst.total_cost)} ج.م</span>
+            {costEst.note && <span className="text-gray-400 italic">{costEst.note}</span>}
+          </div>
+        </div>
+      )}
 
       {/* Live P&L preview */}
       {(cost > 0 || revenue > 0) && (
@@ -224,6 +298,12 @@ export default function HarvestPage() {
     queryKey: ['fields-simple'],
     queryFn:  () => fieldsApi.list(),
     staleTime: 60_000,
+  })
+
+  const { data: seasons = [] } = useQuery({
+    queryKey: ['config-seasons'],
+    queryFn:  () => configApi.seasons() as Promise<Season[]>,
+    staleTime: 300_000,
   })
 
   const { data: harvests = [], isLoading } = useQuery({
@@ -476,6 +556,7 @@ export default function HarvestPage() {
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="سجل حصاد جديد">
         <HarvestForm
           fields={allFields}
+          seasons={seasons}
           onSubmit={(b) => createMut.mutate(b as Parameters<typeof fieldsApi.createHarvest>[0])}
           loading={createMut.isPending}
           onClose={() => setShowAdd(false)}
@@ -488,6 +569,7 @@ export default function HarvestPage() {
           <HarvestForm
             initial={editRecord}
             fields={allFields}
+            seasons={seasons}
             onSubmit={(b) => updateMut.mutate({ id: editRecord.id, b })}
             loading={updateMut.isPending}
             onClose={() => setEditRecord(null)}

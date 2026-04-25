@@ -109,6 +109,8 @@ export const authApi = {
 
   changePassword: (current_password: string, new_password: string) =>
     api.post('/auth/change-password', { current_password, new_password }),
+
+  rbacMatrix: () => unwrap(api.get<RbacMatrix>('/auth/rbac-matrix')),
 }
 
 // ─── Dashboard ────────────────────────────────────────────────
@@ -199,6 +201,8 @@ export const configApi = {
   accounts:         () => unwrap(api.get('/config/accounts')),
   expenseTypes:     () => unwrap(api.get('/config/expense_types')),
   companies:        () => unwrap(api.get('/config/companies')),
+  integrations:     () => unwrap(api.get<{ module_key: string; is_enabled: number }[]>('/config/gl-integrations')),
+  updateIntegration:(key: string, is_enabled: boolean) => api.patch(`/config/gl-integrations/${key}`, { is_enabled }),
 }
 
 // ─── Users (admin) ────────────────────────────────────────────
@@ -291,6 +295,8 @@ export const contractsApi = {
   createSales:    (body: unknown) => api.post('/contracts/sales', body),
   updateSalesStatus: (id: number, status: string, advance_paid?: number) =>
     api.patch(`/contracts/sales/${id}/status`, { status, advance_paid }),
+  receiveAdvance: (id: number, body: { amount: number; receipt_date: string; notes?: string }) =>
+    api.post<{ gl_entry_id: number | null }>(`/contracts/sales/${id}/receive-advance`, body),
 
   summary:        (season_id?: number) =>
     unwrap(api.get(`/contracts/summary${season_id ? `?season_id=${season_id}` : ''}`)),
@@ -395,15 +401,41 @@ export const glApi = {
     unwrap(api.get(`/gl/income-statement${start ? `?start=${start}${end ? `&end=${end}` : ''}` : ''}`)),
   balanceSheet:     (asOf?: string) =>
     unwrap(api.get(`/gl/balance-sheet${asOf ? `?as_of=${asOf}` : ''}`)),
+
+  integrityCheck: () => unwrap(api.get<IntegrityCheckResult>('/gl/integrity-check')),
+}
+
+export interface IntegrityCheck {
+  key:         string
+  label:       string
+  description: string
+  count:       number
+  ok:          boolean
+  blocker:     boolean
+  action_url:  string
+}
+
+export interface IntegrityCheckResult {
+  checks:       IntegrityCheck[]
+  overall_ok:   boolean
+  has_blockers: boolean
+  score:        number
+}
+
+export interface RbacMatrix {
+  roles:       string[]
+  permissions: { key: string; module: string; action: string }[]
+  modules:     string[]
+  matrix:      { role: string; permissions: Record<string, boolean> }[]
 }
 
 // ─── Audit Log ────────────────────────────────────────────────
 export const auditApi = {
   list: (p: { page?: number; size?: number; table?: string; action?: string; user_id?: number; start?: string; end?: string }) =>
-    unwrap(api.get<Paginated<any>>(paginatedUrl('/audit', p))),
+    unwrap(api.get<Paginated<AuditLogRow>>(paginatedUrl('/audit', p))),
   errors: (p: { page?: number; size?: number; company_id?: string }) =>
-    unwrap(api.get<Paginated<any>>(paginatedUrl('/audit/errors', p))),
-  stats: () => unwrap(api.get<any>('/audit/stats')),
+    unwrap(api.get<Paginated<ErrorLogEntry>>(paginatedUrl('/audit/errors', p))),
+  stats: () => unwrap(api.get<AuditStats>('/audit/stats')),
 }
 
 // ─── Admin (super_admin only) ─────────────────────────────────
@@ -411,8 +443,11 @@ export const adminApi = {
   companies:     () => unwrap(api.get<unknown[]>('/admin/companies')),
   createCompany: (body: unknown) => api.post('/admin/companies', body),
   updateCompany: (id: number, body: unknown) => api.patch(`/admin/companies/${id}`, body),
-  switchCompany: async (companyId: number, setAuth: (token: string, user: any, company: any, role: string, permissions: string[]) => void) => {
-    const res = await api.post<any>(`/admin/switch/${companyId}`, {})
+  switchCompany: async (
+    companyId: number,
+    setAuth: (token: string, user: SwitchedUser, company: SwitchedCompany, role: string, permissions: string[]) => void,
+  ) => {
+    const res = await api.post<AdminSwitchPayload>(`/admin/switch/${companyId}`, {})
     if (res.success) {
       const d = res.data
       setAuth(d.token, d.user, d.company, d.user.role, d.permissions ?? [])
@@ -430,6 +465,63 @@ export interface CompanyOverview {
   open_wo:         number; open_po_count: number; open_po_value: number
   employee_count:  number; low_stock_count: number
   last_activity:   string | null; health_score: number
+}
+
+export interface AuditLogRow {
+  id: number
+  action: string
+  table_name: string
+  record_id: number | null
+  old_value: string | null
+  new_value: string | null
+  source: string
+  created_at: string
+  user_name: string
+  user_email: string
+  company_name: string
+  company_id: number
+}
+
+export interface ErrorLogEntry {
+  id: number
+  company_id: number
+  user_id: number | null
+  endpoint: string
+  method: string
+  error_message: string
+  stack_trace: string | null
+  request_payload: string | null
+  created_at: string
+  user_name: string | null
+  company_name: string | null
+}
+
+export interface AuditStats {
+  total_logs?: number
+  total_errors?: number
+  today_logs?: number
+  [key: string]: unknown
+}
+
+export interface SwitchedUser {
+  id: number
+  email: string
+  full_name: string
+  role: string
+  company_id: number
+}
+
+export interface SwitchedCompany {
+  id: number
+  code: string
+  name: string
+}
+
+export interface AdminSwitchPayload {
+  token: string
+  user: SwitchedUser
+  company: SwitchedCompany
+  permissions: string[]
 }
 
 // ─── Export (CSV) ─────────────────────────────────────────────

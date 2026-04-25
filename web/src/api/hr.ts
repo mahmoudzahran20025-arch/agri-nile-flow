@@ -64,6 +64,7 @@ export interface PayrollRun {
   run_date: string; status: 'draft' | 'approved' | 'paid' | 'cancelled'
   total_gross: number; total_deductions: number; total_net: number
   journal_entry_id?: number; approved_by?: number; approved_by_name?: string
+  payment_date?: string | null; payment_gl_entry_id?: number | null
   created_by?: number; created_at: string
 }
 
@@ -135,6 +136,8 @@ export const hrApi = {
   getPayrollRun:  (id: number) => unwrap(api.get<PayrollRun & {items: PayrollItem[]}>(`/hr/payroll/${id}`)),
   runPayroll:     (year: number, month: number) => unwrap(api.post<{id:number; total_net:number}>('/hr/payroll/run', { year, month })),
   approvePayroll: (id: number) => unwrap(api.patch<null>(`/hr/payroll/${id}/approve`, {})),
+  payPayroll:     (id: number, payment_date: string) =>
+    unwrap(api.patch<{ payment_date: string; payment_gl_entry_id: number | null }>(`/hr/payroll/${id}/pay`, { payment_date })),
 
   // Assets
   getAssets:    (empId?: number) => unwrap(api.get<EmployeeAsset[]>(`/hr/assets${empId ? `?employee_id=${empId}` : ''}`)),

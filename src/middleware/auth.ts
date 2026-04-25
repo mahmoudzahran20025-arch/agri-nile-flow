@@ -119,3 +119,13 @@ export function permissionGuard(module: string, action: string) {
     await next()
   }
 }
+
+export function roleGuard(allowedRoles: string[]) {
+  return async (c: Context<{ Bindings: Env }>, next: Next) => {
+    const user = getUser(c)
+    if (!user || !allowedRoles.includes(user.role)) {
+      return c.json({ success: false, error: 'غير مصرح بهذا الإجراء' }, 403)
+    }
+    await next()
+  }
+}

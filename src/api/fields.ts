@@ -1,9 +1,12 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
-import { authMiddleware, getUser } from '../middleware/auth'
+import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
+import { FinanceCore } from '../lib/finance_core'
 
 const fields = new Hono<{ Bindings: Env }>()
 fields.use('*', authMiddleware)
+// RBAC: Fields + Harvest routes are restricted to operational/finance leadership roles.
+fields.use('*', roleGuard(['super_admin', 'company_admin', 'field_supervisor', 'accountant']))
 
 // GET /api/fields
 fields.get('/', async (c) => {
@@ -11,7 +14,7 @@ fields.get('/', async (c) => {
   const season_id = c.req.query('season_id')
   const q         = c.req.query('q')
 
-  let sql = 'SELECT f.*, s.name AS season_name FROM fields f LEFT JOIN seasons s ON s.id = f.season_id WHERE f.company_id = ?'
+  let sql = 'SELECT f.*, s.name AS season_name FROM fields f LEFT JOIN seasons s ON s.id = f.season_id AND s.company_id = f.company_id WHERE f.company_id = ?'
   const params: unknown[] = [company_id]
 
   if (season_id) { sql += ' AND f.season_id = ?'; params.push(Number(season_id)) }
@@ -39,8 +42,8 @@ fields.get('/harvest', async (c) => {
            f.code AS field_code,
            s.name AS season_name
     FROM harvest_records h
-    JOIN fields f ON f.id = h.field_id
-    LEFT JOIN seasons s ON s.id = h.season_id
+    JOIN fields f ON f.id = h.field_id AND f.company_id = h.company_id
+    LEFT JOIN seasons s ON s.id = h.season_id AND s.company_id = h.company_id
     WHERE h.company_id = ?`
   const p: unknown[] = [company_id]
 
@@ -100,8 +103,8 @@ fields.post('/harvest', async (c) => {
     return c.json({ success: false, error: 'الحقل والتاريخ والمحصول مطلوبة' }, 400)
 
   const field = await c.env.DB
-    .prepare('SELECT area_feddan FROM fields WHERE id = ? AND company_id = ?')
-    .bind(b.field_id, company_id).first<{ area_feddan: number }>()
+    .prepare('SELECT area_feddan, name, center_code FROM fields WHERE id = ? AND company_id = ?')
+    .bind(b.field_id, company_id).first<{ area_feddan: number; name: string; center_code: number | null }>()
   if (!field) return c.json({ success: false, error: 'القطعة غير موجودة' }, 404)
 
   const qty_feddan      = field.area_feddan > 0 ? (b.qty_tons / field.area_feddan) : null
@@ -124,7 +127,29 @@ fields.post('/harvest', async (c) => {
     b.notes ?? null, userId
   ).run()
 
-  return c.json({ success: true, data: { id: r.meta.last_row_id } }, 201)
+  const harvestId = Number(r.meta.last_row_id)
+  try {
+    await FinanceCore.postHarvestLedger(c.env.DB, {
+      company_id,
+      userId,
+      harvest_id: harvestId,
+      harvest_date: b.harvest_date,
+      crop_name: b.crop_name,
+      field_name: field.name,
+      center_code: field.center_code,
+      total_revenue: revenue ?? 0,
+      total_actual_cost: actual_cost,
+      season_id: b.season_id ?? null,
+      field_id: b.field_id,
+    })
+  } catch (e: unknown) {
+    await c.env.DB.prepare('DELETE FROM harvest_records WHERE id = ? AND company_id = ?')
+      .bind(harvestId, company_id).run()
+    const message = e instanceof Error ? e.message : 'فشل ترحيل الحصاد إلى دفتر الأستاذ'
+    return c.json({ success: false, error: message }, 400)
+  }
+
+  return c.json({ success: true, data: { id: harvestId } }, 201)
 })
 
 // PATCH /api/fields/harvest/:id
@@ -141,8 +166,8 @@ fields.patch('/harvest/:id', async (c) => {
 
   if (b.qty_tons !== undefined || b.actual_cost !== undefined || b.sell_price_ton !== undefined) {
     const existing = await c.env.DB
-      .prepare(`SELECT h.qty_tons, h.actual_cost, h.sell_price_ton, f.area_feddan
-                FROM harvest_records h JOIN fields f ON f.id = h.field_id
+      .prepare(`SELECT h.qty_tons, h.actual_cost, h.sell_price_ton, f.area_feddan, f.name AS field_name, f.center_code
+                FROM harvest_records h JOIN fields f ON f.id = h.field_id AND f.company_id = h.company_id
                 WHERE h.id = ? AND h.company_id = ?`)
       .bind(id, company_id).first<{ qty_tons: number; actual_cost: number; sell_price_ton: number | null; area_feddan: number }>()
     if (existing) {
@@ -161,11 +186,50 @@ fields.patch('/harvest/:id', async (c) => {
     }
   }
 
+  const before = await c.env.DB.prepare(
+    `SELECT h.harvest_date, h.crop_name, h.revenue, h.actual_cost, f.name AS field_name, f.center_code, h.season_id, h.field_id
+     FROM harvest_records h
+     JOIN fields f ON f.id = h.field_id AND f.company_id = h.company_id
+     WHERE h.id = ? AND h.company_id = ?`
+  ).bind(id, company_id).first<{
+    harvest_date: string
+    crop_name: string
+    revenue: number | null
+    actual_cost: number | null
+    field_name: string
+    center_code: number | null
+    season_id: number | null
+    field_id: number
+  }>()
+
   cols.push('updated_at')
   const vals = [...cols.slice(0, -1).map(f => b[f] as unknown), new Date().toISOString(), id, company_id]
   await c.env.DB.prepare(
     `UPDATE harvest_records SET ${cols.map(f => `${f} = ?`).join(', ')} WHERE id = ? AND company_id = ?`
   ).bind(...vals).run()
+
+  if (before) {
+    const after = await c.env.DB.prepare(
+      'SELECT harvest_date, crop_name, revenue, actual_cost FROM harvest_records WHERE id = ? AND company_id = ?'
+    ).bind(id, company_id).first<{ harvest_date: string; crop_name: string; revenue: number | null; actual_cost: number | null }>()
+
+  if (after) {
+    await FinanceCore.postHarvestLedger(c.env.DB, {
+      company_id,
+      userId: Number(getUser(c).sub),
+      harvest_id: id,
+      harvest_date: after.harvest_date,
+      crop_name: after.crop_name,
+      field_name: before.field_name,
+      center_code: before.center_code,
+      total_revenue: after.revenue ?? 0,
+      total_actual_cost: after.actual_cost ?? 0,
+      season_id: before.season_id,
+      field_id: before.field_id,
+    })
+  }
+  }
+
   return c.json({ success: true, data: null })
 })
 
@@ -202,7 +266,7 @@ fields.get('/harvest/cost-estimate', async (c) => {
     c.env.DB.prepare(
       `SELECT COALESCE(SUM(wt.quantity * wt.unit_cost), 0) AS total
        FROM work_tasks wt
-       JOIN work_orders wo ON wo.id = wt.work_order_id
+       JOIN work_orders wo ON wo.id = wt.work_order_id AND wo.company_id = wt.company_id
        WHERE wo.company_id = ? AND wo.field_id = ? AND wo.season_id = ? AND wo.status != 'cancelled'`
     ).bind(company_id, field_id, season_id).first<{ total: number }>(),
   ])
@@ -238,7 +302,7 @@ fields.get('/:id', async (c) => {
   const { company_id } = getUser(c)
   const id = Number(c.req.param('id'))
   const row = await c.env.DB
-    .prepare('SELECT f.*, s.name AS season_name FROM fields f LEFT JOIN seasons s ON s.id = f.season_id WHERE f.id = ? AND f.company_id = ?')
+    .prepare('SELECT f.*, s.name AS season_name FROM fields f LEFT JOIN seasons s ON s.id = f.season_id AND s.company_id = f.company_id WHERE f.id = ? AND f.company_id = ?')
     .bind(id, company_id).first()
   if (!row) return c.json({ success: false, error: 'القطعة غير موجودة' }, 404)
   return c.json({ success: true, data: row })

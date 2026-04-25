@@ -22,20 +22,21 @@ inventory.get('/balances', permissionGuard('inventory', 'read'), async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT im.warehouse, im.item_code,
             i.name AS item_name, i.unit,
-            im.balance_qty,
-            im.balance_value,
+            totals.total_in, totals.total_out,
+            im.balance_qty, im.balance_value,
             im.center_code, im.field_id
      FROM inventory_movements im
      LEFT JOIN items i ON i.code = im.item_code AND i.company_id = im.company_id
+     INNER JOIN (
+       SELECT item_code, warehouse, SUM(qty_in) AS total_in, SUM(qty_out) AS total_out, MAX(id) AS last_id
+       FROM inventory_movements
+       WHERE company_id = ? ${subWhere}
+       GROUP BY item_code, warehouse
+     ) totals ON im.id = totals.last_id
      WHERE im.company_id = ? ${whereWarehouse.replace('warehouse', 'im.warehouse')}
-       AND im.id IN (
-         SELECT MAX(id) FROM inventory_movements
-         WHERE company_id = ? ${subWhere}
-         GROUP BY item_code, warehouse
-       )
-     HAVING im.balance_qty != 0
+       AND im.balance_qty != 0
      ORDER BY im.warehouse, i.name`
-  ).bind(...binds).all()
+  ).bind(company_id, ...(warehouse ? [warehouse] : []), company_id, ...(warehouse ? [warehouse] : [])).all()
 
   return c.json({ success: true, data: results })
 })
@@ -191,34 +192,37 @@ inventory.post('/movements', permissionGuard('inventory', 'create'), async (c) =
   const balQty    = prevQty + qtyIn - qtyOut
   const balVal    = prevVal + valueIn - valueOut
 
-  const date = new Date(b.movement_date)
-  const result = await c.env.DB.prepare(
-    `INSERT INTO inventory_movements
-     (company_id, season_id, field_id, work_order_id, supplier_code, item_code, center_code,
-      movement_date, warehouse, movement_type, document_number, pack_capacity, pack_count,
-      quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
-      notes, year, month, created_by_user_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).bind(
-    company_id, b.season_id ?? null, b.field_id ?? null, b.work_order_id ?? null,
-    b.supplier_code ?? null, b.item_code, centerCode ?? null,
-    b.movement_date, b.warehouse, b.movement_type, b.document_number ?? null,
-    b.pack_capacity ?? null, b.pack_count ?? null, b.quantity, unitPrice,
-    qtyIn, qtyOut, balQty, valueIn, valueOut, balVal,
-    b.notes ?? null, date.getFullYear(), date.getMonth() + 1, userId
-  ).run()
-
-  const movId = result.meta.last_row_id
-
-  // Propagate delta to all subsequent rows for this item+warehouse (Backdating fix)
+  const localId = `inv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
   const dQty = qtyIn - qtyOut
   const dVal = valueIn - valueOut
-  await c.env.DB.prepare(
-    `UPDATE inventory_movements
-     SET balance_qty = balance_qty + ?, balance_value = balance_value + ?
-     WHERE company_id = ? AND item_code = ? AND warehouse = ?
-       AND (movement_date > ? OR (movement_date = ? AND id > ?))`
-  ).bind(dQty, dVal, company_id, b.item_code, b.warehouse, b.movement_date, b.movement_date, movId).run()
+  const date = new Date(b.movement_date)
+
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `INSERT INTO inventory_movements
+       (company_id, season_id, field_id, work_order_id, supplier_code, item_code, center_code,
+        movement_date, warehouse, movement_type, document_number, pack_capacity, pack_count,
+        quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
+        notes, year, month, created_by_user_id, local_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(
+      company_id, b.season_id ?? null, b.field_id ?? null, b.work_order_id ?? null,
+      b.supplier_code ?? null, b.item_code, centerCode ?? null,
+      b.movement_date, b.warehouse, b.movement_type, b.document_number ?? null,
+      b.pack_capacity ?? null, b.pack_count ?? null, b.quantity, unitPrice,
+      qtyIn, qtyOut, balQty, valueIn, valueOut, balVal,
+      b.notes ?? null, date.getFullYear(), date.getMonth() + 1, userId, localId
+    ),
+    c.env.DB.prepare(
+      `UPDATE inventory_movements
+       SET balance_qty = balance_qty + ?, balance_value = balance_value + ?
+       WHERE company_id = ? AND item_code = ? AND warehouse = ?
+         AND (movement_date > ? OR (movement_date = ? AND id > (SELECT id FROM inventory_movements WHERE local_id = ?)))`
+    ).bind(dQty, dVal, company_id, b.item_code, b.warehouse, b.movement_date, b.movement_date, localId)
+  ])
+
+  const movRow = await c.env.DB.prepare('SELECT id FROM inventory_movements WHERE local_id = ?').bind(localId).first<{id:number}>()
+  const movId = movRow!.id
 
   const itemRow = await c.env.DB
     .prepare('SELECT name FROM items WHERE code = ? AND company_id = ?')

@@ -1,11 +1,13 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
-import { authMiddleware, getUser, permissionGuard } from '../middleware/auth'
+import { authMiddleware, getUser, permissionGuard, roleGuard } from '../middleware/auth'
 import { logAudit } from '../lib/audit'
 import { glPayroll, glWagesPayment } from '../lib/gl'
 
 const hr = new Hono<{ Bindings: Env }>()
 hr.use('*', authMiddleware)
+// RBAC: HR endpoints contain payroll and sensitive employee data (admin-only baseline).
+hr.use('*', roleGuard(['super_admin', 'company_admin', 'accountant']))
 
 // ═══════════════════════════════════════════════════════════
 // BRANCHES
@@ -67,7 +69,7 @@ hr.get('/job-details', permissionGuard('hr', 'read'), async (c) => {
   const { results } = await c.env.DB
     .prepare(`SELECT ejd.*, b.name AS branch_name
               FROM employee_job_details ejd
-              LEFT JOIN branches b ON b.id = ejd.branch_id
+              LEFT JOIN branches b ON b.id = ejd.branch_id AND b.company_id = ejd.company_id
               WHERE ejd.company_id = ?
               ORDER BY ejd.employee_id`)
     .bind(company_id).all()
@@ -80,7 +82,7 @@ hr.get('/job-details/:employee_id', permissionGuard('hr', 'read'), async (c) => 
   const row = await c.env.DB
     .prepare(`SELECT ejd.*, b.name AS branch_name
               FROM employee_job_details ejd
-              LEFT JOIN branches b ON b.id = ejd.branch_id
+              LEFT JOIN branches b ON b.id = ejd.branch_id AND b.company_id = ejd.company_id
               WHERE ejd.employee_id = ? AND ejd.company_id = ?`)
     .bind(empId, company_id).first()
   return c.json({ success: true, data: row ?? null })
@@ -160,7 +162,7 @@ hr.get('/attendance', async (c) => {
     c.env.DB.prepare(
       `SELECT a.*, e.name AS employee_name
        FROM attendance_records a
-       JOIN employees e ON e.id = a.employee_id
+       JOIN employees e ON e.id = a.employee_id AND e.company_id = a.company_id
        ${where}
        ORDER BY a.work_date DESC, e.name LIMIT ? OFFSET ?`
     ).bind(...p, size, offset).all(),
@@ -285,8 +287,8 @@ hr.get('/leave-requests', async (c) => {
     `SELECT lr.*, e.name AS employee_name, lt.name AS leave_type_name,
             lt.is_paid, u.full_name AS approved_by_name
      FROM leave_requests lr
-     JOIN employees  e  ON e.id  = lr.employee_id
-     JOIN leave_types lt ON lt.id = lr.leave_type_id
+     JOIN employees  e  ON e.id  = lr.employee_id AND e.company_id = lr.company_id
+     JOIN leave_types lt ON lt.id = lr.leave_type_id AND lt.company_id = lr.company_id
      LEFT JOIN users u  ON u.id  = lr.approved_by
      ${where}
      ORDER BY lr.created_at DESC LIMIT 200`
@@ -352,7 +354,7 @@ hr.get('/salary-advances', permissionGuard('hr', 'read'), async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT sa.*, e.name AS employee_name, u.full_name AS approved_by_name
      FROM salary_advances sa
-     JOIN employees e ON e.id = sa.employee_id
+     JOIN employees e ON e.id = sa.employee_id AND e.company_id = sa.company_id
      LEFT JOIN users u ON u.id = sa.approved_by
      ${where}
      ORDER BY sa.created_at DESC LIMIT 200`
@@ -423,10 +425,10 @@ hr.get('/payroll/:id', permissionGuard('hr', 'read'), async (c) => {
     c.env.DB.prepare(
       `SELECT pi.*, COALESCE(e.name, '[موظف محذوف]') AS employee_name, e.national_id
        FROM payroll_items pi
-       LEFT JOIN employees e ON e.id = pi.employee_id
-       WHERE pi.payroll_run_id = ?
+       LEFT JOIN employees e ON e.id = pi.employee_id AND e.company_id = pi.company_id
+       WHERE pi.payroll_run_id = ? AND pi.company_id = ?
        ORDER BY employee_name`
-    ).bind(id).all(),
+    ).bind(id, company_id).all(),
   ])
   if (!run) return c.json({ success: false, error: 'المسيرة غير موجودة' }, 404)
   return c.json({ success: true, data: { ...run, items: items.results } })
@@ -458,7 +460,7 @@ hr.post('/payroll/run', permissionGuard('hr', 'admin'), async (c) => {
             ejd.base_salary, ejd.housing_allow, ejd.transport_allow,
             ejd.other_allows, ejd.social_insur, ejd.income_tax_pct
      FROM employees e
-     LEFT JOIN employee_job_details ejd ON ejd.employee_id = e.id
+     LEFT JOIN employee_job_details ejd ON ejd.employee_id = e.id AND ejd.company_id = e.company_id
      WHERE e.company_id = ? AND e.is_active = 1`
   ).bind(company_id).all<{
     id: number; name: string; daily_wage: number

@@ -1,11 +1,69 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
-import { authMiddleware, getUser } from '../middleware/auth'
+import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
 import { postAutoEntry, getOpenPeriod } from '../lib/gl'
 import { logAudit } from '../lib/audit'
 
 const gl = new Hono<{ Bindings: Env }>()
 gl.use('*', authMiddleware)
+// RBAC: General Ledger and period management are restricted to accounting roles.
+gl.use('*', roleGuard(['super_admin', 'company_admin', 'accountant']))
+
+type CoaNode = { code: string; parent_code: string | null }
+
+function hasCoaCycle(nodes: CoaNode[]): boolean {
+  const parentOf = new Map<string, string | null>()
+  for (const n of nodes) parentOf.set(n.code, n.parent_code)
+
+  const state = new Map<string, 0 | 1 | 2>()
+  const visit = (code: string): boolean => {
+    const s = state.get(code) ?? 0
+    if (s === 1) return true
+    if (s === 2) return false
+    state.set(code, 1)
+    const parent = parentOf.get(code)
+    if (parent && parentOf.has(parent) && visit(parent)) return true
+    state.set(code, 2)
+    return false
+  }
+
+  for (const n of nodes) {
+    if (visit(n.code)) return true
+  }
+  return false
+}
+
+async function validateCoaParent(
+  db: Env['DB'],
+  company_id: number,
+  code: string,
+  parent_code: string | null,
+): Promise<string | null> {
+  if (!parent_code) return null
+  if (parent_code === code) return 'لا يمكن أن يكون الحساب أباً لنفسه'
+
+  const parent = await db.prepare(
+    'SELECT code FROM chart_of_accounts WHERE company_id = ? AND code = ?'
+  ).bind(company_id, parent_code).first<{ code: string }>()
+  if (!parent) return `الحساب الأب (${parent_code}) غير موجود`
+
+  const all = await db.prepare(
+    'SELECT code, parent_code FROM chart_of_accounts WHERE company_id = ?'
+  ).bind(company_id).all<CoaNode>()
+
+  const byCode = new Map(all.results.map(r => [r.code, r]))
+  if (byCode.has(code)) {
+    byCode.set(code, { code, parent_code })
+  } else {
+    byCode.set(code, { code, parent_code })
+  }
+
+  if (hasCoaCycle([...byCode.values()])) {
+    return 'تحديث الشجرة يسبب دورة في parent_code (circular reference)'
+  }
+
+  return null
+}
 
 // ── Chart of Accounts ─────────────────────────────────────────
 
@@ -33,6 +91,10 @@ gl.post('/accounts', async (c) => {
   if (!types.includes(b.account_type)) {
     return c.json({ success: false, error: 'نوع الحساب غير صالح' }, 400)
   }
+  const parentError = await validateCoaParent(c.env.DB, company_id, b.code, b.parent_code ?? null)
+  if (parentError) {
+    return c.json({ success: false, error: parentError }, 400)
+  }
   const normalBalance = b.normal_balance ?? (['asset','expense'].includes(b.account_type) ? 'debit' : 'credit')
   try {
     const r = await c.env.DB.prepare(
@@ -53,6 +115,15 @@ gl.patch('/accounts/:code', async (c) => {
   const allowed = ['name','notes','is_active','parent_code']
   const cols = Object.keys(b).filter(k => allowed.includes(k))
   if (!cols.length) return c.json({ success: false, error: 'لا توجد حقول' }, 400)
+
+  if (Object.prototype.hasOwnProperty.call(b, 'parent_code')) {
+    const parentCode = (b.parent_code ?? null) as string | null
+    const parentError = await validateCoaParent(c.env.DB, company_id, code, parentCode)
+    if (parentError) {
+      return c.json({ success: false, error: parentError }, 400)
+    }
+  }
+
   await c.env.DB.prepare(
     `UPDATE chart_of_accounts SET ${cols.map(f => `${f} = ?`).join(', ')} WHERE code = ? AND company_id = ?`
   ).bind(...cols.map(f => b[f]), code, company_id).run()
@@ -172,8 +243,11 @@ gl.get('/entries/:id', async (c) => {
     c.env.DB.prepare('SELECT * FROM journal_entries WHERE id = ? AND company_id = ?')
       .bind(id, company_id).first(),
     c.env.DB.prepare(
-      `SELECT l.*, a.name AS account_name, a.account_type FROM journal_entry_lines l
+      `SELECT l.*, a.name AS account_name, a.account_type, s.name AS season_name, f.name AS field_name
+       FROM journal_entry_lines l
        LEFT JOIN chart_of_accounts a ON a.code = l.account_code AND a.company_id = l.company_id
+       LEFT JOIN seasons s ON s.id = l.season_id
+       LEFT JOIN fields f ON f.id = l.field_id
        WHERE l.entry_id = ? ORDER BY l.id`
     ).bind(id).all(),
   ])
@@ -265,13 +339,19 @@ function buildDescendants(accounts: { code: string; parent_code: string | null }
     }
   }
   const cache = new Map<string, Set<string>>()
+  const visiting = new Set<string>()
   function collect(code: string): Set<string> {
     if (cache.has(code)) return cache.get(code)!
+    if (visiting.has(code)) {
+      throw new Error(`COA_CYCLE: circular parent relation detected at account ${code}`)
+    }
+    visiting.add(code)
     const set = new Set<string>([code])
     for (const child of (childrenOf.get(code) ?? [])) {
       for (const d of collect(child)) set.add(d)
     }
     cache.set(code, set)
+    visiting.delete(code)
     return set
   }
   for (const acc of accounts) collect(acc.code)
@@ -435,6 +515,133 @@ gl.get('/balance-sheet', async (c) => {
     total_assets: totalAssets, total_liabilities: totalLiabilities, total_equity: totalEquity,
     as_of: asOf,
   }})
+})
+
+// GET /api/gl/integrity-check — 6 data quality checks for this company
+gl.get('/integrity-check', async (c) => {
+  const { company_id } = getUser(c)
+
+  const REQUIRED_MAPPINGS = [
+    'cash', 'inventory', 'accounts_payable', 'revenue_default',
+    'expense_default', 'purchases', 'wages', 'cogs', 'wages_payable',
+  ]
+
+  const [unbalancedRow, negStockRow, draftTxRow, staleWoRow, mappedRow, oldPoRow] =
+    await Promise.all([
+      // 1. GL entries where debit ≠ credit
+      c.env.DB.prepare(`
+        SELECT COUNT(*) AS n FROM (
+          SELECT je.id FROM journal_entries je
+          JOIN journal_entry_lines jel ON jel.entry_id = je.id
+          WHERE je.company_id = ?
+          GROUP BY je.id
+          HAVING ABS(ROUND(SUM(jel.debit), 2) - ROUND(SUM(jel.credit), 2)) > 0.01
+        )
+      `).bind(company_id).first<{ n: number }>(),
+
+      // 2. Items with negative running balance
+      c.env.DB.prepare(`
+        SELECT COUNT(DISTINCT im.item_code) AS n
+        FROM inventory_movements im
+        WHERE im.company_id = ?
+          AND im.balance_qty IS NOT NULL AND im.balance_qty < 0
+          AND im.id = (
+            SELECT MAX(id) FROM inventory_movements im2
+            WHERE im2.item_code = im.item_code AND im2.company_id = im.company_id
+          )
+      `).bind(company_id).first<{ n: number }>(),
+
+      // 3. Cash transactions still in draft (unposted)
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM cash_transactions WHERE company_id = ? AND status = 'draft'`
+      ).bind(company_id).first<{ n: number }>(),
+
+      // 4. Work orders open for > 60 days
+      c.env.DB.prepare(`
+        SELECT COUNT(*) AS n FROM work_orders
+        WHERE company_id = ? AND status IN ('pending', 'in_progress')
+          AND julianday('now') - julianday(created_at) > 60
+      `).bind(company_id).first<{ n: number }>(),
+
+      // 5. Required GL mapping keys present
+      c.env.DB.prepare(`
+        SELECT COUNT(*) AS n FROM gl_account_mappings
+        WHERE company_id = ? AND mapping_key IN (${REQUIRED_MAPPINGS.map(() => '?').join(',')})
+      `).bind(company_id, ...REQUIRED_MAPPINGS).first<{ n: number }>(),
+
+      // 6. Purchase orders in sent/partial state for > 90 days
+      c.env.DB.prepare(`
+        SELECT COUNT(*) AS n FROM purchase_orders
+        WHERE company_id = ? AND status IN ('sent', 'partial')
+          AND julianday('now') - julianday(created_at) > 90
+      `).bind(company_id).first<{ n: number }>(),
+    ])
+
+  const missingMappings = REQUIRED_MAPPINGS.length - (mappedRow?.n ?? 0)
+
+  const checks = [
+    {
+      key: 'unbalanced_entries',
+      label: 'قيود دفتر الأستاذ متوازنة',
+      description: 'كل قيد يجب أن يكون مجموع المدين = مجموع الدائن تماماً',
+      count: unbalancedRow?.n ?? 0,
+      ok: (unbalancedRow?.n ?? 0) === 0,
+      blocker: true,
+      action_url: '/gl/entries',
+    },
+    {
+      key: 'negative_stock',
+      label: 'لا يوجد رصيد مخزون سالب',
+      description: 'أصناف وصل رصيدها لأقل من صفر — يدل على صرف بدون استلام',
+      count: negStockRow?.n ?? 0,
+      ok: (negStockRow?.n ?? 0) === 0,
+      blocker: true,
+      action_url: '/inventory',
+    },
+    {
+      key: 'draft_transactions',
+      label: 'لا توجد معاملات نقدية معلقة',
+      description: 'معاملات في مسودة لم تُرحَّل بعد — لا تظهر في رصيد الخزينة',
+      count: draftTxRow?.n ?? 0,
+      ok: (draftTxRow?.n ?? 0) === 0,
+      blocker: false,
+      action_url: '/treasury',
+    },
+    {
+      key: 'stale_work_orders',
+      label: 'لا توجد أوامر شغل متوقفة (> 60 يوم)',
+      description: 'أوامر شغل مفتوحة تجاوزت 60 يوماً بدون إتمام أو إلغاء',
+      count: staleWoRow?.n ?? 0,
+      ok: (staleWoRow?.n ?? 0) === 0,
+      blocker: false,
+      action_url: '/operations',
+    },
+    {
+      key: 'gl_mappings',
+      label: 'ربط الحسابات التلقائية مكتمل',
+      description: `${REQUIRED_MAPPINGS.length} حسابات مطلوبة للترحيل التلقائي للقيود`,
+      count: missingMappings,
+      ok: missingMappings === 0,
+      blocker: true,
+      action_url: '/gl/mappings',
+    },
+    {
+      key: 'old_purchase_orders',
+      label: 'لا توجد أوامر شراء مفتوحة قديمة (> 90 يوم)',
+      description: 'أوامر شراء مرسلة أو جزئية تجاوزت 90 يوماً بدون استكمال',
+      count: oldPoRow?.n ?? 0,
+      ok: (oldPoRow?.n ?? 0) === 0,
+      blocker: false,
+      action_url: '/treasury/purchase-orders',
+    },
+  ]
+
+  const passing     = checks.filter(ch => ch.ok).length
+  const score       = Math.round((passing / checks.length) * 100)
+  const overall_ok  = passing === checks.length
+  const has_blockers = checks.some(ch => !ch.ok && ch.blocker)
+
+  return c.json({ success: true, data: { checks, overall_ok, has_blockers, score } })
 })
 
 export default gl

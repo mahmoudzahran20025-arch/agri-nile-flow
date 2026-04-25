@@ -1,32 +1,44 @@
-import type { D1Database } from '@cloudflare/workers-types'
-import { getOpenPeriod } from './gl'
+import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types'
+import { getOpenPeriod, postAutoEntry, isIntegrationEnabled } from './gl'
+
+interface CashMovementInput {
+  company_id:       number
+  userId:           number
+  transaction_date: string
+  direction:        'د' | 'م'
+  amount:           number
+  narration:        string
+  recipient_name?:  string | null
+  document_number?: number | null
+  supplier_code?:   number | null
+  center_code?:     number | null
+  expense_code?:    number | null
+  season_id?:       number | null
+  notes?:           string | null
+  contraAccount?:   string | null
+  status?:          'draft' | 'posted'
+}
+
+interface CashDraftRow {
+  id: number
+  transaction_date: string
+  direction: 'د' | 'م'
+  amount: number
+  narration: string
+  supplier_code: number | null
+  center_code: number | null
+}
 
 export const FinanceCore = {
 
   async prepareCashMovement(
     db: D1Database,
-    opts: {
-      company_id:       number
-      userId:           number
-      transaction_date: string
-      direction:        'د' | 'م'
-      amount:           number
-      narration:        string
-      recipient_name?:  string
-      document_number?: number
-      supplier_code?:   number
-      center_code?:     number
-      expense_code?:    number
-      season_id?:       number
-      notes?:           string
-      contraAccount?:   string
-      status?:          'draft' | 'posted'
-    }
+    opts: CashMovementInput,
   ) {
     const status    = opts.status ?? 'posted'
     const isPosted  = status === 'posted'
     const batchKey  = `cash_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
-    const stmts: any[] = []
+    const stmts: D1PreparedStatement[] = []
 
     let periodId: number | null = null
     let newBalance: number | null = null
@@ -158,7 +170,7 @@ export const FinanceCore = {
     return { stmts, batchKey, newBalance }
   },
 
-  async recordCashMovement(db: D1Database, opts: any) {
+  async recordCashMovement(db: D1Database, opts: CashMovementInput) {
     const { stmts, batchKey, newBalance } = await this.prepareCashMovement(db, opts)
     await db.batch(stmts)
     const txn = await db
@@ -169,8 +181,9 @@ export const FinanceCore = {
 
   async postCashMovement(db: D1Database, company_id: number, txnId: number, userId: number) {
     const txn = await db.prepare(
-      `SELECT * FROM cash_transactions WHERE id = ? AND company_id = ? AND status = 'draft'`
-    ).bind(txnId, company_id).first<any>()
+      `SELECT id, transaction_date, direction, amount, narration, supplier_code, center_code
+       FROM cash_transactions WHERE id = ? AND company_id = ? AND status = 'draft'`
+    ).bind(txnId, company_id).first<CashDraftRow>()
 
     if (!txn) throw new Error('DRAFT_NOT_FOUND: Transaction not found or already posted')
 
@@ -187,7 +200,7 @@ export const FinanceCore = {
     const delta       = txn.direction === 'د' ? txn.amount : -txn.amount
     const newBalance  = prevBalance + delta
 
-    const stmts: any[] = []
+    const stmts: D1PreparedStatement[] = []
 
     stmts.push(db.prepare(
       `UPDATE cash_transactions SET status = 'posted', running_balance = ? WHERE id = ?`
@@ -282,7 +295,7 @@ export const FinanceCore = {
     if (!invAcc) throw new Error('GL_MAPPING_MISSING: حساب المخزون (inventory) غير مربوط.')
     if (!apAcc)  throw new Error('GL_MAPPING_MISSING: حساب الدائنين (accounts_payable) غير مربوط.')
 
-    const stmts: any[] = []
+    const stmts: D1PreparedStatement[] = []
     const batchKey = `po_rcv_${Date.now()}`
     let totalValue = 0
 
@@ -378,5 +391,91 @@ export const FinanceCore = {
 
     // FIX: Return fields the caller actually destructures: { movements, status }
     return { success: true, movements: opts.items.length, status: 'partial' }
+  },
+
+  /**
+   * Posts GL entries for Harvest (Revenue and COGS).
+   * USES 'CANCEL-AND-REPOST' PATTERN for maximum reliability over 'Delta' logic.
+   */
+  async postHarvestLedger(
+    db: D1Database,
+    opts: {
+      company_id: number
+      userId: number
+      harvest_id: number
+      harvest_date: string
+      crop_name: string
+      field_name: string
+      center_code?: number | null
+      total_revenue: number
+      total_actual_cost: number
+      season_id?: number | null
+      field_id: number
+    },
+  ): Promise<{ revenue_entry_id: number | null; cost_entry_id: number | null }> {
+    const enabled = await isIntegrationEnabled(db, opts.company_id, 'harvest')
+    if (!enabled) return { revenue_entry_id: null, cost_entry_id: null }
+
+    const periodId = await getOpenPeriod(db, opts.company_id, opts.harvest_date)
+    if (!periodId) {
+      throw new Error(`PERIOD_CLOSED: لا توجد فترة مالية مفتوحة للتاريخ ${opts.harvest_date}`)
+    }
+
+    // 1. VOID PREVIOUS ENTRIES linked to this harvest_id to prevent duplication
+    // We use DELETE here because 'journal_entries' schema lacks a 'status' column and uses ON DELETE CASCADE for lines.
+    await db.prepare(
+      "DELETE FROM journal_entries WHERE company_id = ? AND ref_type IN ('harvest_revenue', 'harvest_cogs') AND ref_id = ?"
+    ).bind(opts.company_id, opts.harvest_id).run()
+
+    // 2. Fetch STRICT mappings (no fallbacks allowed for harvest for accuracy)
+    const [cashOrAr, revenueAcc, cogsAcc, inventoryAcc] = await Promise.all([
+      db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'receivable_default'").bind(opts.company_id).first<{ account_code: string }>(),
+      db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'harvest_revenue'").bind(opts.company_id).first<{ account_code: string }>(),
+      db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'harvest_cogs'").bind(opts.company_id).first<{ account_code: string }>(),
+      db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'inventory'").bind(opts.company_id).first<{ account_code: string }>(),
+    ])
+
+    let revenueEntryId: number | null = null
+    let costEntryId: number | null = null
+
+    // 3. Post Revenue (DR Cash/AR, CR Revenue)
+    if (opts.total_revenue > 0) {
+      if (!cashOrAr?.account_code || !revenueAcc?.account_code) {
+        throw new Error('GL_MAPPING_MISSING: يجب تحديد حسابات (العملاء/الصندوق) و (إيراد الحصاد) في الإعدادات أولاً.')
+      }
+      revenueEntryId = await postAutoEntry(db, {
+        company_id: opts.company_id,
+        entry_date: opts.harvest_date,
+        description: `إيراد حصاد: ${opts.crop_name} - ${opts.field_name}`,
+        ref_type: 'harvest_revenue',
+        ref_id: opts.harvest_id,
+        created_by: opts.userId,
+        lines: [
+          { account_code: cashOrAr.account_code, debit: opts.total_revenue, credit: 0, description: `إيراد حصاد ${opts.crop_name}`, center_code: opts.center_code ?? undefined, season_id: opts.season_id ?? undefined, field_id: opts.field_id },
+          { account_code: revenueAcc.account_code, debit: 0, credit: opts.total_revenue, description: `إيراد حصاد ${opts.crop_name}`, center_code: opts.center_code ?? undefined, season_id: opts.season_id ?? undefined, field_id: opts.field_id },
+        ],
+      })
+    }
+
+    // 4. Post COGS (DR Expense/COGS, CR Inventory)
+    if (opts.total_actual_cost > 0) {
+      if (!cogsAcc?.account_code || !inventoryAcc?.account_code) {
+        throw new Error('GL_MAPPING_MISSING: يجب تحديد حسابات (تكلفة الحصاد) و (المخزون) في الإعدادات أولاً.')
+      }
+      costEntryId = await postAutoEntry(db, {
+        company_id: opts.company_id,
+        entry_date: opts.harvest_date,
+        description: `تكلفة حصاد: ${opts.crop_name} - ${opts.field_name}`,
+        ref_type: 'harvest_cogs',
+        ref_id: opts.harvest_id,
+        created_by: opts.userId,
+        lines: [
+          { account_code: cogsAcc.account_code, debit: opts.total_actual_cost, credit: 0, description: `تكلفة حصاد ${opts.crop_name}`, center_code: opts.center_code ?? undefined, season_id: opts.season_id ?? undefined, field_id: opts.field_id },
+          { account_code: inventoryAcc.account_code, debit: 0, credit: opts.total_actual_cost, description: `تكلفة حصاد ${opts.crop_name}`, center_code: opts.center_code ?? undefined, season_id: opts.season_id ?? undefined, field_id: opts.field_id },
+        ],
+      })
+    }
+
+    return { revenue_entry_id: revenueEntryId, cost_entry_id: costEntryId }
   }
 }

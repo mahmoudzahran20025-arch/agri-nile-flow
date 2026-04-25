@@ -6,7 +6,7 @@
     "dev:web": "cd web && npm run dev",
     "db:init": "wrangler d1 execute agri-nile-flow-data-lake --remote --file=./schema.sql",
     "build:web": "cd web && npm install && npm run build",
-    "deploy": "npm run build:web && wrangler deploy",
+    "deploy": "npm run build:web && npx wrangler pages deploy web/dist --project-name=agri-nile-flow-lake && wrangler deploy",
     "type-check": "tsc --noEmit"
   },
   "dependencies": {

@@ -236,4 +236,28 @@ config.post('/seasons/:id/close', async (c) => {
   return c.json({ success: true, data: { id, status: 'closed' } })
 })
 
+// ── GL Integration Settings (Modular Control) ───────────────
+
+config.get('/gl-integrations', async (c) => {
+  const { company_id } = getUser(c)
+  const { results } = await c.env.DB
+    .prepare('SELECT module_key, is_enabled FROM gl_integration_settings WHERE company_id = ?')
+    .bind(company_id).all()
+  return c.json({ success: true, data: results })
+})
+
+config.patch('/gl-integrations/:key', async (c) => {
+  const { company_id } = getUser(c)
+  const key = c.req.param('key')
+  const { is_enabled } = await c.req.json<{ is_enabled: boolean }>()
+
+  await c.env.DB
+    .prepare(`INSERT INTO gl_integration_settings (company_id, module_key, is_enabled) 
+              VALUES (?, ?, ?) 
+              ON CONFLICT(company_id, module_key) DO UPDATE SET is_enabled = EXCLUDED.is_enabled`)
+    .bind(company_id, key, is_enabled ? 1 : 0).run()
+
+  return c.json({ success: true, data: null })
+})
+
 export default config

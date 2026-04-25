@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { FileText, Plus, ShoppingCart, TrendingUp } from 'lucide-react'
+import { FileText, Plus, ShoppingCart, TrendingUp, Banknote, CheckCircle2 } from 'lucide-react'
 import { contractsApi, configApi, suppliersApi, fieldsApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
 import { usePermission } from '../../hooks/usePermission'
@@ -16,6 +16,7 @@ interface SalesContract {
   id: number; contract_number: string; contract_date: string; buyer_name: string
   crop_type: string; quantity_ton: number; unit_price: number; total_value: number
   advance_paid: number; status: string; season_name?: string; field_name?: string
+  advance_gl_entry_id?: number | null
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -33,10 +34,13 @@ function fmt(n: number) { return Number(n).toLocaleString('ar-EG') }
 export default function ContractsPage() {
   const { canWrite } = usePermission()
   const qc = useQueryClient()
-  const [tab, setTab]       = useState<Tab>('purchase')
-  const [openPurch, setOP]  = useState(false)
-  const [openSales, setOS]  = useState(false)
-  const [err, setErr]       = useState('')
+  const [tab, setTab]         = useState<Tab>('purchase')
+  const [openPurch, setOP]    = useState(false)
+  const [openSales, setOS]    = useState(false)
+  const [err, setErr]         = useState('')
+  const [advContract, setAdv] = useState<SalesContract | null>(null)
+  const [advForm, setAdvF]    = useState({ amount: '', receipt_date: new Date().toISOString().slice(0,10), notes: '' })
+  const [advErr, setAdvErr]   = useState('')
 
   const [pForm, setPF] = useState({
     contract_number: '', contract_date: '', subject: '',
@@ -116,6 +120,23 @@ export default function ContractsPage() {
     mutationFn: ({ id, status }: { id: number; status: string }) =>
       contractsApi.updateSalesStatus(id, status),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['contracts-sales'] }),
+  })
+
+  const receiveAdvMut = useMutation({
+    mutationFn: (c: SalesContract) =>
+      contractsApi.receiveAdvance(c.id, {
+        amount:       Number(advForm.amount),
+        receipt_date: advForm.receipt_date,
+        notes:        advForm.notes || undefined,
+      }),
+    onSuccess: (res: { success: boolean; error?: string }) => {
+      if (!res.success) { setAdvErr(res.error ?? 'خطأ'); return }
+      qc.invalidateQueries({ queryKey: ['contracts-sales'] })
+      setAdv(null)
+      setAdvF({ amount: '', receipt_date: new Date().toISOString().slice(0,10), notes: '' })
+      setAdvErr('')
+    },
+    onError: (e: Error) => setAdvErr(e.message),
   })
 
   const CROPS = ['قمح','ذرة','أرز','قصب سكر','قطن','بنجر','بصل','طماطم','أخرى']
@@ -243,6 +264,7 @@ export default function ContractsPage() {
                   <th className="th">إجمالي العقد</th>
                   <th className="th">الدفعة المقدمة</th>
                   <th className="th">الحالة</th>
+                  <th className="th">إجراء</th>
                 </tr>
               </thead>
               <tbody>
@@ -257,7 +279,16 @@ export default function ContractsPage() {
                     <td className="td text-center">{fmt(s.quantity_ton)}</td>
                     <td className="td">{fmt(s.unit_price)} ج</td>
                     <td className="td font-medium text-brand-700">{fmt(s.total_value)} ج</td>
-                    <td className="td text-green-600">{fmt(s.advance_paid)} ج</td>
+                    <td className="td">
+                      <div className="flex items-center gap-1.5">
+                        <span className={s.advance_paid > 0 ? 'text-green-600 font-medium' : 'text-gray-400'}>
+                          {fmt(s.advance_paid)} ج
+                        </span>
+                        {s.advance_paid > 0 && s.advance_gl_entry_id && (
+                          <span title="مسجل في دفتر الأستاذ"><CheckCircle2 size={13} className="text-emerald-500" /></span>
+                        )}
+                      </div>
+                    </td>
                     <td className="td">
                       <select
                         className="text-xs border rounded px-1.5 py-0.5 bg-white"
@@ -268,6 +299,17 @@ export default function ContractsPage() {
                           <option key={st} value={st}>{STATUS_LABELS[st]}</option>
                         ))}
                       </select>
+                    </td>
+                    <td className="td">
+                      {s.advance_paid > 0 && !s.advance_gl_entry_id && canWrite('contracts') && (
+                        <button
+                          onClick={() => { setAdv(s); setAdvF(f => ({ ...f, amount: String(s.advance_paid) })); setAdvErr('') }}
+                          className="flex items-center gap-1 text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-1 rounded-lg hover:bg-emerald-100 whitespace-nowrap"
+                          title="تسجيل الدفعة المقدمة في الخزينة والمحاسبة"
+                        >
+                          <Banknote size={12} /> استلام مقدم
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -346,6 +388,67 @@ export default function ContractsPage() {
             {createPurchase.isPending ? 'جاري الحفظ...' : 'حفظ'}
           </button>
         </div>
+      </Modal>
+
+      {/* Receive Advance Modal */}
+      <Modal
+        open={!!advContract}
+        onClose={() => { setAdv(null); setAdvErr('') }}
+        title="استلام دفعة مقدمة من عقد بيع"
+      >
+        {advContract && (
+          <div className="space-y-4">
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
+              <p className="text-sm font-semibold text-emerald-800">
+                عقد #{advContract.contract_number} — {advContract.buyer_name}
+              </p>
+              <p className="text-xs text-emerald-600 mt-1">
+                سيتم إنشاء قيد محاسبي: DR خزينة / CR إيرادات مؤجلة
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className="label">المبلغ المستلم (ج.م) *</label>
+                <input
+                  className="input"
+                  type="number"
+                  min="1"
+                  value={advForm.amount}
+                  onChange={e => setAdvF(f => ({ ...f, amount: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="label">تاريخ الاستلام *</label>
+                <input
+                  className="input"
+                  type="date"
+                  value={advForm.receipt_date}
+                  onChange={e => setAdvF(f => ({ ...f, receipt_date: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="label">ملاحظات</label>
+                <input
+                  className="input"
+                  value={advForm.notes}
+                  onChange={e => setAdvF(f => ({ ...f, notes: e.target.value }))}
+                  placeholder="اختياري"
+                />
+              </div>
+            </div>
+            {advErr && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{advErr}</p>}
+            <div className="flex justify-end gap-3 pt-2">
+              <button className="btn btn-ghost" onClick={() => { setAdv(null); setAdvErr('') }}>إلغاء</button>
+              <button
+                className="btn btn-primary"
+                onClick={() => advContract && receiveAdvMut.mutate(advContract)}
+                disabled={receiveAdvMut.isPending || !advForm.amount || !advForm.receipt_date || Number(advForm.amount) <= 0}
+              >
+                {receiveAdvMut.isPending ? 'جاري التسجيل...' : 'تسجيل الاستلام وإنشاء القيد'}
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* Sales Contract Modal */}

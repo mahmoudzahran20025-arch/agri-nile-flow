@@ -29,12 +29,14 @@ import JournalEntriesPage    from './pages/gl/JournalEntriesPage'
 import FinancialStatementsPage from './pages/gl/FinancialStatementsPage'
 import AccountLedgerPage     from './pages/gl/AccountLedgerPage'
 import PeriodsPage           from './pages/gl/PeriodsPage'
+import IntegrationControlPage from './pages/gl/IntegrationControlPage'
 import BankReconciliationPage from './pages/treasury/BankReconciliationPage'
 import PurchaseOrdersPage    from './pages/treasury/PurchaseOrdersPage'
 import APAgingPage           from './pages/treasury/APAgingPage'
 import SuperAdminPage        from './pages/admin/SuperAdminPage'
 import AuditLogPage          from './pages/audit/AuditLogPage'
 import ErrorLogPage          from './pages/audit/ErrorLogPage'
+import IntegrityPage         from './pages/audit/IntegrityPage'
 import EmployeeListPage      from './pages/hr/EmployeeListPage'
 import EmployeeProfilePage   from './pages/hr/EmployeeProfilePage'
 import AttendancePage        from './pages/hr/AttendancePage'
@@ -132,6 +134,7 @@ export default function App() {
         <Route path="gl/statements"      element={<FinancialStatementsPage />} />
         <Route path="gl/periods"         element={<PeriodsPage />} />
         <Route path="gl/mappings"        element={<GLMappingsPage />} />
+        <Route path="gl/integrations"    element={<IntegrationControlPage />} />
         <Route path="treasury/ap"        element={<APAgingPage />} />
 
         {/* Finance */}
@@ -153,6 +156,7 @@ export default function App() {
         {/* Audit Log & Health */}
         <Route path="audit" element={<AuditLogPage />} />
         <Route path="audit/errors" element={<ErrorLogPage />} />
+        <Route path="audit/integrity" element={<IntegrityPage />} />
 
         {/* Users */}
         <Route path="users" element={<UsersPage />} />

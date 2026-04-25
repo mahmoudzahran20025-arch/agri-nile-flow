@@ -256,21 +256,21 @@ export default function ItemCardPage() {
           {card.length === 0 ? (
             <p className="text-slate-400 text-sm text-center py-8">لا توجد حركات</p>
           ) : (
-            <div className="flex items-end gap-1.5 h-28">
-              {card.slice(-12).map((row, i) => {
-                const maxBal = Math.max(...card.slice(-12).map(r => Math.abs(r.balance_qty ?? 0)), 1)
-                const h      = Math.max(((row.balance_qty ?? 0) / maxBal) * 100, 3)
+            <div className="flex items-end gap-1 h-32 bg-slate-50/50 rounded-lg p-2 border border-dashed border-slate-200">
+              {card.slice(-15).map((row, i) => {
+                const maxBal = Math.max(...card.slice(-15).map(r => Math.abs(r.balance_qty ?? 0)), 1)
+                const h      = Math.max(((row.balance_qty ?? 0) / maxBal) * 100, 4)
                 const isAdd  = row.movement_type === 'اضافة'
                 return (
-                  <div key={i} className="flex-1 flex flex-col items-center gap-1 group relative"
+                  <div key={i} className="flex-1 flex flex-col items-center group relative h-full justify-end"
                     title={`${DATE_AR(row.movement_date)} — ${row.movement_type}: ${NUM(row.quantity)}\nالرصيد: ${NUM(row.balance_qty)}`}>
                     <div
-                      className={`w-full rounded-t-sm transition-all ${isAdd ? 'bg-green-400 group-hover:bg-green-500' : 'bg-red-300 group-hover:bg-red-400'}`}
+                      className={`w-full max-w-[12px] rounded-t-[2px] transition-all ${isAdd ? 'bg-green-500 group-hover:bg-green-600' : 'bg-red-400 group-hover:bg-red-500'}`}
                       style={{ height: `${h}%` }}
                     />
-                    <span className="text-[9px] text-slate-400 rotate-45 origin-left whitespace-nowrap overflow-hidden w-4">
-                      {new Date(row.movement_date).toLocaleDateString('ar-EG', { month: 'numeric', day: 'numeric' })}
-                    </span>
+                    <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 bg-slate-800 text-white text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap pointer-events-none">
+                      {NUM(row.balance_qty)}
+                    </div>
                   </div>
                 )
               })}

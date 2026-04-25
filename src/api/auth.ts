@@ -151,4 +151,38 @@ auth.post('/change-password', authMiddleware, async (c) => {
   return c.json({ success: true, data: null, message: 'تم تغيير كلمة المرور بنجاح' })
 })
 
+// GET /api/auth/rbac-matrix — full roles × permissions grid (company_admin+)
+auth.get('/rbac-matrix', authMiddleware, async (c) => {
+  const { role } = getUser(c)
+  if (!['super_admin', 'company_admin'].includes(role)) {
+    return c.json({ success: false, error: 'يتطلب صلاحية مدير الشركة' }, 403)
+  }
+
+  const [rolesRes, permsRes, rpRes] = await Promise.all([
+    c.env.DB.prepare('SELECT id, name FROM roles ORDER BY id')
+      .all<{ id: number; name: string }>(),
+    c.env.DB.prepare('SELECT id, module, action FROM permissions ORDER BY module, action')
+      .all<{ id: number; module: string; action: string }>(),
+    c.env.DB.prepare('SELECT role_id, permission_id FROM role_permissions')
+      .all<{ role_id: number; permission_id: number }>(),
+  ])
+
+  const granted = new Set(rpRes.results.map(r => `${r.role_id}:${r.permission_id}`))
+  const modules = [...new Set(permsRes.results.map(p => p.module))]
+
+  const matrix = rolesRes.results.map(r => ({
+    role: r.name,
+    permissions: Object.fromEntries(
+      permsRes.results.map(p => [`${p.module}.${p.action}`, granted.has(`${r.id}:${p.id}`)])
+    ),
+  }))
+
+  return c.json({ success: true, data: {
+    roles:        rolesRes.results.map(r => r.name),
+    permissions:  permsRes.results.map(p => ({ key: `${p.module}.${p.action}`, module: p.module, action: p.action })),
+    modules,
+    matrix,
+  }})
+})
+
 export default auth

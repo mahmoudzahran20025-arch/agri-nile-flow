@@ -1,13 +1,16 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
-import { authMiddleware, getUser } from '../middleware/auth'
+import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
 import { logAudit } from '../lib/audit'
-import { getOpenPeriod, postAutoEntry, glInventoryMovement } from '../lib/gl'
+import { getOpenPeriod, postAutoEntry } from '../lib/gl'
+import { FinanceCore } from '../lib/finance_core'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 
 const finance = new Hono<{ Bindings: Env }>()
 finance.use('*', authMiddleware)
+// RBAC: Finance/AP/Banking endpoints are restricted to finance leadership roles.
+finance.use('*', roleGuard(['super_admin', 'company_admin', 'accountant']))
 
 const poStatusSchema = z.object({
   status: z.enum(['sent', 'partial', 'received', 'cancelled', 'closed']),
@@ -271,8 +274,8 @@ finance.get('/purchase-orders', async (c) => {
               s.name       AS supplier_name_resolved,
               (SELECT COUNT(*) FROM purchase_order_items i WHERE i.po_id = po.id) AS item_count
        FROM purchase_orders po
-       LEFT JOIN users    u1 ON u1.id = po.requested_by
-       LEFT JOIN users    u2 ON u2.id = po.approved_by
+       LEFT JOIN users    u1 ON u1.id = po.requested_by AND u1.company_id = po.company_id
+       LEFT JOIN users    u2 ON u2.id = po.approved_by AND u2.company_id = po.company_id
        LEFT JOIN suppliers s  ON s.code = po.supplier_code AND s.company_id = po.company_id
        ${where}
        ORDER BY po.order_date DESC, po.id DESC
@@ -293,14 +296,14 @@ finance.get('/purchase-orders/:id', async (c) => {
       `SELECT po.*, u1.full_name AS requested_by_name, u2.full_name AS approved_by_name,
               s.name AS supplier_name_resolved
        FROM purchase_orders po
-       LEFT JOIN users    u1 ON u1.id = po.requested_by
-       LEFT JOIN users    u2 ON u2.id = po.approved_by
+       LEFT JOIN users    u1 ON u1.id = po.requested_by AND u1.company_id = po.company_id
+       LEFT JOIN users    u2 ON u2.id = po.approved_by AND u2.company_id = po.company_id
        LEFT JOIN suppliers s  ON s.code = po.supplier_code AND s.company_id = po.company_id
        WHERE po.id = ? AND po.company_id = ?`
     ).bind(id, company_id).first(),
     c.env.DB.prepare(
-      'SELECT * FROM purchase_order_items WHERE po_id = ? ORDER BY id'
-    ).bind(id).all(),
+      'SELECT * FROM purchase_order_items WHERE po_id = ? AND company_id = ? ORDER BY id'
+    ).bind(id, company_id).all(),
   ])
   if (!po) return c.json({ success: false, error: 'طلب الشراء غير موجود' }, 404)
   return c.json({ success: true, data: { ...po, items: items.results } })
@@ -414,7 +417,6 @@ finance.patch('/purchase-orders/:id/receive', async (c) => {
     return c.json({ success: false, error: 'لا يمكن استلام طلب ملغي أو مغلق' }, 400)
   }
 
-  // Period check
   const today = new Date().toISOString().slice(0, 10)
   const periodId = await getOpenPeriod(c.env.DB, company_id, today)
   if (!periodId) {
@@ -422,86 +424,67 @@ finance.patch('/purchase-orders/:id/receive', async (c) => {
       error: `لا توجد فترة مالية مفتوحة للتاريخ ${today} — تحقق من إعدادات الفترات المالية` }, 400)
   }
 
-  // Update qty_received + persist warehouse on item
-  const updateStmts = items.map(i =>
-    c.env.DB.prepare(
-      `UPDATE purchase_order_items
-       SET qty_received = MIN(qty_ordered, qty_received + ?),
-           warehouse = COALESCE(warehouse, ?)
-       WHERE id = ? AND po_id = ?`
-    ).bind(i.qty_received, i.warehouse ?? null, i.item_id, id)
-  )
-  await c.env.DB.batch(updateStmts)
+  const receiveRows: Array<{
+    po_item_id: number
+    item_code: number
+    item_name: string
+    qty_received: number
+    unit_price: number
+    warehouse: string
+  }> = []
 
-  // Auto-create inventory_movements for items with item_code + warehouse
   for (const recv of items.filter(i => i.qty_received > 0)) {
-    const poItem = await c.env.DB
-      .prepare('SELECT item_code, item_name, unit_price, warehouse FROM purchase_order_items WHERE id = ? AND po_id = ?')
-      .bind(recv.item_id, id)
-      .first<{ item_code: string | null; item_name: string; unit_price: number; warehouse: string | null }>()
+    const poItem = await c.env.DB.prepare(
+      `SELECT id, item_code, item_name, unit_price, warehouse
+       FROM purchase_order_items
+       WHERE id = ? AND po_id = ? AND company_id = ?`
+    ).bind(recv.item_id, id, company_id).first<{
+      id: number
+      item_code: string | null
+      item_name: string
+      unit_price: number
+      warehouse: string | null
+    }>()
 
-    const warehouse  = recv.warehouse ?? poItem?.warehouse
-    const itemCodeNum = poItem?.item_code ? Number(poItem.item_code) : NaN
-    if (!warehouse || isNaN(itemCodeNum) || itemCodeNum <= 0) continue
+    if (!poItem) {
+      return c.json({ success: false, error: `بند الاستلام ${recv.item_id} غير موجود في أمر الشراء` }, 404)
+    }
 
-    const itemRow = await c.env.DB
-      .prepare('SELECT code, name FROM items WHERE code = ? AND company_id = ?')
-      .bind(itemCodeNum, company_id).first<{ code: number; name: string }>()
-    if (!itemRow) continue
+    const warehouse = (recv.warehouse ?? poItem.warehouse ?? '').trim()
+    const itemCodeNum = poItem.item_code ? Number(poItem.item_code) : NaN
+    if (!warehouse || isNaN(itemCodeNum) || itemCodeNum <= 0) {
+      return c.json({ success: false, error: `بيانات البند ${recv.item_id} غير مكتملة (المخزن أو كود الصنف)` }, 400)
+    }
 
-    const balRow = await c.env.DB.prepare(
-      `SELECT COALESCE(SUM(qty_in) - SUM(qty_out), 0)     AS bal_qty,
-              COALESCE(SUM(value_in) - SUM(value_out), 0) AS bal_val
-       FROM inventory_movements WHERE company_id = ? AND item_code = ? AND warehouse = ?`
-    ).bind(company_id, itemCodeNum, warehouse).first<{ bal_qty: number; bal_val: number }>()
-
-    const prevQty = balRow?.bal_qty ?? 0
-    const prevVal = balRow?.bal_val ?? 0
-    const price   = poItem?.unit_price ?? 0
-    const qtyIn   = recv.qty_received
-    const valueIn = qtyIn * price
-
-    await c.env.DB.prepare(
-      `INSERT INTO inventory_movements
-       (company_id, item_code, movement_date, warehouse, movement_type,
-        quantity, unit_price, qty_in, qty_out, balance_qty,
-        value_in, value_out, balance_value, notes, year, month, created_by_user_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(
-      company_id, itemCodeNum, today, warehouse, 'اضافة',
-      qtyIn, price, qtyIn, 0, prevQty + qtyIn,
-      valueIn, 0, prevVal + valueIn,
-      `PO استلام: ${poItem?.item_name ?? ''}`,
-      new Date().getFullYear(), new Date().getMonth() + 1, userId
-    ).run()
-
-    const movId = await c.env.DB
-      .prepare('SELECT id FROM inventory_movements WHERE company_id = ? ORDER BY id DESC LIMIT 1')
-      .bind(company_id).first<{ id: number }>()
-    await glInventoryMovement(
-      c.env.DB, company_id, movId?.id ?? 0,
-      'اضافة', valueIn, today, itemRow.name, userId
-    )
+    receiveRows.push({
+      po_item_id: poItem.id,
+      item_code: itemCodeNum,
+      item_name: poItem.item_name,
+      qty_received: recv.qty_received,
+      unit_price: poItem.unit_price ?? 0,
+      warehouse,
+    })
   }
 
-  // Auto-update PO status
-  const { results: itemRows } = await c.env.DB
-    .prepare('SELECT qty_ordered, qty_received FROM purchase_order_items WHERE po_id = ?')
-    .bind(id).all<{ qty_ordered: number; qty_received: number }>()
-
-  const allReceived = itemRows.every(i => i.qty_received >= i.qty_ordered)
-  const anyReceived = itemRows.some(i => i.qty_received > 0)
-
-  const newStatus = allReceived ? 'received' : anyReceived ? 'partial' : po.status
-  if (newStatus !== po.status) {
-    await c.env.DB.prepare(
-      `UPDATE purchase_orders
-       SET status = ?, received_by = ?, received_at = datetime('now'), updated_at = datetime('now')
-       WHERE id = ?`
-    ).bind(newStatus, userId, id).run()
+  if (!receiveRows.length) {
+    return c.json({ success: false, error: 'لا توجد كميات صالحة للاستلام' }, 400)
   }
 
-  return c.json({ success: true, data: { status: newStatus } })
+  try {
+    const result = await FinanceCore.processPOReceipt(c.env.DB, {
+      company_id,
+      userId,
+      po_id: id,
+      received_date: today,
+      items: receiveRows,
+    })
+
+    return c.json({ success: true, data: { status: result.status, received_items: result.movements } })
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'فشل استلام أمر الشراء'
+    return c.json({ success: false, error: message }, 400)
+  }
+
 })
 
 // ═══════════════════════════════════════════════════════════

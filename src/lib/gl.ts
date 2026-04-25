@@ -6,6 +6,8 @@ interface GLLine {
   credit:       number
   description?: string
   center_code?: number
+  season_id?:   number
+  field_id?:    number
 }
 
 interface PostEntryOpts {
@@ -23,6 +25,13 @@ async function getMapping(db: D1Database, company_id: number, key: string): Prom
     .prepare('SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = ?')
     .bind(company_id, key).first<{ account_code: string }>()
   return row?.account_code ?? null
+}
+
+export async function isIntegrationEnabled(db: D1Database, company_id: number, module_key: string): Promise<boolean> {
+  const row = await db
+    .prepare('SELECT is_enabled FROM gl_integration_settings WHERE company_id = ? AND module_key = ?')
+    .bind(company_id, module_key).first<{ is_enabled: number }>()
+  return row ? row.is_enabled === 1 : true; // Default to true for backward compatibility
 }
 
 export async function getOpenPeriod(db: D1Database, company_id: number, date: string): Promise<number | null> {
@@ -62,11 +71,12 @@ export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promis
     const lineStmts = opts.lines.map(l =>
       db.prepare(
         `INSERT INTO journal_entry_lines
-         (entry_id, company_id, account_code, debit, credit, description, center_code)
-         VALUES (?,?,?,?,?,?,?)`
+         (entry_id, company_id, account_code, debit, credit, description, center_code, season_id, field_id)
+         VALUES (?,?,?,?,?,?,?,?,?)`
       ).bind(
         entryId, opts.company_id, l.account_code,
-        l.debit, l.credit, l.description ?? null, l.center_code ?? null
+        l.debit, l.credit, l.description ?? null, l.center_code ?? null,
+        l.season_id ?? null, l.field_id ?? null
       )
     )
     await db.batch(lineStmts)
@@ -212,6 +222,9 @@ export async function glInventoryMovement(
   payment_method?: 'cash' | 'credit',
   work_order_id?: number,
 ): Promise<number | null> {
+  const enabled = await isIntegrationEnabled(db, company_id, 'inventory')
+  if (!enabled) return null
+
   const invAcc     = await getMapping(db, company_id, 'inventory')
   const apAcc      = await getMapping(db, company_id, 'accounts_payable')
   const cashAcc    = await getMapping(db, company_id, 'cash')
@@ -276,7 +289,12 @@ export async function glWorkOrderLabor(
   description: string,
   created_by?: number,
   center_code?: number,
+  season_id?: number | null,
+  field_id?: number | null,
 ): Promise<number | null> {
+  const enabled = await isIntegrationEnabled(db, company_id, 'operations')
+  if (!enabled) return null
+
   const cogsAcc    = await getMapping(db, company_id, 'cogs')
                   ?? await getMapping(db, company_id, 'expense_default')
   const payableAcc = await getMapping(db, company_id, 'wages_payable')
@@ -291,8 +309,8 @@ export async function glWorkOrderLabor(
     company_id, entry_date: date, description,
     ref_type: 'work_order', ref_id,
     lines: [
-      { account_code: cogsAcc,    debit: amount, credit: 0,      description, center_code },
-      { account_code: payableAcc, debit: 0,      credit: amount, description, center_code },
+      { account_code: cogsAcc,    debit: amount, credit: 0,      description, center_code, season_id: season_id ?? undefined, field_id: field_id ?? undefined },
+      { account_code: payableAcc, debit: 0,      credit: amount, description, center_code, season_id: season_id ?? undefined, field_id: field_id ?? undefined },
     ],
     created_by,
   })
@@ -369,6 +387,9 @@ export async function glPayroll(
   created_by?: number,
   center_code?: number,
 ): Promise<number | null> {
+  const enabled = await isIntegrationEnabled(db, company_id, 'hr_payroll')
+  if (!enabled) return null
+
   const wagesAcc = await getMapping(db, company_id, 'wages')
                 ?? await getMapping(db, company_id, 'expense_default')
   const payableAcc = await getMapping(db, company_id, 'wages_payable')

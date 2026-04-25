@@ -5,7 +5,7 @@ import {
   Settings, Calendar, Package, MapPin, BookOpen,
   Tag, Plus, ChevronDown, Lock, LockOpen, AlertTriangle, Info, CheckCircle
 } from 'lucide-react'
-import { configApi, glApi } from '../../api/client'
+import { configApi, glApi, authApi } from '../../api/client'
 import { usePermission } from '../../hooks/usePermission'
 import Modal from '../../components/ui/Modal'
 import AddSeasonModal       from '../../components/forms/AddSeasonModal'
@@ -13,7 +13,7 @@ import AddItemModal         from '../../components/forms/AddItemModal'
 import AddMasterRecordModal from '../../components/forms/AddMasterRecordModal'
 import type { Season, Item, CostCenter, FinancialPeriod } from '../../types'
 
-type Tab = 'seasons' | 'items' | 'cost_centers' | 'accounts' | 'expense_types' | 'periods' | 'mappings'
+type Tab = 'seasons' | 'items' | 'cost_centers' | 'accounts' | 'expense_types' | 'periods' | 'mappings' | 'roles'
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'seasons',       label: 'المواسم',         icon: <Calendar size={16} /> },
@@ -23,6 +23,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'expense_types', label: 'أنواع المصروفات',  icon: <Tag      size={16} /> },
   { id: 'periods',       label: 'الفترات المالية',  icon: <Lock     size={16} /> },
   { id: 'mappings',      label: 'ربط الحسابات',     icon: <Settings size={16} /> },
+  { id: 'roles',         label: 'صلاحيات الأدوار',  icon: <Info     size={16} /> },
 ]
 
 const STATUS_BADGE: Record<string, string> = {
@@ -493,6 +494,111 @@ function PeriodsTab({ canManage }: { canManage: boolean }) {
   )
 }
 
+// ─── Roles / RBAC Matrix Tab ─────────────────────────────────
+const ACTION_LABELS: Record<string, string> = {
+  read:    'قراءة',
+  write:   'كتابة',
+  approve: 'اعتماد',
+  audit:   'مراجعة',
+  delete:  'حذف',
+}
+
+const MODULE_LABELS: Record<string, string> = {
+  admin:     'النظام',
+  config:    'الإعدادات',
+  treasury:  'الخزينة',
+  suppliers: 'الموردون',
+  inventory: 'المخزون',
+  reports:   'التقارير',
+  gl:        'المحاسبة',
+  hr:        'الموارد البشرية',
+  contracts: 'العقود',
+  fields:    'قطع الأراضي',
+  operations:'العمليات',
+}
+
+const ROLE_LABELS: Record<string, string> = {
+  super_admin:      'مدير النظام',
+  company_admin:    'مدير الشركة',
+  accountant:       'محاسب',
+  warehouse_mgr:    'مدير مخازن',
+  field_supervisor: 'مشرف حقلي',
+  viewer:           'مشاهدة',
+}
+
+function RolesTab() {
+  const { data, isLoading } = useQuery({
+    queryKey: ['rbac-matrix'],
+    queryFn:  () => authApi.rbacMatrix(),
+    staleTime: 300_000,
+  })
+
+  if (isLoading) {
+    return <div className="text-center py-16 text-slate-400">جاري التحميل...</div>
+  }
+  if (!data) {
+    return <div className="text-center py-12 text-slate-400">تعذر تحميل صلاحيات الأدوار</div>
+  }
+
+  const { roles, permissions, modules, matrix } = data
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex gap-3 text-sm text-blue-800">
+        <Info size={18} className="text-blue-500 shrink-0 mt-0.5" />
+        <div>
+          <p className="font-semibold">مصفوفة صلاحيات الأدوار (قراءة فقط)</p>
+          <p className="opacity-80">تُظهر هذه المصفوفة الصلاحيات الممنوحة لكل دور في النظام. لتعديلها استخدم SQL Migrations أو راجع ملف RBAC الخاص بالنظام.</p>
+        </div>
+      </div>
+      <div className="card overflow-x-auto">
+        <table className="w-full text-xs min-w-[700px]">
+          <thead>
+            <tr className="bg-slate-50 border-b border-slate-200">
+              <th className="px-4 py-3 text-right font-semibold text-slate-600 w-44">الوحدة / الصلاحية</th>
+              {roles.map(role => (
+                <th key={role} className="px-3 py-3 text-center font-semibold text-slate-700 min-w-[90px]">
+                  <div>{ROLE_LABELS[role] ?? role}</div>
+                  <div className="text-[10px] text-slate-400 font-normal mt-0.5">{role}</div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {modules.map(module => {
+              const modulePerm = permissions.filter(p => p.module === module)
+              return modulePerm.map((perm, pi) => (
+                <tr key={perm.key} className={`border-b border-slate-100 ${pi === 0 ? 'bg-slate-50/50' : 'hover:bg-slate-50'}`}>
+                  {pi === 0 ? (
+                    <td rowSpan={modulePerm.length} className="px-4 py-2 align-top border-l border-slate-100">
+                      <div className="font-bold text-slate-700 text-xs mt-1">{MODULE_LABELS[module] ?? module}</div>
+                      <div className="text-[10px] text-slate-400 font-mono mt-0.5">{module}</div>
+                    </td>
+                  ) : null}
+                  <td className="px-4 py-2 text-slate-500 border-l border-slate-100">
+                    <span className="font-medium">{ACTION_LABELS[perm.action] ?? perm.action}</span>
+                  </td>
+                  {matrix.map(row => {
+                    const granted = row.permissions[perm.key]
+                    return (
+                      <td key={row.role} className="px-3 py-2 text-center">
+                        {granted
+                          ? <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-emerald-100 text-emerald-700 font-bold text-[11px]">✓</span>
+                          : <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-gray-100 text-gray-400 text-[11px]">—</span>
+                        }
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 // ─── Mappings Tab Content ────────────────────────────────────
 function MappingsTab({ canManage }: { canManage: boolean }) {
   const qc = useQueryClient()
@@ -840,6 +946,11 @@ export default function ConfigPage() {
       {/* GL Mappings */}
       {tab === 'mappings' && (
         <MappingsTab canManage={canWrite('config')} />
+      )}
+
+      {/* RBAC Roles Matrix */}
+      {tab === 'roles' && (
+        <RolesTab />
       )}
 
       {/* Modals */}

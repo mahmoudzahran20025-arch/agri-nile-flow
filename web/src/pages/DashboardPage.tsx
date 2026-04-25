@@ -3,9 +3,10 @@ import { useNavigate } from 'react-router-dom'
 import {
   Banknote, TrendingDown, Package, Users,
   AlertTriangle, Clock, ArrowUp, ArrowDown,
-  TrendingUp, BarChart3,
+  TrendingUp, BarChart3, Bell, ChevronLeft,
 } from 'lucide-react'
-import { dashboardApi, glApi } from '../api/client'
+import { dashboardApi, glApi, treasuryApi } from '../api/client'
+import { hrApi } from '../api/hr'
 import { useSeasonId, useAbility } from '../store/appStore'
 import KPICard from '../components/ui/KPICard'
 import type { DashboardStats } from '../types'
@@ -66,6 +67,21 @@ export default function DashboardPage() {
       net_income: number
     }>,
   })
+
+  const { data: payrollRuns } = useQuery({
+    queryKey: ['hr-payroll'],
+    queryFn:  () => hrApi.getPayrollRuns(),
+    enabled:  canReadFinance,
+  })
+
+  const { data: draftTxPage } = useQuery({
+    queryKey: ['dashboard', 'draft-tx'],
+    queryFn:  () => treasuryApi.list({ status: 'draft', size: 1 }),
+    enabled:  canReadFinance,
+  })
+
+  const pendingPayrolls = (payrollRuns ?? []).filter(r => r.status === 'approved').length
+  const draftTxCount   = (draftTxPage as { total?: number } | undefined)?.total ?? 0
 
   const totalRevenue  = incomeData?.revenue?.reduce( (s: number, r: { amount: number }) => s + (r.amount ?? 0), 0) ?? 0
   const totalExpenses = incomeData?.expenses?.reduce((s: number, r: { amount: number }) => s + (r.amount ?? 0), 0) ?? 0
@@ -234,6 +250,55 @@ export default function DashboardPage() {
           )}
         </div>
       </div>
+
+      {/* Pending Actions */}
+      {canReadFinance && (pendingPayrolls > 0 || draftTxCount > 0) && (
+        <div className="card p-5">
+          <h2 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
+            <Bell size={16} className="text-amber-500" />
+            إجراءات معلقة
+            <span className="mr-auto bg-amber-100 text-amber-700 text-xs font-semibold px-2 py-0.5 rounded-full">
+              {pendingPayrolls + draftTxCount}
+            </span>
+          </h2>
+          <div className="space-y-2">
+            {pendingPayrolls > 0 && (
+              <button
+                onClick={() => navigate('/hr/payroll')}
+                className="w-full flex items-center gap-3 py-2.5 px-3 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 transition-colors text-right group"
+              >
+                <div className="w-8 h-8 rounded-lg bg-amber-200 flex items-center justify-center shrink-0">
+                  <Banknote size={15} className="text-amber-700" />
+                </div>
+                <div className="flex-1 min-w-0 text-right">
+                  <p className="text-sm font-semibold text-amber-800">
+                    {pendingPayrolls} {pendingPayrolls === 1 ? 'مسيرة راتب معتمدة' : 'مسيرات رواتب معتمدة'} — بانتظار الصرف
+                  </p>
+                  <p className="text-xs text-amber-600">يلزم صرف الرواتب لإغلاق المسيرة وترحيل القيد</p>
+                </div>
+                <ChevronLeft size={16} className="text-amber-400 group-hover:text-amber-600 shrink-0" />
+              </button>
+            )}
+            {draftTxCount > 0 && (
+              <button
+                onClick={() => navigate('/treasury')}
+                className="w-full flex items-center gap-3 py-2.5 px-3 rounded-xl border border-blue-200 bg-blue-50 hover:bg-blue-100 transition-colors text-right group"
+              >
+                <div className="w-8 h-8 rounded-lg bg-blue-200 flex items-center justify-center shrink-0">
+                  <Clock size={15} className="text-blue-700" />
+                </div>
+                <div className="flex-1 min-w-0 text-right">
+                  <p className="text-sm font-semibold text-blue-800">
+                    {draftTxCount} {draftTxCount === 1 ? 'معاملة نقدية' : 'معاملات نقدية'} في المسودة
+                  </p>
+                  <p className="text-xs text-blue-600">يلزم الترحيل لتحديث رصيد الخزينة والدفتر</p>
+                </div>
+                <ChevronLeft size={16} className="text-blue-400 group-hover:text-blue-600 shrink-0" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Bottom row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

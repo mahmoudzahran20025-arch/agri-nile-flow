@@ -60,8 +60,8 @@
 ## ⚡ Phase 5: Performance Audit
 
 **الفهارس المفقودة (High Priority):**
-- [ ] `idx_ct_company_date` على `cash_transactions(company_id, transaction_date)`
-- [ ] `idx_st_supplier` على `supplier_transactions(company_id, supplier_code)`
+- [x] `idx_ct_company_date` موجود بالفعل على `cash_transactions(company_id, transaction_date)`
+- [x] `idx_st_supplier` موجود بالفعل على `supplier_transactions(company_id, supplier_code)`
 - [ ] `idx_je_ref` على `journal_entries(ref_type, ref_id)` (لتسريع عملية الـ Reconciliation)
 
 ---

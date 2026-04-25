@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
-import { authMiddleware, getUser } from '../middleware/auth'
+import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
 import { postAutoEntry } from '../lib/gl'
 import { FinanceCore } from '../lib/finance_core'
 import { logAudit } from '../lib/audit'
@@ -10,6 +10,8 @@ import { zValidator } from '@hono/zod-validator'
 
 const treasury = new Hono<{ Bindings: Env }>()
 treasury.use('*', authMiddleware)
+// RBAC: Treasury posting and partner cash operations are finance-restricted.
+treasury.use('*', roleGuard(['super_admin', 'company_admin', 'accountant']))
 
 const transactionSchema = z.object({
   transaction_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'التاريخ يجب أن يكون بصيغة YYYY-MM-DD'),

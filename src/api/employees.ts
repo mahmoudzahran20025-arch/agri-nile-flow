@@ -1,9 +1,11 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
-import { authMiddleware, getUser } from '../middleware/auth'
+import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
 
 const employees = new Hono<{ Bindings: Env }>()
 employees.use('*', authMiddleware)
+// RBAC: Employee master data includes PII and is limited to admin roles.
+employees.use('*', roleGuard(['super_admin', 'company_admin']))
 
 // GET /api/employees
 employees.get('/', async (c) => {

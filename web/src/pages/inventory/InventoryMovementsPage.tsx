@@ -208,8 +208,8 @@ export default function InventoryMovementsPage() {
           {/* Item */}
           <select className="input w-44" value={itemCode} onChange={e => { setItemCode(e.target.value); setPage(1) }}>
             <option value="">كل الأصناف</option>
-            {(items as { id: number; name: string }[]).map(i => (
-              <option key={i.id} value={i.id}>{i.name}</option>
+            {(items as { code: number; name: string }[]).map(i => (
+              <option key={i.code} value={i.code}>{i.name}</option>
             ))}
           </select>
 

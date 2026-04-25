@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, Banknote, Package,
   FileText, Settings, LogOut, Leaf, ChevronLeft,
   ClipboardList, UserCog, TrendingUp, MapPin, Wrench,
-  Building2, Shield, Activity, ChevronDown,
+  Building2, Shield, Activity, ChevronDown, Link2, ShieldCheck
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useQuery } from '@tanstack/react-query'
@@ -63,6 +63,22 @@ const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
+    key: 'finance', label: 'المالية والمحاسبة', items: [
+      { to: '/gl/accounts',        icon: <ClipboardList   size={18} />, label: 'شجرة الحسابات',   permission: { module: 'finance', action: 'read' } },
+      { to: '/gl/entries',         icon: <FileText        size={18} />, label: 'قيود اليومية',     permission: { module: 'finance', action: 'read' } },
+      { to: '/gl/statements',      icon: <TrendingUp      size={18} />, label: 'القوائم المالية',  permission: { module: 'finance', action: 'read' } },
+      { to: '/gl/mappings',        icon: <Link2           size={18} />, label: 'ربط الحسابات',     permission: { module: 'config',  action: 'read' } },
+      { to: '/gl/integrations',    icon: <Settings        size={18} />, label: 'حوكمة الربط',      permission: { module: 'config',  action: 'read' } },
+    ],
+  },
+  {
+    key: 'hr', label: 'الموارد البشرية', items: [
+      { to: '/hr',                 icon: <Users           size={18} />, label: 'قائمة الموظفين',   permission: { module: 'hr', action: 'read' } },
+      { to: '/hr/attendance',      icon: <Activity        size={18} />, label: 'الحضور والانصراف', permission: { module: 'hr', action: 'read' } },
+      { to: '/hr/payroll',         icon: <Banknote        size={18} />, label: 'الرواتب والأجور',  permission: { module: 'hr', action: 'read' } },
+    ],
+  },
+  {
     key: 'reports', label: 'التقارير والتحليل', items: [
       { to: '/reports',                    icon: <ClipboardList size={18} />, label: 'التقارير', permission: { module: 'reports', action: 'read' } },
       { to: '/reports/season-summary',     icon: <Leaf          size={18} />, label: 'ملخص الموسم', permission: { module: 'reports', action: 'read' } },
@@ -74,6 +90,7 @@ const NAV_SECTIONS: NavSection[] = [
       { to: '/users',               icon: <UserCog         size={18} />, label: 'المستخدمون', permission: { module: 'admin', action: 'users' } },
       { to: '/audit',               icon: <Shield          size={18} />, label: 'سجل المراجعة', permission: { module: 'admin', action: 'audit' } },
       { to: '/audit/errors',        icon: <Activity        size={18} />, label: 'صحة النظام',   permission: { module: 'admin', action: 'audit' } },
+      { to: '/audit/integrity',     icon: <ShieldCheck     size={18} />, label: 'سلامة البيانات', permission: { module: 'admin', action: 'audit' } },
       { to: '/config',              icon: <Settings        size={18} />, label: 'الإعدادات', permission: { module: 'config', action: 'read' } },
     ],
   },

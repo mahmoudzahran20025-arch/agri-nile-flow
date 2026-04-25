@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { DollarSign, Play, CheckCircle, ChevronDown, ChevronUp, FileText } from 'lucide-react'
+import { DollarSign, Play, CheckCircle, ChevronDown, ChevronUp, FileText, Banknote, X } from 'lucide-react'
 import { hrApi } from '../../api/hr'
 import type { PayrollRun, PayrollItem } from '../../api/hr'
+import Modal from '../../components/ui/Modal'
 
 const MONTH_NAMES = [
   '','يناير','فبراير','مارس','إبريل','مايو','يونيو',
@@ -19,9 +20,12 @@ const STATUS_MAP: Record<string, {label:string;color:string}> = {
 export default function PayrollPage() {
   const qc = useQueryClient()
   const now = new Date()
-  const [runYear,  setRunYear]  = useState(now.getFullYear())
-  const [runMonth, setRunMonth] = useState(now.getMonth() + 1)
+  const [runYear,    setRunYear]    = useState(now.getFullYear())
+  const [runMonth,   setRunMonth]   = useState(now.getMonth() + 1)
   const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [payRunId,   setPayRunId]   = useState<number | null>(null)
+  const [payDate,    setPayDate]    = useState(now.toISOString().slice(0, 10))
+  const [payErr,     setPayErr]     = useState('')
 
   const { data: runsRes } = useQuery({
     queryKey: ['hr-payroll'],
@@ -45,6 +49,16 @@ export default function PayrollPage() {
       qc.invalidateQueries({ queryKey: ['hr-payroll'] })
       qc.invalidateQueries({ queryKey: ['hr-payroll-detail'] })
     },
+  })
+
+  const payMut = useMutation({
+    mutationFn: ({ id, date }: { id: number; date: string }) => hrApi.payPayroll(id, date),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['hr-payroll'] })
+      setPayRunId(null)
+      setPayErr('')
+    },
+    onError: (e: Error) => setPayErr(e.message),
   })
 
   const runs: PayrollRun[] = runsRes ?? []
@@ -122,6 +136,49 @@ export default function PayrollPage() {
         )}
       </div>
 
+      {/* Pay payroll modal */}
+      <Modal open={!!payRunId} onClose={() => { setPayRunId(null); setPayErr('') }} title="صرف الرواتب">
+        {payRunId && (() => {
+          const run = runs.find(r => r.id === payRunId)
+          return (
+            <div className="space-y-4">
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                <p className="text-sm font-semibold text-blue-800">
+                  {MONTH_NAMES[run?.period_month ?? 0]} {run?.period_year} — صافي: {run?.total_net.toLocaleString()} ج.م
+                </p>
+                <p className="text-xs text-blue-600 mt-1">سيتم إنشاء قيد محاسبي: DR مستحقات رواتب / CR خزينة</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">تاريخ الصرف *</label>
+                <input
+                  type="date"
+                  value={payDate}
+                  onChange={e => setPayDate(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              {payErr && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{payErr}</p>}
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  onClick={() => { setPayRunId(null); setPayErr('') }}
+                  className="flex items-center gap-1.5 border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm hover:bg-gray-50"
+                >
+                  <X size={14} /> إلغاء
+                </button>
+                <button
+                  onClick={() => payRunId && payMut.mutate({ id: payRunId, date: payDate })}
+                  disabled={payMut.isPending || !payDate}
+                  className="flex items-center gap-1.5 bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50"
+                >
+                  <Banknote size={14} />
+                  {payMut.isPending ? 'جاري الصرف...' : 'تأكيد الصرف'}
+                </button>
+              </div>
+            </div>
+          )
+        })()}
+      </Modal>
+
       {/* Payroll runs list */}
       <div className="space-y-3">
         {runs.length === 0 ? (
@@ -164,6 +221,19 @@ export default function PayrollPage() {
                     >
                       <CheckCircle size={14} /> اعتماد + قيد
                     </button>
+                  )}
+                  {run.status === 'approved' && (
+                    <button
+                      onClick={e => { e.stopPropagation(); setPayRunId(run.id); setPayErr('') }}
+                      className="flex items-center gap-1.5 bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs hover:bg-blue-700"
+                    >
+                      <Banknote size={14} /> صرف رواتب
+                    </button>
+                  )}
+                  {run.status === 'paid' && run.payment_date && (
+                    <span className="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                      صُرفت {run.payment_date}
+                    </span>
                   )}
                   {isExpanded ? <ChevronUp size={18} className="text-gray-400" /> : <ChevronDown size={18} className="text-gray-400" />}
                 </div>

@@ -1,10 +1,12 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
-import { authMiddleware, getUser } from '../middleware/auth'
+import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
 import { logAudit } from '../lib/audit'
 
 const operations = new Hono<{ Bindings: Env }>()
 operations.use('*', authMiddleware)
+// RBAC: Production work-order lifecycle is limited to operations leadership.
+operations.use('*', roleGuard(['super_admin', 'company_admin', 'field_supervisor', 'accountant']))
 
 // ── Lifecycle transition rules ────────────────────────────────
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
@@ -33,9 +35,9 @@ operations.get('/orders', async (c) => {
                COALESCE(SUM(wt.quantity * wt.unit_cost), 0) AS labor_cost,
                COALESCE(im_costs.inv_cost, 0)                AS inventory_cost
              FROM work_orders wo
-             LEFT JOIN fields f ON f.id = wo.field_id
-             LEFT JOIN seasons s ON s.id = wo.season_id
-             LEFT JOIN work_tasks wt ON wt.work_order_id = wo.id
+             LEFT JOIN fields f ON f.id = wo.field_id AND f.company_id = wo.company_id
+             LEFT JOIN seasons s ON s.id = wo.season_id AND s.company_id = wo.company_id
+             LEFT JOIN work_tasks wt ON wt.work_order_id = wo.id AND wt.company_id = wo.company_id
              LEFT JOIN (
                SELECT work_order_id, SUM(value_out) AS inv_cost
                FROM inventory_movements
@@ -77,17 +79,17 @@ operations.get('/orders/:id', async (c) => {
   const order = await c.env.DB.prepare(
     `SELECT wo.*, f.name AS field_name, f.area_feddan, s.name AS season_name
      FROM work_orders wo
-     LEFT JOIN fields f ON f.id = wo.field_id
-     LEFT JOIN seasons s ON s.id = wo.season_id
+     LEFT JOIN fields f ON f.id = wo.field_id AND f.company_id = wo.company_id
+     LEFT JOIN seasons s ON s.id = wo.season_id AND s.company_id = wo.company_id
      WHERE wo.id = ? AND wo.company_id = ?`
   ).bind(id, company_id).first()
   if (!order) return c.json({ success: false, error: 'أمر العمل غير موجود' }, 404)
 
   const { results: tasks } = await c.env.DB.prepare(
     `SELECT wt.*, e.name AS employee_name FROM work_tasks wt
-     LEFT JOIN employees e ON e.id = wt.employee_id
-     WHERE wt.work_order_id = ? ORDER BY wt.task_date`
-  ).bind(id).all()
+     LEFT JOIN employees e ON e.id = wt.employee_id AND e.company_id = wt.company_id
+     WHERE wt.work_order_id = ? AND wt.company_id = ? ORDER BY wt.task_date`
+  ).bind(id, company_id).all()
 
   // Inventory consumed linked to this work order
   const { results: inventory } = await c.env.DB.prepare(
@@ -168,8 +170,8 @@ operations.patch('/orders/:id/status', async (c) => {
   if (status === 'costed') {
     try {
       const order = await c.env.DB.prepare(
-        'SELECT center_code, actual_date FROM work_orders WHERE id = ? AND company_id = ?'
-      ).bind(id, company_id).first<{ center_code: number; actual_date: string }>()
+        'SELECT center_code, actual_date, season_id, field_id FROM work_orders WHERE id = ? AND company_id = ?'
+      ).bind(id, company_id).first<{ center_code: number; actual_date: string; season_id: number | null; field_id: number | null }>()
 
       const tasks = await c.env.DB.prepare(
         'SELECT SUM(quantity * unit_cost) AS total_cost FROM work_tasks WHERE work_order_id = ?'
@@ -184,7 +186,9 @@ operations.patch('/orders/:id/status', async (c) => {
           actual_date ?? order?.actual_date ?? new Date().toISOString().slice(0, 10),
           `تكلفة عمالة ميدانية: أمر عمل #${id}`,
           userId,
-          order?.center_code
+          order?.center_code,
+          order?.season_id,
+          order?.field_id
         )
       }
     } catch (e: any) {

@@ -1,11 +1,13 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
-import { authMiddleware, getUser } from '../middleware/auth'
+import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
 import { glSupplierTransaction, getOpenPeriod } from '../lib/gl'
 import { logAudit } from '../lib/audit'
 
 const suppliers = new Hono<{ Bindings: Env }>()
 suppliers.use('*', authMiddleware)
+// RBAC: Supplier ledger endpoints are restricted to finance leadership roles.
+suppliers.use('*', roleGuard(['super_admin', 'company_admin', 'accountant']))
 
 // GET /api/suppliers?page=1&size=50&q=search
 suppliers.get('/', async (c) => {
@@ -255,13 +257,14 @@ suppliers.post('/:code/transactions', async (c) => {
 
       await glSupplierTransaction(c.env.DB, company_id, txnId, b.entry_type, b.amount,
         b.transaction_date, `${b.expense_category ?? b.entry_type} — ${supplierRow?.name ?? code}`, userId, b.center_code)
-    } catch (e: any) {
+    } catch (e: unknown) {
       await c.env.DB.prepare(
         "UPDATE supplier_transactions SET status = 'draft' WHERE id = ?"
       ).bind(txnId).run()
+      const message = e instanceof Error ? e.message : 'خطأ غير معروف'
       return c.json({ 
         success: false, 
-        error: `تم حفظ الفاتورة كمسودة، لكن فشل إنشاء القيد المحاسبي: ${e.message}` 
+        error: `تم حفظ الفاتورة كمسودة، لكن فشل إنشاء القيد المحاسبي: ${message}` 
       }, 400)
     }
   }
@@ -285,8 +288,16 @@ suppliers.patch('/:code/transactions/:id/post', async (c) => {
   const id   = Number(c.req.param('id'))
 
   const txn = await c.env.DB
-    .prepare("SELECT * FROM supplier_transactions WHERE id = ? AND company_id = ? AND status = 'draft'")
-    .bind(id, company_id).first<any>()
+    .prepare(`SELECT id, entry_type, amount, transaction_date, expense_category, center_code
+              FROM supplier_transactions WHERE id = ? AND company_id = ? AND status = 'draft'`)
+    .bind(id, company_id).first<{
+      id: number
+      entry_type: string
+      amount: number
+      transaction_date: string
+      expense_category: string | null
+      center_code: number | null
+    }>()
 
   if (!txn) return c.json({ success: false, error: 'المسودة غير موجودة أو تم ترحيلها بالفعل' }, 404)
 
@@ -315,8 +326,9 @@ suppliers.patch('/:code/transactions/:id/post', async (c) => {
     })
 
     return c.json({ success: true, data: null })
-  } catch (e: any) {
-    return c.json({ success: false, error: `فشل ترحيل الحركة: ${e.message}` }, 400)
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'خطأ غير معروف'
+    return c.json({ success: false, error: `فشل ترحيل الحركة: ${message}` }, 400)
   }
 })
 

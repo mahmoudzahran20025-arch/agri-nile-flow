@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Link2, Loader2, CheckCircle2, AlertTriangle, Save } from 'lucide-react'
+import { Link2, Loader2, CheckCircle2, AlertTriangle, Save, Settings2 } from 'lucide-react'
 import { glApi } from '../../api/client'
+import { Link } from 'react-router-dom'
 
 // ── Known mapping keys ────────────────────────────────────────
 const MAPPING_KEYS: Array<{
@@ -19,7 +20,13 @@ const MAPPING_KEYS: Array<{
   // Expenses
   { key: 'expense_default',  label: 'المصروفات (افتراضي)',    group: 'مصروفات',    description: 'يُستخدم في المدفوعات النقدية وصرف المخزون غير المصنّف',  required: true },
   { key: 'purchases',        label: 'المشتريات',               group: 'مصروفات',    description: 'يُستخدم في فواتير الموردين (DR المشتريات / CR الموردون)', required: true },
-  { key: 'wages',            label: 'أجور ورواتب',             group: 'مصروفات',    description: 'يُستخدم في اعتماد مسيرات الرواتب (DR أجور / CR خزينة)',  required: true },
+  { key: 'wages',            label: 'أجور ورواتب',             group: 'مصروفات',    description: 'يُستخدم في اعتماد مسيرات الرواتب (DR أجور / CR مستحقات)',  required: true },
+  { key: 'cogs',             label: 'تكلفة البضاعة المباعة',   group: 'مصروفات',    description: 'يُستخدم في تكلفة عمالة الحقول وأوامر العمل (DR تكلفة / CR مستحقات)', required: true },
+  // Liabilities
+  { key: 'wages_payable',    label: 'مستحقات الرواتب',         group: 'التزامات',   description: 'الالتزام المقابل عند اعتماد الرواتب قبل الصرف (CR مستحقات)', required: true },
+  { key: 'deferred_revenue', label: 'إيرادات مؤجلة',           group: 'التزامات',   description: 'يُستخدم عند استلام دفعات مقدمة من عقود البيع (CR مؤجل)',   required: false },
+  // Equity
+  { key: 'equity',           label: 'حقوق الملكية',            group: 'حقوق ملكية', description: 'يُستخدم عند إضافة رأس مال شريك جديد (CR ملكية)',            required: false },
 ]
 
 interface Mapping { mapping_key: string; account_code: string }
@@ -98,14 +105,23 @@ export default function GLMappingsPage() {
             </div>
           </div>
         </div>
-        <button
-          onClick={handleSave}
-          disabled={!isDirty() || saveMut.isPending}
-          className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-40 text-white text-sm font-medium px-4 py-2.5 rounded-xl transition-colors shadow-sm"
-        >
-          {saveMut.isPending ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
-          حفظ التغييرات
-        </button>
+        <div className="flex items-center gap-3">
+          <Link
+            to="/gl/integrations"
+            className="flex items-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-sm font-medium px-4 py-2.5 rounded-xl transition-colors border border-indigo-200"
+          >
+            <Settings2 size={15} />
+            حوكمة الربط
+          </Link>
+          <button
+            onClick={handleSave}
+            disabled={!isDirty() || saveMut.isPending}
+            className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-40 text-white text-sm font-medium px-4 py-2.5 rounded-xl transition-colors shadow-sm"
+          >
+            {saveMut.isPending ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+            حفظ التغييرات
+          </button>
+        </div>
       </div>
 
       {/* Coverage banner */}
