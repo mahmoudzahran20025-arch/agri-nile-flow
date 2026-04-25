@@ -155,12 +155,12 @@ async function importSuppliers() {
     return
   }
 
-  const valid = txns.filter(r => r.supplier_code && r.transaction_date && r.amount)
+  const valid = txns.filter(r => r.transaction_date && (r.amount || r.credit_amount || r.debit_amount))
   console.log(`  → ${valid.length} حركة صالحة من أصل ${txns.length}`)
 
   // Split into batches of 200
-  for (let i = 0; i < valid.length; i += 200) {
-    const batch = valid.slice(i, i + 200)
+  for (let i = 0; i < valid.length; i += 50) {
+    const batch = valid.slice(i, i + 50)
     const sql = batch.map(r => {
       const date = toISODate(r.transaction_date)
       if (!date) return null
@@ -169,12 +169,13 @@ async function importSuppliers() {
       const debit  = Number(r.debit_amount) || 0
       const etype = String(r.entry_type ?? (debit > 0 ? 'م' : 'د')).trim()
       const d = new Date(date)
+      const sCode = r.supplier_code ? Number(r.supplier_code) : null
       return `INSERT INTO supplier_transactions (
         company_id, supplier_code, transaction_date, entry_type, document_type, document_number, 
         expense_category, equipment, account_code, unit, quantity, unit_price, amount, credit, debit, 
         check_amount, year, month, notes, created_by_user_id
       ) VALUES (
-        ${COMPANY_ID}, ${esc(Number(r.supplier_code))}, ${esc(date)}, ${esc(etype)}, ${esc(r.document_type)}, 
+        ${COMPANY_ID}, ${esc(sCode)}, ${esc(date)}, ${esc(etype)}, ${esc(r.document_type)}, 
         ${esc(r.document_number ? Number(r.document_number) : null)}, ${esc(r.expense_category)}, 
         ${esc(r.equipment)}, ${esc(r.account_code ? Number(r.account_code) : null)}, ${esc(r.unit)}, 
         ${esc(r.quantity ? Number(r.quantity) : null)}, ${esc(r.unit_price ? Number(r.unit_price) : null)}, 
@@ -212,8 +213,8 @@ async function importTreasury() {
   let runningBalance = 0
 
   // Process in order to calculate running balance
-  for (let i = 0; i < valid.length; i += 200) {
-    const batch = valid.slice(i, i + 200)
+  for (let i = 0; i < valid.length; i += 50) {
+    const batch = valid.slice(i, i + 50)
     const sql = batch.map(r => {
       const date = toISODate(r.transaction_date)
       if (!date) return null
