@@ -274,8 +274,8 @@ finance.get('/purchase-orders', async (c) => {
               s.name       AS supplier_name_resolved,
               (SELECT COUNT(*) FROM purchase_order_items i WHERE i.po_id = po.id) AS item_count
        FROM purchase_orders po
-       LEFT JOIN users    u1 ON u1.id = po.requested_by AND u1.company_id = po.company_id
-       LEFT JOIN users    u2 ON u2.id = po.approved_by AND u2.company_id = po.company_id
+       LEFT JOIN users    u1 ON u1.id = po.requested_by
+       LEFT JOIN users    u2 ON u2.id = po.approved_by
        LEFT JOIN suppliers s  ON s.code = po.supplier_code AND s.company_id = po.company_id
        ${where}
        ORDER BY po.order_date DESC, po.id DESC
@@ -296,8 +296,8 @@ finance.get('/purchase-orders/:id', async (c) => {
       `SELECT po.*, u1.full_name AS requested_by_name, u2.full_name AS approved_by_name,
               s.name AS supplier_name_resolved
        FROM purchase_orders po
-       LEFT JOIN users    u1 ON u1.id = po.requested_by AND u1.company_id = po.company_id
-       LEFT JOIN users    u2 ON u2.id = po.approved_by AND u2.company_id = po.company_id
+       LEFT JOIN users    u1 ON u1.id = po.requested_by
+       LEFT JOIN users    u2 ON u2.id = po.approved_by
        LEFT JOIN suppliers s  ON s.code = po.supplier_code AND s.company_id = po.company_id
        WHERE po.id = ? AND po.company_id = ?`
     ).bind(id, company_id).first(),
