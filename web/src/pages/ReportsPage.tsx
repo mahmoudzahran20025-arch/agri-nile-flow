@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { FileText, TrendingUp, TrendingDown, Package, Users, Banknote, ArrowDown, ArrowUp, Download, Clock, BarChart3 } from 'lucide-react'
+import { FileText, TrendingUp, TrendingDown, Package, Users, Banknote, ArrowDown, ArrowUp, Download, Clock, BarChart3, Leaf, Target, ShieldCheck, Lock, ChevronLeft } from 'lucide-react'
 import { dashboardApi, suppliersApi, treasuryApi, inventoryApi, downloadCsv } from '../api/client'
 import { useSeasonId } from '../store/appStore'
 import type { Supplier } from '../types'
@@ -78,6 +78,27 @@ export default function ReportsPage() {
             <BarChart3 size={15} /> التقارير المرئية
           </button>
         </div>
+      </div>
+
+      {/* ── Specialized Reports Hub ──────────────────────────── */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        {[
+          { to: '/reports/season-summary',   icon: <Leaf       size={20} />, label: 'ملخص الموسم',           color: 'text-emerald-600', bg: 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200' },
+          { to: '/reports/season-pnl',       icon: <TrendingUp size={20} />, label: 'أرباح وخسائر الموسم',   color: 'text-brand-600',   bg: 'bg-brand-50 hover:bg-brand-100 border-brand-200' },
+          { to: '/reports/budget-vs-actual', icon: <Target     size={20} />, label: 'الميزانية مقابل الفعلي', color: 'text-amber-600',   bg: 'bg-amber-50 hover:bg-amber-100 border-amber-200' },
+          { to: '/reports/season-readiness', icon: <ShieldCheck size={20} />, label: 'جاهزية الإغلاق',        color: 'text-teal-600',    bg: 'bg-teal-50 hover:bg-teal-100 border-teal-200' },
+          { to: '/reports/season-close',     icon: <Lock       size={20} />, label: 'إغلاق الموسم',           color: 'text-red-600',     bg: 'bg-red-50 hover:bg-red-100 border-red-200' },
+        ].map(card => (
+          <button
+            key={card.to}
+            onClick={() => navigate(card.to)}
+            className={`flex flex-col items-center gap-2 p-4 rounded-xl border text-center transition-all ${card.bg}`}
+          >
+            <span className={card.color}>{card.icon}</span>
+            <span className={`text-xs font-semibold ${card.color}`}>{card.label}</span>
+            <ChevronLeft size={12} className="text-slate-300 -rotate-180" />
+          </button>
+        ))}
       </div>
 
       {/* ── Section 1: Financial Summary ─────────────────────── */}

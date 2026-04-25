@@ -22,6 +22,7 @@ const transactionSchema = z.object({
   document_number: z.number().optional().nullable(),
   supplier_code: z.number().optional().nullable(),
   center_code: z.number().optional().nullable(),
+  field_id: z.number().optional().nullable(),
   season_id: z.number().optional().nullable(),
   status: z.enum(['draft', 'posted']).optional().default('posted'),
   notes: z.string().optional().nullable(),
@@ -54,7 +55,8 @@ treasury.get('/transactions', async (c) => {
   const [rows, cnt] = await Promise.all([
     c.env.DB.prepare(
       `SELECT id, transaction_date, direction, document_number, recipient_name,
-              narration, amount, debit, credit, running_balance, year, month, notes, status
+              narration, amount, debit, credit, running_balance, year, month, notes, status,
+              field_id, center_code, season_id
        FROM cash_transactions ${where}
        ORDER BY transaction_date ASC, id ASC LIMIT ? OFFSET ?`
     ).bind(...binds, size, offset).all(),
@@ -99,6 +101,7 @@ treasury.post('/transactions', zValidator('json', transactionSchema), async (c) 
       document_number: b.document_number,
       supplier_code: b.supplier_code,
       center_code: b.center_code,
+      field_id: b.field_id,
       season_id: b.season_id,
       expense_code: b.expense_code,
       notes: b.notes,

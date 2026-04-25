@@ -19,6 +19,7 @@ interface AppState {
   logout:         () => void
   setSeasons:     (seasons: Season[]) => void
   setActiveSeason:(season: Season | null) => void
+  setPermissions: (permissions: string[]) => void
 }
 
 export const useAppStore = create<AppState>()(
@@ -44,6 +45,7 @@ export const useAppStore = create<AppState>()(
 
       setSeasons:      (seasons)       => set({ seasons }),
       setActiveSeason: (activeSeason)  => set({ activeSeason }),
+      setPermissions:  (permissions)   => set({ permissions }),
     }),
     {
       name:    'agro_app',

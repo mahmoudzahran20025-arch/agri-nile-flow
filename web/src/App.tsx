@@ -2,7 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAppStore, useIsAuth } from './store/appStore'
-import { configApi } from './api/client'
+import { configApi, authApi } from './api/client'
 import RootLayout    from './layouts/RootLayout'
 import LoginPage     from './pages/LoginPage'
 import DebugPage     from './pages/DebugPage'
@@ -53,6 +53,8 @@ import SuppliersBalancePage  from './pages/reports/SuppliersBalancePage'
 import SeasonSummaryPage     from './pages/reports/SeasonSummaryPage'
 import SeasonPnLPage        from './pages/reports/SeasonPnLPage'
 import SeasonClosePage      from './pages/reports/SeasonClosePage'
+import SeasonReadinessPage  from './pages/reports/SeasonReadinessPage'
+import BudgetVsActualPage   from './pages/reports/BudgetVsActualPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuth = useIsAuth()
@@ -60,8 +62,9 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  const isAuth     = useIsAuth()
-  const setSeasons = useAppStore(s => s.setSeasons)
+  const isAuth        = useIsAuth()
+  const setSeasons     = useAppStore(s => s.setSeasons)
+  const setPermissions = useAppStore(s => s.setPermissions)
 
   // Load seasons when authenticated
   const { data: seasons } = useQuery({
@@ -70,9 +73,21 @@ export default function App() {
     enabled:  isAuth,
   })
 
+  // Refresh permissions from server on mount (fixes stale [] from old sessions)
+  const { data: meData } = useQuery({
+    queryKey: ['auth', 'me'],
+    queryFn:  authApi.me,
+    enabled:  isAuth,
+    staleTime: 300_000,
+  })
+
   useEffect(() => {
     if (seasons) setSeasons(seasons as never)
   }, [seasons, setSeasons])
+
+  useEffect(() => {
+    if (meData?.permissions) setPermissions(meData.permissions)
+  }, [meData, setPermissions])
 
   return (
     <Routes>
@@ -148,7 +163,9 @@ export default function App() {
         <Route path="reports/suppliers-balance" element={<SuppliersBalancePage />} />
         <Route path="reports/season-summary" element={<SeasonSummaryPage />} />
         <Route path="reports/season-pnl"     element={<SeasonPnLPage />} />
-        <Route path="reports/season-close"   element={<SeasonClosePage />} />
+        <Route path="reports/season-close"     element={<SeasonClosePage />} />
+        <Route path="reports/season-readiness"   element={<SeasonReadinessPage />} />
+        <Route path="reports/budget-vs-actual"   element={<BudgetVsActualPage />} />
 
         {/* Super Admin */}
         <Route path="admin" element={<SuperAdminPage />} />

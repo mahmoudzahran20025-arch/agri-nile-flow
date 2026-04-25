@@ -1,4 +1,4 @@
-import type { ApiResult, Paginated, DashboardStats } from '../types'
+import type { ApiResult, DashboardStats } from '../types'
 
 const BASE = window.location.hostname.endsWith('pages.dev') 
   ? 'https://agri-nile-flow.mahm-zahran22.workers.dev/api' 
@@ -85,6 +85,23 @@ export async function unwrap<T>(promise: Promise<ApiResult<T>>): Promise<T> {
   }
 }
 
+// For paginated endpoints: backend puts total/page/has_more at the TOP LEVEL of the JSON
+// alongside `data`. unwrap() would throw those away; this helper preserves them.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function unwrapPaginated<T>(promise: Promise<any>): Promise<{
+  data: T[]; total: number; page: number; page_size: number; has_more: boolean
+}> {
+  const raw = await promise
+  if (!raw.success) throw new Error(raw.error || 'API error')
+  return {
+    data:      raw.data      ?? [],
+    total:     raw.total     ?? 0,
+    page:      raw.page      ?? 1,
+    page_size: raw.page_size ?? 50,
+    has_more:  raw.has_more  ?? false,
+  }
+}
+
 export function paginatedUrl(
   base: string,
   params: Record<string, string | number | undefined>,
@@ -105,7 +122,7 @@ export const authApi = {
     api.post<{ token: string; user: { id: number; full_name: string; email: string; company_id: number; role: string }; permissions: string[] }>('/auth/login', { email, password, company_id }),
 
   me: () =>
-    unwrap(api.get<{ user: { id: number; email: string; full_name: string }; company: { id: number; code: string; name: string }; role: string }>('/auth/me')),
+    unwrap(api.get<{ user: { id: number; email: string; full_name: string }; company: { id: number; code: string; name: string }; role: string; permissions: string[] }>('/auth/me')),
 
   changePassword: (current_password: string, new_password: string) =>
     api.post('/auth/change-password', { current_password, new_password }),
@@ -125,12 +142,12 @@ export const dashboardApi = {
 // ─── Suppliers ────────────────────────────────────────────────
 export const suppliersApi = {
   list:       (p: { page?: number; size?: number; q?: string }) =>
-    unwrap(api.get<Paginated<unknown>>(paginatedUrl('/suppliers', p))),
+    unwrapPaginated<unknown>(api.get(paginatedUrl('/suppliers', p))),
   get:        (code: number) => unwrap(api.get(`/suppliers/${code}`)),
   create:     (body: unknown) => api.post('/suppliers', body),
   update:     (code: number, body: unknown) => api.patch(`/suppliers/${code}`, body),
   statement:  (code: number, p: { page?: number; size?: number; season_id?: number; month?: number }) =>
-    unwrap(api.get<Paginated<unknown>>(paginatedUrl(`/suppliers/${code}/statement`, p))),
+    unwrapPaginated<unknown>(api.get(paginatedUrl(`/suppliers/${code}/statement`, p))),
   addTransaction: (code: number, body: unknown) => api.post(`/suppliers/${code}/transactions`, body),
   postTransaction:(code: number, id: number) => unwrap(api.patch<null>(`/suppliers/${code}/transactions/${id}/post`, {})),
   aging:      (asOf?: string) => unwrap(api.get(`/suppliers/aging${asOf ? `?as_of=${asOf}` : ''}`)),
@@ -140,7 +157,7 @@ export const suppliersApi = {
 export const treasuryApi = {
   balance:        () => unwrap(api.get<{ balance: number }>('/treasury/balance')),
   list:           (p: { page?: number; size?: number; direction?: string; month?: number; year?: number; status?: string }) =>
-    unwrap(api.get<Paginated<unknown>>(paginatedUrl('/treasury/transactions', p))),
+    unwrapPaginated<unknown>(api.get(paginatedUrl('/treasury/transactions', p))),
   create:         (body: unknown) => api.post('/treasury/transactions', body),
   post:           (id: number) => unwrap(api.patch<{ success: boolean; balance: number }>(`/treasury/transactions/${id}/post`, {})),
   payments:       (supplierCode?: number) =>
@@ -162,7 +179,7 @@ export const inventoryApi = {
       consumption_pct: number; active_order_count: number
     }>>('/inventory/reorder-alerts')),
   list:        (p: { page?: number; size?: number; warehouse?: string; item_code?: number; type?: string; start?: string; end?: string; field_id?: number; season_id?: number; work_order_id?: number }) =>
-    unwrap(api.get<Paginated<unknown>>(paginatedUrl('/inventory/movements', p))),
+    unwrapPaginated<unknown>(api.get(paginatedUrl('/inventory/movements', p))),
   create:      (body: unknown) => api.post('/inventory/movements', body),
   createBatch: (body: {
     movement_date:    string
@@ -359,7 +376,7 @@ export const reportsApi = {
     unwrap(api.get<{
       season:            { id: number; name: string; season_type: string; start_date: string; end_date: string; status: string } | null
       revenue:           { contracts_value: number; advance_collected: number; contracts_count: number }
-      costs:             { inventory: number; labor: number; cash_out: number; supplier_credit: number; total: number }
+      costs:             { inventory: number; labor: number; cash_out: number; supplier_credit: number; land_rent: number; payroll: number; total: number }
       net_margin:        number
       total_area:        number
       margin_per_feddan: number | null
@@ -370,6 +387,37 @@ export const reportsApi = {
         field_cost: number; field_margin: number; margin_per_feddan: number | null
       }>
     }>(`/reports/season-pnl?season_id=${season_id}`)),
+
+  budgetVsActual: (season_id: number) =>
+    unwrap(api.get<{
+      season: unknown
+      totals: {
+        budget: number; actual: number; variance: number
+        variance_pct: number | null; utilization_pct: number | null
+        budgeted_fields: number; over_budget_count: number; total_fields: number
+      }
+      rows: Array<{
+        id: number; code: string; field_name: string; area_feddan: number; crop_type: string | null
+        budget_per_feddan: number; budget_total: number
+        inv_cost: number; labor_cost: number; cash_cost: number; actual_total: number; actual_per_feddan: number
+        variance: number; variance_pct: number | null; utilization_pct: number | null
+        status: 'on_track' | 'at_risk' | 'over_budget' | 'no_budget'
+      }>
+    }>(`/reports/budget-vs-actual?season_id=${season_id}`)),
+
+  seasonReadiness: (season_id: number) =>
+    unwrap(api.get<{
+      season:  { id: number; name: string; season_type: string; start_date: string; end_date: string; status: string }
+      checks:  Array<{
+        key: string; label: string; description: string
+        count: number; ok: boolean; blocker: boolean; action_url: string
+      }>
+      summary: {
+        blockers_failed: number; warnings_failed: number; passing: number
+        total: number; score: number; ready: boolean
+        total_fields: number; total_harvests: number
+      }
+    }>(`/reports/season-readiness?season_id=${season_id}`)),
 }
 
 // ─── GL (دفتر الأستاذ العام) ──────────────────────────────────
@@ -432,9 +480,9 @@ export interface RbacMatrix {
 // ─── Audit Log ────────────────────────────────────────────────
 export const auditApi = {
   list: (p: { page?: number; size?: number; table?: string; action?: string; user_id?: number; start?: string; end?: string }) =>
-    unwrap(api.get<Paginated<AuditLogRow>>(paginatedUrl('/audit', p))),
+    unwrapPaginated<AuditLogRow>(api.get(paginatedUrl('/audit', p))),
   errors: (p: { page?: number; size?: number; company_id?: string }) =>
-    unwrap(api.get<Paginated<ErrorLogEntry>>(paginatedUrl('/audit/errors', p))),
+    unwrapPaginated<ErrorLogEntry>(api.get(paginatedUrl('/audit/errors', p))),
   stats: () => unwrap(api.get<AuditStats>('/audit/stats')),
 }
 

@@ -1,16 +1,18 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
-import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
+import { authMiddleware, getUser, roleGuard, permissionGuard } from '../middleware/auth'
 import { glSupplierTransaction, getOpenPeriod } from '../lib/gl'
 import { logAudit } from '../lib/audit'
 
 const suppliers = new Hono<{ Bindings: Env }>()
 suppliers.use('*', authMiddleware)
-// RBAC: Supplier ledger endpoints are restricted to finance leadership roles.
-suppliers.use('*', roleGuard(['super_admin', 'company_admin', 'accountant']))
+
+// Write operations (POST/PATCH) are finance-role-only.
+// Read operations use DB-driven permissionGuard so any role with suppliers.read can view.
+const financeOnly = roleGuard(['super_admin', 'company_admin', 'accountant'])
 
 // GET /api/suppliers?page=1&size=50&q=search
-suppliers.get('/', async (c) => {
+suppliers.get('/', permissionGuard('suppliers', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const page   = Math.max(1, Number(c.req.query('page') ?? 1))
   const size   = Math.min(100, Number(c.req.query('size') ?? 50))
@@ -25,7 +27,7 @@ suppliers.get('/', async (c) => {
       `SELECT s.code, s.name, s.activity, s.is_active,
               COALESCE(SUM(st.credit), 0) AS total_credit,
               COALESCE(SUM(st.debit),  0) AS total_debit,
-              COALESCE(MAX(st.balance_with_checks), 0) AS current_balance
+              COALESCE(SUM(st.credit), 0) - COALESCE(SUM(st.debit), 0) AS current_balance
        FROM suppliers s
        LEFT JOIN supplier_transactions st ON st.supplier_code = s.code AND st.company_id = s.company_id
        WHERE s.company_id = ? ${where}
@@ -50,7 +52,7 @@ suppliers.get('/', async (c) => {
 })
 
 // GET /api/suppliers/aging — 30/60/90+ day overdue analysis  (must be before /:code)
-suppliers.get('/aging', async (c) => {
+suppliers.get('/aging', permissionGuard('suppliers', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const asOf = c.req.query('as_of') ?? new Date().toISOString().slice(0, 10)
 
@@ -92,7 +94,7 @@ suppliers.get('/aging', async (c) => {
 })
 
 // GET /api/suppliers/:code
-suppliers.get('/:code', async (c) => {
+suppliers.get('/:code', permissionGuard('suppliers', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const code = Number(c.req.param('code'))
 
@@ -105,7 +107,7 @@ suppliers.get('/:code', async (c) => {
 })
 
 // POST /api/suppliers
-suppliers.post('/', async (c) => {
+suppliers.post('/', financeOnly, async (c) => {
   const { company_id } = getUser(c)
   const body = await c.req.json<{ code: number; name: string; activity?: string; notes?: string }>()
 
@@ -127,7 +129,7 @@ suppliers.post('/', async (c) => {
 })
 
 // PATCH /api/suppliers/:code
-suppliers.patch('/:code', async (c) => {
+suppliers.patch('/:code', financeOnly, async (c) => {
   const { company_id } = getUser(c)
   const code = Number(c.req.param('code'))
   const body = await c.req.json<{ name?: string; activity?: string; notes?: string; is_active?: number }>()
@@ -150,7 +152,7 @@ suppliers.patch('/:code', async (c) => {
 })
 
 // GET /api/suppliers/:code/statement?page=1&size=50&season_id=&month=
-suppliers.get('/:code/statement', async (c) => {
+suppliers.get('/:code/statement', permissionGuard('suppliers', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const code     = Number(c.req.param('code'))
   const page     = Math.max(1, Number(c.req.query('page') ?? 1))
@@ -189,7 +191,7 @@ suppliers.get('/:code/statement', async (c) => {
 })
 
 // POST /api/suppliers/:code/transactions
-suppliers.post('/:code/transactions', async (c) => {
+suppliers.post('/:code/transactions', financeOnly, async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const code = Number(c.req.param('code'))
   const b    = await c.req.json<{
@@ -282,7 +284,7 @@ suppliers.post('/:code/transactions', async (c) => {
 })
 
 // PATCH /api/suppliers/:code/transactions/:id/post — Approve and post a draft invoice
-suppliers.patch('/:code/transactions/:id/post', async (c) => {
+suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const code = Number(c.req.param('code'))
   const id   = Number(c.req.param('id'))
@@ -310,7 +312,7 @@ suppliers.patch('/:code/transactions/:id/post', async (c) => {
     await glSupplierTransaction(
       c.env.DB, company_id, id, txn.entry_type, txn.amount,
       txn.transaction_date, `${txn.expense_category ?? txn.entry_type} — ${supplierRow?.name ?? code}`, 
-      userId, txn.center_code
+      userId, txn.center_code ?? undefined
     )
 
     // 2. Update status to posted

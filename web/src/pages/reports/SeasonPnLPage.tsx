@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import {
   Leaf, TrendingUp, TrendingDown, Banknote, Package,
   Users, Wrench, ArrowRight, CheckCircle, AlertTriangle,
+  DollarSign, Home, ShieldCheck,
 } from 'lucide-react'
 import { reportsApi, configApi } from '../../api/client'
 import type { Season } from '../../types'
@@ -158,6 +160,7 @@ function FieldPnLRow({ row }: { row: FieldRow }) {
 // ─── Main Page ────────────────────────────────────────────────
 
 export default function SeasonPnLPage() {
+  const navigate = useNavigate()
   const [seasonId, setSeasonId] = useState<number | null>(null)
 
   const { data: seasons = [] } = useQuery({
@@ -192,16 +195,27 @@ export default function SeasonPnLPage() {
           </div>
         </div>
 
-        <select
-          className="input w-52 text-sm"
-          value={seasonId ?? ''}
-          onChange={e => setSeasonId(e.target.value ? Number(e.target.value) : null)}
-        >
-          <option value="">— اختر الموسم —</option>
-          {seasons.map(s => (
-            <option key={s.id} value={s.id}>{s.name}{s.status === 'active' ? ' ✓' : ''}</option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          {seasonId && (
+            <button
+              onClick={() => navigate('/reports/season-readiness')}
+              className="flex items-center gap-1.5 btn-secondary text-sm"
+            >
+              <ShieldCheck size={15} className="text-brand-500" />
+              جاهزية الإغلاق
+            </button>
+          )}
+          <select
+            className="input w-52 text-sm"
+            value={seasonId ?? ''}
+            onChange={e => setSeasonId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">— اختر الموسم —</option>
+            {seasons.map(s => (
+              <option key={s.id} value={s.id}>{s.name}{s.status === 'active' ? ' ✓' : ''}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* No season selected */}
@@ -337,6 +351,26 @@ export default function SeasonPnLPage() {
               variant="cost"
               pctOfRev={revenue > 0 ? (data.costs.supplier_credit / revenue) * 100 : undefined}
             />
+            {(data.costs.land_rent ?? 0) > 0 && (
+              <WaterfallRow
+                icon={<Home size={16} className="text-teal-500" />}
+                label="إيجار الأراضي"
+                sub="إيجار × مساحة الحقول"
+                value={data.costs.land_rent}
+                variant="cost"
+                pctOfRev={revenue > 0 ? (data.costs.land_rent / revenue) * 100 : undefined}
+              />
+            )}
+            {(data.costs.payroll ?? 0) > 0 && (
+              <WaterfallRow
+                icon={<DollarSign size={16} className="text-green-500" />}
+                label="رواتب الموظفين"
+                sub="مسيرات رواتب مُسندة لهذا الموسم"
+                value={data.costs.payroll}
+                variant="cost"
+                pctOfRev={revenue > 0 ? (data.costs.payroll / revenue) * 100 : undefined}
+              />
+            )}
 
             {/* Subtotal costs */}
             <WaterfallRow

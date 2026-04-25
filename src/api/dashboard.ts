@@ -63,21 +63,23 @@ dashboard.get('/monthly-cashflow', async (c) => {
 })
 
 // GET /api/dashboard/cost-by-crop
+// Groups supplier costs by cost_center (crop/field type) — not by GL account.
+// The old `accounts` table is empty; cost_centers carries the agricultural dimension.
 dashboard.get('/cost-by-crop', async (c) => {
   const { company_id } = getUser(c)
   const seasonId = c.req.query('season_id')
 
   const query = seasonId
-    ? `SELECT a.name AS crop, SUM(st.amount) AS total_cost
+    ? `SELECT COALESCE(cc.name, 'غير محدد') AS crop, SUM(st.amount) AS total_cost
        FROM supplier_transactions st
-       LEFT JOIN accounts a ON a.code = st.account_code AND a.company_id = st.company_id
+       LEFT JOIN cost_centers cc ON cc.code = st.center_code AND cc.company_id = st.company_id
        WHERE st.company_id = ? AND st.season_id = ?
-       GROUP BY st.account_code ORDER BY total_cost DESC LIMIT 10`
-    : `SELECT a.name AS crop, SUM(st.amount) AS total_cost
+       GROUP BY st.center_code ORDER BY total_cost DESC LIMIT 10`
+    : `SELECT COALESCE(cc.name, 'غير محدد') AS crop, SUM(st.amount) AS total_cost
        FROM supplier_transactions st
-       LEFT JOIN accounts a ON a.code = st.account_code AND a.company_id = st.company_id
+       LEFT JOIN cost_centers cc ON cc.code = st.center_code AND cc.company_id = st.company_id
        WHERE st.company_id = ?
-       GROUP BY st.account_code ORDER BY total_cost DESC LIMIT 10`
+       GROUP BY st.center_code ORDER BY total_cost DESC LIMIT 10`
 
   const { results } = seasonId
     ? await c.env.DB.prepare(query).bind(company_id, seasonId).all()

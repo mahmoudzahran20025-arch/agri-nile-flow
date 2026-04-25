@@ -213,21 +213,26 @@ fields.patch('/harvest/:id', async (c) => {
       'SELECT harvest_date, crop_name, revenue, actual_cost FROM harvest_records WHERE id = ? AND company_id = ?'
     ).bind(id, company_id).first<{ harvest_date: string; crop_name: string; revenue: number | null; actual_cost: number | null }>()
 
-  if (after) {
-    await FinanceCore.postHarvestLedger(c.env.DB, {
-      company_id,
-      userId: Number(getUser(c).sub),
-      harvest_id: id,
-      harvest_date: after.harvest_date,
-      crop_name: after.crop_name,
-      field_name: before.field_name,
-      center_code: before.center_code,
-      total_revenue: after.revenue ?? 0,
-      total_actual_cost: after.actual_cost ?? 0,
-      season_id: before.season_id,
-      field_id: before.field_id,
-    })
-  }
+    if (after) {
+      try {
+        await FinanceCore.postHarvestLedger(c.env.DB, {
+          company_id,
+          userId: Number(getUser(c).sub),
+          harvest_id: id,
+          harvest_date: after.harvest_date,
+          crop_name: after.crop_name,
+          field_name: before.field_name,
+          center_code: before.center_code,
+          total_revenue: after.revenue ?? 0,
+          total_actual_cost: after.actual_cost ?? 0,
+          season_id: before.season_id,
+          field_id: before.field_id,
+        })
+      } catch (e: unknown) {
+        const glMsg = e instanceof Error ? e.message : 'فشل تحديث القيد المحاسبي'
+        return c.json({ success: true, data: null, gl_warning: glMsg })
+      }
+    }
   }
 
   return c.json({ success: true, data: null })

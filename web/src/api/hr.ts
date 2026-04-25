@@ -65,7 +65,7 @@ export interface PayrollRun {
   total_gross: number; total_deductions: number; total_net: number
   journal_entry_id?: number; approved_by?: number; approved_by_name?: string
   payment_date?: string | null; payment_gl_entry_id?: number | null
-  created_by?: number; created_at: string
+  season_id?: number | null; created_by?: number; created_at: string
 }
 
 export interface PayrollItem {
@@ -134,7 +134,8 @@ export const hrApi = {
   // Payroll
   getPayrollRuns: () => unwrap(api.get<PayrollRun[]>('/hr/payroll')),
   getPayrollRun:  (id: number) => unwrap(api.get<PayrollRun & {items: PayrollItem[]}>(`/hr/payroll/${id}`)),
-  runPayroll:     (year: number, month: number) => unwrap(api.post<{id:number; total_net:number}>('/hr/payroll/run', { year, month })),
+  runPayroll:     (year: number, month: number, season_id?: number | null) =>
+    unwrap(api.post<{id:number; total_net:number}>('/hr/payroll/run', { year, month, season_id: season_id ?? null })),
   approvePayroll: (id: number) => unwrap(api.patch<null>(`/hr/payroll/${id}/approve`, {})),
   payPayroll:     (id: number, payment_date: string) =>
     unwrap(api.patch<{ payment_date: string; payment_gl_entry_id: number | null }>(`/hr/payroll/${id}/pay`, { payment_date })),

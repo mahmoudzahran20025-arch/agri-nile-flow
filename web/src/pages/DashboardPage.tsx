@@ -4,8 +4,9 @@ import {
   Banknote, TrendingDown, Package, Users,
   AlertTriangle, Clock, ArrowUp, ArrowDown,
   TrendingUp, BarChart3, Bell, ChevronLeft,
+  Leaf, Target, ShieldCheck,
 } from 'lucide-react'
-import { dashboardApi, glApi, treasuryApi } from '../api/client'
+import { dashboardApi, glApi, treasuryApi, reportsApi } from '../api/client'
 import { hrApi } from '../api/hr'
 import { useSeasonId, useAbility } from '../store/appStore'
 import KPICard from '../components/ui/KPICard'
@@ -78,6 +79,20 @@ export default function DashboardPage() {
     queryKey: ['dashboard', 'draft-tx'],
     queryFn:  () => treasuryApi.list({ status: 'draft', size: 1 }),
     enabled:  canReadFinance,
+  })
+
+  const { data: seasonPnL } = useQuery({
+    queryKey: ['reports', 'season-pnl', seasonId],
+    queryFn:  () => reportsApi.seasonPnL(seasonId!),
+    enabled:  !!seasonId && canReadReports,
+    staleTime: 300_000,
+  })
+
+  const { data: budgetData } = useQuery({
+    queryKey: ['reports', 'budget-vs-actual', seasonId],
+    queryFn:  () => reportsApi.budgetVsActual(seasonId!),
+    enabled:  !!seasonId && canReadReports,
+    staleTime: 300_000,
   })
 
   const pendingPayrolls = (payrollRuns ?? []).filter(r => r.status === 'approved').length
@@ -156,6 +171,117 @@ export default function DashboardPage() {
           />
         )}
       </div>
+
+      {/* ── Active Season Health Widget ──────────────────────── */}
+      {canReadReports && seasonId && seasonPnL?.season && (
+        <div className="card p-5 border-brand-100 bg-gradient-to-br from-brand-50/60 to-emerald-50/40">
+          <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-brand-100 rounded-xl flex items-center justify-center">
+                <Leaf size={16} className="text-brand-600" />
+              </div>
+              <div>
+                <h2 className="font-bold text-slate-800 text-sm">صحة الموسم الزراعي</h2>
+                <p className="text-xs text-slate-400">{seasonPnL.season.name}</p>
+              </div>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide ${
+                seasonPnL.season.status === 'open'
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : 'bg-slate-100 text-slate-500'
+              }`}>
+                {seasonPnL.season.status === 'open' ? 'مفتوح' : 'مغلق'}
+              </span>
+            </div>
+            <div className="flex gap-2 text-xs">
+              <button
+                onClick={() => navigate('/reports/season-pnl')}
+                className="flex items-center gap-1 text-brand-600 hover:text-brand-700 font-semibold bg-white border border-brand-200 hover:border-brand-300 px-3 py-1.5 rounded-lg transition-all"
+              >
+                <TrendingUp size={12} /> أرباح وخسائر
+              </button>
+              <button
+                onClick={() => navigate('/reports/budget-vs-actual')}
+                className="flex items-center gap-1 text-brand-600 hover:text-brand-700 font-semibold bg-white border border-brand-200 hover:border-brand-300 px-3 py-1.5 rounded-lg transition-all"
+              >
+                <Target size={12} /> الميزانية
+              </button>
+              <button
+                onClick={() => navigate('/reports/season-readiness')}
+                className="flex items-center gap-1 text-brand-600 hover:text-brand-700 font-semibold bg-white border border-brand-200 hover:border-brand-300 px-3 py-1.5 rounded-lg transition-all"
+              >
+                <ShieldCheck size={12} /> الجاهزية
+              </button>
+            </div>
+          </div>
+
+          {/* P&L mini-KPIs */}
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="bg-white/80 rounded-xl p-3 text-center border border-emerald-100">
+              <p className="text-[10px] text-slate-400 uppercase tracking-wide mb-1">الإيرادات</p>
+              <p className="font-black text-emerald-700 tabular-nums">{egp(seasonPnL.revenue.contracts_value)}</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">{seasonPnL.revenue.contracts_count} عقد</p>
+            </div>
+            <div className="bg-white/80 rounded-xl p-3 text-center border border-red-100">
+              <p className="text-[10px] text-slate-400 uppercase tracking-wide mb-1">التكاليف</p>
+              <p className="font-black text-red-600 tabular-nums">{egp(seasonPnL.costs.total)}</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                {seasonPnL.total_area > 0 ? `${egp(seasonPnL.costs.total / seasonPnL.total_area)} / فدان` : '—'}
+              </p>
+            </div>
+            <div className={`bg-white/80 rounded-xl p-3 text-center border ${
+              seasonPnL.net_margin >= 0 ? 'border-brand-100' : 'border-red-100'
+            }`}>
+              <p className="text-[10px] text-slate-400 uppercase tracking-wide mb-1">صافي الربح</p>
+              <p className={`font-black tabular-nums ${seasonPnL.net_margin >= 0 ? 'text-brand-700' : 'text-red-600'}`}>
+                {egp(seasonPnL.net_margin)}
+              </p>
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                {seasonPnL.margin_pct != null ? `${seasonPnL.margin_pct}%` : '—'}
+              </p>
+            </div>
+          </div>
+
+          {/* Budget utilization bar */}
+          {budgetData?.totals && budgetData.totals.budget > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-1.5">
+                  <Target size={12} className="text-slate-400" />
+                  <p className="text-xs text-slate-500 font-medium">استهلاك الميزانية الحقلية</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {budgetData.totals.over_budget_count > 0 && (
+                    <span className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">
+                      {budgetData.totals.over_budget_count} حقل تجاوز
+                    </span>
+                  )}
+                  <span className={`text-xs font-black tabular-nums ${
+                    (budgetData.totals.utilization_pct ?? 0) > 100 ? 'text-red-600'
+                    : (budgetData.totals.utilization_pct ?? 0) > 80  ? 'text-amber-600'
+                    : 'text-emerald-600'
+                  }`}>
+                    {budgetData.totals.utilization_pct?.toFixed(1) ?? '—'}%
+                  </span>
+                </div>
+              </div>
+              <div className="bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-1000 ${
+                    (budgetData.totals.utilization_pct ?? 0) > 100 ? 'bg-red-500'
+                    : (budgetData.totals.utilization_pct ?? 0) > 80  ? 'bg-amber-400'
+                    : 'bg-emerald-500'
+                  }`}
+                  style={{ width: `${Math.min(budgetData.totals.utilization_pct ?? 0, 100)}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-[10px] text-slate-400 mt-1">
+                <span>{egp(budgetData.totals.actual)} فعلي</span>
+                <span>{egp(budgetData.totals.budget)} ميزانية</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* GL Financial Summary — Year to Date */}
       {canReadReports && (

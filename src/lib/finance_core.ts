@@ -12,6 +12,7 @@ interface CashMovementInput {
   document_number?: number | null
   supplier_code?:   number | null
   center_code?:     number | null
+  field_id?:        number | null
   expense_code?:    number | null
   season_id?:       number | null
   notes?:           string | null
@@ -72,8 +73,8 @@ export const FinanceCore = {
       `INSERT INTO cash_transactions
        (company_id, season_id, supplier_code, transaction_date,
         direction, document_number, recipient_name, narration, amount,
-        debit, credit, running_balance, year, month, created_by_user_id, status, center_code, expense_code, local_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        debit, credit, running_balance, year, month, created_by_user_id, status, center_code, field_id, expense_code, local_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
       opts.company_id, opts.season_id ?? null, opts.supplier_code ?? null,
       opts.transaction_date, opts.direction, opts.document_number ?? null,
@@ -82,7 +83,7 @@ export const FinanceCore = {
       opts.direction === 'د' ? opts.amount : 0,
       newBalance,
       new Date(opts.transaction_date).getFullYear(), new Date(opts.transaction_date).getMonth() + 1,
-      opts.userId, status, opts.center_code ?? null, opts.expense_code ?? null, batchKey
+      opts.userId, status, opts.center_code ?? null, opts.field_id ?? null, opts.expense_code ?? null, batchKey
     ))
 
     if (isPosted) {

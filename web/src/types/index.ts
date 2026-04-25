@@ -85,6 +85,9 @@ export interface CashTransaction {
   month:           number | null
   status?:         'draft' | 'posted'
   notes:           string | null
+  field_id?:       number | null
+  center_code?:    number | null
+  season_id?:      number | null
 }
 
 export interface InventoryBalance {

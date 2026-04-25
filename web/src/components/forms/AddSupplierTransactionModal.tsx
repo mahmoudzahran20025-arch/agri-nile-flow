@@ -29,7 +29,6 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
     notes:            '',
     season_id:        '',
     center_code:      '',
-    account_code:     '',
     status:           'draft' as 'draft' | 'posted',
   })
 
@@ -40,7 +39,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
         transaction_date: today(), entry_type: 'م', amount: '',
         document_type: '', document_number: '', expense_category: '',
         unit: '', quantity: '', unit_price: '', notes: '',
-        season_id: '', center_code: '', account_code: '', status: 'draft',
+        season_id: '', center_code: '', status: 'draft',
       })
       setError('')
     }
@@ -73,13 +72,6 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
     staleTime: 120_000,
   })
 
-  type AccountOption = { code: number; name: string }
-  const { data: accounts = [] } = useQuery({
-    queryKey: ['config', 'accounts'],
-    queryFn:  configApi.accounts as () => Promise<AccountOption[]>,
-    enabled:  open,
-    staleTime: 120_000,
-  })
 
   // Auto-compute amount from qty × price
   useEffect(() => {
@@ -110,7 +102,6 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
         notes:            form.notes.trim() || undefined,
         season_id:        form.season_id ? Number(form.season_id) : undefined,
         center_code:      form.center_code ? Number(form.center_code) : undefined,
-        account_code:     form.account_code ? Number(form.account_code) : undefined,
         status:           form.status,
       })
       if (!(res as { success: boolean }).success) {
@@ -213,27 +204,15 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">بند المصروف / الخدمة</label>
-            <select className="input" value={form.expense_category}
-              onChange={e => set('expense_category', e.target.value)}>
-              <option value="">— اختياري —</option>
-              {(expenseTypes as ExpenseOption[]).map(et => (
-                <option key={et.code} value={et.name}>{et.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label">الحساب المحاسبي</label>
-            <select className="input" value={form.account_code}
-              onChange={e => set('account_code', e.target.value)}>
-              <option value="">— افتراضي —</option>
-              {(accounts as AccountOption[]).map(a => (
-                <option key={a.code} value={a.code}>{a.code} — {a.name}</option>
-              ))}
-            </select>
-          </div>
+        <div>
+          <label className="label">بند المصروف / الخدمة</label>
+          <select className="input" value={form.expense_category}
+            onChange={e => set('expense_category', e.target.value)}>
+            <option value="">— اختياري —</option>
+            {(expenseTypes as ExpenseOption[]).map(et => (
+              <option key={et.code} value={et.name}>{et.name}</option>
+            ))}
+          </select>
         </div>
 
         {/* ── Row 4: Qty × Price → Amount ─────────────────── */}

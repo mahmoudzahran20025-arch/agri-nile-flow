@@ -527,6 +527,7 @@ reports.get('/season-pnl', async (c) => {
     cashCostRow,
     supCostRow,
     rentCostRow,
+    payrollCostRow,
     areaRow,
     byField,
   ] = await Promise.all([
@@ -592,6 +593,13 @@ reports.get('/season-pnl', async (c) => {
       WHERE company_id = ? AND season_id = ? AND rent_per_feddan > 0
     `).bind(company_id, seasonId).first<{ total: number }>(),
 
+    // Cost 6: Payroll — approved/paid runs attributed to this season
+    c.env.DB.prepare(`
+      SELECT COALESCE(SUM(total_net), 0) AS total
+      FROM payroll_runs
+      WHERE company_id = ? AND season_id = ? AND status IN ('approved', 'paid')
+    `).bind(company_id, seasonId).first<{ total: number }>(),
+
     // Total area for season
     c.env.DB.prepare(`
       SELECT COALESCE(SUM(area_feddan), 0) AS total
@@ -642,16 +650,17 @@ reports.get('/season-pnl', async (c) => {
     }>(),
   ])
 
-  const revenue     = revenueRow?.contracts_value ?? 0
-  const invCost     = invCostRow?.total ?? 0
-  const laborCost   = laborCostRow?.total ?? 0
-  const cashCost    = cashCostRow?.total ?? 0
-  const supCost     = supCostRow?.total ?? 0
-  const rentCost    = rentCostRow?.total ?? 0
-  const totalCosts  = invCost + laborCost + cashCost + supCost + rentCost
-  const netMargin   = revenue - totalCosts
-  const totalArea   = areaRow?.total ?? 0
-  const marginPF    = totalArea > 0 ? netMargin / totalArea : null
+  const revenue      = revenueRow?.contracts_value ?? 0
+  const invCost      = invCostRow?.total ?? 0
+  const laborCost    = laborCostRow?.total ?? 0
+  const cashCost     = cashCostRow?.total ?? 0
+  const supCost      = supCostRow?.total ?? 0
+  const rentCost     = rentCostRow?.total ?? 0
+  const payrollCost  = payrollCostRow?.total ?? 0
+  const totalCosts   = invCost + laborCost + cashCost + supCost + rentCost + payrollCost
+  const netMargin    = revenue - totalCosts
+  const totalArea    = areaRow?.total ?? 0
+  const marginPF     = totalArea > 0 ? netMargin / totalArea : null
 
   return c.json({
     success: true,
@@ -668,6 +677,7 @@ reports.get('/season-pnl', async (c) => {
         cash_out:         cashCost,
         supplier_credit:  supCost,
         land_rent:        rentCost,
+        payroll:          payrollCost,
         total:            totalCosts,
       },
       net_margin:          netMargin,
@@ -675,6 +685,271 @@ reports.get('/season-pnl', async (c) => {
       margin_per_feddan:   marginPF,
       margin_pct:          revenue > 0 ? Math.round((netMargin / revenue) * 1000) / 10 : null,
       by_field:            byField.results,
+    },
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────
+// GET /api/reports/season-readiness?season_id=1
+//
+// Pre-close readiness checklist: 3 blockers + 3 warnings.
+// Each check is a self-contained COUNT query — all run in parallel.
+// ─────────────────────────────────────────────────────────────────
+reports.get('/season-readiness', async (c) => {
+  const { company_id } = getUser(c)
+  const seasonId = c.req.query('season_id') ? Number(c.req.query('season_id')) : null
+  if (!seasonId) return c.json({ success: false, error: 'season_id مطلوب' }, 400)
+
+  const [
+    season,
+    openWORow,
+    draftPayrollRow,
+    draftSupTxRow,
+    uncostedHRow,
+    fieldsNoHRow,
+    activeConRow,
+    totalFieldsRow,
+    totalHarvestsRow,
+  ] = await Promise.all([
+
+    c.env.DB.prepare(
+      'SELECT id, name, season_type, start_date, end_date, status FROM seasons WHERE id = ? AND company_id = ?'
+    ).bind(seasonId, company_id).first<{
+      id: number; name: string; season_type: string
+      start_date: string; end_date: string; status: string
+    }>(),
+
+    // BLOCKER 1: work orders not yet costed or cancelled
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM work_orders WHERE company_id = ? AND season_id = ?
+       AND status NOT IN ('costed','cancelled')`
+    ).bind(company_id, seasonId).first<{ n: number }>(),
+
+    // BLOCKER 2: draft payroll runs attributed to this season
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM payroll_runs WHERE company_id = ? AND season_id = ? AND status = 'draft'`
+    ).bind(company_id, seasonId).first<{ n: number }>(),
+
+    // BLOCKER 3: supplier transactions not yet posted for this season
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM supplier_transactions WHERE company_id = ? AND season_id = ? AND status != 'posted'`
+    ).bind(company_id, seasonId).first<{ n: number }>(),
+
+    // WARNING 1: harvest records with zero / null actual_cost
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM harvest_records WHERE company_id = ? AND season_id = ?
+       AND (actual_cost IS NULL OR actual_cost = 0) AND qty_tons > 0`
+    ).bind(company_id, seasonId).first<{ n: number }>(),
+
+    // WARNING 2: fields in season with no harvest record at all
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM fields f
+       WHERE f.company_id = ? AND f.season_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM harvest_records hr
+           WHERE hr.field_id = f.id AND hr.company_id = f.company_id AND hr.season_id = f.season_id
+         )`
+    ).bind(company_id, seasonId).first<{ n: number }>(),
+
+    // WARNING 3: sales contracts not yet completed
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM sales_contracts WHERE company_id = ? AND season_id = ?
+       AND status IN ('draft','active','partial')`
+    ).bind(company_id, seasonId).first<{ n: number }>(),
+
+    // Context: total fields in season
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM fields WHERE company_id = ? AND season_id = ?`)
+      .bind(company_id, seasonId).first<{ n: number }>(),
+
+    // Context: total harvest records in season
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM harvest_records WHERE company_id = ? AND season_id = ?`)
+      .bind(company_id, seasonId).first<{ n: number }>(),
+  ])
+
+  if (!season) return c.json({ success: false, error: 'الموسم غير موجود' }, 404)
+
+  const totalFields   = totalFieldsRow?.n   ?? 0
+  const totalHarvests = totalHarvestsRow?.n ?? 0
+
+  const checks = [
+    {
+      key:         'open_work_orders',
+      label:       'أوامر العمل المفتوحة',
+      description: 'أوامر عمل لم تُكلَّف أو تُلغَ بعد لهذا الموسم',
+      count:       openWORow?.n ?? 0,
+      ok:          (openWORow?.n ?? 0) === 0,
+      blocker:     true,
+      action_url:  '/operations',
+    },
+    {
+      key:         'draft_payroll',
+      label:       'مسيرات رواتب مسودة',
+      description: 'مسيرات مُسندة لهذا الموسم ولم تُعتمد أو تُدفع بعد',
+      count:       draftPayrollRow?.n ?? 0,
+      ok:          (draftPayrollRow?.n ?? 0) === 0,
+      blocker:     true,
+      action_url:  '/hr/payroll',
+    },
+    {
+      key:         'draft_supplier_tx',
+      label:       'معاملات موردين غير مُرحَّلة',
+      description: 'فواتير أو حركات موردين بحالة مسودة مرتبطة بهذا الموسم',
+      count:       draftSupTxRow?.n ?? 0,
+      ok:          (draftSupTxRow?.n ?? 0) === 0,
+      blocker:     true,
+      action_url:  '/suppliers',
+    },
+    {
+      key:         'uncosted_harvests',
+      label:       'حصادات غير مُكلَّفة',
+      description: 'سجلات حصاد بتكلفة فعلية صفر أو غير محددة مع وجود كميات',
+      count:       uncostedHRow?.n ?? 0,
+      ok:          (uncostedHRow?.n ?? 0) === 0,
+      blocker:     false,
+      action_url:  '/fields/harvest',
+    },
+    {
+      key:         'fields_without_harvest',
+      label:       'حقول بدون سجل حصاد',
+      description: `${totalFields} حقل في الموسم — ${totalFields - (fieldsNoHRow?.n ?? 0)} مسجَّل`,
+      count:       fieldsNoHRow?.n ?? 0,
+      ok:          (fieldsNoHRow?.n ?? 0) === 0,
+      blocker:     false,
+      action_url:  '/fields/harvest',
+    },
+    {
+      key:         'active_contracts',
+      label:       'عقود بيع غير مُكتملة',
+      description: 'عقود نشطة أو جزئية لم تُحدَّث إلى "مكتمل" بعد',
+      count:       activeConRow?.n ?? 0,
+      ok:          (activeConRow?.n ?? 0) === 0,
+      blocker:     false,
+      action_url:  '/contracts',
+    },
+  ]
+
+  const blockersFailed = checks.filter(ch => ch.blocker && !ch.ok).length
+  const warningsFailed = checks.filter(ch => !ch.blocker && !ch.ok).length
+  const passing        = checks.filter(ch => ch.ok).length
+  const score          = Math.round((passing / checks.length) * 100)
+  const ready          = blockersFailed === 0
+
+  return c.json({
+    success: true,
+    data: {
+      season,
+      checks,
+      summary: {
+        blockers_failed: blockersFailed,
+        warnings_failed: warningsFailed,
+        passing,
+        total:           checks.length,
+        score,
+        ready,
+        total_fields:    totalFields,
+        total_harvests:  totalHarvests,
+      },
+    },
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────
+// GET /api/reports/budget-vs-actual?season_id=1
+//
+// Per-field comparison: budget from field_season_budgets vs
+// actual costs: inventory consumed + work-order labor + field-tagged cash transactions.
+// ─────────────────────────────────────────────────────────────────
+reports.get('/budget-vs-actual', async (c) => {
+  const { company_id } = getUser(c)
+  const seasonId = Number(c.req.query('season_id'))
+  if (!seasonId) return c.json({ success: false, error: 'season_id مطلوب' }, 400)
+
+  const [season, fieldRows] = await Promise.all([
+    c.env.DB.prepare('SELECT * FROM seasons WHERE id = ? AND company_id = ?')
+      .bind(seasonId, company_id).first(),
+
+    c.env.DB.prepare(`
+      SELECT
+        f.id, f.code, f.name AS field_name, f.area_feddan, f.crop_type,
+        COALESCE(b.budget_per_feddan, 0)                                                       AS budget_per_feddan,
+        COALESCE(b.budget_per_feddan, 0) * f.area_feddan                                       AS budget_total,
+        COALESCE(inv.inv_cost,   0)                                                            AS inv_cost,
+        COALESCE(lab.labor_cost, 0)                                                            AS labor_cost,
+        COALESCE(csh.cash_cost,  0)                                                            AS cash_cost,
+        COALESCE(inv.inv_cost, 0) + COALESCE(lab.labor_cost, 0) + COALESCE(csh.cash_cost, 0)  AS actual_total,
+        CASE WHEN f.area_feddan > 0
+          THEN (COALESCE(inv.inv_cost, 0) + COALESCE(lab.labor_cost, 0) + COALESCE(csh.cash_cost, 0)) / f.area_feddan
+          ELSE 0 END                                                                           AS actual_per_feddan
+      FROM fields f
+      LEFT JOIN field_season_budgets b ON b.field_id = f.id AND b.season_id = ?
+      LEFT JOIN (
+        SELECT field_id, SUM(value_out) AS inv_cost
+        FROM inventory_movements
+        WHERE company_id = ? AND season_id = ? AND movement_type = 'صرف'
+          AND field_id IS NOT NULL
+        GROUP BY field_id
+      ) inv ON inv.field_id = f.id
+      LEFT JOIN (
+        SELECT wo.field_id, SUM(wt.quantity * wt.unit_cost) AS labor_cost
+        FROM work_tasks wt
+        JOIN work_orders wo ON wo.id = wt.work_order_id AND wo.company_id = wt.company_id
+        WHERE wo.company_id = ? AND wo.season_id = ? AND wo.field_id IS NOT NULL
+        GROUP BY wo.field_id
+      ) lab ON lab.field_id = f.id
+      LEFT JOIN (
+        SELECT field_id, SUM(amount) AS cash_cost
+        FROM cash_transactions
+        WHERE company_id = ? AND season_id = ? AND direction = 'م'
+          AND field_id IS NOT NULL AND status = 'posted'
+        GROUP BY field_id
+      ) csh ON csh.field_id = f.id
+      WHERE f.company_id = ? AND f.season_id = ?
+      ORDER BY actual_total DESC
+    `).bind(seasonId, company_id, seasonId, company_id, seasonId, company_id, seasonId, company_id, seasonId).all<{
+      id: number; code: string; field_name: string; area_feddan: number; crop_type: string | null
+      budget_per_feddan: number; budget_total: number
+      inv_cost: number; labor_cost: number; cash_cost: number; actual_total: number; actual_per_feddan: number
+    }>(),
+  ])
+
+  if (!season) return c.json({ success: false, error: 'الموسم غير موجود' }, 404)
+
+  const rows = fieldRows.results.map(r => {
+    const variance    = r.actual_total - r.budget_total
+    const variancePct = r.budget_total > 0
+      ? Math.round((variance / r.budget_total) * 1000) / 10 : null
+    const utilization = r.budget_total > 0
+      ? Math.round((r.actual_total / r.budget_total) * 1000) / 10 : null
+    const status      = r.budget_total === 0  ? 'no_budget'
+      : r.actual_total >= r.budget_total      ? 'over_budget'
+      : (utilization ?? 0) >= 80             ? 'at_risk'
+      : 'on_track'
+    return { ...r, variance, variance_pct: variancePct, utilization_pct: utilization, status }
+  })
+
+  const totalBudget       = rows.reduce((s, r) => s + r.budget_total,  0)
+  const totalActual       = rows.reduce((s, r) => s + r.actual_total,  0)
+  const totalVariance     = totalActual - totalBudget
+  const budgetedFields    = rows.filter(r => r.budget_total > 0).length
+  const overBudgetCount   = rows.filter(r => r.status === 'over_budget').length
+  const utilizationPct    = totalBudget > 0
+    ? Math.round((totalActual / totalBudget) * 1000) / 10 : null
+
+  return c.json({
+    success: true,
+    data: {
+      season,
+      totals: {
+        budget:           totalBudget,
+        actual:           totalActual,
+        variance:         totalVariance,
+        variance_pct:     totalBudget > 0 ? Math.round((totalVariance / totalBudget) * 1000) / 10 : null,
+        utilization_pct:  utilizationPct,
+        budgeted_fields:  budgetedFields,
+        over_budget_count: overBudgetCount,
+        total_fields:     rows.length,
+      },
+      rows,
     },
   })
 })

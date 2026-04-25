@@ -27,6 +27,10 @@ const MAPPING_KEYS: Array<{
   { key: 'deferred_revenue', label: 'إيرادات مؤجلة',           group: 'التزامات',   description: 'يُستخدم عند استلام دفعات مقدمة من عقود البيع (CR مؤجل)',   required: false },
   // Equity
   { key: 'equity',           label: 'حقوق الملكية',            group: 'حقوق ملكية', description: 'يُستخدم عند إضافة رأس مال شريك جديد (CR ملكية)',            required: false },
+  // Harvest GL — only needed when harvest integration is enabled
+  { key: 'receivable_default', label: 'الذمم المدينة / عملاء', group: 'حصاد (اختياري)', description: 'الجانب المدين لقيد إيراد الحصاد (DR ذمم عملاء أو صندوق)',   required: false },
+  { key: 'harvest_revenue',   label: 'إيراد الحصاد',           group: 'حصاد (اختياري)', description: 'الجانب الدائن لقيد إيراد الحصاد (CR إيرادات الموسم)',       required: false },
+  { key: 'harvest_cogs',      label: 'تكلفة الحصاد (COGS)',    group: 'حصاد (اختياري)', description: 'الجانب المدين لقيد تكلفة الحصاد — مطلوب مع حساب المخزون',  required: false },
 ]
 
 interface Mapping { mapping_key: string; account_code: string }

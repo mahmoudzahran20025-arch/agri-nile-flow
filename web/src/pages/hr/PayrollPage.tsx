@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { DollarSign, Play, CheckCircle, ChevronDown, ChevronUp, FileText, Banknote, X } from 'lucide-react'
+import { DollarSign, Play, CheckCircle, ChevronDown, ChevronUp, FileText, Banknote, X, Wheat } from 'lucide-react'
 import { hrApi } from '../../api/hr'
 import type { PayrollRun, PayrollItem } from '../../api/hr'
 import Modal from '../../components/ui/Modal'
+import { configApi } from '../../api/client'
+import type { Season } from '../../types'
 
 const MONTH_NAMES = [
   '','يناير','فبراير','مارس','إبريل','مايو','يونيو',
@@ -20,16 +22,23 @@ const STATUS_MAP: Record<string, {label:string;color:string}> = {
 export default function PayrollPage() {
   const qc = useQueryClient()
   const now = new Date()
-  const [runYear,    setRunYear]    = useState(now.getFullYear())
-  const [runMonth,   setRunMonth]   = useState(now.getMonth() + 1)
-  const [expandedId, setExpandedId] = useState<number | null>(null)
-  const [payRunId,   setPayRunId]   = useState<number | null>(null)
-  const [payDate,    setPayDate]    = useState(now.toISOString().slice(0, 10))
-  const [payErr,     setPayErr]     = useState('')
+  const [runYear,      setRunYear]      = useState(now.getFullYear())
+  const [runMonth,     setRunMonth]     = useState(now.getMonth() + 1)
+  const [runSeasonId,  setRunSeasonId]  = useState<number | ''>('')
+  const [expandedId,   setExpandedId]   = useState<number | null>(null)
+  const [payRunId,     setPayRunId]     = useState<number | null>(null)
+  const [payDate,      setPayDate]      = useState(now.toISOString().slice(0, 10))
+  const [payErr,       setPayErr]       = useState('')
 
   const { data: runsRes } = useQuery({
     queryKey: ['hr-payroll'],
     queryFn: () => hrApi.getPayrollRuns(),
+  })
+
+  const { data: seasons } = useQuery({
+    queryKey: ['seasons'],
+    queryFn: () => configApi.seasons() as Promise<Season[]>,
+    staleTime: 300_000,
   })
 
   const { data: detailRes, isLoading: detailLoading } = useQuery({
@@ -39,7 +48,7 @@ export default function PayrollPage() {
   })
 
   const runMut = useMutation({
-    mutationFn: () => hrApi.runPayroll(runYear, runMonth),
+    mutationFn: () => hrApi.runPayroll(runYear, runMonth, runSeasonId !== '' ? runSeasonId : null),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['hr-payroll'] }),
   })
 
@@ -115,6 +124,18 @@ export default function PayrollPage() {
               <option key={i+1} value={i+1}>{m}</option>
             ))}
           </select>
+          {seasons && seasons.length > 0 && (
+            <select
+              value={runSeasonId}
+              onChange={e => setRunSeasonId(e.target.value === '' ? '' : Number(e.target.value))}
+              className="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+            >
+              <option value="">بدون موسم</option>
+              {seasons.filter(s => s.status === 'open').map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          )}
           <button
             onClick={() => runMut.mutate()}
             disabled={runMut.isPending}
@@ -197,13 +218,19 @@ export default function PayrollPage() {
                 onClick={() => setExpandedId(isExpanded ? null : run.id)}
               >
                 <div className="flex-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-semibold text-gray-900">
                       {MONTH_NAMES[run.period_month]} {run.period_year}
                     </span>
                     <span className={`text-xs px-2 py-0.5 rounded-full ${st.color}`}>{st.label}</span>
                     {run.journal_entry_id && (
                       <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">GL ✓</span>
+                    )}
+                    {run.season_id && seasons && (
+                      <span className="flex items-center gap-1 text-xs bg-lime-50 text-lime-700 px-2 py-0.5 rounded-full">
+                        <Wheat size={10} />
+                        {seasons.find(s => s.id === run.season_id)?.name ?? `موسم #${run.season_id}`}
+                      </span>
                     )}
                   </div>
                   <div className="flex items-center gap-4 mt-1 text-sm text-gray-500">

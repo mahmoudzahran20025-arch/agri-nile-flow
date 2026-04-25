@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, Banknote, Package,
   FileText, Settings, LogOut, Leaf, ChevronLeft,
   ClipboardList, UserCog, TrendingUp, MapPin, Wrench,
-  Building2, Shield, Activity, ChevronDown, Link2, ShieldCheck
+  Building2, Shield, Activity, ChevronDown, Link2, ShieldCheck, Target, Lock,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useQuery } from '@tanstack/react-query'
@@ -83,6 +83,9 @@ const NAV_SECTIONS: NavSection[] = [
       { to: '/reports',                    icon: <ClipboardList size={18} />, label: 'التقارير', permission: { module: 'reports', action: 'read' } },
       { to: '/reports/season-summary',     icon: <Leaf          size={18} />, label: 'ملخص الموسم', permission: { module: 'reports', action: 'read' } },
       { to: '/reports/season-pnl',         icon: <TrendingUp    size={18} />, label: 'أرباح وخسائر', permission: { module: 'reports', action: 'read' } },
+      { to: '/reports/season-readiness',   icon: <ShieldCheck   size={18} />, label: 'جاهزية الإغلاق',        permission: { module: 'reports', action: 'read' } },
+      { to: '/reports/budget-vs-actual',   icon: <Target        size={18} />, label: 'الميزانية مقابل الفعلي', permission: { module: 'reports', action: 'read' } },
+      { to: '/reports/season-close',       icon: <Lock          size={18} />, label: 'إغلاق الموسم',            permission: { module: 'config',  action: 'read' } },
     ],
   },
   {

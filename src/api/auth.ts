@@ -44,10 +44,28 @@ auth.post('/login', async (c) => {
     .bind(access.role_id)
     .first<{ name: string }>()
 
+  const roleName = roleRow?.name ?? 'viewer'
+
   const token = await signJwt(
-    { sub: user.id, company_id, role: roleRow?.name ?? 'viewer' },
+    { sub: user.id, company_id, role: roleName },
     c.env.JWT_SECRET
   )
+
+  // Load permissions for this role
+  let permissions: string[] = []
+  if (roleName === 'super_admin') {
+    const all = await c.env.DB.prepare('SELECT module, action FROM permissions').all<{ module: string; action: string }>()
+    permissions = all.results.map(p => `${p.module}.${p.action}`)
+  } else {
+    const rows = await c.env.DB.prepare(`
+      SELECT p.module, p.action
+      FROM role_permissions rp
+      JOIN roles r ON r.name = ?
+      JOIN permissions p ON p.id = rp.permission_id
+      WHERE rp.role_id = r.id
+    `).bind(roleName).all<{ module: string; action: string }>()
+    permissions = rows.results.map(p => `${p.module}.${p.action}`)
+  }
 
   // Update last login
   await c.env.DB
@@ -56,7 +74,7 @@ auth.post('/login', async (c) => {
 
   return c.json({
     success: true,
-    data: { token, user: { id: user.id, full_name: user.full_name, email, company_id, role: roleRow?.name } }
+    data: { token, user: { id: user.id, full_name: user.full_name, email, company_id, role: roleName }, permissions }
   })
 })
 

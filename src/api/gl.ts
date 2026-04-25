@@ -526,7 +526,7 @@ gl.get('/integrity-check', async (c) => {
     'expense_default', 'purchases', 'wages', 'cogs', 'wages_payable',
   ]
 
-  const [unbalancedRow, negStockRow, draftTxRow, staleWoRow, mappedRow, oldPoRow] =
+  const [unbalancedRow, negStockRow, draftTxRow, staleWoRow, mappedRow, oldPoRow, harvestIntRow, harvestMappingsRow] =
     await Promise.all([
       // 1. GL entries where debit ≠ credit
       c.env.DB.prepare(`
@@ -575,9 +575,22 @@ gl.get('/integrity-check', async (c) => {
         WHERE company_id = ? AND status IN ('sent', 'partial')
           AND julianday('now') - julianday(created_at) > 90
       `).bind(company_id).first<{ n: number }>(),
+
+      // 7a. Is harvest GL integration enabled?
+      c.env.DB.prepare(
+        `SELECT is_enabled FROM gl_integration_settings WHERE company_id = ? AND module_key = 'harvest'`
+      ).bind(company_id).first<{ is_enabled: number }>(),
+
+      // 7b. How many of the 3 harvest mapping keys are configured?
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM gl_account_mappings
+         WHERE company_id = ? AND mapping_key IN ('harvest_revenue','harvest_cogs','receivable_default')`
+      ).bind(company_id).first<{ n: number }>(),
     ])
 
-  const missingMappings = REQUIRED_MAPPINGS.length - (mappedRow?.n ?? 0)
+  const missingMappings  = REQUIRED_MAPPINGS.length - (mappedRow?.n ?? 0)
+  const harvestEnabled   = (harvestIntRow?.is_enabled ?? 0) === 1
+  const harvestMissing   = 3 - (harvestMappingsRow?.n ?? 0)
 
   const checks = [
     {
@@ -633,6 +646,15 @@ gl.get('/integrity-check', async (c) => {
       ok: (oldPoRow?.n ?? 0) === 0,
       blocker: false,
       action_url: '/treasury/purchase-orders',
+    },
+    {
+      key: 'harvest_gl_mappings',
+      label: 'ربط حسابات الحصاد',
+      description: 'ثلاثة حسابات مطلوبة لترحيل الحصاد تلقائياً (إيراد + تكلفة + ذمم مدينة)',
+      count: harvestEnabled ? harvestMissing : 0,
+      ok: !harvestEnabled || harvestMissing === 0,
+      blocker: false,
+      action_url: '/gl/mappings',
     },
   ]
 

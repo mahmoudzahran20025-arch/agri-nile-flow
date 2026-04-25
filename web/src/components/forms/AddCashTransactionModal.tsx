@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { Users, Briefcase, Receipt } from 'lucide-react'
 import Modal from '../ui/Modal'
-import { treasuryApi, suppliersApi, configApi, employeesApi } from '../../api/client'
+import { treasuryApi, suppliersApi, configApi, employeesApi, fieldsApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 
 interface Props { open: boolean; onClose: () => void }
@@ -36,6 +36,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
     supplier_code:    '',
     season_id:        '',
     center_code:      '',
+    field_id:         '',
     expense_code:     '',
     unit:             '',
     quantity:         '',
@@ -50,7 +51,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
       setForm({
         transaction_date: today(), direction: 'م', narration: '', amount: '',
         document_number: '', document_type: '', recipient_name: '', notes: '',
-        supplier_code: '', season_id: '', center_code: '', expense_code: '',
+        supplier_code: '', season_id: '', center_code: '', field_id: '', expense_code: '',
         unit: '', quantity: '', unit_price: '', status: 'draft',
       })
       setBeneficiaryType('supplier')
@@ -102,6 +103,14 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
     staleTime: 120_000,
   })
 
+  type FieldOption = { id: number; name: string; code: string; area_feddan?: number }
+  const { data: fields = [] } = useQuery({
+    queryKey: ['fields-dropdown', form.season_id],
+    queryFn:  () => fieldsApi.list(form.season_id ? { season_id: Number(form.season_id) } : {}) as Promise<FieldOption[]>,
+    enabled:  open,
+    staleTime: 120_000,
+  })
+
   // Auto-fill recipient name when supplier changes
   useEffect(() => {
     if (beneficiaryType === 'supplier' && form.supplier_code) {
@@ -147,6 +156,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
                             ? Number(form.supplier_code) : undefined,
         season_id:        form.season_id ? Number(form.season_id) : undefined,
         center_code:      form.center_code ? Number(form.center_code) : undefined,
+        field_id:         form.field_id ? Number(form.field_id) : undefined,
         expense_code:     form.expense_code ? Number(form.expense_code) : undefined,
         unit:             form.unit.trim() || undefined,
         quantity:         form.quantity ? Number(form.quantity) : undefined,
@@ -291,12 +301,12 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
             onChange={e => set('narration', e.target.value)} required />
         </div>
 
-        {/* ── Season + Cost Center + Expense Type ───────── */}
-        <div className="grid grid-cols-3 gap-3">
+        {/* ── Season + Field + Cost Center + Expense Type ── */}
+        <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="label">الموسم الزراعي</label>
             <select className="input" value={form.season_id}
-              onChange={e => set('season_id', e.target.value)}>
+              onChange={e => { set('season_id', e.target.value); set('field_id', '') }}>
               <option value="">— بدون موسم —</option>
               {(seasons as SeasonOption[]).map(s => (
                 <option key={s.id} value={s.id}>
@@ -305,6 +315,20 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
               ))}
             </select>
           </div>
+          <div>
+            <label className="label">قطعة الأرض <span className="text-slate-400 font-normal text-[10px]">(لربط بالميزانية)</span></label>
+            <select className="input" value={form.field_id}
+              onChange={e => set('field_id', e.target.value)}>
+              <option value="">— بدون قطعة —</option>
+              {(fields as FieldOption[]).map(f => (
+                <option key={f.id} value={f.id}>
+                  {f.name}{f.area_feddan ? ` (${f.area_feddan} ف)` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="label">مركز التكلفة</label>
             <select className="input" value={form.center_code}

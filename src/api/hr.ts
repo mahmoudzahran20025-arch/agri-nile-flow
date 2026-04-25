@@ -437,7 +437,7 @@ hr.get('/payroll/:id', permissionGuard('hr', 'read'), async (c) => {
 // POST /api/hr/payroll/run — حساب مسيرة شهر
 hr.post('/payroll/run', permissionGuard('hr', 'admin'), async (c) => {
   const { company_id, sub: userId } = getUser(c)
-  const b = await c.req.json<{ year: number; month: number }>()
+  const b = await c.req.json<{ year: number; month: number; season_id?: number | null }>()
   if (!b.year || !b.month || b.month < 1 || b.month > 12) {
     return c.json({ success: false, error: 'السنة والشهر مطلوبان (1-12)' }, 400)
   }
@@ -509,9 +509,9 @@ hr.post('/payroll/run', permissionGuard('hr', 'admin'), async (c) => {
 
   // Create the payroll run
   const runResult = await c.env.DB.prepare(
-    `INSERT INTO payroll_runs (company_id, period_year, period_month, run_date, status, created_by)
-     VALUES (?,?,?,date('now'),'draft',?)`
-  ).bind(company_id, b.year, b.month, userId).run()
+    `INSERT INTO payroll_runs (company_id, period_year, period_month, run_date, status, created_by, season_id)
+     VALUES (?,?,?,date('now'),'draft',?,?)`
+  ).bind(company_id, b.year, b.month, userId, b.season_id ?? null).run()
   const runId = runResult.meta.last_row_id
 
   let totalGross = 0, totalDeductions = 0, totalNet = 0
@@ -566,7 +566,7 @@ hr.post('/payroll/run', permissionGuard('hr', 'admin'), async (c) => {
 
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'CREATE', table_name: 'payroll_runs', record_id: runId,
-    new_value: { year: b.year, month: b.month, total_net: totalNet, employees: employees.length },
+    new_value: { year: b.year, month: b.month, season_id: b.season_id ?? null, total_net: totalNet, employees: employees.length },
   })
 
   return c.json({
