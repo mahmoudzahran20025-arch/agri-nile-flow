@@ -1,7 +1,7 @@
   import { useState, useMemo } from 'react'
   import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
   import { useNavigate } from 'react-router-dom'
-  import { BookOpen, Plus, Settings, Eye, List, GitBranch, ChevronRight, ChevronDown, Shield, Info } from 'lucide-react'
+  import { BookOpen, Plus, Settings, Eye, List, GitBranch, ChevronRight, ChevronDown, Shield, Info, Pencil, PowerOff, Power } from 'lucide-react'
   import { glApi } from '../../api/client'
   import { useToast } from '../../contexts/ToastContext'
   import Modal from '../../components/ui/Modal'
@@ -140,15 +140,17 @@
       code: '', name: '', account_type: 'expense', parent_code: '', notes: '',
     })
 
-    if (!canRead('gl')) {
-      return (
-        <div className="flex flex-col items-center justify-center h-full p-20 text-center">
-          <Shield size={48} className="text-slate-300 mb-4" />
-          <h2 className="text-xl font-bold text-slate-800">غير مصرح لك بالوصول</h2>
-          <p className="text-slate-500">تحتاج لصلاحية 'gl.read' لعرض شجرة الحسابات.</p>
-        </div>
-      )
+    // ── Edit state ──────────────────────────────────────────────
+    const [openEdit, setOpenEdit]   = useState(false)
+    const [editTarget, setEditTarget] = useState<Account | null>(null)
+    const [editForm, setEditForm]   = useState({ name: '', parent_code: '', notes: '' })
+
+    function openEditModal(a: Account) {
+      setEditTarget(a)
+      setEditForm({ name: a.name, parent_code: a.parent_code ?? '', notes: '' })
+      setOpenEdit(true)
     }
+
 
     const { data: accounts = [], isLoading } = useQuery({
       queryKey: ['gl-accounts'],
@@ -167,6 +169,30 @@
       : list
 
     const tree = useMemo(() => buildTree(filter ? filtered : list), [list, filtered, filter])
+
+
+    const editAcc = useMutation({
+      mutationFn: () => glApi.updateAccount(editTarget!.code, {
+        name:        editForm.name || undefined,
+        parent_code: editForm.parent_code || null,
+        notes:       editForm.notes || undefined,
+      }),
+      onSuccess: (res: { success: boolean; error?: string }) => {
+        if (!res.success) { toast(res.error ?? 'خطأ', 'error'); return }
+        qc.invalidateQueries({ queryKey: ['gl-accounts'] })
+        toast('تم تحديث الحساب', 'success')
+        setOpenEdit(false)
+      },
+    })
+
+    const toggleActive = useMutation({
+      mutationFn: (acc: Account) => glApi.updateAccount(acc.code, { is_active: acc.is_active === 1 ? 0 : 1 }),
+      onSuccess: (res: { success: boolean; error?: string }) => {
+        if (!res.success) { toast(res.error ?? 'خطأ', 'error'); return }
+        qc.invalidateQueries({ queryKey: ['gl-accounts'] })
+        toast('تم تحديث حالة الحساب', 'success')
+      },
+    })
 
     const createAcc = useMutation({
       mutationFn: () => glApi.createAccount(form),
@@ -204,6 +230,15 @@
 
     return (
       <div className="p-6 space-y-6">
+        {/* Permission Guard */}
+        {!canRead('gl') && (
+          <div className="flex flex-col items-center justify-center h-full p-20 text-center">
+            <Shield size={48} className="text-slate-300 mb-4" />
+            <h2 className="text-xl font-bold text-slate-800">غير مصرح لك بالوصول</h2>
+            <p className="text-slate-500">تحتاج لصلاحية 'gl.read' لعرض شجرة الحسابات.</p>
+          </div>
+        )}
+        {canRead('gl') && (<>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <BookOpen size={24} className="text-brand-600" />
@@ -323,15 +358,40 @@
                         : <span className="badge badge-green">حساب فرعي</span>}
                     </td>
                     <td className="td text-left">
-                      {!a.is_header && (
-                        <button
-                          onClick={() => navigate(`/gl/ledger/${a.code}`)}
-                          className="p-1.5 rounded-lg text-brand-600 hover:bg-brand-50 transition-colors"
-                          title="دفتر الأستاذ"
-                        >
-                          <Eye size={15} />
-                        </button>
-                      )}
+                      <div className="flex items-center gap-1 justify-end">
+                        {!a.is_header && (
+                          <button
+                            onClick={() => navigate(`/gl/ledger/${a.code}`)}
+                            className="p-1.5 rounded-lg text-brand-600 hover:bg-brand-50 transition-colors"
+                            title="دفتر الأستاذ"
+                          >
+                            <Eye size={15} />
+                          </button>
+                        )}
+                        {canWrite('gl') && (
+                          <button
+                            onClick={() => openEditModal(a)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
+                            title="تعديل"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                        )}
+                        {canWrite('gl') && !a.is_header && (
+                          <button
+                            onClick={() => toggleActive.mutate(a)}
+                            className={`p-1.5 rounded-lg transition-colors ${
+                              a.is_active === 1
+                                ? 'text-amber-400 hover:bg-amber-50 hover:text-amber-600'
+                                : 'text-emerald-500 hover:bg-emerald-50'
+                            }`}
+                            title={a.is_active === 1 ? 'تعطيل الحساب' : 'تفعيل الحساب'}
+                            disabled={toggleActive.isPending}
+                          >
+                            {a.is_active === 1 ? <PowerOff size={14} /> : <Power size={14} />}
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -339,6 +399,39 @@
             </table>
           </div>
         )}
+
+        {/* Edit Account Modal */}
+        <Modal open={openEdit} onClose={() => setOpenEdit(false)} title={`تعديل: ${editTarget?.name}`} size="md">
+          <div className="space-y-4">
+            <div>
+              <label className="label">اسم الحساب *</label>
+              <input className="input" value={editForm.name}
+                onChange={e => setEditForm(p => ({ ...p, name: e.target.value }))} />
+            </div>
+            <div>
+              <label className="label">الحساب الأب (كود)</label>
+              <input className="input font-mono" value={editForm.parent_code}
+                onChange={e => setEditForm(p => ({ ...p, parent_code: e.target.value }))}
+                placeholder="اتركه فارغاً للحسابات الرئيسية" />
+              <p className="text-[11px] text-slate-400 mt-1">كود الحساب: <span className="font-mono font-bold">{editTarget?.code}</span></p>
+            </div>
+            <div>
+              <label className="label">ملاحظات</label>
+              <input className="input" value={editForm.notes}
+                onChange={e => setEditForm(p => ({ ...p, notes: e.target.value }))} />
+            </div>
+          </div>
+          <div className="flex justify-end gap-3 mt-6">
+            <button className="btn btn-ghost" onClick={() => setOpenEdit(false)}>إلغاء</button>
+            <button
+              className="btn btn-primary"
+              onClick={() => editAcc.mutate()}
+              disabled={editAcc.isPending || !editForm.name}
+            >
+              {editAcc.isPending ? 'جاري الحفظ...' : 'حفظ التعديلات'}
+            </button>
+          </div>
+        </Modal>
 
         {/* Add Account Modal */}
         <Modal open={openAdd} onClose={() => setOpenAdd(false)} title="إضافة حساب جديد" size="md">
@@ -426,6 +519,7 @@
             </button>
           </div>
         </Modal>
+        </>)}
       </div>
     )
   }

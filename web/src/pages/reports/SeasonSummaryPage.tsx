@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { reportsApi, configApi } from '../../api/client'
 import type { Season } from '../../types'
+import { useAppStore } from '../../store/appStore'
 
 function egp(n: number | null | undefined) {
   if (n == null) return '0 ج.م'
@@ -26,7 +27,8 @@ type TabId = 'overview' | 'cost_centers' | 'expense_types' | 'suppliers' | 'inve
 
 export default function SeasonSummaryPage() {
   const navigate = useNavigate()
-  const [seasonId, setSeasonId] = useState<number>(1)
+  const activeSeasonId = useAppStore(s => s.activeSeason?.id)
+  const [seasonId, setSeasonId] = useState<number>(0)
   const [tab, setTab]           = useState<TabId>('overview')
   const [expandedCenter, setExpandedCenter] = useState<number | null>(null)
 
@@ -34,6 +36,12 @@ export default function SeasonSummaryPage() {
     queryKey: ['config', 'seasons'],
     queryFn:  configApi.seasons as () => Promise<Season[]>,
   })
+
+  useEffect(() => {
+    if (seasonId === 0 && seasons && seasons.length > 0) {
+      setSeasonId(activeSeasonId ?? seasons[0].id)
+    }
+  }, [seasons, activeSeasonId, seasonId])
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['reports', 'season-summary', seasonId],

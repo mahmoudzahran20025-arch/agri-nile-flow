@@ -4,11 +4,12 @@ import {
   Banknote, TrendingDown, Package, Users,
   AlertTriangle, Clock, ArrowUp, ArrowDown,
   TrendingUp, BarChart3, Bell, ChevronLeft,
-  Leaf, Target, ShieldCheck,
+  Leaf, Target, ShieldCheck, ShieldAlert, CheckCircle2, ArrowRight,
 } from 'lucide-react'
 import { dashboardApi, glApi, treasuryApi, reportsApi } from '../api/client'
+import type { IntegrityCheck } from '../api/client'
 import { hrApi } from '../api/hr'
-import { useSeasonId, useAbility } from '../store/appStore'
+import { useSeasonId, useAbility, useAppStore } from '../store/appStore'
 import KPICard from '../components/ui/KPICard'
 import type { DashboardStats } from '../types'
 
@@ -28,8 +29,10 @@ function dateAr(iso: string) {
 }
 
 export default function DashboardPage() {
-  const seasonId = useSeasonId()
-  const navigate = useNavigate()
+  const seasonId  = useSeasonId()
+  const navigate  = useNavigate()
+  const { role }  = useAppStore()
+  const isAdmin   = role === 'super_admin' || role === 'company_admin' || role === 'accountant'
 
   const canReadFinance = useAbility('treasury', 'read')
   const canReadReports = useAbility('reports', 'read')
@@ -94,6 +97,17 @@ export default function DashboardPage() {
     enabled:  !!seasonId && canReadReports,
     staleTime: 300_000,
   })
+
+  const { data: glHealth } = useQuery({
+    queryKey: ['gl-integrity', 'dashboard'],
+    queryFn:  glApi.integrityCheck,
+    enabled:  isAdmin,
+    staleTime: 120_000,
+  })
+  const glChecks = (glHealth?.checks ?? []) as IntegrityCheck[]
+  const glScore  = glHealth?.score ?? null
+  const glBlockers = glChecks.filter(ch => !ch.ok && ch.blocker).length
+  const glWarnings = glChecks.filter(ch => !ch.ok && !ch.blocker).length
 
   const pendingPayrolls = (payrollRuns ?? []).filter(r => r.status === 'approved').length
   const draftTxCount   = (draftTxPage as { total?: number } | undefined)?.total ?? 0
@@ -171,6 +185,113 @@ export default function DashboardPage() {
           />
         )}
       </div>
+
+      {/* ── GL Health Card (admin only) ──────────────────────── */}
+      {isAdmin && glScore !== null && (
+        <div
+          className={`card p-5 border-2 cursor-pointer transition-all hover:shadow-md ${
+            glBlockers > 0
+              ? 'border-red-200 bg-red-50/40 hover:border-red-300'
+              : glWarnings > 0
+              ? 'border-amber-200 bg-amber-50/40 hover:border-amber-300'
+              : 'border-emerald-200 bg-emerald-50/40 hover:border-emerald-300'
+          }`}
+          onClick={() => navigate('/audit/integrity')}
+        >
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-sm shrink-0 ${
+                glBlockers > 0 ? 'bg-red-500' : glWarnings > 0 ? 'bg-amber-500' : 'bg-emerald-600'
+              }`}>
+                {glBlockers > 0
+                  ? <ShieldAlert size={22} className="text-white" />
+                  : <ShieldCheck size={22} className="text-white" />
+                }
+              </div>
+              <div>
+                <h2 className="font-bold text-slate-800">صحة النظام المالي</h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {glBlockers > 0
+                    ? `${glBlockers} مشكلة حاجبة تحتاج معالجة فورية`
+                    : glWarnings > 0
+                    ? `${glWarnings} تحذير — يُنصح بالمراجعة`
+                    : 'جميع الفحوصات ناجحة — النظام سليم'}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              {/* Score circle */}
+              <div className={`text-center px-4 py-2 rounded-xl font-black text-2xl tabular-nums ${
+                glScore >= 80 ? 'text-emerald-700 bg-emerald-100' :
+                glScore >= 50 ? 'text-amber-700 bg-amber-100' :
+                'text-red-700 bg-red-100'
+              }`}>
+                {glScore}%
+              </div>
+              {/* Mini checks preview */}
+              <div className="hidden sm:flex gap-1 flex-wrap max-w-[200px]">
+                {glChecks.slice(0, 7).map(ch => (
+                  <span key={ch.key} className={`w-2.5 h-2.5 rounded-full ${ch.ok ? 'bg-emerald-500' : ch.blocker ? 'bg-red-500' : 'bg-amber-400'}`} title={ch.label} />
+                ))}
+              </div>
+              <ArrowRight size={16} className="text-slate-400" />
+            </div>
+          </div>
+
+          {/* Blocker pills */}
+          {glBlockers > 0 && (
+            <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-red-200">
+              {glChecks.filter(ch => !ch.ok && ch.blocker).map(ch => (
+                <span key={ch.key} className="text-[11px] font-bold bg-red-100 text-red-700 border border-red-200 px-2.5 py-1 rounded-full flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                  {ch.label}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Onboarding Checklist (when setup incomplete) ─────── */}
+      {isAdmin && glScore !== null && glScore < 100 && (
+        <div className="card p-5 border border-indigo-100 bg-gradient-to-br from-indigo-50/60 to-slate-50/40">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-7 h-7 bg-indigo-100 rounded-lg flex items-center justify-center">
+              <CheckCircle2 size={14} className="text-indigo-600" />
+            </div>
+            <h2 className="font-bold text-slate-800 text-sm">قائمة إعداد النظام</h2>
+            <span className="mr-auto text-[11px] font-bold text-indigo-600 bg-indigo-100 px-2 py-0.5 rounded-full">
+              {glChecks.filter(ch => ch.ok).length}/{glChecks.length} مكتمل
+            </span>
+          </div>
+          <div className="space-y-2">
+            {glChecks.map(ch => (
+              <button
+                key={ch.key}
+                onClick={() => navigate(ch.action_url)}
+                className={`w-full flex items-center gap-3 p-2.5 rounded-xl text-right transition-colors group ${
+                  ch.ok ? 'opacity-60 hover:opacity-80' : 'hover:bg-white/80'
+                }`}
+              >
+                <span className="shrink-0">
+                  {ch.ok
+                    ? <CheckCircle2 size={16} className="text-emerald-500" />
+                    : ch.blocker
+                    ? <span className="w-4 h-4 rounded-full border-2 border-red-400 flex items-center justify-center"><span className="w-2 h-2 rounded-full bg-red-400" /></span>
+                    : <span className="w-4 h-4 rounded-full border-2 border-amber-400" />
+                  }
+                </span>
+                <span className={`flex-1 text-xs font-medium ${ch.ok ? 'text-slate-400 line-through' : 'text-slate-700'}`}>
+                  {ch.label}
+                </span>
+                {!ch.ok && (
+                  <ArrowRight size={12} className="text-slate-300 group-hover:text-indigo-500 shrink-0 transition-colors" />
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Active Season Health Widget ──────────────────────── */}
       {canReadReports && seasonId && seasonPnL?.season && (

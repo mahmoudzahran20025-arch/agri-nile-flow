@@ -7,7 +7,7 @@ import RootLayout    from './layouts/RootLayout'
 import LoginPage     from './pages/LoginPage'
 import DebugPage     from './pages/DebugPage'
 import DashboardPage from './pages/DashboardPage'
-import SupplierListPage      from './pages/suppliers/SupplierListPage'
+import SupplierHubPage       from './pages/suppliers/SupplierHubPage'
 import SupplierDetailPage    from './pages/suppliers/SupplierDetailPage'
 import CashJournalPage       from './pages/treasury/CashJournalPage'
 import WarehouseBalancesPage from './pages/inventory/WarehouseBalancesPage'
@@ -55,6 +55,9 @@ import SeasonPnLPage        from './pages/reports/SeasonPnLPage'
 import SeasonClosePage      from './pages/reports/SeasonClosePage'
 import SeasonReadinessPage  from './pages/reports/SeasonReadinessPage'
 import BudgetVsActualPage   from './pages/reports/BudgetVsActualPage'
+import SeasonReportsPage    from './pages/reports/SeasonReportsPage'
+import GLSettingsPage       from './pages/gl/GLSettingsPage'
+import AuditCenterPage      from './pages/audit/AuditCenterPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuth = useIsAuth()
@@ -105,8 +108,8 @@ export default function App() {
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard"  element={<DashboardPage />} />
 
-        {/* Suppliers */}
-        <Route path="suppliers"        element={<SupplierListPage />} />
+        {/* Suppliers — tabbed hub (list | aging | balance) */}
+        <Route path="suppliers"        element={<SupplierHubPage />} />
         <Route path="suppliers/:code"  element={<SupplierDetailPage />} />
 
         {/* Treasury */}
@@ -143,36 +146,44 @@ export default function App() {
         <Route path="contracts"  element={<ContractsPage />} />
 
         {/* General Ledger */}
-        <Route path="gl/accounts"        element={<ChartOfAccountsPage />} />
-        <Route path="gl/ledger/:code"    element={<AccountLedgerPage />} />
-        <Route path="gl/entries"         element={<JournalEntriesPage />} />
-        <Route path="gl/statements"      element={<FinancialStatementsPage />} />
-        <Route path="gl/periods"         element={<PeriodsPage />} />
-        <Route path="gl/mappings"        element={<GLMappingsPage />} />
-        <Route path="gl/integrations"    element={<IntegrationControlPage />} />
-        <Route path="treasury/ap"        element={<APAgingPage />} />
+        <Route path="gl/accounts"     element={<ChartOfAccountsPage />} />
+        <Route path="gl/ledger/:code" element={<AccountLedgerPage />} />
+        <Route path="gl/entries"      element={<JournalEntriesPage />} />
+        <Route path="gl/statements"   element={<FinancialStatementsPage />} />
+        {/* GL Settings hub — tabs: mappings | integrations | periods */}
+        <Route path="gl/settings"     element={<GLSettingsPage />} />
+        {/* Keep direct routes alive for backward-compat / deep-linking */}
+        <Route path="gl/periods"      element={<PeriodsPage />} />
+        <Route path="gl/mappings"     element={<GLMappingsPage />} />
+        <Route path="gl/integrations" element={<IntegrationControlPage />} />
+        <Route path="treasury/ap"     element={<APAgingPage />} />
 
         {/* Finance */}
         <Route path="treasury/bank"      element={<BankReconciliationPage />} />
         <Route path="treasury/po"        element={<PurchaseOrdersPage />} />
 
         {/* Reports */}
-        <Route path="reports" element={<ReportsPage />} />
-        <Route path="reports/charts" element={<ChartsPage />} />
-        <Route path="reports/cost-centers" element={<CostCenterReportPage />} />
-        <Route path="reports/suppliers-balance" element={<SuppliersBalancePage />} />
-        <Route path="reports/season-summary" element={<SeasonSummaryPage />} />
-        <Route path="reports/season-pnl"     element={<SeasonPnLPage />} />
-        <Route path="reports/season-close"     element={<SeasonClosePage />} />
+        <Route path="reports"                    element={<ReportsPage />} />
+        <Route path="reports/charts"             element={<ChartsPage />} />
+        <Route path="reports/cost-centers"       element={<CostCenterReportPage />} />
+        <Route path="reports/suppliers-balance"  element={<SuppliersBalancePage />} />
+        {/* Season reports hub — tabs: summary | pnl | budget | readiness | close */}
+        <Route path="reports/season"             element={<SeasonReportsPage />} />
+        {/* Keep individual routes for backward-compat */}
+        <Route path="reports/season-summary"     element={<SeasonSummaryPage />} />
+        <Route path="reports/season-pnl"         element={<SeasonPnLPage />} />
+        <Route path="reports/season-close"       element={<SeasonClosePage />} />
         <Route path="reports/season-readiness"   element={<SeasonReadinessPage />} />
         <Route path="reports/budget-vs-actual"   element={<BudgetVsActualPage />} />
 
         {/* Super Admin */}
         <Route path="admin" element={<SuperAdminPage />} />
 
-        {/* Audit Log & Health */}
-        <Route path="audit" element={<AuditLogPage />} />
-        <Route path="audit/errors" element={<ErrorLogPage />} />
+        {/* Audit Center — unified with tabs: log | errors | integrity */}
+        <Route path="audit"           element={<AuditCenterPage />} />
+        {/* Keep deep-link routes for backward-compat */}
+        <Route path="audit/log"       element={<AuditLogPage />} />
+        <Route path="audit/errors"    element={<ErrorLogPage />} />
         <Route path="audit/integrity" element={<IntegrityPage />} />
 
         {/* Users */}

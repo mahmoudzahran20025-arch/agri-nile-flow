@@ -12,8 +12,9 @@ const MODULE_LABELS: Record<string, string> = {
   negative_stock:      'مخازن',
   draft_transactions:  'خزينة',
   stale_work_orders:   'عمليات',
-  gl_mappings:         'إعدادات',
+  gl_mappings:         'إعدادات GL',
   old_purchase_orders: 'مشتريات',
+  harvest_gl_mappings: 'حصاد',
 }
 
 function CheckRow({ check, onNavigate }: { check: IntegrityCheck; onNavigate: (url: string) => void }) {
@@ -88,7 +89,8 @@ export default function IntegrityPage() {
     refetchOnWindowFocus: false,
   })
 
-  const result = data
+  const checks = (data?.checks ?? []) as IntegrityCheck[]
+  const result  = data ? { ...data, checks } : null
   const lastChecked = dataUpdatedAt
     ? new Date(dataUpdatedAt).toLocaleTimeString('ar-EG')
     : null
@@ -160,6 +162,9 @@ export default function IntegrityPage() {
             <p className="text-sm text-gray-600 mt-1">
               {result.checks.filter(ch => ch.ok).length} من {result.checks.length} فحوصات ناجحة
               {!result.overall_ok && ` · ${result.checks.filter(ch => !ch.ok && ch.blocker).length} حاجبة`}
+            </p>
+            <p className="text-xs text-gray-400 mt-2">
+              {result.checks.length < 7 ? `⚠️ يتوقع النظام 7 فحوصات، استُرجع ${result.checks.length}` : `✅ جميع الـ ${result.checks.length} فحوصات محمّلة`}
             </p>
           </div>
         </div>

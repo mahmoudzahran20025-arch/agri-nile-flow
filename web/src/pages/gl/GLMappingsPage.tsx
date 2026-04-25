@@ -147,7 +147,7 @@ export default function GLMappingsPage() {
           </p>
           {missingReq.length > 0 && (
             <p className="text-xs text-amber-700 mt-0.5">
-              غير مُعيَّن: {missingReq.map(k => k.label).join(' · ')}
+              غير مُعيَّن: {(missingReq || []).map(k => k.label).join(' · ')}
             </p>
           )}
         </div>
@@ -164,18 +164,18 @@ export default function GLMappingsPage() {
         <div className="flex justify-center py-16 text-gray-400"><Loader2 className="animate-spin" size={32} /></div>
       ) : (
         <div className="space-y-6">
-          {GROUPS.map(group => (
+          {(GROUPS || []).map(group => (
             <div key={group}>
               <div className="flex items-center gap-3 mb-3">
                 <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">{group}</span>
                 <div className="flex-1 h-px bg-gray-100" />
               </div>
               <div className="space-y-2">
-                {MAPPING_KEYS.filter(k => k.group === group).map(item => {
+                {(MAPPING_KEYS || []).filter(k => k.group === group).map(item => {
                   const val     = getValue(item.key)
-                  const isSaved = saved.includes(item.key)
+                  const isSaved = (saved || []).includes(item.key)
                   const isDirtyRow = local[item.key] !== undefined
-                  const selectedAcct = accounts.find(a => a.code === val)
+                  const selectedAcct = (accounts || []).find(a => a.code === val)
 
                   return (
                     <div
@@ -213,7 +213,7 @@ export default function GLMappingsPage() {
                           onChange={e => setLocal(l => ({ ...l, [item.key]: e.target.value }))}
                         >
                           <option value="">— اختر حساباً —</option>
-                          {accounts
+                          {([...(accounts || [])])
                             .sort((a, b) => a.code.localeCompare(b.code))
                             .map(a => (
                               <option key={a.code} value={a.code}>

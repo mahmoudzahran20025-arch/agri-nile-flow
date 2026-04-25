@@ -3,13 +3,18 @@ import {
   LayoutDashboard, Users, Banknote, Package,
   FileText, Settings, LogOut, Leaf, ChevronLeft,
   ClipboardList, UserCog, TrendingUp, MapPin, Wrench,
-  Building2, Shield, Activity, ChevronDown, Link2, ShieldCheck, Target, Lock,
+  Building2, Shield, Activity, ChevronDown, Link2,
+  ShieldCheck, Target, Lock, ShoppingCart, CalendarDays,
+  Landmark, Database, BarChart3,
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useQuery } from '@tanstack/react-query'
 import { dashboardApi, inventoryApi } from '../api/client'
 import { useIsAuth } from '../store/appStore'
 import { useState } from 'react'
+
+// suppress unused import warnings — icons kept for potential future use
+void Link2; void ShieldCheck; void Lock;
 
 const ROLE_LABELS: Record<string, string> = {
   super_admin:      'مدير النظام',
@@ -38,63 +43,88 @@ interface NavItem {
 }
 
 interface NavSection {
-  key:      string
-  label:    string
-  icon?:    React.ReactNode
-  items:    NavItem[]
+  key:   string
+  label: string
+  items: NavItem[]
 }
 
 const NAV_SECTIONS: NavSection[] = [
+  // ── Main ──────────────────────────────────────────────────────
   {
     key: 'main', label: 'الرئيسي', items: [
-      { to: '/dashboard',           icon: <LayoutDashboard size={18} />, label: 'لوحة التحكم' },
+      { to: '/dashboard', icon: <LayoutDashboard size={18} />, label: 'لوحة التحكم' },
     ],
   },
+
+  // ── Suppliers & AP ────────────────────────────────────────────
+  {
+    key: 'suppliers', label: 'الموردون والمدفوعات', items: [
+      { to: '/suppliers',   icon: <Users         size={18} />, label: 'الموردون والعملاء', permission: { module: 'suppliers', action: 'read' } },
+      { to: '/treasury/po', icon: <ShoppingCart  size={18} />, label: 'أوامر الشراء',      permission: { module: 'treasury',  action: 'read' } },
+    ],
+  },
+
+  // ── Treasury ──────────────────────────────────────────────────
+  {
+    key: 'treasury', label: 'الخزينة والبنوك', items: [
+      { to: '/treasury',          icon: <Banknote   size={18} />, label: 'الخزينة (صندوق)',  permission: { module: 'treasury', action: 'read' } },
+      { to: '/treasury/bank',     icon: <Landmark   size={18} />, label: 'التسوية البنكية', permission: { module: 'treasury', action: 'read' } },
+      { to: '/treasury/partners', icon: <TrendingUp size={18} />, label: 'الشركاء',          permission: { module: 'treasury', action: 'read' } },
+    ],
+  },
+
+  // ── Inventory ─────────────────────────────────────────────────
+  {
+    key: 'inventory', label: 'المخزون', items: [
+      { to: '/inventory',           icon: <Package       size={18} />, label: 'أرصدة المخازن', permission: { module: 'inventory', action: 'read' } },
+      { to: '/inventory/movements', icon: <ClipboardList size={18} />, label: 'حركات المخزون', permission: { module: 'inventory', action: 'read' } },
+    ],
+  },
+
+  // ── Agricultural Ops ──────────────────────────────────────────
   {
     key: 'ops', label: 'العمليات الزراعية', items: [
-      { to: '/suppliers',           icon: <Users           size={18} />, label: 'الموردين والعملاء', permission: { module: 'suppliers', action: 'read' } },
-      { to: '/treasury',            icon: <Banknote        size={18} />, label: 'الخزينة', permission: { module: 'treasury', action: 'read' } },
-      { to: '/treasury/partners',   icon: <TrendingUp      size={18} />, label: 'الشركاء', permission: { module: 'treasury', action: 'read' } },
-      { to: '/inventory',                icon: <Package         size={18} />, label: 'أرصدة المخازن', permission: { module: 'inventory', action: 'read' } },
-      { to: '/inventory/movements',      icon: <ClipboardList   size={18} />, label: 'حركات المخزون', permission: { module: 'inventory', action: 'read' } },
-      { to: '/fields',                   icon: <MapPin          size={18} />, label: 'قطع الأراضي',   permission: { module: 'config', action: 'read' } },
-      { to: '/operations',          icon: <Wrench          size={18} />, label: 'أوامر العمل',   permission: { module: 'config', action: 'read' } },
-      { to: '/contracts',           icon: <FileText        size={18} />, label: 'العقود',        permission: { module: 'config', action: 'read' } },
+      { to: '/fields',     icon: <MapPin   size={18} />, label: 'قطع الأراضي', permission: { module: 'operations', action: 'read' } },
+      { to: '/operations', icon: <Wrench   size={18} />, label: 'أوامر العمل', permission: { module: 'operations', action: 'read' } },
+      { to: '/contracts',  icon: <FileText size={18} />, label: 'العقود',       permission: { module: 'operations', action: 'read' } },
     ],
   },
-  {
-    key: 'finance', label: 'المالية والمحاسبة', items: [
-      { to: '/gl/accounts',        icon: <ClipboardList   size={18} />, label: 'شجرة الحسابات',   permission: { module: 'finance', action: 'read' } },
-      { to: '/gl/entries',         icon: <FileText        size={18} />, label: 'قيود اليومية',     permission: { module: 'finance', action: 'read' } },
-      { to: '/gl/statements',      icon: <TrendingUp      size={18} />, label: 'القوائم المالية',  permission: { module: 'finance', action: 'read' } },
-      { to: '/gl/mappings',        icon: <Link2           size={18} />, label: 'ربط الحسابات',     permission: { module: 'config',  action: 'read' } },
-      { to: '/gl/integrations',    icon: <Settings        size={18} />, label: 'حوكمة الربط',      permission: { module: 'config',  action: 'read' } },
-    ],
-  },
+
+  // ── HR ────────────────────────────────────────────────────────
   {
     key: 'hr', label: 'الموارد البشرية', items: [
-      { to: '/hr',                 icon: <Users           size={18} />, label: 'قائمة الموظفين',   permission: { module: 'hr', action: 'read' } },
-      { to: '/hr/attendance',      icon: <Activity        size={18} />, label: 'الحضور والانصراف', permission: { module: 'hr', action: 'read' } },
-      { to: '/hr/payroll',         icon: <Banknote        size={18} />, label: 'الرواتب والأجور',  permission: { module: 'hr', action: 'read' } },
+      { to: '/hr',            icon: <Users        size={18} />, label: 'قائمة الموظفين',  permission: { module: 'hr', action: 'read' } },
+      { to: '/hr/attendance', icon: <Activity     size={18} />, label: 'الحضور والانصراف', permission: { module: 'hr', action: 'read' } },
+      { to: '/hr/payroll',    icon: <Banknote     size={18} />, label: 'الرواتب والأجور',  permission: { module: 'hr', action: 'read' } },
+      { to: '/hr/leaves',     icon: <CalendarDays size={18} />, label: 'الإجازات والسلف',  permission: { module: 'hr', action: 'read' } },
     ],
   },
+
+  // ── General Ledger ────────────────────────────────────────────
+  {
+    key: 'finance', label: 'دفتر الأستاذ العام', items: [
+      { to: '/gl/accounts',   icon: <Database  size={18} />, label: 'شجرة الحسابات',   permission: { module: 'finance', action: 'read' } },
+      { to: '/gl/entries',    icon: <FileText  size={18} />, label: 'قيود اليومية',     permission: { module: 'finance', action: 'read' } },
+      { to: '/gl/statements', icon: <BarChart3 size={18} />, label: 'القوائم المالية',  permission: { module: 'finance', action: 'read' } },
+      { to: '/gl/settings',   icon: <Settings  size={18} />, label: 'إعدادات المحاسبة', permission: { module: 'config',  action: 'read' } },
+    ],
+  },
+
+  // ── Reports ───────────────────────────────────────────────────
   {
     key: 'reports', label: 'التقارير والتحليل', items: [
-      { to: '/reports',                    icon: <ClipboardList size={18} />, label: 'التقارير', permission: { module: 'reports', action: 'read' } },
-      { to: '/reports/season-summary',     icon: <Leaf          size={18} />, label: 'ملخص الموسم', permission: { module: 'reports', action: 'read' } },
-      { to: '/reports/season-pnl',         icon: <TrendingUp    size={18} />, label: 'أرباح وخسائر', permission: { module: 'reports', action: 'read' } },
-      { to: '/reports/season-readiness',   icon: <ShieldCheck   size={18} />, label: 'جاهزية الإغلاق',        permission: { module: 'reports', action: 'read' } },
-      { to: '/reports/budget-vs-actual',   icon: <Target        size={18} />, label: 'الميزانية مقابل الفعلي', permission: { module: 'reports', action: 'read' } },
-      { to: '/reports/season-close',       icon: <Lock          size={18} />, label: 'إغلاق الموسم',            permission: { module: 'config',  action: 'read' } },
+      { to: '/reports',              icon: <ClipboardList size={18} />, label: 'مركز التقارير',  permission: { module: 'reports', action: 'read' } },
+      { to: '/reports/season',       icon: <Leaf          size={18} />, label: 'تقارير الموسم',  permission: { module: 'reports', action: 'read' } },
+      { to: '/reports/cost-centers', icon: <Target        size={18} />, label: 'مراكز التكلفة',  permission: { module: 'reports', action: 'read' } },
     ],
   },
+
+  // ── System ────────────────────────────────────────────────────
   {
     key: 'admin', label: 'الإدارة والنظام', items: [
-      { to: '/users',               icon: <UserCog         size={18} />, label: 'المستخدمون', permission: { module: 'admin', action: 'users' } },
-      { to: '/audit',               icon: <Shield          size={18} />, label: 'سجل المراجعة', permission: { module: 'admin', action: 'audit' } },
-      { to: '/audit/errors',        icon: <Activity        size={18} />, label: 'صحة النظام',   permission: { module: 'admin', action: 'audit' } },
-      { to: '/audit/integrity',     icon: <ShieldCheck     size={18} />, label: 'سلامة البيانات', permission: { module: 'admin', action: 'audit' } },
-      { to: '/config',              icon: <Settings        size={18} />, label: 'الإعدادات', permission: { module: 'config', action: 'read' } },
+      { to: '/users',  icon: <UserCog  size={18} />, label: 'المستخدمون',  permission: { module: 'admin',  action: 'users' } },
+      { to: '/audit',  icon: <Shield   size={18} />, label: 'مركز التدقيق', permission: { module: 'admin',  action: 'audit' } },
+      { to: '/config', icon: <Settings size={18} />, label: 'الإعدادات',    permission: { module: 'config', action: 'read'  } },
     ],
   },
 ]
@@ -109,7 +139,6 @@ export default function Sidebar() {
   const toggleSection = (key: string) =>
     setCollapsedSections(prev => ({ ...prev, [key]: !prev[key] }))
 
-  // Low-stock alerts count
   const { data: alertsData = [] } = useQuery({
     queryKey: ['dashboard', 'alerts'],
     queryFn:  () => dashboardApi.inventoryAlerts() as Promise<{ name: string; balance_qty: number }[]>,
@@ -118,7 +147,6 @@ export default function Sidebar() {
     refetchInterval: 300_000,
   })
 
-  // Reorder alerts count
   const { data: reorderData = [] } = useQuery({
     queryKey: ['inventory', 'reorder-alerts'],
     queryFn:  inventoryApi.reorderAlerts,
@@ -127,7 +155,7 @@ export default function Sidebar() {
     refetchInterval: 300_000,
   })
 
-  const alertCount  = alertsData.length + reorderData.length
+  const alertCount = alertsData.length + reorderData.length
 
   const handleLogout = () => {
     logout()
@@ -168,13 +196,12 @@ export default function Sidebar() {
         )}
       </div>
 
-      {/* Super-admin portal link */}
+      {/* Super-admin portal */}
       {role === 'super_admin' && !collapsed && (
         <NavLink
           to="/admin"
           className={({ isActive }) => `
-            flex items-center gap-2 mx-2 px-3 py-2 rounded-lg text-xs font-semibold
-            border transition-colors
+            flex items-center gap-2 mx-2 mt-2 px-3 py-2 rounded-lg text-xs font-semibold border transition-colors
             ${isActive
               ? 'bg-red-600 border-red-700 text-white'
               : 'border-red-500/40 text-red-300 hover:bg-red-900/30'}
@@ -199,12 +226,11 @@ export default function Sidebar() {
           const sectionCollapsed = collapsedSections[section.key]
           return (
             <div key={section.key}>
-              {/* Section header */}
               {!collapsed && section.key !== 'main' && (
                 <button
                   onClick={() => toggleSection(section.key)}
                   className="w-full flex items-center justify-between px-2 py-1.5 mt-2 mb-0.5 rounded-md
-                             text-brand-400 hover:text-brand-200 transition-colors group"
+                             text-brand-400 hover:text-brand-200 transition-colors"
                 >
                   <span className="text-[10px] font-bold uppercase tracking-wider truncate">
                     {section.label}
@@ -215,7 +241,7 @@ export default function Sidebar() {
                   />
                 </button>
               )}
-              {/* Section items */}
+
               {!sectionCollapsed && visibleItems.map(item => {
                 const isInventory = item.to === '/inventory'
                 const badge = isInventory && alertCount > 0 ? alertCount : item.badge
@@ -223,10 +249,10 @@ export default function Sidebar() {
                   <NavLink
                     key={item.to}
                     to={item.to}
-                    end={item.to === '/hr'}
+                    end={item.to === '/hr' || item.to === '/treasury' || item.to === '/inventory'}
                     className={({ isActive }) => `
                       flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium
-                      transition-colors duration-150 group relative
+                      transition-colors duration-150 relative
                       ${isActive
                         ? 'bg-brand-700 text-white'
                         : 'text-brand-200 hover:bg-brand-800 hover:text-white'}

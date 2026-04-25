@@ -166,7 +166,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
             <select className="input" value={form.season_id}
               onChange={e => set('season_id', e.target.value)}>
               <option value="">— بدون موسم —</option>
-              {(seasons as SeasonOption[]).map(s => (
+              {(seasons || []).map(s => (
                 <option key={s.id} value={s.id}>
                   {s.name}{s.status === 'active' ? ' ✓' : ''}
                 </option>
@@ -178,7 +178,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
             <select className="input" value={form.center_code}
               onChange={e => set('center_code', e.target.value)}>
               <option value="">— بدون مركز —</option>
-              {(costCenters as CostCenterOption[]).map(cc => (
+              {(costCenters || []).map(cc => (
                 <option key={cc.code} value={cc.code}>{cc.code} — {cc.name}</option>
               ))}
             </select>
@@ -209,7 +209,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
           <select className="input" value={form.expense_category}
             onChange={e => set('expense_category', e.target.value)}>
             <option value="">— اختياري —</option>
-            {(expenseTypes as ExpenseOption[]).map(et => (
+            {(expenseTypes || []).map(et => (
               <option key={et.code} value={et.name}>{et.name}</option>
             ))}
           </select>

@@ -64,13 +64,11 @@ auditApi.get('/', async (c) => {
 
   return c.json({
     success: true,
-    data: {
-      data:      results,
-      total,
-      page,
-      page_size: size,
-      has_more:  offset + size < total,
-    },
+    data: results,
+    total,
+    page,
+    page_size: size,
+    has_more: offset + size < total,
   })
 })
 
@@ -113,7 +111,7 @@ auditApi.get('/errors', async (c) => {
 
   return c.json({
     success: true,
-    data: { data: results, total, page, page_size: size, has_more: offset + size < total }
+    data: results, total, page, page_size: size, has_more: offset + size < total
   })
 })
 

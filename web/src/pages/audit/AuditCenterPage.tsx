@@ -1,0 +1,61 @@
+import { useSearchParams } from 'react-router-dom'
+import { Shield, Activity, ShieldCheck } from 'lucide-react'
+import AuditLogPage   from './AuditLogPage'
+import ErrorLogPage   from './ErrorLogPage'
+import IntegrityPage  from './IntegrityPage'
+
+type Tab = 'log' | 'errors' | 'integrity'
+
+const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
+  { id: 'log',       icon: <Shield      size={15} />, label: 'سجل التغييرات'  },
+  { id: 'errors',    icon: <Activity    size={15} />, label: 'سجل الأخطاء'    },
+  { id: 'integrity', icon: <ShieldCheck size={15} />, label: 'سلامة البيانات' },
+]
+
+export default function AuditCenterPage() {
+  const [params, setParams] = useSearchParams()
+  const tab = (params.get('tab') as Tab | null) ?? 'log'
+
+  const setTab = (t: Tab) => setParams({ tab: t }, { replace: true })
+
+  return (
+    <div className="space-y-5 animate-fade-in">
+      {/* Header */}
+      <div className="page-header">
+        <div className="flex items-center gap-3">
+          <Shield size={22} className="text-slate-500" />
+          <div>
+            <h1 className="page-title">مركز التدقيق والمراجعة</h1>
+            <p className="text-sm text-slate-500">سجل التغييرات · سجل الأخطاء · سلامة البيانات</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Tab bar */}
+      <div className="flex items-end gap-1 border-b border-slate-200">
+        {TABS.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`
+              flex items-center gap-2 px-5 py-2.5 text-sm font-bold border-b-2 -mb-px transition-all
+              ${tab === t.id
+                ? 'border-blue-600 text-blue-600'
+                : 'border-transparent text-slate-400 hover:text-slate-600 hover:border-slate-300'}
+            `}
+          >
+            {t.icon}
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Content — suppress inner page headers */}
+      <div className="[&_.page-header]:hidden [&_.page-title]:hidden">
+        {tab === 'log'       && <AuditLogPage />}
+        {tab === 'errors'    && <ErrorLogPage />}
+        {tab === 'integrity' && <IntegrityPage />}
+      </div>
+    </div>
+  )
+}

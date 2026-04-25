@@ -5,7 +5,7 @@ import {
   ChevronRight, ChevronDown, ArrowRight, Clock,
   Terminal, AlertCircle, Shield, Download
 } from 'lucide-react'
-import { auditApi, downloadCsv } from '../../api/client'
+import { auditApi, adminApi, downloadCsv } from '../../api/client'
 import type { Company } from '../../types'
 import { useAppStore } from '../../store/appStore'
 
@@ -41,8 +41,8 @@ export default function AuditLogPage() {
     queryKey: ['admin-companies-list'],
     queryFn: async () => {
       if (role !== 'super_admin') return []
-      const res = await fetch('/api/admin/companies').then(r => r.json())
-      return res.data as Company[]
+      const res = await adminApi.companies()
+      return res as Company[]
     },
     enabled: role === 'super_admin'
   })
@@ -197,7 +197,7 @@ export default function AuditLogPage() {
               onChange={e => setFilters(f => ({ ...f, company_id: e.target.value }))}
             >
               <option value="all">جميع الشركات</option>
-              {companies?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {(companies || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
         )}
@@ -245,7 +245,7 @@ export default function AuditLogPage() {
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {entries.map((entry: AuditLogEntry) => (
+            {(entries || []).map((entry: AuditLogEntry) => (
               <div 
                 key={entry.id} 
                 className={`transition-all ${expandedId === entry.id ? 'bg-slate-50/80 shadow-inner' : 'hover:bg-slate-50/50'}`}
