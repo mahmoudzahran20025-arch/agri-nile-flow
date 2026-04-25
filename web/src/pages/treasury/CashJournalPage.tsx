@@ -1,6 +1,9 @@
 import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Download, ShieldCheck, HelpCircle, Filter, RefreshCcw } from 'lucide-react'
+import {
+  Plus, Download, ShieldCheck, RefreshCcw, X,
+  TrendingUp, TrendingDown, Wallet, Clock, CheckCircle2,
+} from 'lucide-react'
 import { treasuryApi, downloadCsv } from '../../api/client'
 import { usePermission } from '../../hooks/usePermission'
 import DataTable, { type Column, type SortState } from '../../components/ui/DataTable'
@@ -10,19 +13,22 @@ import { useToast } from '../../contexts/ToastContext'
 
 function egp(n: number | null | undefined) {
   if (n == null) return '—'
-  return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 2 }).format(n)
+  return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 }
 
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
+const YEARS  = [2025, 2026]
 
 export default function CashJournalPage() {
   const { canWrite, role } = usePermission()
-  const { toast } = useToast()
-  const queryClient = useQueryClient()
+  const { toast }          = useToast()
+  const queryClient        = useQueryClient()
+
   const [page,      setPage]      = useState(1)
   const [direction, setDirection] = useState('')
   const [status,    setStatus]    = useState('')
   const [month,     setMonth]     = useState('')
+  const [year,      setYear]      = useState('')
   const [addOpen,   setAddOpen]   = useState(false)
   const [sort,      setSort]      = useState<SortState | undefined>(undefined)
 
@@ -32,11 +38,12 @@ export default function CashJournalPage() {
   })
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['treasury', 'txns', page, direction, month, status],
+    queryKey: ['treasury', 'txns', page, direction, month, year, status],
     queryFn:  () => treasuryApi.list({
       page, size: 100,
       direction: direction || undefined,
-      month: month ? Number(month) : undefined,
+      month:  month  ? Number(month)  : undefined,
+      year:   year   ? Number(year)   : undefined,
       status: status || undefined,
     }) as Promise<{ data: CashTransaction[]; total: number; page: number; page_size: number; has_more: boolean }>,
   })
@@ -47,16 +54,21 @@ export default function CashJournalPage() {
       toast('تم ترحيل الحركة واعتمادها بنجاح', 'success')
       queryClient.invalidateQueries({ queryKey: ['treasury'] })
     },
-    onError: (err: any) => toast(err.message || 'فشل ترحيل الحركة', 'error')
+    onError: (err: { message?: string }) => toast(err.message || 'فشل ترحيل الحركة', 'error'),
   })
 
   const COLUMNS: Column<CashTransaction>[] = [
     { key: 'transaction_date', header: 'التاريخ', width: '110px', sortable: true,
-      render: r => new Date(r.transaction_date).toLocaleDateString('ar-EG') },
+      render: r => <span className="text-xs tabular-nums">{new Date(r.transaction_date).toLocaleDateString('ar-EG')}</span> },
     {
-      key: 'direction', header: 'الاتجاه', width: '80px',
+      key: 'direction', header: 'الاتجاه', width: '85px',
       render: r => (
-        <span className={r.direction === 'د' ? 'badge-green' : 'badge-red'}>
+        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+          r.direction === 'د'
+            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+            : 'bg-red-50 text-red-700 border-red-200'
+        }`}>
+          {r.direction === 'د' ? <TrendingUp size={9} /> : <TrendingDown size={9} />}
           {r.direction === 'د' ? 'وارد' : 'منصرف'}
         </span>
       ),
@@ -65,39 +77,54 @@ export default function CashJournalPage() {
       key: 'status', header: 'الحالة', width: '90px',
       render: r => (
         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-          r.status === 'posted' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'
+          r.status === 'posted'
+            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+            : 'bg-amber-50 text-amber-700 border-amber-200'
         }`}>
+          {r.status === 'posted' ? <CheckCircle2 size={9} /> : <Clock size={9} />}
           {r.status === 'posted' ? 'مُرحّل' : 'مسودة'}
         </span>
       )
     },
-    { key: 'document_number', header: 'رقم المستند', width: '100px', render: r => r.document_number ?? '—' },
-    { key: 'recipient_name',  header: 'المستلم / المسلم', render: r => r.recipient_name ?? '—' },
-    { key: 'narration',       header: 'البيان' },
-    { key: 'amount',  header: 'المبلغ',   sortable: true,
-      render: r => <span className="font-medium">{egp(r.amount)}</span> },
+    { key: 'document_number', header: 'المستند', width: '90px',
+      render: r => r.document_number ? <span className="font-mono text-xs text-slate-600">#{r.document_number}</span> : <span className="text-slate-300">—</span> },
+    { key: 'recipient_name',  header: 'المستلم / المسلم',
+      render: r => r.recipient_name ?? <span className="text-slate-300">—</span> },
+    { key: 'narration',       header: 'البيان',
+      render: r => <span className="text-slate-700">{r.narration}</span> },
+    { key: 'amount', header: 'المبلغ', sortable: true, width: '120px',
+      render: r => (
+        <span className={`font-bold tabular-nums ${r.direction === 'د' ? 'text-emerald-700' : 'text-red-600'}`}>
+          {egp(r.amount)}
+        </span>
+      )
+    },
     {
-      key: 'running_balance', header: 'الرصيد', sortable: true,
+      key: 'running_balance', header: 'الرصيد التراكمي', width: '130px',
       render: r => {
-        if (r.status === 'draft') return <span className="text-slate-300 italic text-xs">— بانتظار الترحيل —</span>
+        if (r.status === 'draft') return <span className="text-slate-300 italic text-[10px]">— مسودة —</span>
         const b = r.running_balance ?? 0
-        return <span className={`font-bold ${b >= 0 ? 'text-slate-800' : 'text-red-600'}`}>{egp(b)}</span>
+        return (
+          <span className={`font-black tabular-nums text-sm ${b >= 0 ? 'text-slate-800' : 'text-red-600'}`}>
+            {egp(b)}
+          </span>
+        )
       },
     },
     {
-       key: 'actions', header: '', width: '60px',
-       render: r => (
-         r.status === 'draft' && (role === 'super_admin' || role === 'company_admin') ? (
-           <button 
-             onClick={() => postMutation.mutate(r.id)}
-             disabled={postMutation.isPending}
-             className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-             title="اعتماد وترحيل"
-           >
-             <ShieldCheck size={18} />
-           </button>
-         ) : null
-       )
+      key: 'actions', header: '', width: '60px',
+      render: r => (
+        r.status === 'draft' && (role === 'super_admin' || role === 'company_admin') ? (
+          <button
+            onClick={() => postMutation.mutate(r.id)}
+            disabled={postMutation.isPending}
+            className="p-1.5 text-emerald-600 hover:bg-emerald-100 rounded-lg transition-colors"
+            title="اعتماد وترحيل"
+          >
+            <ShieldCheck size={16} />
+          </button>
+        ) : null
+      )
     }
   ]
 
@@ -113,65 +140,111 @@ export default function CashJournalPage() {
     })
   }, [data, sort])
 
-  const bal = (balance as { balance: number } | null)?.balance
+  const bal        = (balance as { balance: number } | null)?.balance
+  const allRows    = data?.data ?? []
+  const draftCount = allRows.filter(r => r.status === 'draft').length
+  const cashIn     = allRows.filter(r => r.direction === 'د' && r.status === 'posted').reduce((s, r) => s + r.amount, 0)
+  const cashOut    = allRows.filter(r => r.direction === 'م' && r.status === 'posted').reduce((s, r) => s + r.amount, 0)
+  const hasFilters = !!(direction || month || year || status)
 
   return (
     <div className="space-y-5 animate-fade-in">
+
+      {/* ── Page Header ───────────────────────────────── */}
       <div className="page-header">
         <div>
           <h1 className="page-title">الخزينة والسيولة</h1>
-          {bal != null && (
-            <div className="flex items-center gap-3 mt-1">
-               <p className="text-sm text-slate-500">
-                الرصيد المعتمد:
-                <span className={`font-black mr-2 text-lg ${bal >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
-                  {egp(bal)}
-                </span>
-              </p>
-              <div className="h-4 w-[1px] bg-slate-200" />
-              <div className="flex items-center gap-1 text-[10px] text-amber-600 font-bold bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-100">
-                 <HelpCircle size={10} /> المسودات لا تؤثر على الرصيد
-              </div>
-            </div>
-          )}
+          <p className="text-xs text-slate-400 mt-0.5">سجل الحركات النقدية المعتمدة والمسودات</p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            className="btn-secondary gap-2"
-            onClick={() => refetch()}
-          >
-            <RefreshCcw size={16} />تحديث
+          <button className="btn-secondary gap-2 text-sm" onClick={() => refetch()}>
+            <RefreshCcw size={14} /> تحديث
           </button>
           <button
-            className="btn-secondary gap-2"
+            className="btn-secondary gap-2 text-sm"
             onClick={() => downloadCsv('/treasury', 'دفتر_اليومية', {
-              year:  new Date().getFullYear(),
+              year:  year  ? Number(year)  : undefined,
               month: month ? Number(month) : undefined,
             })}
           >
-            <Download size={16} />تصدير CSV
+            <Download size={14} /> تصدير CSV
           </button>
           {canWrite('treasury') && (
-            <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
-              <Plus size={16} />حركة جديدة
+            <button className="btn-primary gap-2 shadow-lg shadow-emerald-100" onClick={() => setAddOpen(true)}>
+              <Plus size={16} /> حركة جديدة
             </button>
           )}
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="card p-4 space-y-3 bg-slate-50/50">
-        <div className="flex flex-wrap gap-4 items-center">
-          <div className="flex items-center gap-2">
-             <Filter size={14} className="text-slate-400" />
-             <span className="text-xs font-bold text-slate-500">التصفيات:</span>
+      {/* ── KPI Strip ─────────────────────────────────── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {/* Balance */}
+        <div className={`card p-4 border-2 ${
+          (bal ?? 0) >= 0 ? 'border-emerald-200 bg-emerald-50/50' : 'border-red-200 bg-red-50/50'
+        }`}>
+          <div className="flex items-center gap-2 mb-1">
+            <Wallet size={14} className={(bal ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-600'} />
+            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">الرصيد المعتمد</p>
           </div>
+          <p className={`text-xl font-black tabular-nums ${(bal ?? 0) >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+            {bal != null ? egp(bal) : '…'}
+          </p>
+        </div>
+        {/* Cash In */}
+        <div className="card p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <TrendingUp size={14} className="text-emerald-500" />
+            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">وارد (معروض)</p>
+          </div>
+          <p className="text-xl font-black text-emerald-700 tabular-nums">{egp(cashIn)}</p>
+        </div>
+        {/* Cash Out */}
+        <div className="card p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <TrendingDown size={14} className="text-red-500" />
+            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">منصرف (معروض)</p>
+          </div>
+          <p className="text-xl font-black text-red-600 tabular-nums">{egp(cashOut)}</p>
+        </div>
+        {/* Drafts */}
+        <div className={`card p-4 ${draftCount > 0 ? 'border-amber-200 bg-amber-50/50' : ''}`}>
+          <div className="flex items-center gap-2 mb-1">
+            <Clock size={14} className={draftCount > 0 ? 'text-amber-500' : 'text-slate-400'} />
+            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">مسودات معلقة</p>
+          </div>
+          <p className={`text-xl font-black ${draftCount > 0 ? 'text-amber-700' : 'text-slate-400'}`}>
+            {draftCount} حركة
+          </p>
+          {draftCount > 0 && (
+            <p className="text-[9px] text-amber-600 mt-0.5">تحتاج ترحيل</p>
+          )}
+        </div>
+      </div>
 
+      {/* Draft alert banner */}
+      {draftCount > 0 && (
+        <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-amber-800 text-xs font-semibold">
+          <Clock size={13} className="text-amber-500 shrink-0" />
+          يوجد {draftCount} حركة في المسودة — لن تؤثر على الرصيد الفعلي حتى يتم ترحيلها
+          <button
+            className="mr-auto text-amber-700 hover:text-amber-900 font-bold text-xs"
+            onClick={() => setStatus('draft')}
+          >
+            عرض المسودات فقط ←
+          </button>
+        </div>
+      )}
+
+      {/* ── Filters ───────────────────────────────────── */}
+      <div className="card p-4 bg-slate-50/50">
+        <div className="flex flex-wrap gap-3 items-center">
+          {/* Status toggle */}
           <div className="flex items-center gap-1 rounded-xl bg-white border border-slate-200 p-1 shadow-sm">
             {[
-              { v: '',  l: 'الكل' },
-              { v: 'posted', l: 'معتمد ✅' },
-              { v: 'draft',  l: 'مسودة 📝' },
+              { v: '',       l: 'الكل' },
+              { v: 'posted', l: '✅ معتمد' },
+              { v: 'draft',  l: '📝 مسودة' },
             ].map(({ v, l }) => (
               <button
                 key={v}
@@ -185,11 +258,12 @@ export default function CashJournalPage() {
             ))}
           </div>
 
+          {/* Direction toggle */}
           <div className="flex items-center gap-1 rounded-xl bg-white border border-slate-200 p-1 shadow-sm">
             {[
               { v: '',  l: 'كل الاتجاهات' },
-              { v: 'د', l: 'وارد' },
-              { v: 'م', l: 'منصرف' },
+              { v: 'د', l: '↓ وارد' },
+              { v: 'م', l: '↑ منصرف' },
             ].map(({ v, l }) => (
               <button
                 key={v}
@@ -203,33 +277,44 @@ export default function CashJournalPage() {
             ))}
           </div>
 
+          {/* Year */}
           <select
-            className="input w-36 text-xs h-8 bg-white border-slate-200"
+            className="input w-24 text-xs h-8 bg-white border-slate-200"
+            value={year}
+            onChange={e => { setYear(e.target.value); setPage(1) }}
+          >
+            <option value="">كل السنوات</option>
+            {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+
+          {/* Month */}
+          <select
+            className="input w-32 text-xs h-8 bg-white border-slate-200"
             value={month}
             onChange={e => { setMonth(e.target.value); setPage(1) }}
           >
             <option value="">كل الشهور</option>
-            {MONTHS.map((m, i) => (
-              <option key={i + 1} value={i + 1}>{m}</option>
-            ))}
+            {MONTHS.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
           </select>
 
-          {(direction || month || status) && (
+          {/* Clear */}
+          {hasFilters && (
             <button
-              className="text-xs font-bold text-rose-600 hover:underline"
-              onClick={() => { setDirection(''); setMonth(''); setStatus(''); setPage(1) }}
+              className="flex items-center gap-1 text-xs font-bold text-red-500 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors"
+              onClick={() => { setDirection(''); setMonth(''); setYear(''); setStatus(''); setPage(1) }}
             >
-              إلغاء التصفية
+              <X size={12} /> مسح
             </button>
           )}
 
-          <div className="flex-1 text-left self-center text-[10px] font-black text-slate-400 uppercase tracking-widest">
-            {data ? `${(data?.total ?? 0).toLocaleString('ar-EG')} حركة` : ''}
-          </div>
+          <span className="mr-auto text-[11px] font-bold text-slate-400 uppercase tracking-widest">
+            {data?.total?.toLocaleString('ar-EG') ?? '…'} حركة
+          </span>
         </div>
       </div>
 
-      <div className="card overflow-hidden shadow-xl border-none">
+      {/* ── Data Table ────────────────────────────────── */}
+      <div className="card overflow-hidden shadow-lg border-none">
         <DataTable<CashTransaction>
           columns={COLUMNS}
           data={sortedData}
@@ -241,7 +326,7 @@ export default function CashJournalPage() {
           rowKey={r => r.id}
           sort={sort}
           onSort={setSort}
-          emptyText="لا توجد حركات في الخزينة"
+          emptyText="لا توجد حركات بالفلاتر المحددة"
         />
       </div>
 

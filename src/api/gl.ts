@@ -373,8 +373,8 @@ gl.get('/trial-balance', async (c) => {
   // 1. Get raw leaf balances
   const rawBalances = await c.env.DB.prepare(
     `SELECT a.code, a.parent_code, a.is_header,
-            COALESCE(SUM(l.debit),  0) AS leaf_debit,
-            COALESCE(SUM(l.credit), 0) AS leaf_credit
+            COALESCE(SUM(CASE WHEN e.id IS NOT NULL THEN l.debit ELSE 0 END), 0) AS leaf_debit,
+            COALESCE(SUM(CASE WHEN e.id IS NOT NULL THEN l.credit ELSE 0 END), 0) AS leaf_credit
      FROM chart_of_accounts a
      LEFT JOIN journal_entry_lines l ON l.account_code = a.code AND l.company_id = a.company_id
      LEFT JOIN journal_entries e ON e.id = l.entry_id AND ${entryWhere}
@@ -430,7 +430,7 @@ gl.get('/income-statement', async (c) => {
   // 1. Get raw leaf balances for Revenue/Expense
   const raw = await c.env.DB.prepare(
     `SELECT a.code, a.account_type,
-            SUM(CASE WHEN a.account_type = 'revenue' THEN (l.credit - l.debit) ELSE (l.debit - l.credit) END) AS amount
+            SUM(CASE WHEN e.id IS NOT NULL THEN (CASE WHEN a.account_type = 'revenue' THEN (l.credit - l.debit) ELSE (l.debit - l.credit) END) ELSE 0 END) AS amount
      FROM chart_of_accounts a
      LEFT JOIN journal_entry_lines l ON l.account_code = a.code AND l.company_id = a.company_id
      LEFT JOIN journal_entries e ON e.id = l.entry_id AND ${entryWhere}
@@ -476,8 +476,8 @@ gl.get('/balance-sheet', async (c) => {
   const raw = await c.env.DB.prepare(
     `SELECT a.code, a.account_type, a.normal_balance,
             CASE WHEN a.normal_balance = 'debit'
-                 THEN COALESCE(SUM(l.debit),0) - COALESCE(SUM(l.credit),0)
-                 ELSE COALESCE(SUM(l.credit),0) - COALESCE(SUM(l.debit),0) END AS balance
+                 THEN COALESCE(SUM(CASE WHEN e.id IS NOT NULL THEN l.debit ELSE 0 END),0) - COALESCE(SUM(CASE WHEN e.id IS NOT NULL THEN l.credit ELSE 0 END),0)
+                 ELSE COALESCE(SUM(CASE WHEN e.id IS NOT NULL THEN l.credit ELSE 0 END),0) - COALESCE(SUM(CASE WHEN e.id IS NOT NULL THEN l.debit ELSE 0 END),0) END AS balance
      FROM chart_of_accounts a
      LEFT JOIN journal_entry_lines l ON l.account_code = a.code AND l.company_id = a.company_id
      LEFT JOIN journal_entries e ON e.id = l.entry_id AND e.is_posted = 1 AND e.entry_date <= ?

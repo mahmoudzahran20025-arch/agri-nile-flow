@@ -93,6 +93,65 @@ suppliers.get('/aging', permissionGuard('suppliers', 'read'), async (c) => {
   return c.json({ success: true, data: { suppliers: results, totals, as_of: asOf } })
 })
 
+// GET /api/suppliers/:code/summary — Odoo-style smart-button aggregates
+suppliers.get('/:code/summary', permissionGuard('suppliers', 'read'), async (c) => {
+  const { company_id } = getUser(c)
+  const code = Number(c.req.param('code'))
+
+  const [invoices, payments, glLedger] = await Promise.all([
+    // All supplier transactions (invoices / credit notes)
+    c.env.DB.prepare(`
+      SELECT
+        COUNT(*) AS total_count,
+        COUNT(CASE WHEN status = 'draft' THEN 1 END) AS draft_count,
+        COUNT(CASE WHEN status = 'posted' THEN 1 END) AS posted_count,
+        COALESCE(SUM(CASE WHEN status='posted' THEN credit ELSE 0 END), 0) AS total_credit,
+        COALESCE(SUM(CASE WHEN status='posted' THEN debit  ELSE 0 END), 0) AS total_debit
+      FROM supplier_transactions
+      WHERE company_id = ? AND supplier_code = ?
+    `).bind(company_id, code).first<{
+      total_count: number; draft_count: number; posted_count: number
+      total_credit: number; total_debit: number
+    }>(),
+
+    // Treasury payments to this supplier
+    c.env.DB.prepare(`
+      SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS total
+      FROM cash_transactions
+      WHERE company_id = ? AND supplier_code = ? AND direction = 'م' AND status = 'posted'
+    `).bind(company_id, code).first<{ count: number; total: number }>(),
+
+    // GL Ledger balance (via journal_entry_lines on supplier account)
+    c.env.DB.prepare(`
+      SELECT
+        COALESCE(SUM(l.debit), 0)  AS total_debit,
+        COALESCE(SUM(l.credit), 0) AS total_credit
+      FROM journal_entry_lines l
+      JOIN journal_entries e ON e.id = l.entry_id AND e.company_id = l.company_id
+      JOIN gl_account_mappings m ON m.company_id = l.company_id AND m.mapping_key = 'accounts_payable'
+      WHERE l.company_id = ? AND l.account_code = m.account_code AND e.is_posted = 1
+    `).bind(company_id).first<{ total_debit: number; total_credit: number }>(),
+  ])
+
+  const openBalance = (invoices?.total_credit ?? 0) - (invoices?.total_debit ?? 0)
+
+  return c.json({
+    success: true,
+    data: {
+      invoices_count:  invoices?.total_count   ?? 0,
+      draft_count:     invoices?.draft_count    ?? 0,
+      posted_count:    invoices?.posted_count   ?? 0,
+      total_credit:    invoices?.total_credit   ?? 0,
+      total_debit:     invoices?.total_debit    ?? 0,
+      open_balance:    openBalance,
+      payments_count:  payments?.count          ?? 0,
+      payments_total:  payments?.total          ?? 0,
+      gl_debit:        glLedger?.total_debit    ?? 0,
+      gl_credit:       glLedger?.total_credit   ?? 0,
+    },
+  })
+})
+
 // GET /api/suppliers/:code
 suppliers.get('/:code', permissionGuard('suppliers', 'read'), async (c) => {
   const { company_id } = getUser(c)

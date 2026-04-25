@@ -21,7 +21,7 @@ function egp(n: number) { return `${fmt(n)} ج` }
 
 export default function FinancialStatementsPage() {
   const [tab, setTab]     = useState<Tab>('pl')
-  const [startDate, setS] = useState(`${new Date().getFullYear()}-01-01`)
+  const [startDate, setS] = useState('2025-01-01') // Include historical data
   const [endDate,   setE] = useState(new Date().toISOString().slice(0,10))
   const [asOf,    setAO]  = useState(new Date().toISOString().slice(0,10))
 

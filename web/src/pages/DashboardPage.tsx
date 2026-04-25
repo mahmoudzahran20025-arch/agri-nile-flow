@@ -14,7 +14,7 @@ import KPICard from '../components/ui/KPICard'
 import type { DashboardStats } from '../types'
 
 function startOfYear() {
-  return `${new Date().getFullYear()}-01-01`
+  return '2025-01-01' // Include historical data
 }
 function todayStr() {
   return new Date().toISOString().slice(0, 10)

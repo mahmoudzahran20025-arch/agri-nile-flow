@@ -146,6 +146,12 @@ export const suppliersApi = {
   get:        (code: number) => unwrap(api.get(`/suppliers/${code}`)),
   create:     (body: unknown) => api.post('/suppliers', body),
   update:     (code: number, body: unknown) => api.patch(`/suppliers/${code}`, body),
+  summary:    (code: number) => unwrap(api.get<{
+    invoices_count: number; draft_count: number; posted_count: number
+    total_credit: number; total_debit: number; open_balance: number
+    payments_count: number; payments_total: number
+    gl_debit: number; gl_credit: number
+  }>(`/suppliers/${code}/summary`)),
   statement:  (code: number, p: { page?: number; size?: number; season_id?: number; month?: number }) =>
     unwrapPaginated<unknown>(api.get(paginatedUrl(`/suppliers/${code}/statement`, p))),
   addTransaction: (code: number, body: unknown) => api.post(`/suppliers/${code}/transactions`, body),
@@ -436,7 +442,7 @@ export const glApi = {
   reopenPeriod: (id: number)    => api.patch(`/gl/periods/${id}/reopen`, {}),
 
   entries:     (p?: { page?: number; size?: number; start?: string; end?: string; ref_type?: string }) =>
-    unwrap(api.get<unknown>(paginatedUrl('/gl/entries', p ?? {}))),
+    unwrapPaginated<unknown>(api.get(paginatedUrl('/gl/entries', p ?? {}))),
   getEntry:    (id: number) => unwrap(api.get(`/gl/entries/${id}`)),
   createEntry: (body: unknown) => api.post('/gl/entries', body),
 
