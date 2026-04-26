@@ -222,7 +222,10 @@ gl.get('/entries', async (c) => {
     c.env.DB.prepare(
       `SELECT e.*, fp.name AS period_name,
               (SELECT SUM(l.debit)  FROM journal_entry_lines l WHERE l.entry_id = e.id) AS total_debit,
-              (SELECT SUM(l.credit) FROM journal_entry_lines l WHERE l.entry_id = e.id) AS total_credit
+              (SELECT SUM(l.credit) FROM journal_entry_lines l WHERE l.entry_id = e.id) AS total_credit,
+              (SELECT rev.id FROM journal_entries rev
+               WHERE rev.ref_type = 'reversal' AND rev.ref_id = e.id AND rev.company_id = e.company_id
+               LIMIT 1) AS reversal_entry_id
        FROM journal_entries e
        LEFT JOIN financial_periods fp ON fp.id = e.period_id
        ${where}
@@ -515,6 +518,72 @@ gl.get('/balance-sheet', async (c) => {
     total_assets: totalAssets, total_liabilities: totalLiabilities, total_equity: totalEquity,
     as_of: asOf,
   }})
+})
+
+// POST /api/gl/entries/:id/reverse — create a mirror entry with negated lines
+gl.post('/entries/:id/reverse', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+
+  // Fetch original entry
+  const [entry, linesRes] = await Promise.all([
+    c.env.DB.prepare('SELECT * FROM journal_entries WHERE id = ? AND company_id = ?')
+      .bind(id, company_id).first<{
+        id: number; description: string; entry_date: string; is_posted: number; ref_type: string
+      }>(),
+    c.env.DB.prepare(
+      'SELECT account_code, debit, credit, description, center_code, season_id, field_id FROM journal_entry_lines WHERE entry_id = ?'
+    ).bind(id).all<{
+      account_code: string; debit: number; credit: number
+      description: string | null; center_code: number | null; season_id: number | null; field_id: number | null
+    }>(),
+  ])
+
+  if (!entry) return c.json({ success: false, error: 'القيد غير موجود' }, 404)
+  if (!entry.is_posted) return c.json({ success: false, error: 'لا يمكن عكس قيد غير مرحّل' }, 400)
+
+  // Check not already reversed
+  const alreadyReversed = await c.env.DB.prepare(
+    "SELECT id FROM journal_entries WHERE company_id = ? AND ref_type = 'reversal' AND ref_id = ?"
+  ).bind(company_id, id).first()
+  if (alreadyReversed) {
+    return c.json({ success: false, error: 'هذا القيد تم عكسه مسبقاً' }, 409)
+  }
+
+  const today = new Date().toISOString().slice(0, 10)
+  const periodId = await getOpenPeriod(c.env.DB, company_id, today)
+  if (!periodId) {
+    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${today}` }, 400)
+  }
+
+  const lines = linesRes.results
+  if (!lines.length) return c.json({ success: false, error: 'القيد لا يحتوي على سطور' }, 400)
+
+  const reversalEntryId = await postAutoEntry(c.env.DB, {
+    company_id,
+    entry_date:  today,
+    description: `عكس القيد: ${entry.description}`,
+    ref_type:    'reversal',
+    ref_id:      id,
+    created_by:  userId,
+    lines: lines.map(l => ({
+      account_code: l.account_code,
+      debit:        l.credit,
+      credit:       l.debit,
+      description:  l.description ?? undefined,
+      center_code:  l.center_code ?? undefined,
+      season_id:    l.season_id  ?? undefined,
+      field_id:     l.field_id   ?? undefined,
+    })),
+  })
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'CREATE',
+    table_name: 'journal_entries',
+    new_value: { reversal_of: id, reversal_entry_id: reversalEntryId },
+  })
+
+  return c.json({ success: true, data: { reversal_entry_id: reversalEntryId } }, 201)
 })
 
 // GET /api/gl/integrity-check — 6 data quality checks for this company

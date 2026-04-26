@@ -5,7 +5,7 @@ import { reportsApi, configApi } from '../../api/client'
 
 function egp(n: number | null | undefined) {
   if (n == null || n === 0) return '٠'
-  return new Intl.NumberFormat('ar-EG', {
+  return new Intl.NumberFormat('en-US', {
     style: 'currency', currency: 'EGP', maximumFractionDigits: 0,
   }).format(n)
 }

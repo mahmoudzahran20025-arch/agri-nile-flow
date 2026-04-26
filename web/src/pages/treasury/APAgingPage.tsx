@@ -9,7 +9,7 @@ import Modal from '../../components/ui/Modal'
 
 // ── Helpers ───────────────────────────────────────────────────
 function egp(n: number) {
-  return new Intl.NumberFormat('ar-EG', { minimumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('en-US', { minimumFractionDigits: 0 }).format(n)
 }
 
 function ageBucket(days: number): {
@@ -180,8 +180,15 @@ export default function APAgingPage() {
           row={payModal}
           onClose={() => setPayModal(null)}
           onSuccess={() => {
+            const code = payModal?.supplier_code
             setPayModal(null)
             qc.invalidateQueries({ queryKey: ['ap-aging'] })
+            qc.invalidateQueries({ queryKey: ['treasury'] })
+            if (code) {
+              qc.invalidateQueries({ queryKey: ['supplier-statement', code] })
+              qc.invalidateQueries({ queryKey: ['supplier-summary',   code] })
+              qc.invalidateQueries({ queryKey: ['supplier',           code] })
+            }
           }}
         />
       )}
@@ -227,7 +234,7 @@ function PayModal({
           </div>
           <div className="text-left shrink-0">
             <p className="text-xs text-gray-400">المتبقي</p>
-            <p className="font-bold text-gray-900">{new Intl.NumberFormat('ar-EG',{minimumFractionDigits:0}).format(row.outstanding)} ج.م</p>
+            <p className="font-bold text-gray-900">{new Intl.NumberFormat('en-US',{minimumFractionDigits:0}).format(row.outstanding)} ج.م</p>
           </div>
         </div>
 

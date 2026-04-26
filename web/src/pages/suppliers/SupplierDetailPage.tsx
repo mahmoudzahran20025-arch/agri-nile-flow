@@ -20,7 +20,7 @@ type TabId = 'statement' | 'analysis'
 
 function egp(n: number | null | undefined) {
   if (n == null) return '—'
-  return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 }
 
 // ── Odoo-Style Smart Button ───────────────────────────────────
@@ -129,7 +129,7 @@ export default function SupplierDetailPage() {
 
   const TXNS_COLS: Column<SupplierTransaction>[] = [
     { key: 'transaction_date', header: 'التاريخ', width: '100px',
-      render: r => new Date(r.transaction_date).toLocaleDateString('ar-EG') },
+      render: r => new Date(r.transaction_date).toLocaleDateString('en-US') },
     {
       key: 'status', header: 'الحالة', width: '85px',
       render: r => (
@@ -142,7 +142,27 @@ export default function SupplierDetailPage() {
         </span>
       )
     },
-    { key: 'document_type',    header: 'المستند',  width: '100px', render: r => r.document_type ?? '—' },
+    {
+      key: 'document_type', header: 'النوع', width: '105px',
+      render: r => {
+        const dtype = r.document_type
+        if (!dtype) return <span className="text-slate-300 text-xs">—</span>
+        const cfg: Record<string, string> = {
+          'فاتورة':      'bg-blue-50 text-blue-700 border-blue-200',
+          'أمر شراء':   'bg-indigo-50 text-indigo-700 border-indigo-200',
+          'شيك':         'bg-purple-50 text-purple-700 border-purple-200',
+          'تحويل بنكي': 'bg-sky-50 text-sky-700 border-sky-200',
+          'نقداً':       'bg-emerald-50 text-emerald-700 border-emerald-200',
+          'إيصال':       'bg-teal-50 text-teal-700 border-teal-200',
+        }
+        const cls = cfg[dtype] ?? 'bg-slate-50 text-slate-600 border-slate-200'
+        return (
+          <span className={`inline-flex px-2 py-0.5 rounded-md text-[10px] font-bold border ${cls}`}>
+            {dtype}
+          </span>
+        )
+      }
+    },
     { key: 'document_number',  header: 'رقم',      width: '65px',  render: r => r.document_number ?? '—' },
     { key: 'expense_category', header: 'الخدمة',                   render: r => r.expense_category ?? '—' },
     { key: 'amount', header: 'القيمة', width: '110px',

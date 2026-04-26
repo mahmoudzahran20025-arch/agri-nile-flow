@@ -216,7 +216,7 @@ export default function SeasonReadinessPage() {
                 </h2>
               </div>
               <p className="text-sm text-slate-500">
-                {data.season.name} · {new Date(data.season.start_date).toLocaleDateString('ar-EG')} — {new Date(data.season.end_date).toLocaleDateString('ar-EG')}
+                {data.season.name} · {new Date(data.season.start_date).toLocaleDateString('en-US')} — {new Date(data.season.end_date).toLocaleDateString('en-US')}
               </p>
               {!summary.ready && (
                 <p className="text-xs text-red-600 mt-2 font-medium">

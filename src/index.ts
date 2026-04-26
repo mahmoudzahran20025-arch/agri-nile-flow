@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
-import type { Env } from './types'
+import type { Env, JwtPayload } from './types'
 import authRoutes       from './api/auth'
 import dashboardRoutes  from './api/dashboard'
 import supplierRoutes   from './api/suppliers'
@@ -25,7 +25,7 @@ import financeRoutes    from './api/finance'
 import reportsRoutes    from './api/reports'
 import budgetsRoutes    from './api/budgets'
 
-const app = new Hono<{ Bindings: Env }>()
+const app = new Hono<{ Bindings: Env; Variables: { jwtPayload: JwtPayload } }>()
 
 const ALLOWED_ORIGINS = [
   'https://agri-nile-flow-lake.pages.dev',

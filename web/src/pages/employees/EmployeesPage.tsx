@@ -124,7 +124,7 @@ export default function EmployeesPage() {
                   <td className="td">
                     <span className="flex items-center gap-1">
                       <DollarSign size={12} />
-                      {Number(e.daily_wage).toLocaleString('ar-EG')} ج
+                      {Number(e.daily_wage).toLocaleString('en-US')} ج
                     </span>
                   </td>
                   <td className="td">

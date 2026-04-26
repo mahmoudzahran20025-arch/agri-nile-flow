@@ -10,7 +10,7 @@ import Modal from '../../components/ui/Modal'
 
 // ── Helpers ───────────────────────────────────────────────────
 function fmtCurrency(n: number) {
-  return new Intl.NumberFormat('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)
+  return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)
 }
 function diffColor(diff: number) {
   if (Math.abs(diff) < 0.01) return 'text-emerald-600'
@@ -693,9 +693,9 @@ function ReconPreview({ form }: { form: Record<string, string> }) {
         {balanced ? '✅ المطابقة متوازنة' : '⚠️ يوجد فرق في المطابقة'}
       </p>
       <div className="grid grid-cols-2 gap-2 text-xs text-gray-600">
-        <span>رصيد البنك المعدّل: <strong>{new Intl.NumberFormat('ar-EG').format(adjBank)}</strong></span>
-        <span>رصيد الدفاتر المعدّل: <strong>{new Intl.NumberFormat('ar-EG').format(adjBook)}</strong></span>
-        {!balanced && <span className="col-span-2 text-red-600 font-medium">الفرق: {new Intl.NumberFormat('ar-EG').format(diff)}</span>}
+        <span>رصيد البنك المعدّل: <strong>{new Intl.NumberFormat('en-US').format(adjBank)}</strong></span>
+        <span>رصيد الدفاتر المعدّل: <strong>{new Intl.NumberFormat('en-US').format(adjBook)}</strong></span>
+        {!balanced && <span className="col-span-2 text-red-600 font-medium">الفرق: {new Intl.NumberFormat('en-US').format(diff)}</span>}
       </div>
     </div>
   )

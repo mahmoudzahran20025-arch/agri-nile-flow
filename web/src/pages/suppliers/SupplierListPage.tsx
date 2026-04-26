@@ -11,7 +11,7 @@ import type { Supplier } from '../../types'
 
 function egp(n: number | undefined) {
   if (n == null) return '—'
-  return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 }
 
 // ── Filter types ──────────────────────────────────────────────
@@ -279,7 +279,7 @@ export default function SupplierListPage() {
 
       {/* Stats */}
       <div className="flex items-center gap-4 text-sm text-slate-500">
-        <span>{filtered.length.toLocaleString('ar-EG')} مورد / عميل</span>
+        <span>{filtered.length.toLocaleString('en-US')} مورد / عميل</span>
         {hasActiveFilters && (
           <span className="text-brand-600 font-medium">— فلتر مفعّل</span>
         )}

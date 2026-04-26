@@ -114,7 +114,7 @@ function SeasonCloseModal({ season, open, onClose }: { season: Season; open: boo
                     </p>
                     {!ch.ok && (
                       <p className="text-xs text-slate-500 mt-0.5">
-                        {ch.count} عنصر{ch.amount ? ` — ${new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(ch.amount)}` : ''}
+                        {ch.count} عنصر{ch.amount ? ` — ${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(ch.amount)}` : ''}
                       </p>
                     )}
                   </div>
@@ -440,7 +440,7 @@ function PeriodsTab({ canManage }: { canManage: boolean }) {
                     )}
                   </td>
                   <td className="px-5 py-3.5 text-slate-400 text-xs tabular-nums">
-                    {p.closed_at ? new Date(p.closed_at).toLocaleDateString('ar-EG') : '—'}
+                    {p.closed_at ? new Date(p.closed_at).toLocaleDateString('en-US') : '—'}
                   </td>
                   <td className="px-5 py-3.5 text-left">
                     {canManage && (
@@ -810,8 +810,8 @@ export default function ConfigPage() {
                   <td className="px-4 py-3 text-slate-500">
                     {s.season_type === 'winter' ? 'شتوي' : s.season_type === 'summer' ? 'صيفي' : 'سنوي'}
                   </td>
-                  <td className="px-4 py-3 text-slate-500">{new Date(s.start_date).toLocaleDateString('ar-EG')}</td>
-                  <td className="px-4 py-3 text-slate-500">{new Date(s.end_date).toLocaleDateString('ar-EG')}</td>
+                  <td className="px-4 py-3 text-slate-500">{new Date(s.start_date).toLocaleDateString('en-US')}</td>
+                  <td className="px-4 py-3 text-slate-500">{new Date(s.end_date).toLocaleDateString('en-US')}</td>
                   <td className="px-4 py-3">
                     <span className={STATUS_BADGE[s.status] ?? 'badge-slate'}>{STATUS_LABEL[s.status] ?? s.status}</span>
                   </td>

@@ -26,7 +26,8 @@ const MAPPING_KEYS: Array<{
   { key: 'wages_payable',    label: 'مستحقات الرواتب',         group: 'التزامات',   description: 'الالتزام المقابل عند اعتماد الرواتب قبل الصرف (CR مستحقات)', required: true },
   { key: 'deferred_revenue', label: 'إيرادات مؤجلة',           group: 'التزامات',   description: 'يُستخدم عند استلام دفعات مقدمة من عقود البيع (CR مؤجل)',   required: false },
   // Equity
-  { key: 'equity',           label: 'حقوق الملكية',            group: 'حقوق ملكية', description: 'يُستخدم عند إضافة رأس مال شريك جديد (CR ملكية)',            required: false },
+  { key: 'equity',                label: 'حقوق الملكية',               group: 'حقوق ملكية', description: 'يُستخدم عند إضافة رأس مال شريك جديد (CR ملكية)',                       required: false },
+  { key: 'partner_current_acct',  label: 'حساب الشريك الجاري',         group: 'حقوق ملكية', description: 'الحساب الجاري للشريك — يفصل بين رأس المال والسحوبات الجارية (CR/DR)',  required: false },
   // Harvest GL — only needed when harvest integration is enabled
   { key: 'receivable_default', label: 'الذمم المدينة / عملاء', group: 'حصاد (اختياري)', description: 'الجانب المدين لقيد إيراد الحصاد (DR ذمم عملاء أو صندوق)',   required: false },
   { key: 'harvest_revenue',   label: 'إيراد الحصاد',           group: 'حصاد (اختياري)', description: 'الجانب الدائن لقيد إيراد الحصاد (CR إيرادات الموسم)',       required: false },

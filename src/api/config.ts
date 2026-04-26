@@ -65,22 +65,61 @@ masterRoutes(config, 'sub_locations', 'code', ['code', 'name'])
 config.get('/items', async (c) => {
   const { company_id } = getUser(c)
   const { results } = await c.env.DB
-    .prepare('SELECT * FROM items WHERE company_id = ? ORDER BY code')
+    .prepare(`
+      SELECT i.*, ic.name as category_name 
+      FROM items i 
+      LEFT JOIN item_categories ic ON ic.id = i.category_id 
+      WHERE i.company_id = ? 
+      ORDER BY i.code
+    `)
     .bind(company_id).all()
   return c.json({ success: true, data: results })
 })
 
 config.post('/items', async (c) => {
   const { company_id } = getUser(c)
-  const b = await c.req.json<{ code: number; name: string; unit?: string; warehouse?: string; reorder_threshold?: number }>()
+  const b = await c.req.json<{ 
+    code: number; name: string; unit?: string; warehouse?: string; 
+    reorder_threshold?: number; category_id?: number; track_lots?: number 
+  }>()
 
   if (!b.code || !b.name) return c.json({ success: false, error: 'الكود والاسم مطلوبان' }, 400)
 
   await c.env.DB.prepare(
-    'INSERT OR IGNORE INTO items (code, company_id, name, unit, warehouse, reorder_threshold) VALUES (?,?,?,?,?,?)'
-  ).bind(b.code, company_id, b.name, b.unit ?? null, b.warehouse ?? null, b.reorder_threshold ?? 0).run()
+    'INSERT OR IGNORE INTO items (code, company_id, name, unit, warehouse, reorder_threshold, category_id, track_lots) VALUES (?,?,?,?,?,?,?,?)'
+  ).bind(
+    b.code, company_id, b.name, b.unit ?? null, b.warehouse ?? null, 
+    b.reorder_threshold ?? 0, b.category_id ?? null, b.track_lots ?? 0
+  ).run()
 
   return c.json({ success: true, data: null }, 201)
+})
+
+config.patch('/items/:code', async (c) => {
+  const { company_id } = getUser(c)
+  const code = Number(c.req.param('code'))
+  const b = await c.req.json<{ 
+    name?: string; unit?: string; warehouse?: string; 
+    reorder_threshold?: number; category_id?: number; track_lots?: number 
+  }>()
+
+  const sets = []
+  const binds = []
+  if (b.name) { sets.push('name = ?'); binds.push(b.name) }
+  if (b.unit !== undefined) { sets.push('unit = ?'); binds.push(b.unit) }
+  if (b.warehouse !== undefined) { sets.push('warehouse = ?'); binds.push(b.warehouse) }
+  if (b.reorder_threshold !== undefined) { sets.push('reorder_threshold = ?'); binds.push(b.reorder_threshold) }
+  if (b.category_id !== undefined) { sets.push('category_id = ?'); binds.push(b.category_id) }
+  if (b.track_lots !== undefined) { sets.push('track_lots = ?'); binds.push(b.track_lots) }
+
+  if (sets.length === 0) return c.json({ success: false, error: 'لا توجد بيانات للتحديث' }, 400)
+
+  binds.push(code, company_id)
+  await c.env.DB.prepare(
+    `UPDATE items SET ${sets.join(', ')} WHERE code = ? AND company_id = ?`
+  ).bind(...binds).run()
+
+  return c.json({ success: true })
 })
 
 // Seasons

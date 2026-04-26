@@ -12,6 +12,7 @@ interface JournalEntry {
   id: number; entry_date: string; description: string; entry_number?: string
   ref_type?: string; ref_id?: number; period_name?: string
   total_debit: number; total_credit: number; is_posted: number
+  reversal_entry_id?: number | null
 }
 interface EntryLine {
   account_code: string; account_name?: string; debit: number; credit: number; description?: string
@@ -32,7 +33,7 @@ const REF_COLORS: Record<string, string> = {
   manual:               'bg-purple-50 text-purple-700 border-purple-200',
 }
 
-function fmt(n: number) { return Number(n || 0).toLocaleString('ar-EG') }
+function fmt(n: number) { return Number(n || 0).toLocaleString('en-US') }
 
 // ── Full-page New Entry Form ──────────────────────────────────
 function NewEntryForm({
@@ -269,6 +270,7 @@ function NewEntryForm({
 // ── Main Page ─────────────────────────────────────────────────
 export default function JournalEntriesPage() {
   const { canWrite } = usePermission()
+  const { toast }    = useToast()
   const qc = useQueryClient()
 
   const [start,     setStart]    = useState('')
@@ -279,6 +281,16 @@ export default function JournalEntriesPage() {
   const [showNew,   setShowNew]  = useState(false)
   const [sortKey,   setSortKey]  = useState<'entry_date' | 'total_debit'>('entry_date')
   const [sortDir,   setSortDir]  = useState<'asc' | 'desc'>('desc')
+
+  const reverseMutation = useMutation({
+    mutationFn: (id: number) => glApi.reverseEntry(id),
+    onSuccess: () => {
+      toast('تم إنشاء قيد العكس بنجاح', 'success')
+      qc.invalidateQueries({ queryKey: ['gl-entries'] })
+      qc.invalidateQueries({ queryKey: ['gl-entry', selectedId] })
+    },
+    onError: (err: { message?: string }) => toast(err.message || 'فشل إنشاء قيد العكس', 'error'),
+  })
 
   const toggleSort = (k: typeof sortKey) => {
     if (sortKey === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -325,7 +337,7 @@ export default function JournalEntriesPage() {
           <BookMarked size={22} className="text-purple-600" />
           <h1 className="page-title">قيود اليومية</h1>
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-purple-100 text-purple-700 border border-purple-200">
-            {total.toLocaleString('ar-EG')} قيد
+            {total.toLocaleString('en-US')} قيد
           </span>
         </div>
         {canWrite('gl') && !showNew && (
@@ -387,7 +399,7 @@ export default function JournalEntriesPage() {
             </button>
           )}
           <span className="mr-auto text-[11px] font-bold text-slate-400 uppercase tracking-widest">
-            {total.toLocaleString('ar-EG')} نتيجة
+            {total.toLocaleString('en-US')} نتيجة
           </span>
         </div>
       </div>
@@ -435,11 +447,18 @@ export default function JournalEntriesPage() {
               >
                 <div className="flex items-start justify-between gap-2 mb-2">
                   <p className="text-sm font-semibold text-slate-800 truncate flex-1">{e.description}</p>
-                  {e.ref_type && (
-                    <span className={`inline-flex px-2 py-0.5 rounded-md text-[10px] font-bold border flex-shrink-0 ${refColor}`}>
-                      {REF_LABELS[e.ref_type] ?? e.ref_type}
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {e.reversal_entry_id && (
+                      <span className="inline-flex px-2 py-0.5 rounded-md text-[10px] font-bold border bg-slate-100 text-slate-400 border-slate-200">
+                        معكوس
+                      </span>
+                    )}
+                    {e.ref_type && (
+                      <span className={`inline-flex px-2 py-0.5 rounded-md text-[10px] font-bold border ${refColor}`}>
+                        {REF_LABELS[e.ref_type] ?? e.ref_type}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-slate-400">{e.entry_date}</span>
@@ -495,7 +514,24 @@ export default function JournalEntriesPage() {
                     {detail.ref_id && <> · <span className="font-mono">#{detail.ref_id}</span></>}
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  {detail.reversal_entry_id ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                      <RotateCcw size={11} /> معكوس
+                    </span>
+                  ) : (
+                    canWrite('gl') && (
+                      <button
+                        onClick={() => reverseMutation.mutate(detail.id)}
+                        disabled={reverseMutation.isPending}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition-colors disabled:opacity-40"
+                        title="إنشاء قيد عكسي"
+                      >
+                        <RotateCcw size={11} />
+                        {reverseMutation.isPending ? '...' : 'عكس القيد'}
+                      </button>
+                    )
+                  )}
                   <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
                     <CheckCircle2 size={11} /> مرحّل
                   </span>

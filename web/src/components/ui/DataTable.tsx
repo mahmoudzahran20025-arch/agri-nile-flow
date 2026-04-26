@@ -153,7 +153,7 @@ export default function DataTable<T>({
       {totalPages > 1 && onPage && (
         <div className="flex items-center justify-between px-4 py-3 border-t border-slate-200 text-sm">
           <span className="text-slate-500">
-            {(total ?? 0).toLocaleString('ar-EG')} نتيجة — صفحة {page} من {totalPages}
+            {(total ?? 0).toLocaleString('en-US')} نتيجة — صفحة {page} من {totalPages}
           </span>
           <div className="flex items-center gap-1">
             <button

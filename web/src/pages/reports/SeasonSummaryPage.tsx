@@ -11,7 +11,7 @@ import { useAppStore } from '../../store/appStore'
 
 function egp(n: number | null | undefined) {
   if (n == null) return '0 ج.م'
-  return new Intl.NumberFormat('ar-EG', {
+  return new Intl.NumberFormat('en-US', {
     style: 'currency', currency: 'EGP', maximumFractionDigits: 0,
   }).format(n)
 }
@@ -556,7 +556,7 @@ export default function SeasonSummaryPage() {
                     </td>
                     <td className="td py-5 text-center text-slate-500 font-bold">{r.unit || '—'}</td>
                     <td className="td py-5 text-left text-indigo-600 font-black">
-                      {new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(r.total_qty_out)}
+                      {new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(r.total_qty_out)}
                     </td>
                     <td className="td py-5 text-left">
                        <span className="text-lg font-black text-slate-900">{egp(r.total_value_out)}</span>

@@ -13,7 +13,7 @@ import type { Season } from '../../types'
 
 function egp(n: number | null | undefined, signed = false) {
   if (n == null) return '—'
-  const fmt = new Intl.NumberFormat('ar-EG', {
+  const fmt = new Intl.NumberFormat('en-US', {
     style: 'currency', currency: 'EGP', maximumFractionDigits: 0,
   }).format(Math.abs(n))
   if (!signed) return fmt
@@ -23,7 +23,7 @@ function egp(n: number | null | undefined, signed = false) {
 }
 function num(n: number | null | undefined, dp = 1) {
   if (n == null) return '—'
-  return new Intl.NumberFormat('ar-EG', { maximumFractionDigits: dp }).format(n)
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: dp }).format(n)
 }
 function pct(n: number | null | undefined) {
   if (n == null) return '—'
@@ -241,8 +241,8 @@ export default function SeasonPnLPage() {
               <span className="font-semibold text-brand-700">{data.season.name}</span>
               <span className="text-slate-400">—</span>
               <span className="text-slate-500">
-                {new Date(data.season.start_date).toLocaleDateString('ar-EG')} ←
-                {new Date(data.season.end_date).toLocaleDateString('ar-EG')}
+                {new Date(data.season.start_date).toLocaleDateString('en-US')} ←
+                {new Date(data.season.end_date).toLocaleDateString('en-US')}
               </span>
               {totalArea > 0 && (
                 <span className="mr-auto text-brand-600 font-medium">

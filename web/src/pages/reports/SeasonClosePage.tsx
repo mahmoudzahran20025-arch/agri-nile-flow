@@ -18,7 +18,7 @@ interface CloseCheckResult {
 }
 
 function egp(n: number) {
-  return new Intl.NumberFormat('ar-EG', { minimumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('en-US', { minimumFractionDigits: 0 }).format(n)
 }
 
 export default function SeasonClosePage() {

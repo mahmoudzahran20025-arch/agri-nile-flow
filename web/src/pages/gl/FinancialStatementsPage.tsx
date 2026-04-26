@@ -15,7 +15,7 @@ const TYPE_AR: Record<string, string> = {
 }
 
 function fmt(n: number) {
-  return new Intl.NumberFormat('ar-EG', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n || 0)
+  return new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n || 0)
 }
 function egp(n: number) { return `${fmt(n)} ج` }
 

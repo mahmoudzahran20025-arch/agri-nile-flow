@@ -5,7 +5,7 @@ import {
   ClipboardList, UserCog, TrendingUp, MapPin, Wrench,
   Building2, Shield, Activity, ChevronDown, Link2,
   ShieldCheck, Target, Lock, ShoppingCart, CalendarDays,
-  Landmark, Database, BarChart3,
+  Landmark, Database, BarChart3, FolderTree, ClipboardCheck
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useQuery } from '@tanstack/react-query'
@@ -76,8 +76,11 @@ const NAV_SECTIONS: NavSection[] = [
   // ── Inventory ─────────────────────────────────────────────────
   {
     key: 'inventory', label: 'المخزون', items: [
-      { to: '/inventory',           icon: <Package       size={18} />, label: 'أرصدة المخازن', permission: { module: 'inventory', action: 'read' } },
-      { to: '/inventory/movements', icon: <ClipboardList size={18} />, label: 'حركات المخزون', permission: { module: 'inventory', action: 'read' } },
+      { to: '/inventory',             icon: <Package       size={18} />, label: 'أرصدة المخازن',   permission: { module: 'inventory', action: 'read' } },
+      { to: '/inventory/categories',  icon: <FolderTree    size={18} />, label: 'تصنيفات الأصناف', permission: { module: 'inventory', action: 'read' } },
+      { to: '/inventory/adjustments', icon: <ClipboardCheck size={18} />, label: 'التسويات الجردية', permission: { module: 'inventory', action: 'read' } },
+      { to: '/inventory/movements',   icon: <ClipboardList size={18} />, label: 'حركات المخزون',   permission: { module: 'inventory', action: 'read' } },
+      { to: '/inventory/setup',       icon: <Building2     size={18} />, label: 'إدارة المستودعات', permission: { module: 'inventory', action: 'create' } },
     ],
   },
 

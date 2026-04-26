@@ -327,7 +327,7 @@ export default function EmployeeListPage() {
                 {/* Wage */}
                 <div className="text-left shrink-0 hidden sm:block">
                   <div className="text-sm font-bold text-emerald-700">
-                    {emp.daily_wage.toLocaleString('ar-EG')}
+                    {emp.daily_wage.toLocaleString('en-US')}
                   </div>
                   <div className="text-xs text-gray-400">ج.م / يوم</div>
                 </div>

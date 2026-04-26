@@ -47,7 +47,7 @@ export default function AttendancePage() {
   const summary: AttendanceSummary[] = summaryRes ?? []
   const employees: {id:number; name:string}[] = empRes ?? []
 
-  const monthLabel = new Date(year, month - 1, 1).toLocaleDateString('ar-EG', { year: 'numeric', month: 'long' })
+  const monthLabel = new Date(year, month - 1, 1).toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
 
   const prevMonth = () => {
     if (month === 1) { setMonth(12); setYear(y => y - 1) } else setMonth(m => m - 1)

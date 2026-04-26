@@ -46,7 +46,7 @@ const TYPE_AR: Record<string, string> = {
 
 function egp(n: number) {
   if (!n) return '—'
-  return new Intl.NumberFormat('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Math.abs(n))
+  return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Math.abs(n))
 }
 
 function today() {
@@ -196,7 +196,7 @@ export default function AccountLedgerPage() {
               {lines.map((l, i) => (
                 <tr key={l.id} className={`border-b transition-colors hover:bg-gray-50 ${i % 2 === 0 ? '' : 'bg-gray-50/40'}`}>
                   <td className="td font-mono text-xs text-gray-500">
-                    {new Date(l.entry_date).toLocaleDateString('ar-EG', {
+                    {new Date(l.entry_date).toLocaleDateString('en-US', {
                       day: 'numeric', month: 'short', year: 'numeric',
                     })}
                   </td>

@@ -22,7 +22,7 @@ function fmtMonth(ym: string) {
   return MONTH_AR[m] ?? ym
 }
 function fmtCurrency(n: number) {
-  return new Intl.NumberFormat('ar-EG').format(Math.round(n))
+  return new Intl.NumberFormat('en-US').format(Math.round(n))
 }
 
 // ── KPI card ─────────────────────────────────────────────────
@@ -145,7 +145,7 @@ export default function HrDashboardPage() {
     : 0
 
   // Today date label
-  const todayLabel = new Date(d.today).toLocaleDateString('ar-EG', {
+  const todayLabel = new Date(d.today).toLocaleDateString('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
   })
 
@@ -490,7 +490,7 @@ export default function HrDashboardPage() {
       {/* ── Summary badges row ─────────────────────────────── */}
       <div className="flex items-center gap-4 flex-wrap text-xs text-gray-400">
         <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-emerald-400" /> البيانات مُحدَّثة تلقائياً كل دقيقتين</span>
-        <span>آخر تحديث: {new Date().toLocaleTimeString('ar-EG')}</span>
+        <span>آخر تحديث: {new Date().toLocaleTimeString('en-US')}</span>
       </div>
 
     </div>

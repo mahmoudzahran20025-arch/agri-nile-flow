@@ -391,7 +391,7 @@ function EventDetailModal({
   const canArrive   = hasLocation && ev.status !== 'done' && ev.status !== 'cancelled'
   const canDone     = ev.status !== 'done' && ev.status !== 'cancelled'
 
-  const dateStr = new Date(ev.start_datetime).toLocaleDateString('ar-EG', {
+  const dateStr = new Date(ev.start_datetime).toLocaleDateString('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   })
   const timeStr = ev.all_day ? 'يوم كامل' : formatTime(ev.start_datetime)
@@ -571,7 +571,7 @@ function DayCellPopup({
   onCreateClick: (date: string) => void
   onClose: () => void
 }) {
-  const label = new Date(date + 'T12:00').toLocaleDateString('ar-EG', {
+  const label = new Date(date + 'T12:00').toLocaleDateString('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   })
   return (
@@ -845,7 +845,7 @@ export default function CalendarPage() {
                 >
                   <p className="text-xs font-semibold truncate max-w-[140px]">{ev.title}</p>
                   <p className="text-xs opacity-70 mt-0.5">
-                    {new Date(ev.start_datetime + (ev.start_datetime.includes('T') ? '' : 'T00:00')).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' })}
+                    {new Date(ev.start_datetime + (ev.start_datetime.includes('T') ? '' : 'T00:00')).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}
                     {!ev.all_day && ` · ${formatTime(ev.start_datetime)}`}
                   </p>
                   {ev.location_name && (

@@ -7,7 +7,7 @@ import type { Season } from '../../types'
 
 function egp(n: number | null | undefined) {
   if (n == null || n === 0) return '—'
-  return new Intl.NumberFormat('ar-EG', {
+  return new Intl.NumberFormat('en-US', {
     style: 'currency', currency: 'EGP', maximumFractionDigits: 0,
   }).format(n)
 }
@@ -17,7 +17,7 @@ function egpColored(n: number, positiveColor = 'text-amber-700', negativeColor =
   const color = n >= 0 ? positiveColor : negativeColor
   return (
     <span className={`font-semibold ${color}`}>
-      {abs === 0 ? '—' : new Intl.NumberFormat('ar-EG', {
+      {abs === 0 ? '—' : new Intl.NumberFormat('en-US', {
         style: 'currency', currency: 'EGP', maximumFractionDigits: 0,
       }).format(abs)}
     </span>

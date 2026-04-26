@@ -130,7 +130,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
     : null
 
   const egp = (n: number) =>
-    new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 2 }).format(n)
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 2 }).format(n)
 
   return (
     <Modal open={open} title={`إضافة قيد — ${supplierName}`} onClose={onClose} size="lg">

@@ -12,11 +12,11 @@ import Modal from '../../components/ui/Modal'
 
 function fmt(n: number | null | undefined, dec = 1) {
   if (n === null || n === undefined) return '—'
-  return new Intl.NumberFormat('ar-EG', { minimumFractionDigits: dec, maximumFractionDigits: dec }).format(n)
+  return new Intl.NumberFormat('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec }).format(n)
 }
 function fmtMoney(n: number | null | undefined) {
   if (n === null || n === undefined) return '—'
-  return new Intl.NumberFormat('ar-EG', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n)
 }
 
 // ── KPI Card ──────────────────────────────────────────────────

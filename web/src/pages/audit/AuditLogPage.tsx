@@ -275,7 +275,7 @@ export default function AuditLogPage() {
                        </span>
                        <span className="text-slate-200">|</span>
                        <span className="flex items-center gap-1 text-xs text-slate-400">
-                         <Clock size={12} /> {new Date(entry.created_at).toLocaleString('ar-EG')}
+                         <Clock size={12} /> {new Date(entry.created_at).toLocaleString('en-US')}
                        </span>
                     </div>
                   </div>

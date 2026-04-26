@@ -9,12 +9,12 @@ import {
   financeApi,
   type PurchaseOrder, type POItem, type MatchStatus,
 } from '../../api/finance'
-import { suppliersApi } from '../../api/client'
+import { suppliersApi, configApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
 
 // ── Helpers ───────────────────────────────────────────────────
 function fmtCurrency(n: number) {
-  return new Intl.NumberFormat('ar-EG', { minimumFractionDigits: 2 }).format(n)
+  return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2 }).format(n)
 }
 
 const STATUS_MAP: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
@@ -53,8 +53,8 @@ function MatchBadge({ status }: { status: MatchStatus }) {
   )
 }
 
-interface POFormItem { item_name: string; unit: string; qty_ordered: string; unit_price: string }
-const EMPTY_ITEM: POFormItem = { item_name: '', unit: 'قطعة', qty_ordered: '1', unit_price: '0' }
+interface POFormItem { item_name: string; unit: string; qty_ordered: string; unit_price: string; center_code: string }
+const EMPTY_ITEM: POFormItem = { item_name: '', unit: 'قطعة', qty_ordered: '1', unit_price: '0', center_code: '' }
 
 // ── Three-Way Match Section ───────────────────────────────────
 function ThreeWayMatchSection({ poId, onInvoice }: { poId: number; onInvoice: () => void }) {
@@ -368,6 +368,12 @@ export default function PurchaseOrdersPage() {
     staleTime: 120_000,
   })
 
+  const { data: costCentersData } = useQuery({
+    queryKey: ['cost-centers'],
+    queryFn:  () => configApi.costCenters(),
+    staleTime: 300_000,
+  })
+
   const { data: detail, isLoading: detailLoading } = useQuery({
     queryKey: ['purchase-order', expandedId],
     queryFn:  () => financeApi.getPurchaseOrder(expandedId!),
@@ -388,6 +394,7 @@ export default function PurchaseOrdersPage() {
           unit:        i.unit || undefined,
           qty_ordered: Number(i.qty_ordered) || 1,
           unit_price:  Number(i.unit_price) || 0,
+          center_code: i.center_code ? Number(i.center_code) : undefined,
         })),
     }),
     onSuccess: () => {
@@ -573,10 +580,11 @@ export default function PurchaseOrdersPage() {
             </div>
 
             <div className="grid grid-cols-12 gap-1.5 text-xs text-gray-500 font-medium mb-1 px-1">
-              <span className="col-span-4">الصنف</span>
+              <span className="col-span-3">الصنف</span>
               <span className="col-span-2">الوحدة</span>
               <span className="col-span-2">الكمية</span>
-              <span className="col-span-3">سعر الوحدة</span>
+              <span className="col-span-2">سعر الوحدة</span>
+              <span className="col-span-2">مركز التكلفة</span>
               <span className="col-span-1"></span>
             </div>
 
@@ -584,7 +592,7 @@ export default function PurchaseOrdersPage() {
               {formItems.map((item, idx) => (
                 <div key={idx} className="grid grid-cols-12 gap-1.5 items-center">
                   <input
-                    className="col-span-4 border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-brand-500"
+                    className="col-span-3 border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-brand-500"
                     placeholder="اسم الصنف"
                     value={item.item_name}
                     onChange={e => setFormItems(items => items.map((it, i) => i === idx ? { ...it, item_name: e.target.value } : it))}
@@ -603,10 +611,20 @@ export default function PurchaseOrdersPage() {
                   />
                   <input
                     type="number" min="0" step="any"
-                    className="col-span-3 border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-brand-500"
+                    className="col-span-2 border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-brand-500"
                     value={item.unit_price}
                     onChange={e => setFormItems(items => items.map((it, i) => i === idx ? { ...it, unit_price: e.target.value } : it))}
                   />
+                  <select
+                    className="col-span-2 border border-gray-300 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-brand-500 bg-white"
+                    value={item.center_code}
+                    onChange={e => setFormItems(items => items.map((it, i) => i === idx ? { ...it, center_code: e.target.value } : it))}
+                  >
+                    <option value="">— مركز —</option>
+                    {(costCentersData as Array<{ code: number; name: string }> ?? []).map(cc => (
+                      <option key={cc.code} value={cc.code}>{cc.name}</option>
+                    ))}
+                  </select>
                   <button
                     onClick={() => setFormItems(items => items.filter((_, i) => i !== idx))}
                     disabled={formItems.length === 1}

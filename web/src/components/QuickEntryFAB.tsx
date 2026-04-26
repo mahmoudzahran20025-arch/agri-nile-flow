@@ -65,7 +65,7 @@ export default function QuickEntryFAB() {
     <div
       ref={ref}
       dir="rtl"
-      className="fixed bottom-24 md:bottom-8 left-4 md:left-auto md:right-6 z-40 flex flex-col-reverse items-start md:items-end gap-2"
+      className="fixed bottom-24 md:bottom-8 left-4 md:left-8 z-40 flex flex-col-reverse items-start gap-2"
     >
       {/* Action items */}
       {open && (

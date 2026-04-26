@@ -183,7 +183,7 @@ export default function UsersPage() {
                   </td>
                   <td className="px-4 py-3 text-slate-400 text-xs">
                     {u.last_login
-                      ? new Date(u.last_login).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+                      ? new Date(u.last_login).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' })
                       : 'لم يسجل دخول بعد'}
                   </td>
                   <td className="px-4 py-3">

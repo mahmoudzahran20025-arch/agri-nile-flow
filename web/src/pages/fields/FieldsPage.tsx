@@ -227,7 +227,7 @@ export default function FieldsPage() {
                 <tr key={f.id} className="border-b hover:bg-gray-50 transition-colors">
                   <td className="td font-mono text-brand-700">{f.code}</td>
                   <td className="td font-medium">{f.name}</td>
-                  <td className="td text-center">{f.area_feddan?.toLocaleString('ar-EG')}</td>
+                  <td className="td text-center">{f.area_feddan?.toLocaleString('en-US')}</td>
                   <td className="td text-gray-500">{f.season_name ?? '—'}</td>
                   <td className="td">{f.crop_type ?? '—'}</td>
                   <td className="td">{f.irrigation_type ?? '—'}</td>

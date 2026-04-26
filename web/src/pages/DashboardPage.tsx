@@ -21,11 +21,11 @@ function todayStr() {
 }
 
 function egp(n: number) {
-  return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 }
 
 function dateAr(iso: string) {
-  return new Date(iso).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' })
+  return new Date(iso).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })
 }
 
 export default function DashboardPage() {
@@ -84,6 +84,27 @@ export default function DashboardPage() {
     enabled:  canReadFinance,
   })
 
+  type SetupPeriod = { id: number; is_closed: number }
+  const { data: setupPeriods } = useQuery({
+    queryKey: ['gl-periods'],
+    queryFn:  glApi.periods as () => Promise<SetupPeriod[]>,
+    staleTime: 300_000,
+    enabled:  isAdmin,
+  })
+  type SetupMapping = { mapping_key: string; account_code: string }
+  const { data: setupMappings } = useQuery({
+    queryKey: ['gl-mappings'],
+    queryFn:  glApi.mappings as () => Promise<SetupMapping[]>,
+    staleTime: 300_000,
+    enabled:  isAdmin,
+  })
+  const hasOpenPeriod   = (setupPeriods ?? []).some(p => !p.is_closed)
+  const REQUIRED_KEYS   = ['cash', 'expense_default', 'revenue_default', 'accounts_payable', 'inventory', 'wages']
+  const mappedKeys      = new Set((setupMappings ?? []).map(m => m.mapping_key))
+  const missingMappings = REQUIRED_KEYS.filter(k => !mappedKeys.has(k))
+  const setupDone       = hasOpenPeriod && missingMappings.length === 0
+  const periodsLoaded   = setupPeriods !== undefined && setupMappings !== undefined
+
   const { data: seasonPnL } = useQuery({
     queryKey: ['reports', 'season-pnl', seasonId],
     queryFn:  () => reportsApi.seasonPnL(seasonId!),
@@ -133,9 +154,55 @@ export default function DashboardPage() {
       <div className="page-header">
         <h1 className="page-title">لوحة التحكم</h1>
         <span className="text-sm text-slate-400">
-          {new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+          {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
         </span>
       </div>
+
+      {/* ── Setup Checklist (shown to admins until everything is configured) ── */}
+      {isAdmin && periodsLoaded && !setupDone && (
+        <div className="card border-2 border-amber-200 bg-amber-50/60 p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <ShieldAlert size={16} className="text-amber-600" />
+            <h3 className="text-sm font-bold text-amber-800">إعداد الشركة غير مكتمل — أكمل الخطوات التالية قبل الترحيل</h3>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {/* Fiscal period */}
+            <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold ${
+              hasOpenPeriod ? 'bg-emerald-50 text-emerald-700' : 'bg-white border border-amber-200 text-amber-700'
+            }`}>
+              {hasOpenPeriod
+                ? <CheckCircle2 size={13} className="text-emerald-500 shrink-0" />
+                : <AlertTriangle size={13} className="text-amber-500 shrink-0" />}
+              <span className="flex-1">فترة مالية مفتوحة</span>
+              {!hasOpenPeriod && (
+                <a href="/gl/periods" className="font-bold underline underline-offset-2 text-amber-700 hover:text-amber-900">إنشاء ←</a>
+              )}
+            </div>
+            {/* GL mappings */}
+            {REQUIRED_KEYS.map(k => {
+              const ok = mappedKeys.has(k)
+              const labels: Record<string, string> = {
+                cash: 'حساب الخزينة', expense_default: 'حساب المصروفات',
+                revenue_default: 'حساب الإيرادات', accounts_payable: 'حساب الموردين',
+                inventory: 'حساب المخزون', wages: 'حساب الأجور',
+              }
+              return (
+                <div key={k} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold ${
+                  ok ? 'bg-emerald-50 text-emerald-700' : 'bg-white border border-amber-200 text-amber-700'
+                }`}>
+                  {ok
+                    ? <CheckCircle2 size={13} className="text-emerald-500 shrink-0" />
+                    : <AlertTriangle size={13} className="text-amber-500 shrink-0" />}
+                  <span className="flex-1">{labels[k]}</span>
+                  {!ok && (
+                    <a href="/gl/mappings" className="font-bold underline underline-offset-2 text-amber-700 hover:text-amber-900">إعداد ←</a>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* KPI Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -440,7 +507,7 @@ export default function DashboardPage() {
           {cashflow && cashflow.length > 0 ? (
             <div className="space-y-2">
               {cashflow.map(row => {
-                const monthName = new Date(row.year, row.month - 1).toLocaleDateString('ar-EG', { month: 'short', year: '2-digit' })
+                const monthName = new Date(row.year, row.month - 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
                 const max = Math.max(...cashflow.map(r => Math.max(r.cash_in, r.cash_out)), 1)
                 return (
                   <div key={`${row.year}-${row.month}`} className="flex items-center gap-3 text-sm">

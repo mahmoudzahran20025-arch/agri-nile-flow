@@ -23,7 +23,7 @@ interface CompanyRow {
 
 function egp(n: number | null) {
   if (n == null) return '—'
-  return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 }
 
 const EMPTY_FORM = { code: '', name: '', address: '', phone: '' }

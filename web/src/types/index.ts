@@ -88,6 +88,10 @@ export interface CashTransaction {
   field_id?:       number | null
   center_code?:    number | null
   season_id?:      number | null
+  document_type?:  string | null
+  unit?:           string | null
+  quantity?:       number | null
+  unit_price?:     number | null
 }
 
 export interface InventoryBalance {

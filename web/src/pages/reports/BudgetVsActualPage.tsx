@@ -11,7 +11,7 @@ import type { Season } from '../../types'
 
 // ── Helpers ───────────────────────────────────────────────────
 function egp(n: number) {
-  return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 }
 function pct(n: number | null) {
   if (n == null) return '—'

@@ -140,7 +140,7 @@ export default function ErrorLogPage() {
                     <p className="text-sm font-black text-rose-700/80 line-clamp-1">{entry.error_message}</p>
                     <div className="flex items-center gap-4 mt-2">
                        <span className="flex items-center gap-1.5 text-xs text-slate-400 font-bold">
-                         <Globe size={14} /> {new Date(entry.created_at).toLocaleString('ar-EG')}
+                         <Globe size={14} /> {new Date(entry.created_at).toLocaleString('en-US')}
                        </span>
                        {entry.user_name && (
                          <span className="flex items-center gap-1.5 text-xs text-slate-400 font-bold border-r pr-4 border-slate-200">

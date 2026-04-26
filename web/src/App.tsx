@@ -11,9 +11,13 @@ import SupplierHubPage       from './pages/suppliers/SupplierHubPage'
 import SupplierDetailPage    from './pages/suppliers/SupplierDetailPage'
 import CashJournalPage       from './pages/treasury/CashJournalPage'
 import WarehouseBalancesPage from './pages/inventory/WarehouseBalancesPage'
+import WarehousesPage        from './pages/inventory/WarehousesPage'
 import InventoryMovementsPage from './pages/inventory/InventoryMovementsPage'
 import ItemCardPage from './pages/inventory/ItemCardPage'
 import CostByFieldPage from './pages/inventory/CostByFieldPage'
+import ItemCategoriesPage from './pages/inventory/ItemCategoriesPage'
+import InventoryAdjustmentsPage from './pages/inventory/InventoryAdjustmentsPage'
+import AdjustmentDetailPage from './pages/inventory/AdjustmentDetailPage'
 import UsersPage       from './pages/users/UsersPage'
 import PartnersPage    from './pages/treasury/PartnersPage'
 import ReportsPage     from './pages/ReportsPage'
@@ -117,10 +121,14 @@ export default function App() {
         <Route path="treasury/partners" element={<PartnersPage />} />
 
         {/* Inventory */}
-        <Route path="inventory"                element={<WarehouseBalancesPage />} />
-        <Route path="inventory/movements"      element={<InventoryMovementsPage />} />
-        <Route path="inventory/item/:code"     element={<ItemCardPage />} />
-        <Route path="inventory/cost-by-field"  element={<CostByFieldPage />} />
+        <Route path="inventory"                  element={<WarehouseBalancesPage />} />
+        <Route path="inventory/categories"       element={<ItemCategoriesPage />} />
+        <Route path="inventory/adjustments"      element={<InventoryAdjustmentsPage />} />
+        <Route path="inventory/adjustments/:id"  element={<AdjustmentDetailPage />} />
+        <Route path="inventory/setup"            element={<WarehousesPage />} />
+        <Route path="inventory/movements"        element={<InventoryMovementsPage />} />
+        <Route path="inventory/item/:code"       element={<ItemCardPage />} />
+        <Route path="inventory/cost-by-field"    element={<CostByFieldPage />} />
 
         {/* HR Module */}
         <Route path="hr/dashboard"            element={<HrDashboardPage />} />

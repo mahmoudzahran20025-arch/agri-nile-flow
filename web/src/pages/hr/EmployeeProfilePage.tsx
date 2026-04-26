@@ -202,7 +202,7 @@ export default function EmployeeProfilePage() {
           </div>
         </div>
         <div className="text-left shrink-0 hidden sm:block">
-          <div className="text-2xl font-bold text-emerald-700">{employee.daily_wage.toLocaleString('ar-EG')}</div>
+          <div className="text-2xl font-bold text-emerald-700">{employee.daily_wage.toLocaleString('en-US')}</div>
           <div className="text-xs text-gray-400">ج.م / يوم</div>
           {attendanceSummaryBadge(presentDays, absentDays)}
         </div>
@@ -293,7 +293,7 @@ export default function EmployeeProfilePage() {
                       { label: 'رقم الجوال',       value: employee.phone ?? '—' },
                       { label: 'المسمى الوظيفي',   value: employee.role_title ?? '—' },
                       { label: 'تاريخ التعيين',    value: employee.hire_date ?? '—' },
-                      { label: 'الأجر اليومي',     value: `${employee.daily_wage.toLocaleString('ar-EG')} ج.م` },
+                      { label: 'الأجر اليومي',     value: `${employee.daily_wage.toLocaleString('en-US')} ج.م` },
                     ] as { label: string; value: string }[]).map(k => (
                       <div key={k.label} className="bg-gray-50 rounded-xl p-3">
                         <div className="text-xs text-gray-400 mb-1">{k.label}</div>
@@ -417,13 +417,13 @@ export default function EmployeeProfilePage() {
                       { label: 'المستوى',            value: LEVEL_AR[jobDetails.position_level ?? ''] ?? '—' },
                       { label: 'نوع العقد',          value: CONTRACT_AR[jobDetails.contract_type ?? ''] ?? '—' },
                       { label: 'الوردية',            value: SHIFT_AR[jobDetails.shift_type ?? ''] ?? '—' },
-                      { label: 'الراتب الأساسي',    value: `${jobDetails.base_salary.toLocaleString('ar-EG')} ج.م` },
-                      { label: 'بدل السكن',         value: `${(jobDetails.housing_allow ?? 0).toLocaleString('ar-EG')} ج.م` },
-                      { label: 'بدل النقل',         value: `${(jobDetails.transport_allow ?? 0).toLocaleString('ar-EG')} ج.م` },
-                      { label: 'بدلات أخرى',       value: `${(jobDetails.other_allows ?? 0).toLocaleString('ar-EG')} ج.م` },
-                      { label: 'التأمينات',         value: `${(jobDetails.social_insur ?? 0).toLocaleString('ar-EG')} ج.م` },
+                      { label: 'الراتب الأساسي',    value: `${jobDetails.base_salary.toLocaleString('en-US')} ج.م` },
+                      { label: 'بدل السكن',         value: `${(jobDetails.housing_allow ?? 0).toLocaleString('en-US')} ج.م` },
+                      { label: 'بدل النقل',         value: `${(jobDetails.transport_allow ?? 0).toLocaleString('en-US')} ج.م` },
+                      { label: 'بدلات أخرى',       value: `${(jobDetails.other_allows ?? 0).toLocaleString('en-US')} ج.م` },
+                      { label: 'التأمينات',         value: `${(jobDetails.social_insur ?? 0).toLocaleString('en-US')} ج.م` },
                       { label: 'ضريبة الدخل',      value: `${jobDetails.income_tax_pct ?? 0}%` },
-                      { label: 'صافي الراتب',      value: `${(jobDetails.base_salary + (jobDetails.housing_allow ?? 0) + (jobDetails.transport_allow ?? 0) + (jobDetails.other_allows ?? 0) - (jobDetails.social_insur ?? 0)).toLocaleString('ar-EG')} ج.م` },
+                      { label: 'صافي الراتب',      value: `${(jobDetails.base_salary + (jobDetails.housing_allow ?? 0) + (jobDetails.transport_allow ?? 0) + (jobDetails.other_allows ?? 0) - (jobDetails.social_insur ?? 0)).toLocaleString('en-US')} ج.م` },
                     ] as { label: string; value: string }[]).map(k => (
                       <div key={k.label} className="bg-gray-50 rounded-xl p-3">
                         <div className="text-xs text-gray-400 mb-1">{k.label}</div>
@@ -507,7 +507,7 @@ export default function EmployeeProfilePage() {
                       return (
                         <div key={a.id} className="bg-gray-50 border rounded-xl px-4 py-3 flex items-center justify-between gap-3">
                           <div>
-                            <div className="text-sm font-semibold">{a.amount.toLocaleString('ar-EG')} ج.م</div>
+                            <div className="text-sm font-semibold">{a.amount.toLocaleString('en-US')} ج.م</div>
                             <div className="text-xs text-gray-400 mt-0.5">
                               {a.request_date} — {a.repay_months} شهر{a.reason ? ` — ${a.reason}` : ''}
                             </div>

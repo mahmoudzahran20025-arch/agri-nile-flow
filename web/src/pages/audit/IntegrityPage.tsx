@@ -92,7 +92,7 @@ export default function IntegrityPage() {
   const checks = (data?.checks ?? []) as IntegrityCheck[]
   const result  = data ? { ...data, checks } : null
   const lastChecked = dataUpdatedAt
-    ? new Date(dataUpdatedAt).toLocaleTimeString('ar-EG')
+    ? new Date(dataUpdatedAt).toLocaleTimeString('en-US')
     : null
 
   const scoreColor = !result

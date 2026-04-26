@@ -25,10 +25,10 @@ const colorMap = {
 function fmt(value: number | string, format?: Props['format']): string {
   if (typeof value === 'string') return value
   if (format === 'currency') {
-    return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(value)
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(value)
   }
   if (format === 'number') {
-    return new Intl.NumberFormat('ar-EG').format(value)
+    return new Intl.NumberFormat('en-US').format(value)
   }
   return String(value)
 }
