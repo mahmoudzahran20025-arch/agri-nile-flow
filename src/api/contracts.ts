@@ -129,9 +129,24 @@ contracts.patch('/sales/:id/status', async (c) => {
   return c.json({ success: true, data: null })
 })
 
+// GET /contracts/sales/:id/advances — list all advance receipts for a contract
+contracts.get('/sales/:id/advances', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const contract = await c.env.DB
+    .prepare('SELECT id FROM sales_contracts WHERE id = ? AND company_id = ?')
+    .bind(id, company_id).first<{ id: number }>()
+  if (!contract) return c.json({ success: false, error: 'العقد غير موجود' }, 404)
+
+  const { results } = await c.env.DB
+    .prepare('SELECT * FROM contract_advances WHERE company_id = ? AND contract_id = ? ORDER BY receipt_date DESC, id DESC')
+    .bind(company_id, id).all()
+  return c.json({ success: true, data: results })
+})
+
 // POST /contracts/sales/:id/receive-advance
 // Records cash received as advance from buyer: DR Cash / CR Deferred Revenue.
-// Updates advance_paid and writes advance_gl_entry_id for audit traceability.
+// Supports multiple advances; advance_paid on the contract is the running total.
 contracts.post('/sales/:id/receive-advance', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
@@ -143,10 +158,9 @@ contracts.post('/sales/:id/receive-advance', async (c) => {
   if (!receipt_date)          return c.json({ success: false, error: 'تاريخ الاستلام مطلوب' }, 400)
 
   const contract = await c.env.DB
-    .prepare('SELECT id, contract_number, advance_gl_entry_id FROM sales_contracts WHERE id = ? AND company_id = ?')
-    .bind(id, company_id).first<{ id: number; contract_number: string; advance_gl_entry_id: number | null }>()
+    .prepare('SELECT id, contract_number, advance_paid FROM sales_contracts WHERE id = ? AND company_id = ?')
+    .bind(id, company_id).first<{ id: number; contract_number: string; advance_paid: number }>()
   if (!contract) return c.json({ success: false, error: 'العقد غير موجود' }, 404)
-  if (contract.advance_gl_entry_id) return c.json({ success: false, error: 'تم تسجيل دفعة مقدمة مسبقاً لهذا العقد' }, 409)
 
   let glId: number | null = null
   try {
@@ -159,11 +173,19 @@ contracts.post('/sales/:id/receive-advance', async (c) => {
     return c.json({ success: false, error: `فشل إنشاء القيد المحاسبي: ${e.message}` }, 400)
   }
 
+  // Log each advance in the new table
+  await c.env.DB.prepare(
+    `INSERT INTO contract_advances (company_id, contract_id, amount, receipt_date, notes, gl_entry_id, created_by)
+     VALUES (?,?,?,?,?,?,?)`
+  ).bind(company_id, id, amount, receipt_date, notes ?? null, glId, userId).run()
+
+  // Update running total; keep advance_gl_entry_id pointing to the latest entry for audit
+  const newTotal = Number(contract.advance_paid ?? 0) + amount
   await c.env.DB.prepare(
     'UPDATE sales_contracts SET advance_paid = ?, advance_gl_entry_id = ? WHERE id = ? AND company_id = ?'
-  ).bind(amount, glId, id, company_id).run()
+  ).bind(newTotal, glId, id, company_id).run()
 
-  return c.json({ success: true, data: { gl_entry_id: glId } })
+  return c.json({ success: true, data: { gl_entry_id: glId, advance_paid: newTotal } })
 })
 
 // ── Summary (for dashboard) ──────────────────────────────────

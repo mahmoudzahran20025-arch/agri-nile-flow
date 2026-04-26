@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { FileText, Plus, ShoppingCart, TrendingUp, Banknote, CheckCircle2 } from 'lucide-react'
+import { FileText, Plus, ShoppingCart, TrendingUp, Banknote, CheckCircle2, History } from 'lucide-react'
 import { contractsApi, configApi, suppliersApi, fieldsApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
 import { usePermission } from '../../hooks/usePermission'
@@ -18,6 +18,10 @@ interface SalesContract {
   advance_paid: number; status: string; season_name?: string; field_name?: string
   advance_gl_entry_id?: number | null
 }
+interface ContractAdvance {
+  id: number; amount: number; receipt_date: string; notes?: string | null
+  gl_entry_id?: number | null; created_at: string
+}
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'مسودة', active: 'نشط', partial: 'جزئي', completed: 'مكتمل', cancelled: 'ملغى',
@@ -29,7 +33,7 @@ const STATUS_BADGE: Record<string, string> = {
 }
 const CONTRACT_STATUSES = ['draft','active','partial','completed','cancelled']
 
-function fmt(n: number) { return Number(n).toLocaleString('ar-EG') }
+function fmt(n: number) { return Number(n).toLocaleString('en-US') }
 
 export default function ContractsPage() {
   const { canWrite } = usePermission()
@@ -132,11 +136,17 @@ export default function ContractsPage() {
     onSuccess: (res: { success: boolean; error?: string }) => {
       if (!res.success) { setAdvErr(res.error ?? 'خطأ'); return }
       qc.invalidateQueries({ queryKey: ['contracts-sales'] })
-      setAdv(null)
+      qc.invalidateQueries({ queryKey: ['contract-advances', advContract?.id] })
       setAdvF({ amount: '', receipt_date: new Date().toISOString().slice(0,10), notes: '' })
       setAdvErr('')
     },
     onError: (e: Error) => setAdvErr(e.message),
+  })
+
+  const { data: advanceHistory = [] } = useQuery({
+    queryKey: ['contract-advances', advContract?.id],
+    queryFn:  () => contractsApi.listAdvances(advContract!.id),
+    enabled:  !!advContract,
   })
 
   const CROPS = ['قمح','ذرة','أرز','قصب سكر','قطن','بنجر','بصل','طماطم','أخرى']
@@ -301,11 +311,11 @@ export default function ContractsPage() {
                       </select>
                     </td>
                     <td className="td">
-                      {s.advance_paid > 0 && !s.advance_gl_entry_id && canWrite('contracts') && (
+                      {canWrite('contracts') && s.status !== 'cancelled' && (
                         <button
-                          onClick={() => { setAdv(s); setAdvF(f => ({ ...f, amount: String(s.advance_paid) })); setAdvErr('') }}
+                          onClick={() => { setAdv(s); setAdvF(f => ({ ...f, amount: '' })); setAdvErr('') }}
                           className="flex items-center gap-1 text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-1 rounded-lg hover:bg-emerald-100 whitespace-nowrap"
-                          title="تسجيل الدفعة المقدمة في الخزينة والمحاسبة"
+                          title="استلام دفعة مقدمة جديدة"
                         >
                           <Banknote size={12} /> استلام مقدم
                         </button>
@@ -394,58 +404,101 @@ export default function ContractsPage() {
       <Modal
         open={!!advContract}
         onClose={() => { setAdv(null); setAdvErr('') }}
-        title="استلام دفعة مقدمة من عقد بيع"
+        title="الدفعات المقدمة"
+        size="lg"
       >
         {advContract && (
-          <div className="space-y-4">
-            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
-              <p className="text-sm font-semibold text-emerald-800">
-                عقد #{advContract.contract_number} — {advContract.buyer_name}
-              </p>
-              <p className="text-xs text-emerald-600 mt-1">
-                سيتم إنشاء قيد محاسبي: DR خزينة / CR إيرادات مؤجلة
-              </p>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="col-span-2">
-                <label className="label">المبلغ المستلم (ج.م) *</label>
-                <input
-                  className="input"
-                  type="number"
-                  min="1"
-                  value={advForm.amount}
-                  onChange={e => setAdvF(f => ({ ...f, amount: e.target.value }))}
-                />
-              </div>
+          <div className="space-y-5">
+            {/* Contract summary bar */}
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 flex items-center justify-between">
               <div>
-                <label className="label">تاريخ الاستلام *</label>
-                <input
-                  className="input"
-                  type="date"
-                  value={advForm.receipt_date}
-                  onChange={e => setAdvF(f => ({ ...f, receipt_date: e.target.value }))}
-                />
+                <p className="text-sm font-semibold text-emerald-800">
+                  عقد #{advContract.contract_number} — {advContract.buyer_name}
+                </p>
+                <p className="text-xs text-emerald-600 mt-0.5">
+                  إجمالي العقد: {fmt(advContract.quantity_ton * advContract.unit_price)} ج.م
+                </p>
               </div>
-              <div>
-                <label className="label">ملاحظات</label>
-                <input
-                  className="input"
-                  value={advForm.notes}
-                  onChange={e => setAdvF(f => ({ ...f, notes: e.target.value }))}
-                  placeholder="اختياري"
-                />
+              <div className="text-left">
+                <p className="text-xs text-gray-500">إجمالي المقدمات</p>
+                <p className="text-lg font-bold text-emerald-700">{fmt(advContract.advance_paid)} ج.م</p>
               </div>
             </div>
-            {advErr && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{advErr}</p>}
-            <div className="flex justify-end gap-3 pt-2">
-              <button className="btn btn-ghost" onClick={() => { setAdv(null); setAdvErr('') }}>إلغاء</button>
-              <button
-                className="btn btn-primary"
-                onClick={() => advContract && receiveAdvMut.mutate(advContract)}
-                disabled={receiveAdvMut.isPending || !advForm.amount || !advForm.receipt_date || Number(advForm.amount) <= 0}
-              >
-                {receiveAdvMut.isPending ? 'جاري التسجيل...' : 'تسجيل الاستلام وإنشاء القيد'}
-              </button>
+
+            {/* Advances history */}
+            {(advanceHistory as ContractAdvance[]).length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <History size={14} className="text-gray-400" />
+                  <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">سجل الدفعات</span>
+                </div>
+                <div className="rounded-xl border border-gray-100 overflow-hidden divide-y divide-gray-50">
+                  {(advanceHistory as ContractAdvance[]).map(adv => (
+                    <div key={adv.id} className="flex items-center justify-between px-4 py-2.5 text-sm bg-white hover:bg-gray-50">
+                      <div className="flex items-center gap-3">
+                        {adv.gl_entry_id
+                          ? <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />
+                          : <span className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 shrink-0" />
+                        }
+                        <div>
+                          <span className="font-medium text-gray-800">{fmt(adv.amount)} ج.م</span>
+                          {adv.notes && <span className="text-gray-400 text-xs mr-2">— {adv.notes}</span>}
+                        </div>
+                      </div>
+                      <span className="text-xs text-gray-400 shrink-0">{adv.receipt_date}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* New advance form */}
+            <div className="border-t pt-4">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">دفعة جديدة</p>
+              <p className="text-xs text-gray-400 mb-3">سيتم إنشاء قيد محاسبي تلقائياً: DR خزينة / CR إيرادات مؤجلة</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <label className="label">المبلغ المستلم (ج.م) *</label>
+                  <input
+                    className="input"
+                    type="number"
+                    min="1"
+                    step="0.01"
+                    value={advForm.amount}
+                    onChange={e => setAdvF(f => ({ ...f, amount: e.target.value }))}
+                    placeholder="0.00"
+                  />
+                </div>
+                <div>
+                  <label className="label">تاريخ الاستلام *</label>
+                  <input
+                    className="input"
+                    type="date"
+                    value={advForm.receipt_date}
+                    onChange={e => setAdvF(f => ({ ...f, receipt_date: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="label">ملاحظات</label>
+                  <input
+                    className="input"
+                    value={advForm.notes}
+                    onChange={e => setAdvF(f => ({ ...f, notes: e.target.value }))}
+                    placeholder="اختياري"
+                  />
+                </div>
+              </div>
+              {advErr && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mt-3">{advErr}</p>}
+              <div className="flex justify-end gap-3 pt-4">
+                <button className="btn btn-ghost" onClick={() => { setAdv(null); setAdvErr('') }}>إغلاق</button>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => advContract && receiveAdvMut.mutate(advContract)}
+                  disabled={receiveAdvMut.isPending || !advForm.amount || !advForm.receipt_date || Number(advForm.amount) <= 0}
+                >
+                  {receiveAdvMut.isPending ? 'جاري التسجيل...' : 'تسجيل الدفعة وإنشاء القيد'}
+                </button>
+              </div>
             </div>
           </div>
         )}
