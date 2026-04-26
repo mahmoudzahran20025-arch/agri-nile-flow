@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import Modal from '../ui/Modal'
-import { configApi } from '../../api/client'
+import { configApi, inventoryApi } from '../../api/client'
 
 interface Props { open: boolean; onClose: () => void }
 
@@ -10,7 +10,12 @@ export default function AddItemModal({ open, onClose }: Props) {
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState('')
   const [form, setForm] = useState({
-    code: '', name: '', unit: '', warehouse: '', reorder_threshold: '0',
+    code: '', name: '', unit: '', warehouse: '', reorder_threshold: '0', category_id: '',
+  })
+
+  const { data: categories } = useQuery({
+    queryKey: ['item-categories'],
+    queryFn: () => inventoryApi.categories(),
   })
 
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }))
@@ -27,13 +32,14 @@ export default function AddItemModal({ open, onClose }: Props) {
         unit:              form.unit.trim() || undefined,
         warehouse:         form.warehouse.trim() || undefined,
         reorder_threshold: Number(form.reorder_threshold) || 0,
+        category_id:       form.category_id ? Number(form.category_id) : undefined,
       })
       if (!(res as { success: boolean }).success) {
         setError((res as { error: string }).error ?? 'حدث خطأ')
         return
       }
       await qc.invalidateQueries({ queryKey: ['config', 'items'] })
-      setForm({ code: '', name: '', unit: '', warehouse: '', reorder_threshold: '0' })
+      setForm({ code: '', name: '', unit: '', warehouse: '', reorder_threshold: '0', category_id: '' })
       onClose()
     } catch {
       setError('حدث خطأ في الاتصال')
@@ -71,10 +77,25 @@ export default function AddItemModal({ open, onClose }: Props) {
           </div>
         </div>
 
-        <div>
-          <label className="label">حد التنبيه (كمية إعادة الطلب)</label>
-          <input type="number" className="input" min="0" value={form.reorder_threshold}
-            onChange={e => set('reorder_threshold', e.target.value)} />
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="label">تصنيف الصنف</label>
+            <select 
+              className="input" 
+              value={form.category_id}
+              onChange={e => set('category_id', e.target.value)}
+            >
+              <option value="">-- بدون تصنيف --</option>
+              {categories?.map((cat: any) => (
+                <option key={cat.id} value={cat.id}>{cat.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">حد التنبيه (كمية إعادة الطلب)</label>
+            <input type="number" className="input" min="0" value={form.reorder_threshold}
+              onChange={e => set('reorder_threshold', e.target.value)} />
+          </div>
         </div>
 
         {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}

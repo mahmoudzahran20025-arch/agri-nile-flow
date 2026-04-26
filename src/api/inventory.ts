@@ -8,35 +8,25 @@ import { logAudit } from '../lib/audit'
 const inventory = new Hono<{ Bindings: Env }>()
 inventory.use('*', authMiddleware)
 
-// GET /api/inventory/balances?warehouse=
+// GET /api/inventory/balances?warehouse_id=
 inventory.get('/balances', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
-  const warehouse = c.req.query('warehouse')
+  const warehouseId = c.req.query('warehouse_id')
+  const oldWarehouse = c.req.query('warehouse') // backward compat
 
-  const whereWarehouse = warehouse ? 'AND warehouse = ?' : ''
-  const subWhere = warehouse ? 'AND warehouse = ?' : ''
-  const binds = warehouse 
-    ? [company_id, warehouse, company_id, warehouse] 
-    : [company_id, company_id]
+  let query = `SELECT * FROM vw_stock_balances WHERE company_id = ?`
+  const binds: unknown[] = [company_id]
+  
+  if (warehouseId) {
+    query += ` AND warehouse_id = ?`
+    binds.push(Number(warehouseId))
+  } else if (oldWarehouse) {
+     query += ` AND warehouse = ?`
+     binds.push(oldWarehouse)
+  }
+  query += ` ORDER BY warehouse, item_name`
 
-  const { results } = await c.env.DB.prepare(
-    `SELECT im.warehouse, im.item_code,
-            i.name AS item_name, i.unit,
-            totals.total_in, totals.total_out,
-            im.balance_qty, im.balance_value,
-            im.center_code, im.field_id
-     FROM inventory_movements im
-     LEFT JOIN items i ON i.code = im.item_code AND i.company_id = im.company_id
-     INNER JOIN (
-       SELECT item_code, warehouse, SUM(qty_in) AS total_in, SUM(qty_out) AS total_out, MAX(id) AS last_id
-       FROM inventory_movements
-       WHERE company_id = ? ${subWhere}
-       GROUP BY item_code, warehouse
-     ) totals ON im.id = totals.last_id
-     WHERE im.company_id = ? ${whereWarehouse.replace('warehouse', 'im.warehouse')}
-       AND im.balance_qty != 0
-     ORDER BY im.warehouse, i.name`
-  ).bind(company_id, ...(warehouse ? [warehouse] : []), company_id, ...(warehouse ? [warehouse] : [])).all()
+  const { results } = await c.env.DB.prepare(query).bind(...binds).all()
 
   return c.json({ success: true, data: results })
 })
@@ -46,10 +36,34 @@ inventory.get('/warehouses', permissionGuard('inventory', 'read'), async (c) => 
   const { company_id } = getUser(c)
 
   const { results } = await c.env.DB.prepare(
-    `SELECT DISTINCT warehouse FROM inventory_movements WHERE company_id = ? ORDER BY warehouse`
+    `SELECT id, name, type, location FROM warehouses WHERE company_id = ? AND is_active = 1 ORDER BY name`
   ).bind(company_id).all()
 
-  return c.json({ success: true, data: results.map(r => (r as { warehouse: string }).warehouse) })
+  // For backward compatibility until full frontend rewrite, we return strings in data, but also provide objects
+  return c.json({ 
+    success: true, 
+    data: results.map(r => (r as { name: string }).name),
+    entities: results 
+  })
+})
+
+// POST /api/inventory/warehouses
+inventory.post('/warehouses', permissionGuard('inventory', 'create'), async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const b = await c.req.json<{ name: string; type?: string; location?: string }>()
+  
+  if (!b.name) return c.json({ success: false, error: 'اسم المخزن مطلوب' }, 400)
+  
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO warehouses (company_id, name, type, location, manager_id) VALUES (?, ?, ?, ?, ?)`
+    ).bind(company_id, b.name, b.type || 'internal', b.location || null, userId).run()
+    
+    return c.json({ success: true })
+  } catch (err: any) {
+    if (err.message.includes('UNIQUE')) return c.json({ success: false, error: 'اسم المخزن موجود بالفعل' }, 409)
+    throw err
+  }
 })
 
 // GET /api/inventory/movements?page=&size=&warehouse=&item_code=&type=&start=&end=
@@ -843,6 +857,186 @@ inventory.post('/transfer', async (c) => {
   ])
 
   return c.json({ success: true, data: { transferred: b.quantity, price: avgPrice } })
+})
+
+// GET /api/inventory/categories
+inventory.get('/categories', async (c) => {
+  const { company_id } = getUser(c)
+  const { results } = await c.env.DB.prepare(
+    'SELECT * FROM item_categories WHERE company_id = ? ORDER BY name'
+  ).bind(company_id).all()
+  return c.json({ success: true, data: results })
+})
+
+// POST /api/inventory/categories
+inventory.post('/categories', async (c) => {
+  const { company_id } = getUser(c)
+  const b = await c.req.json<{ name: string; parent_id?: number; expense_account_code?: string; inventory_account_code?: string }>()
+  if (!b.name) return c.json({ success: false, error: 'الاسم مطلوب' }, 400)
+
+  await c.env.DB.prepare(
+    `INSERT INTO item_categories (company_id, name, parent_id, expense_account_code, inventory_account_code)
+     VALUES (?, ?, ?, ?, ?)`
+  ).bind(company_id, b.name, b.parent_id ?? null, b.expense_account_code ?? null, b.inventory_account_code ?? null).run()
+
+  return c.json({ success: true })
+})
+
+// GET /api/inventory/adjustments
+inventory.get('/adjustments', async (c) => {
+  const { company_id } = getUser(c)
+  const { results } = await c.env.DB.prepare(
+    `SELECT a.*, w.name as warehouse_name
+     FROM inventory_adjustments a
+     JOIN warehouses w ON w.id = a.warehouse_id
+     WHERE a.company_id = ? ORDER BY a.adjustment_date DESC, a.id DESC`
+  ).bind(company_id).all()
+  return c.json({ success: true, data: results })
+})
+
+// POST /api/inventory/adjustments
+inventory.post('/adjustments', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const b = await c.req.json<{ warehouse_id: number; adjustment_date: string; notes?: string; lines: any[] }>()
+
+  if (!b.warehouse_id || !b.adjustment_date || !b.lines || b.lines.length === 0) {
+    return c.json({ success: false, error: 'البيانات غير مكتملة' }, 400)
+  }
+
+  const { lastRowId } = await c.env.DB.prepare(
+    `INSERT INTO inventory_adjustments (company_id, warehouse_id, adjustment_date, notes, created_by)
+     VALUES (?, ?, ?, ?, ?)`
+  ).bind(company_id, b.warehouse_id, b.adjustment_date, b.notes ?? null, userId).run()
+
+  const adjId = lastRowId
+
+  const lineStmts = b.lines.map(l =>
+    c.env.DB.prepare(
+      `INSERT INTO inventory_adjustment_lines (adjustment_id, item_code, theoretical_qty, counted_qty, difference, notes)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(adjId, l.item_code, l.theoretical_qty, l.counted_qty, l.counted_qty - l.theoretical_qty, l.notes ?? null)
+  )
+
+  if (lineStmts.length > 0) await c.env.DB.batch(lineStmts)
+
+  return c.json({ success: true, id: adjId })
+})
+
+// GET /api/inventory/adjustments/:id
+inventory.get('/adjustments/:id', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+
+  const adj = await c.env.DB.prepare(
+    `SELECT a.*, w.name as warehouse_name
+     FROM inventory_adjustments a
+     JOIN warehouses w ON w.id = a.warehouse_id
+     WHERE a.id = ? AND a.company_id = ?`
+  ).bind(id, company_id).first()
+
+  if (!adj) return c.json({ success: false, error: 'التسوية غير موجودة' }, 404)
+
+  const { results: lines } = await c.env.DB.prepare(
+    `SELECT al.*, i.name as item_name, i.unit
+     FROM inventory_adjustment_lines al
+     JOIN items i ON i.code = al.item_code AND i.company_id = ?
+     WHERE al.adjustment_id = ?`
+  ).bind(company_id, id).all()
+
+  return c.json({ success: true, data: { ...adj, lines } })
+})
+
+// POST /api/inventory/adjustments/:id/post
+inventory.post('/adjustments/:id/post', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+
+  // 1. Get Adjustment & Lines
+  const adj = await c.env.DB.prepare(
+    'SELECT * FROM inventory_adjustments WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ id: number; status: string; warehouse_id: number; adjustment_date: string; warehouse_name?: string }>()
+
+  if (!adj) return c.json({ success: false, error: 'التسوية غير موجودة' }, 404)
+  if (adj.status !== 'draft') return c.json({ success: false, error: 'التسوية تم ترحيلها بالفعل' }, 400)
+
+  // Get warehouse name for the notes
+  const wh = await c.env.DB.prepare('SELECT name FROM warehouses WHERE id = ?').bind(adj.warehouse_id).first<{ name: string }>()
+  const warehouseName = wh?.name || 'مخزن'
+
+  const { results: lines } = await c.env.DB.prepare(
+    'SELECT * FROM inventory_adjustment_lines WHERE adjustment_id = ?'
+  ).bind(id).all<{ item_code: number; difference: number; theoretical_qty: number; counted_qty: number }>()
+
+  // 2. Validate Period
+  const periodId = await getOpenPeriod(c.env.DB, company_id, adj.adjustment_date)
+  if (!periodId) return c.json({ success: false, error: 'الفترة المالية مغلقة' }, 400)
+
+  // 3. Process Each Line as an Inventory Movement
+  // Note: We'll use a transaction/batch for the movements and balance updates
+  // For simplicity here, we'll loop and use FinanceCore or direct inserts
+  // Actually, we should use the same logic as batch movements to update running balances correctly
+
+  const yr = new Date(adj.adjustment_date).getFullYear()
+  const mo = new Date(adj.adjustment_date).getMonth() + 1
+  const batchKey = `adj_${id}_${Date.now()}`
+
+  for (const l of lines) {
+    if (l.difference === 0) continue
+
+    const movementType = l.difference > 0 ? 'اضافة' : 'صرف'
+    const absQty = Math.abs(l.difference)
+
+    // Get current balance/value for pricing (weighted average)
+    const lastRow = await c.env.DB.prepare(
+      `SELECT balance_qty, balance_value FROM inventory_movements
+       WHERE company_id = ? AND item_code = ? AND warehouse = ?
+       ORDER BY movement_date DESC, id DESC LIMIT 1`
+    ).bind(company_id, l.item_code, warehouseName).first<{ balance_qty: number; balance_value: number }>()
+
+    const prevQty = lastRow?.balance_qty ?? 0
+    const prevVal = lastRow?.balance_value ?? 0
+    const unitPrice = prevQty > 0 ? prevVal / prevQty : 0
+    const totalValue = absQty * unitPrice
+
+    const qtyIn = movementType === 'اضافة' ? absQty : 0
+    const qtyOut = movementType === 'صرف' ? absQty : 0
+    const valIn = movementType === 'اضافة' ? totalValue : 0
+    const valOut = movementType === 'صرف' ? totalValue : 0
+
+    // Insert movement
+    await c.env.DB.prepare(
+      `INSERT INTO inventory_movements
+       (company_id, item_code, movement_date, warehouse, movement_type,
+        quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
+        notes, year, month, created_by_user_id, local_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(
+      company_id, l.item_code, adj.adjustment_date, warehouseName, movementType,
+      absQty, unitPrice, qtyIn, qtyOut, prevQty + qtyIn - qtyOut, valIn, valOut, prevVal + valIn - valOut,
+      `تسوية جردية رقم #${id}`, yr, mo, userId, `${batchKey}_${l.item_code}`
+    ).run()
+
+    // Create GL Entry for the adjustment
+    // DB: Inventory (Asset) / CR: Inventory Adjustment Expense (P&L) if shortage
+    // DR: Inventory (Asset) / CR: Inventory Gain (P&L) if surplus
+    // We'll use a generic "Inventory Adjustment" GL mapping if available, or fallback to expense_default
+    try {
+      await glInventoryMovement(
+        c.env.DB, company_id, id, // using adj ID as ref
+        movementType, totalValue, adj.adjustment_date,
+        `تسوية جردية - ${l.item_code}`, userId
+      )
+    } catch (e) {
+       console.error("GL Integration failed for adjustment line", e)
+    }
+  }
+
+  // 4. Update Adjustment Status
+  await c.env.DB.prepare(
+    'UPDATE inventory_adjustments SET status = "posted" WHERE id = ?'
+  ).bind(id).run()
+
+  return c.json({ success: true })
 })
 
 export default inventory

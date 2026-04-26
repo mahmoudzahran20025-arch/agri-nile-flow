@@ -51,9 +51,9 @@ const uid       = () => Math.random().toString(36).slice(2, 9)
 const newLine   = (): LineItem => ({ id: uid(), item_code: '', quantity: '', unit_price: '', notes: '' })
 
 const EGP = (n: number) =>
-  new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
+  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 const NUM = (n: number, dp = 3) =>
-  new Intl.NumberFormat('ar-EG', { maximumFractionDigits: dp }).format(n)
+  new Intl.NumberFormat('en-US', { maximumFractionDigits: dp }).format(n)
 
 // ─── Step indicator ───────────────────────────────────────────
 

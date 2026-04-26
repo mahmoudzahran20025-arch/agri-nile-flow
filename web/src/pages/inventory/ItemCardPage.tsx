@@ -15,14 +15,14 @@ import type { Item } from '../../types'
 
 const EGP = (n: number | null | undefined) => {
   if (n == null) return '—'
-  return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 }
 const NUM = (n: number | null | undefined, dp = 3) => {
   if (n == null) return '—'
-  return new Intl.NumberFormat('ar-EG', { maximumFractionDigits: dp }).format(n)
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: dp }).format(n)
 }
 const DATE_AR = (iso: string) =>
-  new Date(iso).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short', year: 'numeric' })
+  new Date(iso).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })
 
 // ─── Types ─────────────────────────────────────────────────────
 

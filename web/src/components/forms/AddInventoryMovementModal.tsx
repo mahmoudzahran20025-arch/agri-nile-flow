@@ -74,12 +74,9 @@ export default function AddInventoryMovementModal({ open, onClose, defaultWareho
         notes:           form.notes.trim() || undefined,
       })
       if (!(res as { success: boolean }).success) {
-        const code = (res as { code?: string }).code
-        if (code === 'INSUFFICIENT_STOCK') {
-          setError((res as { error: string }).error)
-        } else {
-          setError((res as { error: string }).error ?? 'حدث خطأ')
-        }
+        const raw = (res as { error: unknown; code?: string })
+        const msg = typeof raw.error === 'string' ? raw.error : 'خطأ في التحقق من البيانات'
+        setError(msg)
         return
       }
       await qc.invalidateQueries({ queryKey: ['inventory'] })

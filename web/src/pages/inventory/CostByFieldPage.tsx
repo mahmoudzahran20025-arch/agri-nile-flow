@@ -11,11 +11,11 @@ import { inventoryApi, configApi, budgetsApi } from '../../api/client'
 
 function egp(n: number | null | undefined) {
   if (n == null || n === 0) return '—'
-  return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 }
 function num(n: number | null | undefined, dp = 2) {
   if (n == null) return '—'
-  return new Intl.NumberFormat('ar-EG', { maximumFractionDigits: dp }).format(n)
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: dp }).format(n)
 }
 
 // ─── Types ────────────────────────────────────────────────────

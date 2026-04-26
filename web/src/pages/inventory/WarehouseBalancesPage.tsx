@@ -1,18 +1,19 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Package, ChevronDown, ChevronUp, Plus, Download, ExternalLink, AlertTriangle, X, Wrench } from 'lucide-react'
+import { Package, ChevronDown, ChevronUp, Plus, Download, ExternalLink, AlertTriangle, X, Wrench, ArrowRightLeft } from 'lucide-react'
 import { inventoryApi, downloadCsv } from '../../api/client'
 import AddInventoryBatchModal from '../../components/forms/AddInventoryBatchModal'
+import InternalTransferModal from '../../components/forms/InternalTransferModal'
 import { TableSkeleton } from '../../components/ui/Skeleton'
 import type { InventoryBalance } from '../../types'
 import { usePermission } from '../../hooks/usePermission'
 
 function egp(n: number) {
-  return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 }
 function num(n: number) {
-  return new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(n)
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(n)
 }
 
 export default function WarehouseBalancesPage() {
@@ -22,6 +23,13 @@ export default function WarehouseBalancesPage() {
   const [expanded,           setExpanded]           = useState<Set<string>>(new Set())
   const [addOpen,            setAddOpen]            = useState(false)
   const [reorderDismissed,   setReorderDismissed]   = useState(false)
+  const [transferData, setTransferData] = useState<{
+    open: boolean;
+    itemCode: number;
+    itemName: string;
+    sourceWarehouse: string;
+    maxQuantity: number;
+  }>({ open: false, itemCode: 0, itemName: '', sourceWarehouse: '', maxQuantity: 0 })
 
   const { data: warehouses } = useQuery({
     queryKey: ['warehouses'],
@@ -68,10 +76,18 @@ export default function WarehouseBalancesPage() {
             <Download size={16} />تصدير CSV
           </button>
           {canWrite('inventory') && (
-            <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
-              <Plus size={16} />
-              حركة جديدة
-            </button>
+            <>
+              <button 
+                className="btn-secondary gap-2 border-indigo-200 text-indigo-700 hover:bg-indigo-50" 
+                onClick={() => setTransferData({ open: true, itemCode: 0, itemName: '', sourceWarehouse: '', maxQuantity: 0 })}
+              >
+                <ArrowRightLeft size={16} /> تحويل مخزني
+              </button>
+              <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
+                <Plus size={16} />
+                حركة جديدة
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -104,7 +120,7 @@ export default function WarehouseBalancesPage() {
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold truncate">{alert.item_name}</p>
                         <p className="text-[11px] opacity-75">
-                          رصيد: {new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(alert.current_balance)} {alert.unit ?? ''}
+                          رصيد: {new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(alert.current_balance)} {alert.unit ?? ''}
                           {' · '}
                           <Wrench size={9} className="inline" />
                           {' '}{alert.active_order_count} أمر عمل
@@ -192,7 +208,7 @@ export default function WarehouseBalancesPage() {
                     <table className="w-full text-sm">
                       <thead className="bg-slate-50">
                         <tr>
-                          {['الصنف','الوحدة','الوارد','المنصرف','الرصيد','قيمة الرصيد'].map(h => (
+                          {['الصنف','الوحدة','الرصيد','قيمة الرصيد', 'إجراءات'].map(h => (
                             <th key={h} className="px-4 py-2.5 text-xs font-semibold text-slate-500 text-right">{h}</th>
                           ))}
                         </tr>
@@ -200,30 +216,49 @@ export default function WarehouseBalancesPage() {
                       <tbody className="divide-y divide-slate-100">
                         {items.map(item => (
                           <tr key={item.item_code}
-                            className="hover:bg-brand-50 cursor-pointer transition-colors group"
-                            onClick={() => navigate(`/inventory/item/${item.item_code}`)}>
-                            <td className="px-4 py-3 font-medium text-slate-700 group-hover:text-brand-700 flex items-center gap-1.5">
+                            className="hover:bg-brand-50 cursor-pointer transition-colors group">
+                            <td className="px-4 py-3 font-medium text-slate-700 group-hover:text-brand-700 flex items-center gap-1.5"
+                                onClick={() => navigate(`/inventory/item/${item.item_code}`)}>
                               {item.item_name ?? `#${item.item_code}`}
                               <ExternalLink size={12} className="opacity-0 group-hover:opacity-60 transition-opacity text-brand-500" />
                             </td>
                             <td className="px-4 py-3 text-slate-500">{item.unit ?? '—'}</td>
-                            <td className="px-4 py-3 text-green-700">{num(item.total_in)}</td>
-                            <td className="px-4 py-3 text-red-600">{num(item.total_out)}</td>
                             <td className="px-4 py-3">
                               <span className={`font-bold ${item.balance_qty > 0 ? 'text-slate-800' : 'text-slate-400'}`}>
                                 {num(item.balance_qty)}
                               </span>
                             </td>
                             <td className="px-4 py-3 font-semibold text-brand-700">{egp(item.balance_value)}</td>
+                            <td className="px-4 py-3">
+                              {canWrite('inventory') && item.balance_qty > 0 && (
+                                <button 
+                                  className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all border border-indigo-100"
+                                  title="تحويل مخزني"
+                                  onClick={(e) => { 
+                                    e.stopPropagation(); 
+                                    setTransferData({
+                                      open: true,
+                                      itemCode: item.item_code,
+                                      itemName: item.item_name ?? `#${item.item_code}`,
+                                      sourceWarehouse: warehouse,
+                                      maxQuantity: item.balance_qty
+                                    });
+                                  }}
+                                >
+                                  <ArrowRightLeft size={14} />
+                                  <span>تحويل</span>
+                                </button>
+                              )}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
                       <tfoot className="bg-slate-50 border-t-2 border-slate-200">
                         <tr>
-                          <td colSpan={5} className="px-4 py-2.5 text-sm font-semibold text-slate-600 text-left">
+                          <td colSpan={3} className="px-4 py-2.5 text-sm font-semibold text-slate-600 text-left">
                             إجمالي {warehouse}
                           </td>
-                          <td className="px-4 py-2.5 font-bold text-brand-700">{egp(totalVal)}</td>
+                          <td colSpan={2} className="px-4 py-2.5 font-bold text-brand-700">{egp(totalVal)}</td>
                         </tr>
                       </tfoot>
                     </table>
@@ -240,6 +275,17 @@ export default function WarehouseBalancesPage() {
         onClose={() => setAddOpen(false)}
         defaultWarehouse={activeWarehouse ?? undefined}
       />
+
+      {transferData.open && (
+        <InternalTransferModal
+          open={transferData.open}
+          onClose={() => setTransferData({ ...transferData, open: false })}
+          itemCode={transferData.itemCode}
+          itemName={transferData.itemName}
+          sourceWarehouse={transferData.sourceWarehouse}
+          maxQuantity={transferData.maxQuantity}
+        />
+      )}
     </div>
   )
 }

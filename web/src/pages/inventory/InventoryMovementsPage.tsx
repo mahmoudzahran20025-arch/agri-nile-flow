@@ -10,16 +10,16 @@ import { usePermission } from '../../hooks/usePermission'
 
 function egp(n: number | null | undefined) {
   if (n == null) return '—'
-  return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 }
 function num(n: number | null | undefined) {
   if (n == null) return '—'
-  return new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 3 }).format(n)
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 }).format(n)
 }
 
 const COLUMNS: Column<InventoryMovement & { field_name?: string }>[] = [
   { key: 'movement_date', header: 'التاريخ', width: '105px', sortable: true,
-    render: r => new Date(r.movement_date).toLocaleDateString('ar-EG') },
+    render: r => new Date(r.movement_date).toLocaleDateString('en-US') },
   { key: 'warehouse', header: 'المخزن', width: '120px', sortable: true },
   {
     key: 'movement_type', header: 'النوع', width: '80px', sortable: true,
@@ -249,7 +249,7 @@ export default function InventoryMovementsPage() {
             </button>
           )}
           <div className="flex-1 text-left text-sm text-slate-400">
-            {data ? `${(data?.total ?? 0).toLocaleString('ar-EG')} حركة` : ''}
+            {data ? `${(data?.total ?? 0).toLocaleString('en-US')} حركة` : ''}
           </div>
         </div>
       </div>
