@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
 import { logAudit } from '../lib/audit'
-import { getOpenPeriod, postAutoEntry } from '../lib/gl'
+import { getOpenPeriod } from '../lib/gl'
 import { FinanceCore } from '../lib/finance_core'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
@@ -30,6 +30,7 @@ const poCreateSchema = z.object({
     unit: z.string().optional().nullable(),
     qty_ordered: z.number().positive('الكمية يجب أن تكون موجبة'),
     unit_price: z.number().nonnegative('السعر لا يمكن أن يكون سالباً'),
+    center_code: z.number().optional().nullable(),
     notes: z.string().optional().nullable(),
   })).min(1, 'يجب إضافة صنف واحد على الأقل'),
 })
@@ -239,14 +240,28 @@ finance.post('/bank-recon/:accountId', async (c) => {
 finance.patch('/bank-recon/:id/close', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
+
+  const recon = await c.env.DB
+    .prepare('SELECT bank_account_id, period_start, period_end FROM bank_reconciliations WHERE id = ? AND company_id = ? AND status = \'draft\'')
+    .bind(id, company_id).first<{ bank_account_id: number; period_start: string; period_end: string }>()
+  if (!recon) return c.json({ success: false, error: 'جلسة المطابقة غير موجودة أو تم إغلاقها مسبقاً' }, 404)
+
+  const unmatched = await c.env.DB
+    .prepare('SELECT COUNT(*) AS n FROM bank_statements WHERE bank_account_id = ? AND statement_date BETWEEN ? AND ? AND is_matched = 0')
+    .bind(recon.bank_account_id, recon.period_start, recon.period_end).first<{ n: number }>()
+  if ((unmatched?.n ?? 0) > 0) {
+    return c.json({ success: false, error: `لا يمكن إغلاق المطابقة — يوجد ${unmatched!.n} بند غير مطابق في هذه الفترة. طابق جميع البنود أولاً.` }, 400)
+  }
+
   await c.env.DB.prepare(
     `UPDATE bank_reconciliations
      SET status = 'reconciled', closed_by = ?, closed_at = datetime('now')
-     WHERE id = ? AND company_id = ? AND status = 'draft'`
+     WHERE id = ? AND company_id = ?`
   ).bind(userId, id, company_id).run()
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'CLOSE',
     table_name: 'bank_reconciliations', record_id: id,
+    new_value: { period_start: recon.period_start, period_end: recon.period_end },
   })
   return c.json({ success: true, data: null })
 })
@@ -340,10 +355,10 @@ finance.post('/purchase-orders', zValidator('json', poCreateSchema), async (c) =
   const itemStmts = b.items.map(i =>
     c.env.DB.prepare(
       `INSERT INTO purchase_order_items
-       (po_id, company_id, item_code, item_name, unit, qty_ordered, unit_price, notes)
-       VALUES (?,?,?,?,?,?,?,?)`
+       (po_id, company_id, item_code, item_name, unit, qty_ordered, unit_price, center_code, notes)
+       VALUES (?,?,?,?,?,?,?,?,?)`
     ).bind(poId, company_id, i.item_code ?? null, i.item_name, i.unit ?? null,
-           i.qty_ordered, i.unit_price, i.notes ?? null)
+           i.qty_ordered, i.unit_price, i.center_code ?? null, i.notes ?? null)
   )
   await c.env.DB.batch(itemStmts)
 
@@ -638,6 +653,14 @@ finance.post('/purchase-orders/:id/invoices', async (c) => {
     return c.json({ success: false, error: 'رقم الفاتورة والتاريخ والبنود مطلوبة' }, 400)
   }
 
+  // Reject duplicate invoice numbers for the same company
+  const dupCheck = await c.env.DB.prepare(
+    'SELECT id FROM supplier_invoices WHERE company_id = ? AND invoice_number = ?'
+  ).bind(company_id, b.invoice_number).first()
+  if (dupCheck) {
+    return c.json({ success: false, error: `رقم الفاتورة "${b.invoice_number}" مستخدم مسبقاً` }, 409)
+  }
+
   const po = await c.env.DB.prepare(
     'SELECT id, supplier_code FROM purchase_orders WHERE id = ? AND company_id = ?'
   ).bind(poId, company_id).first<{ id: number; supplier_code: number | null }>()
@@ -716,6 +739,7 @@ finance.get('/ap-aging', async (c) => {
       si.id,
       si.invoice_number,
       si.invoice_date,
+      si.supplier_code,
       COALESCE(si.due_date_days, 30)             AS due_date_days,
       DATE(si.invoice_date, '+' || COALESCE(si.due_date_days,30) || ' days') AS due_date,
       si.total_amount,
@@ -724,7 +748,7 @@ finance.get('/ap-aging', async (c) => {
       si.payment_date,
       si.payment_ref,
       po.po_number,
-      po.supplier_name,
+      COALESCE(s.name, po.supplier_name)         AS supplier_name,
       CAST(
         julianday('now') -
         julianday(DATE(si.invoice_date, '+' || COALESCE(si.due_date_days,30) || ' days'))
@@ -732,6 +756,7 @@ finance.get('/ap-aging', async (c) => {
       ) AS days_overdue
     FROM supplier_invoices si
     LEFT JOIN purchase_orders po ON po.id = si.po_id AND po.company_id = si.company_id
+    LEFT JOIN suppliers s ON s.code = si.supplier_code AND s.company_id = si.company_id
     WHERE si.company_id = ?
       AND si.total_amount > COALESCE(si.paid_amount, 0)
     ORDER BY due_date ASC
@@ -749,64 +774,57 @@ finance.patch('/supplier-invoices/:id/pay', async (c) => {
   }>()
 
   const inv = await c.env.DB.prepare(
-    'SELECT * FROM supplier_invoices WHERE id = ? AND company_id = ?'
+    `SELECT id, invoice_number, total_amount, COALESCE(paid_amount,0) AS paid_amount,
+            supplier_code, payment_date, payment_ref
+     FROM supplier_invoices WHERE id = ? AND company_id = ?`
   ).bind(id, company_id).first<{
-    total_amount: number; paid_amount: number
-    payment_date: string | null; payment_ref: string | null
+    id: number; invoice_number: string; total_amount: number; paid_amount: number
+    supplier_code: number | null; payment_date: string | null; payment_ref: string | null
   }>()
   if (!inv) return c.json({ success: false, error: 'الفاتورة غير موجودة' }, 404)
 
-  const newPaid = Math.min(Number(b.paid_amount) || 0, inv.total_amount)
-  const today   = b.payment_date ?? new Date().toISOString().slice(0, 10)
-
-  // Pre-validate GL mappings and open period before touching financial records
-  const [apRow, cashRow] = await Promise.all([
-    c.env.DB.prepare('SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = ?')
-      .bind(company_id, 'accounts_payable').first<{ account_code: string }>(),
-    c.env.DB.prepare('SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = ?')
-      .bind(company_id, 'cash').first<{ account_code: string }>(),
-  ])
-  if (!apRow || !cashRow) {
-    return c.json({ success: false, error: 'GL_MAPPING_MISSING: حسابات الدائنون أو الخزينة غير معرفة في إعدادات الحسابات' }, 400)
-  }
-  const periodId = await getOpenPeriod(c.env.DB, company_id, today)
-  if (!periodId) {
-    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${today}` }, 400)
+  const paymentAmount = Math.min(
+    Number(b.paid_amount) || 0,
+    inv.total_amount - inv.paid_amount,
+  )
+  if (paymentAmount <= 0) {
+    return c.json({ success: false, error: 'لا يوجد مبلغ صالح للدفع — الفاتورة مسددة بالكامل' }, 400)
   }
 
-  // Update payment record
-  await c.env.DB.prepare(
-    `UPDATE supplier_invoices
-     SET paid_amount = ?, payment_date = COALESCE(?, payment_date),
-         payment_ref = COALESCE(?, payment_ref)
-     WHERE id = ? AND company_id = ?`
-  ).bind(newPaid, b.payment_date ?? null, b.payment_ref ?? null, id, company_id).run()
+  const today = b.payment_date ?? new Date().toISOString().slice(0, 10)
+  const narration = `سداد فاتورة مورد #${inv.invoice_number}${b.payment_ref ? ` (${b.payment_ref})` : ''}`
 
-  // GL: DR Accounts Payable / CR Cash — balanced and batched via postAutoEntry
   try {
-    await postAutoEntry(c.env.DB, {
-      company_id, entry_date: today,
-      description: `سداد فاتورة مورد #${id}`,
-      ref_type: 'supplier_payment', ref_id: id,
-      lines: [
-        { account_code: apRow.account_code,   debit: newPaid, credit: 0,       description: `سداد فاتورة #${id}` },
-        { account_code: cashRow.account_code, debit: 0,       credit: newPaid, description: `سداد فاتورة #${id}` },
-      ],
-      created_by: userId,
+    // Atomically creates: cash_transaction (dir=م) + supplier_transaction (entry_type=م) + GL (DR AP / CR Cash)
+    await FinanceCore.recordCashMovement(c.env.DB, {
+      company_id,
+      userId,
+      transaction_date: today,
+      direction: 'م',
+      amount: paymentAmount,
+      narration,
+      supplier_code: inv.supplier_code ?? undefined,
+      status: 'posted',
     })
-  } catch (e: any) {
-    // Compensating rollback — restore original payment values
+
+    // Mark invoice as paid (separate from GL — GL is always authoritative)
     await c.env.DB.prepare(
-      `UPDATE supplier_invoices SET paid_amount = ?, payment_date = ?, payment_ref = ?
+      `UPDATE supplier_invoices
+       SET paid_amount    = paid_amount + ?,
+           payment_date   = COALESCE(?, payment_date),
+           payment_ref    = COALESCE(?, payment_ref)
        WHERE id = ? AND company_id = ?`
-    ).bind(inv.paid_amount, inv.payment_date, inv.payment_ref, id, company_id).run()
-    return c.json({ success: false, error: `فشل إنشاء القيد المحاسبي: ${e.message}` }, 400)
+    ).bind(paymentAmount, b.payment_date ?? null, b.payment_ref ?? null, id, company_id).run()
+
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'فشل تسجيل الدفعة'
+    return c.json({ success: false, error: msg }, 400)
   }
 
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'UPDATE',
     table_name: 'supplier_invoices', record_id: id,
-    new_value: { paid_amount: newPaid, payment_date: b.payment_date },
+    new_value: { paid_amount: paymentAmount, payment_date: today },
   })
 
   return c.json({ success: true, data: null })

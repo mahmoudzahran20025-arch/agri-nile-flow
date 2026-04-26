@@ -77,7 +77,7 @@ export interface APAgingRow {
   due_date: string; due_date_days: number
   total_amount: number; paid_amount: number; outstanding: number
   payment_date?: string; payment_ref?: string
-  po_number?: string; supplier_name?: string
+  po_number?: string; supplier_name?: string; supplier_code?: number
   days_overdue: number
 }
 
@@ -129,7 +129,7 @@ export const financeApi = {
     order_date: string; po_number?: string
     supplier_code?: number; supplier_name?: string
     expected_date?: string; notes?: string
-    items: Array<{ item_code?: string; item_name: string; unit?: string; qty_ordered: number; unit_price: number; notes?: string }>
+    items: Array<{ item_code?: string; item_name: string; unit?: string; qty_ordered: number; unit_price: number; center_code?: number; notes?: string }>
   }) => unwrap(api.post<{id:number; po_number:string}>('/finance/purchase-orders', b)),
   updatePOStatus: (id: number, status: string, notes?: string) =>
     unwrap(api.patch<null>(`/finance/purchase-orders/${id}/status`, { status, notes })),

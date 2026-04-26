@@ -162,7 +162,7 @@ export const suppliersApi = {
 // ─── Treasury ─────────────────────────────────────────────────
 export const treasuryApi = {
   balance:        () => unwrap(api.get<{ balance: number }>('/treasury/balance')),
-  list:           (p: { page?: number; size?: number; direction?: string; month?: number; year?: number; status?: string }) =>
+  list:           (p: { page?: number; size?: number; direction?: string; month?: number; year?: number; status?: string; search?: string }) =>
     unwrapPaginated<unknown>(api.get(paginatedUrl('/treasury/transactions', p))),
   create:         (body: unknown) => api.post('/treasury/transactions', body),
   post:           (id: number) => unwrap(api.patch<{ success: boolean; balance: number }>(`/treasury/transactions/${id}/post`, {})),
@@ -175,9 +175,13 @@ export const treasuryApi = {
 
 // ─── Inventory ────────────────────────────────────────────────
 export const inventoryApi = {
-  balances:    (warehouse?: string) =>
-    unwrap(api.get<unknown[]>(`/inventory/balances${warehouse ? `?warehouse=${encodeURIComponent(warehouse)}` : ''}`)),
+  balances:    (warehouse?: string | number) => {
+    const q = typeof warehouse === 'number' ? `warehouse_id=${warehouse}` : `warehouse=${encodeURIComponent(String(warehouse || ''))}`
+    return unwrap(api.get<unknown[]>(`/inventory/balances${warehouse ? `?${q}` : ''}`))
+  },
   warehouses:  () => unwrap(api.get<string[]>('/inventory/warehouses')),
+  warehousesSetup: () => api.get<{ success: boolean; data: string[]; entities: any[] }>('/inventory/warehouses'),
+  createWarehouse: (body: unknown) => api.post('/inventory/warehouses', body),
   reorderAlerts: () =>
     unwrap(api.get<Array<{
       item_code: number; item_name: string; unit: string | null
@@ -201,6 +205,10 @@ export const inventoryApi = {
     center_code?:     number
     items: Array<{ item_code: number; quantity: number; unit_price?: number; notes?: string }>
   }) => api.post('/inventory/movements/batch', body),
+  transfer: (body: {
+    movement_date: string; item_code: number; quantity: number;
+    from_warehouse: string; to_warehouse: string; notes?: string
+  }) => api.post('/inventory/movements/transfer', body),
   costByField: (season_id?: number) =>
     unwrap(api.get<unknown[]>(`/inventory/cost-by-field${season_id ? `?season_id=${season_id}` : ''}`)),
   itemStock:   (code: number, warehouse?: string) =>
@@ -209,6 +217,14 @@ export const inventoryApi = {
     )),
   itemCard:    (code: number, warehouse?: string) =>
     unwrap(api.get(`/inventory/item/${code}/card${warehouse ? `?warehouse=${encodeURIComponent(warehouse)}` : ''}`)),
+
+  // New Enterprise Features
+  categories: () => unwrap(api.get<any[]>('/inventory/categories')),
+  createCategory: (body: any) => api.post('/inventory/categories', body),
+  adjustments: () => unwrap(api.get<any[]>('/inventory/adjustments')),
+  adjustmentDetail: (id: number) => unwrap(api.get<any>(`/inventory/adjustments/${id}`)),
+  createAdjustment: (body: any) => api.post('/inventory/adjustments', body),
+  postAdjustment: (id: number) => api.post(`/inventory/adjustments/${id}/post`, {}),
 }
 
 // ─── Config ───────────────────────────────────────────────────
@@ -218,8 +234,9 @@ export const configApi = {
   updateSeasonStatus:(id: number, status: string) => api.patch(`/config/seasons/${id}/status`, { status }),
   seasonCloseCheck: (id: number) => unwrap(api.get(`/config/seasons/${id}/close-check`)),
   closeSeason:      (id: number, close_notes?: string) => unwrap(api.post<{ id: number; status: string }>(`/config/seasons/${id}/close`, { close_notes })),
-  items:            () => unwrap(api.get('/config/items')),
+  items:            () => unwrap(api.get<any[]>('/config/items')),
   createItem:       (body: unknown) => api.post('/config/items', body),
+  updateItem:       (code: number, body: unknown) => api.patch(`/config/items/${code}`, body),
   costCenters:      () => unwrap(api.get('/config/cost_centers')),
   accounts:         () => unwrap(api.get('/config/accounts')),
   expenseTypes:     () => unwrap(api.get('/config/expense_types')),
@@ -319,7 +336,9 @@ export const contractsApi = {
   updateSalesStatus: (id: number, status: string, advance_paid?: number) =>
     api.patch(`/contracts/sales/${id}/status`, { status, advance_paid }),
   receiveAdvance: (id: number, body: { amount: number; receipt_date: string; notes?: string }) =>
-    api.post<{ gl_entry_id: number | null }>(`/contracts/sales/${id}/receive-advance`, body),
+    api.post<{ gl_entry_id: number | null; advance_paid: number }>(`/contracts/sales/${id}/receive-advance`, body),
+  listAdvances: (id: number) =>
+    unwrap(api.get<unknown[]>(`/contracts/sales/${id}/advances`)),
 
   summary:        (season_id?: number) =>
     unwrap(api.get(`/contracts/summary${season_id ? `?season_id=${season_id}` : ''}`)),
@@ -457,6 +476,11 @@ export const glApi = {
     unwrap(api.get(`/gl/balance-sheet${asOf ? `?as_of=${asOf}` : ''}`)),
 
   integrityCheck: () => unwrap(api.get<IntegrityCheckResult>('/gl/integrity-check')),
+
+  reverseEntry: (id: number) =>
+    unwrap(api.post<{ reversal_entry_id: number }>(`/gl/entries/${id}/reverse`, {})),
+
+  bankAccounts: () => unwrap(api.get<unknown[]>('/finance/bank-accounts')),
 }
 
 export interface IntegrityCheck {

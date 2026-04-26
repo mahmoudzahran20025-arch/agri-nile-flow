@@ -2,17 +2,18 @@ import { useState, useEffect } from 'react'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { Users, Briefcase, Receipt } from 'lucide-react'
 import Modal from '../ui/Modal'
-import { treasuryApi, suppliersApi, configApi, employeesApi, fieldsApi } from '../../api/client'
+import { treasuryApi, suppliersApi, configApi, employeesApi, fieldsApi, glApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 
 interface Props { open: boolean; onClose: () => void }
 
-type BeneficiaryType = 'supplier' | 'employee' | 'general'
+type BeneficiaryType = 'supplier' | 'employee' | 'partner' | 'general'
 
 const today = () => new Date().toISOString().slice(0, 10)
 
 const BENEFICIARY_TYPES: { value: BeneficiaryType; label: string; icon: React.ReactNode; desc: string }[] = [
   { value: 'supplier', label: 'مورد',        icon: <Users size={18} />,     desc: 'صرف أو تحصيل من مورد/عميل' },
+  { value: 'partner',  label: 'شريك',        icon: <Briefcase size={18} />, desc: 'مسحوبات أو جاري شركاء' },
   { value: 'employee', label: 'موظف',        icon: <Briefcase size={18} />, desc: 'سلفة أو صرف لموظف' },
   { value: 'general',  label: 'مصروف عام',   icon: <Receipt size={18} />,   desc: 'إيجار، مرافق، مصروفات أخرى' },
 ]
@@ -42,6 +43,8 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
     quantity:         '',
     unit_price:       '',
     status:           'draft' as 'draft' | 'posted',
+    financial_account_id: '',
+    partner_id:       '',
   })
   const [beneficiaryType, setBeneficiaryType] = useState<BeneficiaryType>('supplier')
 
@@ -53,6 +56,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
         document_number: '', document_type: '', recipient_name: '', notes: '',
         supplier_code: '', season_id: '', center_code: '', field_id: '', expense_code: '',
         unit: '', quantity: '', unit_price: '', status: 'draft',
+        financial_account_id: '', partner_id: '',
       })
       setBeneficiaryType('supplier')
       setError('')
@@ -103,6 +107,20 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
     staleTime: 120_000,
   })
 
+  const { data: partners = [] } = useQuery({
+    queryKey: ['treasury', 'partners'],
+    queryFn:  () => treasuryApi.partners() as Promise<{ id: number; name: string }[]>,
+    enabled:  open && beneficiaryType === 'partner',
+    staleTime: 60_000,
+  })
+
+  const { data: accounts = [] } = useQuery({
+    queryKey: ['finance', 'bank-accounts'],
+    queryFn:  () => glApi.bankAccounts() as Promise<{ id: number; bank_name: string; account_name: string }[]>,
+    enabled:  open,
+    staleTime: 120_000,
+  })
+
   type FieldOption = { id: number; name: string; code: string; area_feddan?: number }
   const { data: fields = [] } = useQuery({
     queryKey: ['fields-dropdown', form.season_id],
@@ -140,6 +158,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
     e.preventDefault()
     setError('')
     if (!form.narration.trim() || !form.amount) { setError('البيان والمبلغ مطلوبان'); return }
+    if (form.narration.trim().length < 3) { setError('البيان يجب أن يكون 3 أحرف على الأقل'); return }
     if (Number(form.amount) <= 0) { setError('المبلغ يجب أن يكون أكبر من صفر'); return }
 
     setSaving(true)
@@ -150,6 +169,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
         narration:        form.narration.trim(),
         amount:           Number(form.amount),
         document_number:  form.document_number ? Number(form.document_number) : undefined,
+        document_type:    form.document_type || undefined,
         recipient_name:   form.recipient_name.trim() || undefined,
         notes:            form.notes.trim() || undefined,
         supplier_code:    beneficiaryType === 'supplier' && form.supplier_code
@@ -157,14 +177,17 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
         season_id:        form.season_id ? Number(form.season_id) : undefined,
         center_code:      form.center_code ? Number(form.center_code) : undefined,
         field_id:         form.field_id ? Number(form.field_id) : undefined,
-        expense_code:     form.expense_code ? Number(form.expense_code) : undefined,
-        unit:             form.unit.trim() || undefined,
-        quantity:         form.quantity ? Number(form.quantity) : undefined,
-        unit_price:       form.unit_price ? Number(form.unit_price) : undefined,
+        expense_code:     form.expense_code ? Number(form.expense_code) : null,
+        unit:             form.unit || null,
+        quantity:         form.quantity ? Number(form.quantity) : null,
+        unit_price:       form.unit_price ? Number(form.unit_price) : null,
+        financial_account_id: form.financial_account_id ? Number(form.financial_account_id) : null,
+        partner_id:       form.partner_id ? Number(form.partner_id) : null,
         status:           form.status,
       })
       if (!(res as { success: boolean }).success) {
-        setError((res as { error: string }).error ?? 'حدث خطأ')
+        const rawErr = (res as { error: unknown }).error
+        setError(typeof rawErr === 'string' ? rawErr : 'خطأ في التحقق من البيانات')
         return
       }
       const data = (res as { data?: { gl_entry_id?: number; running_balance?: number } }).data
@@ -185,7 +208,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
   }
 
   const computedAmount = Number(form.quantity) > 0 && Number(form.unit_price) > 0
-    ? (Number(form.quantity) * Number(form.unit_price)).toLocaleString('ar-EG', { style: 'currency', currency: 'EGP' })
+    ? (Number(form.quantity) * Number(form.unit_price)).toLocaleString('en-US', { style: 'currency', currency: 'EGP' })
     : null
 
   return (
@@ -215,10 +238,22 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
           </div>
         </div>
 
+        {/* ── Account Selector ─────────────────────────────── */}
+        <div>
+          <label className="label">الحساب (الخزينة/البنك) <span className="text-red-500">*</span></label>
+          <select required className="input" value={form.financial_account_id}
+            onChange={e => set('financial_account_id', e.target.value)}>
+            <option value="">— اختر الحساب —</option>
+            {accounts.map(a => (
+              <option key={a.id} value={a.id}>{a.bank_name} - {a.account_name}</option>
+            ))}
+          </select>
+        </div>
+
         {/* ── Beneficiary Type Toggle ─────────────────────── */}
         <div>
           <label className="label mb-2">نوع المستفيد</label>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-4 gap-2">
             {BENEFICIARY_TYPES.map(bt => (
               <button key={bt.value} type="button"
                 className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 text-sm font-medium transition-all
@@ -228,6 +263,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
                 onClick={() => {
                   setBeneficiaryType(bt.value)
                   set('supplier_code', '')
+                  set('partner_id', '')
                   set('recipient_name', '')
                 }}>
                 {bt.icon}
@@ -282,6 +318,23 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
                 value={form.recipient_name}
                 onChange={e => set('recipient_name', e.target.value)} />
             </div>
+          </div>
+        )}
+
+        {beneficiaryType === 'partner' && (
+          <div>
+            <label className="label">الشريك</label>
+            <select className="input" value={form.partner_id}
+              onChange={e => {
+                set('partner_id', e.target.value)
+                const p = (partners as { id: number; name: string }[]).find(x => x.id === Number(e.target.value))
+                if (p) set('recipient_name', p.name)
+              }}>
+              <option value="">— اختر الشريك —</option>
+              {(partners as { id: number; name: string }[]).map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
           </div>
         )}
 

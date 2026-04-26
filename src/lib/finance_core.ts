@@ -16,7 +16,13 @@ interface CashMovementInput {
   expense_code?:    number | null
   season_id?:       number | null
   notes?:           string | null
+  document_type?:   string | null
+  unit?:            string | null
+  quantity?:        number | null
+  unit_price?:      number | null
   contraAccount?:   string | null
+  partner_id?:           number | null
+  financial_account_id?: number | null
   status?:          'draft' | 'posted'
 }
 
@@ -28,6 +34,8 @@ interface CashDraftRow {
   narration: string
   supplier_code: number | null
   center_code: number | null
+  partner_id: number | null
+  financial_account_id: number | null
 }
 
 export const FinanceCore = {
@@ -50,51 +58,65 @@ export const FinanceCore = {
       if (!periodId) throw new Error(`PERIOD_CLOSED: No open period for ${opts.transaction_date}`)
 
       // FIX: Calculate balance BEFORE building the INSERT so it binds the correct value
+      // Calculate balance for this SPECIFIC account
       const lastRow = await db
         .prepare(`SELECT running_balance FROM cash_transactions
-                  WHERE company_id = ? AND transaction_date <= ? AND status = 'posted'
+                  WHERE company_id = ? AND financial_account_id = ? 
+                    AND transaction_date <= ? AND status = 'posted'
                   ORDER BY transaction_date DESC, id DESC LIMIT 1`)
-        .bind(opts.company_id, opts.transaction_date).first<{ running_balance: number }>()
+        .bind(opts.company_id, opts.financial_account_id, opts.transaction_date).first<{ running_balance: number }>()
 
       const prevBalance = lastRow?.running_balance ?? 0
       delta      = opts.direction === 'د' ? opts.amount : -opts.amount
       newBalance = prevBalance + delta
 
       // FIX: NULL-guard — existing rows with local_id IS NULL must also be propagated
+      // Only affect running_balance of the SAME account
       stmts.push(db.prepare(
         `UPDATE cash_transactions SET running_balance = running_balance + ?
-         WHERE company_id = ? AND status = 'posted'
+         WHERE company_id = ? AND financial_account_id = ? AND status = 'posted'
            AND (transaction_date > ? OR (transaction_date = ? AND (local_id IS NULL OR local_id != ?)))`
-      ).bind(delta, opts.company_id, opts.transaction_date, opts.transaction_date, batchKey))
+      ).bind(delta, opts.company_id, opts.financial_account_id, opts.transaction_date, opts.transaction_date, batchKey))
     }
 
     // Insert cash transaction with correct running_balance
     stmts.push(db.prepare(
       `INSERT INTO cash_transactions
-       (company_id, season_id, supplier_code, transaction_date,
+       (company_id, season_id, supplier_code, partner_id, financial_account_id, transaction_date,
         direction, document_number, recipient_name, narration, amount,
-        debit, credit, running_balance, year, month, created_by_user_id, status, center_code, field_id, expense_code, local_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        debit, credit, running_balance, year, month, created_by_user_id, status, center_code, field_id, expense_code, local_id,
+        document_type, notes, unit, quantity, unit_price)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
-      opts.company_id, opts.season_id ?? null, opts.supplier_code ?? null,
+      opts.company_id, opts.season_id ?? null, opts.supplier_code ?? null, opts.partner_id ?? null, opts.financial_account_id ?? null,
       opts.transaction_date, opts.direction, opts.document_number ?? null,
       opts.recipient_name ?? null, opts.narration, opts.amount,
       opts.direction === 'م' ? opts.amount : 0,
       opts.direction === 'د' ? opts.amount : 0,
       newBalance,
       new Date(opts.transaction_date).getFullYear(), new Date(opts.transaction_date).getMonth() + 1,
-      opts.userId, status, opts.center_code ?? null, opts.field_id ?? null, opts.expense_code ?? null, batchKey
+      opts.userId, status, opts.center_code ?? null, opts.field_id ?? null, opts.expense_code ?? null, batchKey,
+      opts.document_type ?? null, opts.notes ?? null, opts.unit ?? null, opts.quantity ?? null, opts.unit_price ?? null
     ))
 
     if (isPosted) {
-      // FIX: mapping_key was 'payable' — correct canonical key is 'accounts_payable'
-      const cashAcc = await db
-        .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'")
-        .bind(opts.company_id).first<{ account_code: string }>()
+      // Determine which GL account to use for "Cash" side
+      let cashAccCode = ''
+      if (opts.financial_account_id) {
+        const accInfo = await db.prepare("SELECT gl_account_code FROM bank_accounts WHERE id = ?").bind(opts.financial_account_id).first<{ gl_account_code: string }>()
+        cashAccCode = accInfo?.gl_account_code || ''
+      }
+
+      if (!cashAccCode) {
+        const cashMapping = await db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'").bind(opts.company_id).first<{ account_code: string }>()
+        cashAccCode = cashMapping?.account_code || ''
+      }
 
       let contraAcc = opts.contraAccount
       if (!contraAcc) {
-        const key = opts.supplier_code
+        const key = opts.partner_id
+          ? 'partner_current_account'
+          : opts.supplier_code
           ? 'accounts_payable'
           : (opts.direction === 'د' ? 'revenue_default' : 'expense_default')
         const mapping = await db
@@ -103,9 +125,9 @@ export const FinanceCore = {
         contraAcc = mapping?.account_code
       }
 
-      if (!cashAcc) throw new Error('GL_MAPPING_MISSING: حساب النقدية (cash) غير مربوط. أضفه من إعدادات الحسابات.')
+      if (!cashAccCode) throw new Error('GL_MAPPING_MISSING: حساب الخزينة غير مربوط. أضفه من إعدادات الحسابات.')
       if (!contraAcc) {
-        const missingKey = opts.supplier_code ? 'accounts_payable' : (opts.direction === 'د' ? 'revenue_default' : 'expense_default')
+        const missingKey = opts.partner_id ? 'partner_current_account' : (opts.supplier_code ? 'accounts_payable' : (opts.direction === 'د' ? 'revenue_default' : 'expense_default'))
         throw new Error(`GL_MAPPING_MISSING: حساب المقابل (${missingKey}) غير مربوط. أضفه من إعدادات الحسابات.`)
       }
 
@@ -118,7 +140,7 @@ export const FinanceCore = {
       stmts.push(db.prepare(
         `INSERT INTO journal_entry_lines (entry_id, company_id, account_code, debit, credit, description, center_code)
          VALUES ((SELECT id FROM journal_entries WHERE local_id = ?), ?, ?, ?, ?, ?, ?)`
-      ).bind(jeKey, opts.company_id, cashAcc.account_code,
+      ).bind(jeKey, opts.company_id, cashAccCode,
         opts.direction === 'د' ? opts.amount : 0,
         opts.direction === 'م' ? opts.amount : 0,
         opts.narration, opts.center_code ?? null))
@@ -131,7 +153,6 @@ export const FinanceCore = {
         opts.direction === 'د' ? opts.amount : 0,
         opts.narration, opts.center_code ?? null))
 
-      // FIX: supplier_transactions has no 'narration' column — use 'notes'
       if (opts.supplier_code) {
         const supKey = `st_${batchKey}`
         stmts.push(db.prepare(
@@ -149,7 +170,7 @@ export const FinanceCore = {
         ))
       }
     } else {
-      // Draft supplier mirror — FIX: same narration→notes fix
+      // Draft supplier mirror
       if (opts.supplier_code) {
         const supKey = `st_${batchKey}`
         stmts.push(db.prepare(
@@ -182,7 +203,7 @@ export const FinanceCore = {
 
   async postCashMovement(db: D1Database, company_id: number, txnId: number, userId: number) {
     const txn = await db.prepare(
-      `SELECT id, transaction_date, direction, amount, narration, supplier_code, center_code
+      `SELECT id, transaction_date, direction, amount, narration, supplier_code, partner_id, financial_account_id, center_code
        FROM cash_transactions WHERE id = ? AND company_id = ? AND status = 'draft'`
     ).bind(txnId, company_id).first<CashDraftRow>()
 
@@ -193,9 +214,10 @@ export const FinanceCore = {
 
     const lastRow = await db
       .prepare(`SELECT running_balance FROM cash_transactions
-                WHERE company_id = ? AND transaction_date <= ? AND status = 'posted'
+                WHERE company_id = ? AND financial_account_id = ? 
+                  AND transaction_date <= ? AND status = 'posted'
                 ORDER BY transaction_date DESC, id DESC LIMIT 1`)
-      .bind(company_id, txn.transaction_date).first<{ running_balance: number }>()
+      .bind(company_id, txn.financial_account_id, txn.transaction_date).first<{ running_balance: number }>()
 
     const prevBalance = lastRow?.running_balance ?? 0
     const delta       = txn.direction === 'د' ? txn.amount : -txn.amount
@@ -210,16 +232,23 @@ export const FinanceCore = {
     // FIX: use id > ? (not local_id) — existing rows have local_id = NULL
     stmts.push(db.prepare(
       `UPDATE cash_transactions SET running_balance = running_balance + ?
-       WHERE company_id = ? AND status = 'posted'
+       WHERE company_id = ? AND financial_account_id = ? AND status = 'posted'
          AND (transaction_date > ? OR (transaction_date = ? AND id > ?))`
-    ).bind(delta, company_id, txn.transaction_date, txn.transaction_date, txnId))
+    ).bind(delta, company_id, txn.financial_account_id, txn.transaction_date, txn.transaction_date, txnId))
 
-    // FIX: mapping_key was 'payable' — correct canonical key is 'accounts_payable'
-    const cashAcc = await db
-      .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'")
-      .bind(company_id).first<{ account_code: string }>()
+    let cashAccCode = ''
+    if (txn.financial_account_id) {
+      const accInfo = await db.prepare("SELECT gl_account_code FROM bank_accounts WHERE id = ?").bind(txn.financial_account_id).first<{ gl_account_code: string }>()
+      cashAccCode = accInfo?.gl_account_code || ''
+    }
+    if (!cashAccCode) {
+      const cashMapping = await db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'").bind(company_id).first<{ account_code: string }>()
+      cashAccCode = cashMapping?.account_code || ''
+    }
 
-    const contraKey = txn.supplier_code
+    const contraKey = txn.partner_id
+      ? 'partner_current_account'
+      : txn.supplier_code
       ? 'accounts_payable'
       : (txn.direction === 'د' ? 'revenue_default' : 'expense_default')
     const mapping = await db
@@ -227,8 +256,8 @@ export const FinanceCore = {
       .bind(company_id, contraKey).first<{ account_code: string }>()
     const contraAcc = mapping?.account_code
 
-    if (!cashAcc)   throw new Error('GL_MAPPING_MISSING: حساب النقدية (cash) غير مربوط. أضفه من إعدادات الحسابات.')
-    if (!contraAcc) throw new Error(`GL_MAPPING_MISSING: حساب المقابل (${contraKey}) غير مربوط. أضفه من إعدادات الحسابات.`)
+    if (!cashAccCode) throw new Error('GL_MAPPING_MISSING: حساب الخزينة غير مربوط. أضفه من إعدادات الحسابات.')
+    if (!contraAcc)   throw new Error(`GL_MAPPING_MISSING: حساب المقابل (${contraKey}) غير مربوط. أضفه من إعدادات الحسابات.`)
 
     const jeKey = `je_post_${txnId}`
 
@@ -240,7 +269,7 @@ export const FinanceCore = {
     stmts.push(db.prepare(
       `INSERT INTO journal_entry_lines (entry_id, company_id, account_code, debit, credit, description, center_code)
        VALUES ((SELECT id FROM journal_entries WHERE local_id = ?), ?, ?, ?, ?, ?, ?)`
-    ).bind(jeKey, company_id, cashAcc.account_code,
+    ).bind(jeKey, company_id, cashAccCode,
       txn.direction === 'د' ? txn.amount : 0,
       txn.direction === 'م' ? txn.amount : 0,
       txn.narration, txn.center_code))

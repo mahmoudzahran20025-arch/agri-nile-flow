@@ -2,9 +2,10 @@ import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Download, ShieldCheck, RefreshCcw, X,
-  TrendingUp, TrendingDown, Wallet, Clock, CheckCircle2,
+  TrendingUp, TrendingDown, Wallet, Clock, CheckCircle2, AlertTriangle, Search,
 } from 'lucide-react'
-import { treasuryApi, downloadCsv } from '../../api/client'
+import { Link } from 'react-router-dom'
+import { treasuryApi, glApi, downloadCsv } from '../../api/client'
 import { usePermission } from '../../hooks/usePermission'
 import DataTable, { type Column, type SortState } from '../../components/ui/DataTable'
 import AddCashTransactionModal from '../../components/forms/AddCashTransactionModal'
@@ -13,7 +14,7 @@ import { useToast } from '../../contexts/ToastContext'
 
 function egp(n: number | null | undefined) {
   if (n == null) return '—'
-  return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 }
 
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
@@ -29,22 +30,33 @@ export default function CashJournalPage() {
   const [status,    setStatus]    = useState('')
   const [month,     setMonth]     = useState('')
   const [year,      setYear]      = useState('')
-  const [addOpen,   setAddOpen]   = useState(false)
-  const [sort,      setSort]      = useState<SortState | undefined>(undefined)
+  const [addOpen,     setAddOpen]     = useState(false)
+  const [sort,        setSort]        = useState<SortState | undefined>(undefined)
+  const [search,      setSearch]      = useState('')
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
 
   const { data: balance } = useQuery({
     queryKey: ['treasury', 'balance'],
     queryFn:  () => treasuryApi.balance(),
   })
 
+  type Period = { id: number; is_closed: number }
+  const { data: periods } = useQuery({
+    queryKey: ['gl-periods'],
+    queryFn:  glApi.periods as () => Promise<Period[]>,
+    staleTime: 300_000,
+  })
+  const hasOpenPeriod = (periods ?? []).some(p => !p.is_closed)
+
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['treasury', 'txns', page, direction, month, year, status],
+    queryKey: ['treasury', 'txns', page, direction, month, year, status, search],
     queryFn:  () => treasuryApi.list({
       page, size: 100,
       direction: direction || undefined,
       month:  month  ? Number(month)  : undefined,
       year:   year   ? Number(year)   : undefined,
       status: status || undefined,
+      search: search.trim() || undefined,
     }) as Promise<{ data: CashTransaction[]; total: number; page: number; page_size: number; has_more: boolean }>,
   })
 
@@ -57,9 +69,39 @@ export default function CashJournalPage() {
     onError: (err: { message?: string }) => toast(err.message || 'فشل ترحيل الحركة', 'error'),
   })
 
+  const bulkPostMut = useMutation({
+    mutationFn: async (ids: number[]) => {
+      for (const id of ids) await treasuryApi.post(id)
+    },
+    onSuccess: () => {
+      toast(`تم ترحيل الحركات المحددة بنجاح`, 'success')
+      setSelectedIds(new Set())
+      queryClient.invalidateQueries({ queryKey: ['treasury'] })
+    },
+    onError: (err: { message?: string }) => toast(err.message || 'فشل الترحيل الجماعي', 'error'),
+  })
+
   const COLUMNS: Column<CashTransaction>[] = [
+    {
+      key: 'id', header: '', width: '36px',
+      render: r => r.status === 'draft' ? (
+        <input
+          type="checkbox"
+          className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-600 cursor-pointer"
+          checked={selectedIds.has(r.id)}
+          onChange={e => {
+            setSelectedIds(prev => {
+              const next = new Set(prev)
+              e.target.checked ? next.add(r.id) : next.delete(r.id)
+              return next
+            })
+          }}
+          onClick={ev => ev.stopPropagation()}
+        />
+      ) : <span className="block w-3.5 h-3.5" />,
+    },
     { key: 'transaction_date', header: 'التاريخ', width: '110px', sortable: true,
-      render: r => <span className="text-xs tabular-nums">{new Date(r.transaction_date).toLocaleDateString('ar-EG')}</span> },
+      render: r => <span className="text-xs tabular-nums">{new Date(r.transaction_date).toLocaleDateString('en-US')}</span> },
     {
       key: 'direction', header: 'الاتجاه', width: '85px',
       render: r => (
@@ -86,7 +128,22 @@ export default function CashJournalPage() {
         </span>
       )
     },
-    { key: 'document_number', header: 'المستند', width: '90px',
+    {
+      key: 'document_type', header: 'نوع المستند', width: '100px',
+      render: r => {
+        if (!r.document_type) return <span className="text-slate-300">—</span>
+        const cfg: Record<string, string> = {
+          'فاتورة':      'bg-blue-50 text-blue-700 border-blue-200',
+          'شيك':         'bg-purple-50 text-purple-700 border-purple-200',
+          'تحويل بنكي': 'bg-sky-50 text-sky-700 border-sky-200',
+          'نقداً':       'bg-emerald-50 text-emerald-700 border-emerald-200',
+          'إيصال':       'bg-teal-50 text-teal-700 border-teal-200',
+        }
+        const cls = cfg[r.document_type] ?? 'bg-slate-50 text-slate-600 border-slate-200'
+        return <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold border ${cls}`}>{r.document_type}</span>
+      },
+    },
+    { key: 'document_number', header: 'رقم المستند', width: '90px',
       render: r => r.document_number ? <span className="font-mono text-xs text-slate-600">#{r.document_number}</span> : <span className="text-slate-300">—</span> },
     { key: 'recipient_name',  header: 'المستلم / المسلم',
       render: r => r.recipient_name ?? <span className="text-slate-300">—</span> },
@@ -145,7 +202,7 @@ export default function CashJournalPage() {
   const draftCount = allRows.filter(r => r.status === 'draft').length
   const cashIn     = allRows.filter(r => r.direction === 'د' && r.status === 'posted').reduce((s, r) => s + r.amount, 0)
   const cashOut    = allRows.filter(r => r.direction === 'م' && r.status === 'posted').reduce((s, r) => s + r.amount, 0)
-  const hasFilters = !!(direction || month || year || status)
+  const hasFilters = !!(direction || month || year || status || search.trim())
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -169,6 +226,16 @@ export default function CashJournalPage() {
           >
             <Download size={14} /> تصدير CSV
           </button>
+          {selectedIds.size > 0 && (role === 'super_admin' || role === 'company_admin') && (
+            <button
+              className="btn-primary gap-2 bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-100"
+              onClick={() => bulkPostMut.mutate([...selectedIds])}
+              disabled={bulkPostMut.isPending}
+            >
+              <ShieldCheck size={15} />
+              {bulkPostMut.isPending ? 'جاري الترحيل...' : `ترحيل ${selectedIds.size} حركة`}
+            </button>
+          )}
           {canWrite('treasury') && (
             <button className="btn-primary gap-2 shadow-lg shadow-emerald-100" onClick={() => setAddOpen(true)}>
               <Plus size={16} /> حركة جديدة
@@ -236,6 +303,20 @@ export default function CashJournalPage() {
         </div>
       )}
 
+      {/* ── Period warning ────────────────────────────── */}
+      {periods !== undefined && !hasOpenPeriod && (
+        <div className="flex items-center gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+          <AlertTriangle size={15} className="text-red-500 shrink-0" />
+          <div>
+            <span className="text-sm font-bold text-red-800">لا توجد فترة مالية مفتوحة</span>
+            <span className="text-xs font-normal text-red-700 mr-2">— لن تُرحّل أي حركة إلى دفتر الأستاذ حتى تُنشئ فترة مفتوحة</span>
+          </div>
+          <Link to="/gl/periods" className="mr-auto shrink-0 text-xs font-bold text-red-700 hover:text-red-900 underline underline-offset-2 whitespace-nowrap">
+            إنشاء فترة مالية ←
+          </Link>
+        </div>
+      )}
+
       {/* ── Filters ───────────────────────────────────── */}
       <div className="card p-4 bg-slate-50/50">
         <div className="flex flex-wrap gap-3 items-center">
@@ -297,18 +378,30 @@ export default function CashJournalPage() {
             {MONTHS.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
           </select>
 
+          {/* Search */}
+          <div className="relative flex-1 min-w-[160px] max-w-xs">
+            <Search size={11} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="بحث في البيان أو المستلم..."
+              className="input h-8 text-xs pr-7 bg-white border-slate-200 w-full"
+              value={search}
+              onChange={e => { setSearch(e.target.value); setPage(1) }}
+            />
+          </div>
+
           {/* Clear */}
           {hasFilters && (
             <button
               className="flex items-center gap-1 text-xs font-bold text-red-500 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors"
-              onClick={() => { setDirection(''); setMonth(''); setYear(''); setStatus(''); setPage(1) }}
+              onClick={() => { setDirection(''); setMonth(''); setYear(''); setStatus(''); setSearch(''); setPage(1) }}
             >
               <X size={12} /> مسح
             </button>
           )}
 
           <span className="mr-auto text-[11px] font-bold text-slate-400 uppercase tracking-widest">
-            {data?.total?.toLocaleString('ar-EG') ?? '…'} حركة
+            {data?.total?.toLocaleString('en-US') ?? '…'} حركة
           </span>
         </div>
       </div>

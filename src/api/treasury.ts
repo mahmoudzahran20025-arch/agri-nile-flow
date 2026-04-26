@@ -8,6 +8,10 @@ import { logAudit } from '../lib/audit'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 
+function userMsg(err: { message?: string }): string {
+  return (err.message ?? 'حدث خطأ').replace(/^[A-Z_]+:\s*/, '')
+}
+
 const treasury = new Hono<{ Bindings: Env }>()
 treasury.use('*', authMiddleware)
 // RBAC: Treasury posting and partner cash operations are finance-restricted.
@@ -27,6 +31,12 @@ const transactionSchema = z.object({
   status: z.enum(['draft', 'posted']).optional().default('posted'),
   notes: z.string().optional().nullable(),
   expense_code: z.number().optional().nullable(),
+  document_type: z.string().optional().nullable(),
+  unit: z.string().optional().nullable(),
+  quantity: z.number().optional().nullable(),
+  unit_price: z.number().optional().nullable(),
+  financial_account_id: z.number().optional().nullable(),
+  partner_id: z.number().optional().nullable(),
 })
 
 // GET /api/treasury/transactions?page=&size=&direction=&season_id=&month=&year=&status=
@@ -40,6 +50,8 @@ treasury.get('/transactions', async (c) => {
   const month     = c.req.query('month')
   const year      = c.req.query('year')
   const search    = c.req.query('search')
+  const accountId = c.req.query('account_id')
+  const partnerId = c.req.query('partner_id')
   const offset    = (page - 1) * size
 
   let where   = 'WHERE company_id = ?'
@@ -50,13 +62,16 @@ treasury.get('/transactions', async (c) => {
   if (status)    { where += ' AND status = ?';     binds.push(status) }
   if (month)     { where += ' AND month = ?';      binds.push(Number(month)) }
   if (year)      { where += ' AND year = ?';       binds.push(Number(year)) }
+  if (accountId) { where += ' AND financial_account_id = ?'; binds.push(Number(accountId)) }
+  if (partnerId) { where += ' AND partner_id = ?'; binds.push(Number(partnerId)) }
   if (search)    { where += ' AND (narration LIKE ? OR recipient_name LIKE ?)'; const like = `%${search}%`; binds.push(like, like) }
 
   const [rows, cnt] = await Promise.all([
     c.env.DB.prepare(
       `SELECT id, transaction_date, direction, document_number, recipient_name,
               narration, amount, debit, credit, running_balance, year, month, notes, status,
-              field_id, center_code, season_id
+              field_id, center_code, season_id, document_type, unit, quantity, unit_price,
+              financial_account_id, partner_id
        FROM cash_transactions ${where}
        ORDER BY transaction_date ASC, id ASC LIMIT ? OFFSET ?`
     ).bind(...binds, size, offset).all(),
@@ -75,12 +90,21 @@ treasury.get('/transactions', async (c) => {
 // GET /api/treasury/balance
 treasury.get('/balance', async (c) => {
   const { company_id } = getUser(c)
+  const accountId = c.req.query('account_id')
+
+  let where = 'WHERE company_id = ? AND status = "posted"'
+  const binds: any[] = [company_id]
+
+  if (accountId) {
+    where += ' AND financial_account_id = ?'
+    binds.push(Number(accountId))
+  }
 
   const row = await c.env.DB
     .prepare(`SELECT running_balance FROM cash_transactions
-              WHERE company_id = ? AND status = 'posted'
+              ${where}
               ORDER BY transaction_date DESC, id DESC LIMIT 1`)
-    .bind(company_id).first<{ running_balance: number }>()
+    .bind(...binds).first<{ running_balance: number }>()
 
   return c.json({ success: true, data: { balance: row?.running_balance ?? 0 } })
 })
@@ -106,11 +130,17 @@ treasury.post('/transactions', zValidator('json', transactionSchema), async (c) 
       expense_code: b.expense_code,
       notes: b.notes,
       status: b.status,
+      document_type: b.document_type,
+      unit: b.unit,
+      quantity: b.quantity,
+      unit_price: b.unit_price,
+      financial_account_id: b.financial_account_id,
+      partner_id: b.partner_id,
     })
 
     return c.json({ success: true, data: { running_balance: balance, id: txnId } }, 201)
   } catch (err: any) {
-    return c.json({ success: false, error: err.message }, 400)
+    return c.json({ success: false, error: userMsg(err) }, 400)
   }
 })
 
@@ -130,7 +160,7 @@ treasury.post('/transactions', zValidator('json', transactionSchema), async (c) 
 
     return c.json({ success: true, data: result })
   } catch (err: any) {
-    return c.json({ success: false, error: err.message }, 400)
+    return c.json({ success: false, error: userMsg(err) }, 400)
   }
 })
 
@@ -237,12 +267,13 @@ treasury.patch('/partners/:id', async (c) => {
   const today = new Date().toISOString().slice(0, 10)
   const partnerName = b.name?.trim() ?? current.name
 
-  const equityMapping = await c.env.DB
-    .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'equity'")
-    .bind(company_id).first<{ account_code: string }>()
-  const cashMapping = await c.env.DB
-    .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'")
-    .bind(company_id).first<{ account_code: string }>()
+  const [equityMapping, cashMapping, currentAcctMapping] = await Promise.all([
+    c.env.DB.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'equity'").bind(company_id).first<{ account_code: string }>(),
+    c.env.DB.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'").bind(company_id).first<{ account_code: string }>(),
+    c.env.DB.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'partner_current_acct'").bind(company_id).first<{ account_code: string }>(),
+  ])
+  // Use dedicated partner current-account mapping if set, else fall back to equity
+  const currentAcctCode = currentAcctMapping?.account_code ?? equityMapping?.account_code
 
   if (equityMapping && cashMapping) {
     // Capital change → DR/CR Cash vs Equity
@@ -274,8 +305,8 @@ treasury.patch('/partners/:id', async (c) => {
       }
     }
 
-    // Current account change → DR/CR Cash vs Partner Current Account
-    if (b.current_acct !== undefined) {
+    // Current account change → DR/CR Cash vs Partner Current Account (dedicated mapping or equity fallback)
+    if (b.current_acct !== undefined && currentAcctCode) {
       const delta = b.current_acct - (current.current_acct ?? 0)
       if (Math.abs(delta) > 0.01) {
         const desc = delta > 0
@@ -291,12 +322,12 @@ treasury.patch('/partners/:id', async (c) => {
           ref_id:      id,
           lines: delta > 0
             ? [
-                { account_code: cashMapping.account_code,   debit: absDelta, credit: 0,        description: desc },
-                { account_code: equityMapping.account_code,  debit: 0,        credit: absDelta, description: desc },
+                { account_code: cashMapping.account_code, debit: absDelta, credit: 0,        description: desc },
+                { account_code: currentAcctCode,           debit: 0,        credit: absDelta, description: desc },
               ]
             : [
-                { account_code: equityMapping.account_code,  debit: absDelta, credit: 0,        description: desc },
-                { account_code: cashMapping.account_code,   debit: 0,        credit: absDelta, description: desc },
+                { account_code: currentAcctCode,           debit: absDelta, credit: 0,        description: desc },
+                { account_code: cashMapping.account_code, debit: 0,        credit: absDelta, description: desc },
               ],
           created_by: userId,
         })

@@ -11,7 +11,7 @@ function startOfYear() { return `${new Date().getFullYear()}-01-01` }
 function today()       { return new Date().toISOString().slice(0, 10) }
 
 function egp(n: number) {
-  return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 }
 
 // ─── Add / Edit Partner Modal ─────────────────────────────────
