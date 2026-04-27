@@ -230,9 +230,10 @@ export const FinanceCore = {
     ).bind(newBalance, txnId))
 
     // FIX: use id > ? (not local_id) — existing rows have local_id = NULL
+    // Also use 'IS' for financial_account_id to handle NULL correctly in comparison
     stmts.push(db.prepare(
       `UPDATE cash_transactions SET running_balance = running_balance + ?
-       WHERE company_id = ? AND financial_account_id = ? AND status = 'posted'
+       WHERE company_id = ? AND (financial_account_id IS ?) AND status = 'posted'
          AND (transaction_date > ? OR (transaction_date = ? AND id > ?))`
     ).bind(delta, company_id, txn.financial_account_id, txn.transaction_date, txn.transaction_date, txnId))
 

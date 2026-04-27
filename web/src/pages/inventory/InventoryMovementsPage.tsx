@@ -1,10 +1,11 @@
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Plus, SlidersHorizontal, Download, Leaf } from 'lucide-react'
+import { Plus, SlidersHorizontal, Download, Leaf, ArrowRightLeft } from 'lucide-react'
 import { inventoryApi, configApi, fieldsApi, operationsApi, downloadCsv } from '../../api/client'
 import DataTable, { type Column, type SortState } from '../../components/ui/DataTable'
 import AddInventoryBatchModal from '../../components/forms/AddInventoryBatchModal'
+import InternalTransferModal from '../../components/forms/InternalTransferModal'
 import type { InventoryMovement } from '../../types'
 import { usePermission } from '../../hooks/usePermission'
 
@@ -24,9 +25,14 @@ const COLUMNS: Column<InventoryMovement & { field_name?: string }>[] = [
   {
     key: 'movement_type', header: 'النوع', width: '80px', sortable: true,
     render: r => (
-      <span className={r.movement_type === 'اضافة' ? 'badge-green' : 'badge-red'}>
-        {r.movement_type === 'اضافة' ? 'وارد' : 'منصرف'}
-      </span>
+      <div className="flex items-center gap-1.5">
+        <span className={r.movement_type === 'اضافة' ? 'badge-green' : 'badge-red'}>
+          {r.movement_type === 'اضافة' ? 'وارد' : 'منصرف'}
+        </span>
+        {(r as any).related_movement_id && (
+          <ArrowRightLeft size={12} className="text-indigo-400" title="جزء من عملية تحويل" />
+        )}
+      </div>
     ),
   },
   { key: 'item_name',  header: 'الصنف', sortable: true, render: r => (
@@ -81,6 +87,7 @@ export default function InventoryMovementsPage() {
   const [startDate, setStart]     = useState(thisMonthStart())
   const [endDate,   setEnd]       = useState(today())
   const [addOpen,   setAddOpen]   = useState(false)
+  const [transferOpen, setTransferOpen] = useState(false)
   const [sort,      setSort]      = useState<SortState | undefined>(undefined)
 
   const reset = () => {
@@ -158,6 +165,12 @@ export default function InventoryMovementsPage() {
           >
             <Download size={16} /> تصدير CSV
           </button>
+          <button
+            className="btn-secondary gap-2 border-indigo-200 text-indigo-700 hover:bg-indigo-50"
+            onClick={() => setTransferOpen(true)}
+          >
+            <ArrowRightLeft size={16} /> تحويل مخزني
+          </button>
           {canWrite('inventory') && (
             <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
               <Plus size={16} />
@@ -166,6 +179,11 @@ export default function InventoryMovementsPage() {
           )}
         </div>
       </div>
+
+      <InternalTransferModal
+        open={transferOpen}
+        onClose={() => setTransferOpen(false)}
+      />
 
       {/* Filters */}
       <div className="card p-4 space-y-3">

@@ -1,140 +1,229 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { inventoryApi } from '../../api/client'
+import { inventoryApi, configApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 import Modal from '../ui/Modal'
-import { ArrowRightLeft, Package, MapPin } from 'lucide-react'
+import { ArrowRightLeft, Package, MapPin, Plus, Trash2, CheckCircle } from 'lucide-react'
 
 interface Props {
   open: boolean
   onClose: () => void
-  itemCode: number
-  itemName: string
-  sourceWarehouse: string
-  maxQuantity: number
+  initialItemCode?: number
+  initialItemName?: string
+  initialSourceWarehouse?: string
 }
 
-export default function InternalTransferModal({ open, onClose, itemCode, itemName, sourceWarehouse, maxQuantity }: Props) {
+interface TransferLine {
+  id: string
+  item_code: string
+  item_name?: string
+  quantity: string
+  available?: number
+  error?: string
+}
+
+const uid = () => Math.random().toString(36).slice(2, 9)
+
+export default function InternalTransferModal({ open, onClose, initialItemCode, initialItemName, initialSourceWarehouse }: Props) {
   const qc = useQueryClient()
   const { toast } = useToast()
 
+  const [fromWarehouse, setFromWarehouse] = useState(initialSourceWarehouse || '')
   const [toWarehouse, setToWarehouse] = useState('')
-  const [quantity, setQuantity] = useState<number | ''>('')
   const [notes, setNotes] = useState('')
+  const [lines, setLines] = useState<TransferLine[]>([])
 
-  const { data: warehousesData } = useQuery({
-    queryKey: ['warehouses-setup'],
-    queryFn: () => inventoryApi.warehousesSetup(),
+  // Reset/Initialize
+  useEffect(() => {
+    if (open) {
+      setFromWarehouse(initialSourceWarehouse || '')
+      setToWarehouse('')
+      setNotes('')
+      if (initialItemCode) {
+        setLines([{ id: uid(), item_code: String(initialItemCode), item_name: initialItemName, quantity: '' }])
+      } else {
+        setLines([{ id: uid(), item_code: '', quantity: '' }])
+      }
+    }
+  }, [open, initialItemCode, initialItemName, initialSourceWarehouse])
+
+  const { data: warehouses = [] } = useQuery({
+    queryKey: ['warehouses'],
+    queryFn: inventoryApi.warehouses,
+    enabled: open
   })
 
-  const warehouses = (warehousesData as any)?.entities || []
-  const validWarehouses = warehouses.filter((w: any) => w.name !== sourceWarehouse)
+  const { data: items = [] } = useQuery({
+    queryKey: ['config-items-simple'],
+    queryFn: configApi.items,
+    enabled: open
+  })
 
-  const directTransferMutation = useMutation({
-    mutationFn: () => inventoryApi.transfer({
+  const addLine = () => setLines(ls => [...ls, { id: uid(), item_code: '', quantity: '' }])
+  const removeLine = (id: string) => setLines(ls => ls.length > 1 ? ls.filter(l => l.id !== id) : ls)
+  
+  const updateLine = (id: string, patch: Partial<TransferLine>) => 
+    setLines(ls => ls.map(l => l.id === id ? { ...l, ...patch } : l))
+
+  const handleItemChange = async (id: string, code: string) => {
+    const it = (items as any[]).find(i => String(i.code) === code)
+    updateLine(id, { item_code: code, item_name: it?.name, available: undefined, error: undefined })
+    
+    if (code && fromWarehouse) {
+      try {
+        const stock = await inventoryApi.itemStock(Number(code), fromWarehouse)
+        updateLine(id, { available: stock.total_qty })
+      } catch (err) {
+        console.error('Failed to fetch stock', err)
+      }
+    }
+  }
+
+  const batchTransferMutation = useMutation({
+    mutationFn: () => inventoryApi.transferBatch({
       movement_date: new Date().toISOString().split('T')[0],
-      item_code: itemCode,
-      quantity: Number(quantity),
-      from_warehouse: sourceWarehouse,
+      from_warehouse: fromWarehouse,
       to_warehouse: toWarehouse,
-      notes
+      notes,
+      items: lines.map(l => ({ item_code: Number(l.item_code), quantity: Number(l.quantity) }))
     }),
     onSuccess: (res: any) => {
       if (res.success === false) { toast(res.error || 'فشل التحويل', 'error'); return }
-      toast('تم تحويل المخزون بنجاح', 'success')
+      toast(`تم تحويل ${lines.length} صنف بنجاح`, 'success')
       qc.invalidateQueries({ queryKey: ['inventory'] })
       onClose()
     },
     onError: () => toast('خطأ في الاتصال بالخادم', 'error')
   })
 
-  return (
-    <Modal open={open} onClose={onClose} title="تحويل مخزني داخلي (Internal Transfer)">
-      <div className="space-y-4">
-        
-        {/* Item Info Card */}
-        <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center">
-              <Package size={20} />
-            </div>
-            <div>
-              <p className="font-bold text-slate-800">{itemName}</p>
-              <p className="text-xs text-indigo-600 font-semibold">المتاح للنقل: {maxQuantity}</p>
-            </div>
-          </div>
-        </div>
+  const isValid = fromWarehouse && toWarehouse && fromWarehouse !== toWarehouse && 
+                  lines.length > 0 && lines.every(l => l.item_code && Number(l.quantity) > 0 && (l.available === undefined || Number(l.quantity) <= l.available))
 
-        {/* Transfer Path */}
-        <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-end">
-          <div>
-            <label className="label text-slate-500">من مخزن (المصدر)</label>
-            <div className="input bg-slate-50 text-slate-500 cursor-not-allowed flex items-center gap-2">
-              <MapPin size={16} />
-              {sourceWarehouse}
-            </div>
+  return (
+    <Modal open={open} onClose={onClose} title="تحويل مخزني (Batch Transfer)" size="lg">
+      <div className="space-y-5">
+        
+        {/* Warehouses Selection */}
+        <div className="grid grid-cols-[1fr_auto_1fr] gap-4 items-center bg-slate-50 border border-slate-200 rounded-2xl p-4 shadow-sm">
+          <div className="space-y-1">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1">من مخزن (المصدر)</label>
+            <select 
+              className="input bg-white border-slate-200"
+              value={fromWarehouse}
+              onChange={e => { setFromWarehouse(e.target.value); setLines(ls => ls.map(l => ({...l, available: undefined}))) }}
+            >
+              <option value="">-- اختر المصدر --</option>
+              {warehouses.map(w => <option key={w} value={w}>{w}</option>)}
+            </select>
           </div>
           
-          <div className="pb-3 text-slate-400">
-            <ArrowRightLeft size={20} />
+          <div className="pt-5 text-brand-500">
+            <ArrowRightLeft size={20} className="animate-pulse-slow" />
           </div>
 
-          <div>
-            <label className="label">إلى مخزن (الوجهة) *</label>
+          <div className="space-y-1">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1">إلى مخزن (الوجهة)</label>
             <select 
-              className="input border-indigo-200 focus:border-indigo-500 focus:ring-indigo-500" 
-              value={toWarehouse} 
+              className="input bg-white border-slate-200"
+              value={toWarehouse}
               onChange={e => setToWarehouse(e.target.value)}
             >
-              <option value="">-- اختر المخزن --</option>
-              {validWarehouses.map((w: any) => (
-                <option key={w.name} value={w.name}>{w.name}</option>
-              ))}
+              <option value="">-- اختر الوجهة --</option>
+              {warehouses.filter(w => w !== fromWarehouse).map(w => <option key={w} value={w}>{w}</option>)}
             </select>
           </div>
         </div>
 
-        <div>
-          <label className="label">الكمية المراد نقلها *</label>
-          <div className="relative">
-            <input 
-              type="number" 
-              className="input pr-16" 
-              placeholder="0.0"
-              min={0.1}
-              max={maxQuantity}
-              step="any"
-              value={quantity}
-              onChange={e => setQuantity(Number(e.target.value))}
-            />
-            <button 
-              className="absolute top-1/2 -translate-y-1/2 right-2 text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded hover:bg-indigo-100"
-              onClick={() => setQuantity(maxQuantity)}
-            >
-              الكل
+        {/* Items List */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between px-1">
+            <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+              <Package size={16} className="text-brand-500" />
+              الأصناف المراد نقلها
+            </h3>
+            <button className="btn-ghost text-xs text-brand-600 gap-1 h-8" onClick={addLine}>
+              <Plus size={14} /> إضافة صنف
             </button>
+          </div>
+
+          <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+            {lines.map((line, idx) => (
+              <div key={line.id} className="group flex gap-2 items-start bg-white border border-slate-200 rounded-xl p-3 hover:border-brand-200 hover:shadow-sm transition-all">
+                <div className="flex-1 space-y-2">
+                  <select 
+                    className="input text-sm py-1.5"
+                    value={line.item_code}
+                    onChange={e => handleItemChange(line.id, e.target.value)}
+                  >
+                    <option value="">-- اختر الصنف --</option>
+                    {(items as any[]).map(i => <option key={i.code} value={i.code}>{i.name}</option>)}
+                  </select>
+                  
+                  {line.item_code && (
+                    <div className="flex items-center gap-4 px-1">
+                      <div className="flex items-center gap-1.5 text-[10px] font-medium text-slate-500">
+                        <span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
+                        الرصيد المتاح: <span className={line.available === 0 ? 'text-red-500 font-bold' : 'text-slate-800'}>
+                          {line.available !== undefined ? line.available : '...'}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="w-32 space-y-2">
+                  <div className="relative">
+                    <input 
+                      type="number" 
+                      className={`input text-sm py-1.5 pr-8 ${line.error ? 'border-red-500 bg-red-50' : ''}`}
+                      placeholder="الكمية"
+                      value={line.quantity}
+                      onChange={e => updateLine(line.id, { quantity: e.target.value })}
+                    />
+                    <button 
+                      className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-brand-600 font-bold"
+                      onClick={() => line.available !== undefined && updateLine(line.id, { quantity: String(line.available) })}
+                    >
+                      الكل
+                    </button>
+                  </div>
+                </div>
+
+                <button 
+                  className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all mt-0.5"
+                  onClick={() => removeLine(line.id)}
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ))}
           </div>
         </div>
 
         <div>
-          <label className="label">ملاحظات (اختياري)</label>
+          <label className="label text-xs">ملاحظات التحويل (اختياري)</label>
           <input 
             type="text" 
-            className="input" 
-            placeholder="سبب التحويل أو رقم إذن النقل..."
+            className="input text-sm" 
+            placeholder="مثال: نقل لموقع العمل، تسوية مخزنية..."
             value={notes}
             onChange={e => setNotes(e.target.value)}
           />
         </div>
 
-        <div className="flex gap-3 pt-4">
+        <div className="flex gap-3 pt-2">
           <button className="btn-secondary flex-1" onClick={onClose}>إلغاء</button>
           <button 
-            className="btn-primary flex-1 bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200" 
-            disabled={directTransferMutation.isPending || !toWarehouse || !quantity || quantity <= 0 || quantity > maxQuantity}
-            onClick={() => directTransferMutation.mutate()}
+            className="btn-primary flex-1 bg-brand-600 hover:bg-brand-700 shadow-brand-100 gap-2" 
+            disabled={batchTransferMutation.isPending || !isValid}
+            onClick={() => batchTransferMutation.mutate()}
           >
-            {directTransferMutation.isPending ? 'جاري التحويل...' : 'تأكيد التحويل'}
+            {batchTransferMutation.isPending ? 'جاري التحويل...' : (
+              <>
+                <CheckCircle size={18} />
+                تأكيد تحويل {lines.length} صنف
+              </>
+            )}
           </button>
         </div>
       </div>

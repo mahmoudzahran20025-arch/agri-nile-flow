@@ -1,16 +1,13 @@
 import { Hono } from 'hono'
-import type { Env } from '../types'
-import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
-import { logAudit } from '../lib/audit'
-import { getOpenPeriod } from '../lib/gl'
-import { FinanceCore } from '../lib/finance_core'
+import type { Env } from '../../types'
+import { getUser } from '../../middleware/auth'
+import { logAudit } from '../../lib/audit'
+import { getOpenPeriod, glSupplierInvoice } from '../../lib/gl'
+import { FinanceCore } from '../../lib/finance_core'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 
-const finance = new Hono<{ Bindings: Env }>()
-finance.use('*', authMiddleware)
-// RBAC: Finance/AP/Banking endpoints are restricted to finance leadership roles.
-finance.use('*', roleGuard(['super_admin', 'company_admin', 'accountant']))
+const purchasing = new Hono<{ Bindings: Env }>()
 
 const poStatusSchema = z.object({
   status: z.enum(['sent', 'partial', 'received', 'cancelled', 'closed']),
@@ -36,241 +33,10 @@ const poCreateSchema = z.object({
 })
 
 // ═══════════════════════════════════════════════════════════
-// BANK ACCOUNTS — الحسابات البنكية
-// ═══════════════════════════════════════════════════════════
-
-finance.get('/bank-accounts', async (c) => {
-  const { company_id } = getUser(c)
-  const { results } = await c.env.DB
-    .prepare(`SELECT ba.*,
-               (SELECT COALESCE(SUM(s.amount_in) - SUM(s.amount_out),0)
-                FROM bank_statements s WHERE s.bank_account_id = ba.id) +
-               ba.opening_balance AS current_balance
-             FROM bank_accounts ba
-             WHERE ba.company_id = ? ORDER BY ba.bank_name, ba.account_name`)
-    .bind(company_id).all()
-  return c.json({ success: true, data: results })
-})
-
-finance.post('/bank-accounts', async (c) => {
-  const { company_id, sub: userId } = getUser(c)
-  const b = await c.req.json<{
-    bank_name: string; account_name: string; account_number: string
-    iban?: string; currency?: string; gl_account_code?: string
-    opening_balance?: number; notes?: string
-  }>()
-  if (!b.bank_name || !b.account_name || !b.account_number) {
-    return c.json({ success: false, error: 'اسم البنك واسم الحساب ورقم الحساب مطلوبة' }, 400)
-  }
-  const r = await c.env.DB.prepare(
-    `INSERT INTO bank_accounts
-     (company_id, bank_name, account_name, account_number, iban, currency,
-      gl_account_code, opening_balance, notes)
-     VALUES (?,?,?,?,?,?,?,?,?)`
-  ).bind(
-    company_id, b.bank_name, b.account_name, b.account_number,
-    b.iban ?? null, b.currency ?? 'EGP', b.gl_account_code ?? null,
-    b.opening_balance ?? 0, b.notes ?? null
-  ).run()
-  void logAudit(c.env.DB, {
-    user_id: userId, company_id, action: 'CREATE',
-    table_name: 'bank_accounts', record_id: r.meta.last_row_id,
-    new_value: b,
-  })
-  return c.json({ success: true, data: { id: r.meta.last_row_id } }, 201)
-})
-
-finance.patch('/bank-accounts/:id', async (c) => {
-  const { company_id } = getUser(c)
-  const id = Number(c.req.param('id'))
-  const b = await c.req.json<Record<string, unknown>>()
-  const allowed = ['bank_name','account_name','account_number','iban','currency','gl_account_code','opening_balance','is_active','notes']
-  const cols = Object.keys(b).filter(k => allowed.includes(k))
-  if (!cols.length) return c.json({ success: false, error: 'لا توجد حقول للتعديل' }, 400)
-  await c.env.DB.prepare(
-    `UPDATE bank_accounts SET ${cols.map(f => `${f} = ?`).join(', ')} WHERE id = ? AND company_id = ?`
-  ).bind(...cols.map(f => b[f]), id, company_id).run()
-  return c.json({ success: true, data: null })
-})
-
-// ═══════════════════════════════════════════════════════════
-// BANK STATEMENTS — كشوف حساب البنك
-// ═══════════════════════════════════════════════════════════
-
-finance.get('/bank-statements/:accountId', async (c) => {
-  const { company_id } = getUser(c)
-  const accountId = Number(c.req.param('accountId'))
-  const start     = c.req.query('start')
-  const end       = c.req.query('end')
-  const unmatched = c.req.query('unmatched')
-
-  let where = 'WHERE s.company_id = ? AND s.bank_account_id = ?'
-  const p: unknown[] = [company_id, accountId]
-  if (start)    { where += ' AND s.statement_date >= ?'; p.push(start) }
-  if (end)      { where += ' AND s.statement_date <= ?'; p.push(end) }
-  if (unmatched === '1') { where += ' AND s.is_matched = 0' }
-
-  const { results } = await c.env.DB
-    .prepare(`SELECT s.*, u.full_name AS matched_by_name
-              FROM bank_statements s
-              LEFT JOIN users u ON u.id = s.matched_by
-              ${where}
-              ORDER BY s.statement_date ASC, s.id ASC`)
-    .bind(...p).all()
-  return c.json({ success: true, data: results })
-})
-
-// POST many lines at once (import / manual batch entry)
-finance.post('/bank-statements/:accountId', async (c) => {
-  const { company_id, sub: userId } = getUser(c)
-  const accountId = Number(c.req.param('accountId'))
-
-  // Verify ownership
-  const acct = await c.env.DB
-    .prepare('SELECT id FROM bank_accounts WHERE id = ? AND company_id = ?')
-    .bind(accountId, company_id).first()
-  if (!acct) return c.json({ success: false, error: 'الحساب غير موجود' }, 404)
-
-  const body = await c.req.json<{
-    batch_id?: string
-    lines: Array<{
-      statement_date: string; value_date?: string; description: string
-      ref_number?: string; amount_in?: number; amount_out?: number; bank_balance?: number
-    }>
-  }>()
-  if (!body.lines?.length) return c.json({ success: false, error: 'لا توجد سطور' }, 400)
-
-  const batchId = body.batch_id ?? `import-${Date.now()}`
-  const stmts = body.lines.map(l =>
-    c.env.DB.prepare(
-      `INSERT OR IGNORE INTO bank_statements
-       (company_id, bank_account_id, statement_date, value_date, description,
-        ref_number, amount_in, amount_out, bank_balance, import_batch_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`
-    ).bind(
-      company_id, accountId, l.statement_date, l.value_date ?? null, l.description,
-      l.ref_number ?? null, l.amount_in ?? 0, l.amount_out ?? 0,
-      l.bank_balance ?? null, batchId
-    )
-  )
-  await c.env.DB.batch(stmts)
-  void logAudit(c.env.DB, {
-    user_id: userId, company_id, action: 'CREATE',
-    table_name: 'bank_statements', record_id: accountId,
-    new_value: { lines: body.lines.length, batch_id: batchId },
-  })
-  return c.json({ success: true, data: { imported: body.lines.length, batch_id: batchId } }, 201)
-})
-
-// PATCH match/unmatch a statement line to a cash_transaction
-finance.patch('/bank-statements/:id/match', async (c) => {
-  const { company_id, sub: userId } = getUser(c)
-  const id = Number(c.req.param('id'))
-  const { cash_tx_id } = await c.req.json<{ cash_tx_id: number | null }>()
-
-  if (cash_tx_id !== null) {
-    // Verify the cash_transaction belongs to this company
-    const tx = await c.env.DB
-      .prepare('SELECT id FROM cash_transactions WHERE id = ? AND company_id = ?')
-      .bind(cash_tx_id, company_id).first()
-    if (!tx) return c.json({ success: false, error: 'حركة الخزينة غير موجودة' }, 404)
-    await c.env.DB.prepare(
-      `UPDATE bank_statements
-       SET is_matched = 1, matched_tx_id = ?, matched_at = datetime('now'), matched_by = ?
-       WHERE id = ? AND company_id = ?`
-    ).bind(cash_tx_id, userId, id, company_id).run()
-  } else {
-    // Unmatch
-    await c.env.DB.prepare(
-      `UPDATE bank_statements
-       SET is_matched = 0, matched_tx_id = NULL, matched_at = NULL, matched_by = NULL
-       WHERE id = ? AND company_id = ?`
-    ).bind(id, company_id).run()
-  }
-  return c.json({ success: true, data: null })
-})
-
-// ═══════════════════════════════════════════════════════════
-// BANK RECONCILIATIONS — جلسات المطابقة
-// ═══════════════════════════════════════════════════════════
-
-finance.get('/bank-recon/:accountId', async (c) => {
-  const { company_id } = getUser(c)
-  const accountId = Number(c.req.param('accountId'))
-  const { results } = await c.env.DB
-    .prepare(
-      `SELECT r.*, u.full_name AS created_by_name, cu.full_name AS closed_by_name
-       FROM bank_reconciliations r
-       LEFT JOIN users u  ON u.id  = r.created_by
-       LEFT JOIN users cu ON cu.id = r.closed_by
-       WHERE r.company_id = ? AND r.bank_account_id = ?
-       ORDER BY r.period_end DESC`
-    ).bind(company_id, accountId).all()
-  return c.json({ success: true, data: results })
-})
-
-finance.post('/bank-recon/:accountId', async (c) => {
-  const { company_id, sub: userId } = getUser(c)
-  const accountId = Number(c.req.param('accountId'))
-  const b = await c.req.json<{
-    period_start: string; period_end: string
-    bank_closing_bal: number; book_closing_bal: number
-    outstanding_checks?: number; deposits_in_transit?: number
-    bank_errors?: number; book_errors?: number; notes?: string
-  }>()
-  if (!b.period_start || !b.period_end) {
-    return c.json({ success: false, error: 'تاريخ بداية ونهاية الفترة مطلوبان' }, 400)
-  }
-  const r = await c.env.DB.prepare(
-    `INSERT INTO bank_reconciliations
-     (company_id, bank_account_id, period_start, period_end,
-      bank_closing_bal, book_closing_bal, outstanding_checks,
-      deposits_in_transit, bank_errors, book_errors, notes, created_by)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).bind(
-    company_id, accountId, b.period_start, b.period_end,
-    b.bank_closing_bal, b.book_closing_bal,
-    b.outstanding_checks ?? 0, b.deposits_in_transit ?? 0,
-    b.bank_errors ?? 0, b.book_errors ?? 0,
-    b.notes ?? null, userId
-  ).run()
-  return c.json({ success: true, data: { id: r.meta.last_row_id } }, 201)
-})
-
-finance.patch('/bank-recon/:id/close', async (c) => {
-  const { company_id, sub: userId } = getUser(c)
-  const id = Number(c.req.param('id'))
-
-  const recon = await c.env.DB
-    .prepare('SELECT bank_account_id, period_start, period_end FROM bank_reconciliations WHERE id = ? AND company_id = ? AND status = \'draft\'')
-    .bind(id, company_id).first<{ bank_account_id: number; period_start: string; period_end: string }>()
-  if (!recon) return c.json({ success: false, error: 'جلسة المطابقة غير موجودة أو تم إغلاقها مسبقاً' }, 404)
-
-  const unmatched = await c.env.DB
-    .prepare('SELECT COUNT(*) AS n FROM bank_statements WHERE bank_account_id = ? AND statement_date BETWEEN ? AND ? AND is_matched = 0')
-    .bind(recon.bank_account_id, recon.period_start, recon.period_end).first<{ n: number }>()
-  if ((unmatched?.n ?? 0) > 0) {
-    return c.json({ success: false, error: `لا يمكن إغلاق المطابقة — يوجد ${unmatched!.n} بند غير مطابق في هذه الفترة. طابق جميع البنود أولاً.` }, 400)
-  }
-
-  await c.env.DB.prepare(
-    `UPDATE bank_reconciliations
-     SET status = 'reconciled', closed_by = ?, closed_at = datetime('now')
-     WHERE id = ? AND company_id = ?`
-  ).bind(userId, id, company_id).run()
-  void logAudit(c.env.DB, {
-    user_id: userId, company_id, action: 'CLOSE',
-    table_name: 'bank_reconciliations', record_id: id,
-    new_value: { period_start: recon.period_start, period_end: recon.period_end },
-  })
-  return c.json({ success: true, data: null })
-})
-
-// ═══════════════════════════════════════════════════════════
 // PURCHASE ORDERS — طلبات الشراء
 // ═══════════════════════════════════════════════════════════
 
-finance.get('/purchase-orders', async (c) => {
+purchasing.get('/purchase-orders', async (c) => {
   const { company_id } = getUser(c)
   const status = c.req.query('status')
   const page   = Math.max(1, Number(c.req.query('page') ?? 1))
@@ -303,7 +69,7 @@ finance.get('/purchase-orders', async (c) => {
   return c.json({ success: true, data: rows.results, total: cnt?.n ?? 0, page, page_size: size })
 })
 
-finance.get('/purchase-orders/:id', async (c) => {
+purchasing.get('/purchase-orders/:id', async (c) => {
   const { company_id } = getUser(c)
   const id = Number(c.req.param('id'))
   const [po, items] = await Promise.all([
@@ -324,11 +90,10 @@ finance.get('/purchase-orders/:id', async (c) => {
   return c.json({ success: true, data: { ...po, items: items.results } })
 })
 
-finance.post('/purchase-orders', zValidator('json', poCreateSchema), async (c) => {
+purchasing.post('/purchase-orders', zValidator('json', poCreateSchema), async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const b = c.req.valid('json')
 
-  // Auto-generate PO number if not provided
   const poNumber = b.po_number ?? await (async () => {
     const yr = new Date(b.order_date).getFullYear()
     const cnt = await c.env.DB.prepare(
@@ -371,8 +136,7 @@ finance.post('/purchase-orders', zValidator('json', poCreateSchema), async (c) =
   return c.json({ success: true, data: { id: poId, po_number: poNumber } }, 201)
 })
 
-// PATCH status transitions: sent → partial → received → closed / cancelled
-finance.patch('/purchase-orders/:id/status', zValidator('json', poStatusSchema), async (c) => {
+purchasing.patch('/purchase-orders/:id/status', zValidator('json', poStatusSchema), async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id   = Number(c.req.param('id'))
   const b    = c.req.valid('json')
@@ -383,7 +147,6 @@ finance.patch('/purchase-orders/:id/status', zValidator('json', poStatusSchema),
     .bind(id, company_id).first<{ status: string }>()
   if (!po) return c.json({ success: false, error: 'طلب الشراء غير موجود' }, 404)
 
-  // Cannot reopen a cancelled/closed PO
   if (['cancelled','closed'].includes(po.status)) {
     return c.json({ success: false, error: `لا يمكن تعديل طلب شراء ${po.status}` }, 400)
   }
@@ -391,11 +154,11 @@ finance.patch('/purchase-orders/:id/status', zValidator('json', poStatusSchema),
   let extra = ''
   const extraBinds: unknown[] = []
   if (status === 'received') {
-    extra = ', received_by = ?, received_at = datetime(\'now\')'
+    extra = ", received_by = ?, received_at = datetime('now')"
     extraBinds.push(userId)
   }
   if (status === 'sent' && po.status === 'draft') {
-    extra = ', approved_by = ?, approved_at = datetime(\'now\')'
+    extra = ", approved_by = ?, approved_at = datetime('now')"
     extraBinds.push(userId)
   }
 
@@ -414,8 +177,7 @@ finance.patch('/purchase-orders/:id/status', zValidator('json', poStatusSchema),
   return c.json({ success: true, data: null })
 })
 
-// PATCH receive: update qty_received per item + auto inventory_movements
-finance.patch('/purchase-orders/:id/receive', async (c) => {
+purchasing.patch('/purchase-orders/:id/receive', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
   const { items } = await c.req.json<{
@@ -499,19 +261,17 @@ finance.patch('/purchase-orders/:id/receive', async (c) => {
     const message = e instanceof Error ? e.message : 'فشل استلام أمر الشراء'
     return c.json({ success: false, error: message }, 400)
   }
-
 })
 
 // ═══════════════════════════════════════════════════════════
 // CASH TRANSACTION SEARCH — for bank statement matching
 // ═══════════════════════════════════════════════════════════
 
-finance.get('/cash-tx-search', async (c) => {
+purchasing.get('/cash-tx-search', async (c) => {
   const { company_id } = getUser(c)
   const q         = c.req.query('q') ?? ''
   const direction = c.req.query('direction')
 
-  // Exclude already-matched transactions
   let where = `
     WHERE ct.company_id = ?
     AND ct.id NOT IN (
@@ -542,9 +302,7 @@ finance.get('/cash-tx-search', async (c) => {
 // SUPPLIER INVOICES — المطابقة الثلاثية (PO → GR → Invoice)
 // ═══════════════════════════════════════════════════════════
 
-// GET /finance/purchase-orders/:id/match
-// Returns PO items with qty_ordered / qty_received / qty_invoiced for 3-way match
-finance.get('/purchase-orders/:id/match', async (c) => {
+purchasing.get('/purchase-orders/:id/match', async (c) => {
   const { company_id } = getUser(c)
   const poId = Number(c.req.param('id'))
 
@@ -573,7 +331,6 @@ finance.get('/purchase-orders/:id/match', async (c) => {
     }>(),
   ])
 
-  // Aggregate invoiced qty per po_item_id
   const invoicedByItem = new Map<number, { qty: number; price: number; invoice_id: number; invoice_number: string }>()
   for (const row of invoices.results) {
     const existing = invoicedByItem.get(row.po_item_id)
@@ -589,7 +346,6 @@ finance.get('/purchase-orders/:id/match', async (c) => {
     }
   }
 
-  // Build match rows
   const matchRows = (items.results as Array<{
     id: number; item_name: string; unit: string | null
     qty_ordered: number; qty_received: number; unit_price: number
@@ -628,7 +384,6 @@ finance.get('/purchase-orders/:id/match', async (c) => {
     }
   })
 
-  // Unique invoices list for this PO
   const uniqueInvoices = [...new Map(
     invoices.results.map(r => [r.invoice_id, {
       id: r.invoice_id, number: r.invoice_number,
@@ -639,8 +394,7 @@ finance.get('/purchase-orders/:id/match', async (c) => {
   return c.json({ success: true, data: { po, match_rows: matchRows, invoices: uniqueInvoices } })
 })
 
-// POST /finance/purchase-orders/:id/invoices
-finance.post('/purchase-orders/:id/invoices', async (c) => {
+purchasing.post('/purchase-orders/:id/invoices', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const poId = Number(c.req.param('id'))
 
@@ -653,7 +407,6 @@ finance.post('/purchase-orders/:id/invoices', async (c) => {
     return c.json({ success: false, error: 'رقم الفاتورة والتاريخ والبنود مطلوبة' }, 400)
   }
 
-  // Reject duplicate invoice numbers for the same company
   const dupCheck = await c.env.DB.prepare(
     'SELECT id FROM supplier_invoices WHERE company_id = ? AND invoice_number = ?'
   ).bind(company_id, b.invoice_number).first()
@@ -666,14 +419,11 @@ finance.post('/purchase-orders/:id/invoices', async (c) => {
   ).bind(poId, company_id).first<{ id: number; supplier_code: number | null }>()
   if (!po) return c.json({ success: false, error: 'طلب الشراء غير موجود' }, 404)
 
-  // Validate financial period
-  const { getOpenPeriod, glSupplierInvoice } = await import('../lib/gl')
   const periodId = await getOpenPeriod(c.env.DB, company_id, b.invoice_date)
   if (!periodId) {
     return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.invoice_date}` }, 400)
   }
 
-  // 3-Way Match Enforcement: Check existing invoiced qty vs received qty
   for (const item of b.items) {
     const poItem = await c.env.DB.prepare(
       `SELECT item_name, qty_received, (SELECT COALESCE(SUM(qty_invoiced),0) FROM supplier_invoice_items WHERE po_item_id = ?) AS already_invoiced
@@ -681,12 +431,12 @@ finance.post('/purchase-orders/:id/invoices', async (c) => {
     ).bind(item.po_item_id, item.po_item_id, poId, company_id).first<{ item_name: string; qty_received: number; already_invoiced: number }>()
 
     if (!poItem) return c.json({ success: false, error: `البند ${item.po_item_id} غير موجود` }, 404)
-    
+
     const remainingToInvoice = poItem.qty_received - poItem.already_invoiced
     if (item.qty_invoiced > remainingToInvoice) {
-      return c.json({ 
-        success: false, 
-        error: `الكمية المفوترة (${item.qty_invoiced}) تتجاوز المتبقي من الاستلام (${remainingToInvoice}) لبند ${poItem.item_name}. المطابقة الثلاثية مطلوبة.` 
+      return c.json({
+        success: false,
+        error: `الكمية المفوترة (${item.qty_invoiced}) تتجاوز المتبقي من الاستلام (${remainingToInvoice}) لبند ${poItem.item_name}. المطابقة الثلاثية مطلوبة.`
       }, 409)
     }
   }
@@ -728,10 +478,11 @@ finance.post('/purchase-orders/:id/invoices', async (c) => {
   return c.json({ success: true, data: { id: invoiceId, gl_entry_id: glEntryId } }, 201)
 })
 
-// ── AP Aging ──────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+// AP AGING — شيخوخة الذمم الدائنة
+// ═══════════════════════════════════════════════════════════
 
-// GET /finance/ap-aging
-finance.get('/ap-aging', async (c) => {
+purchasing.get('/ap-aging', async (c) => {
   const { company_id } = getUser(c)
 
   const { results } = await c.env.DB.prepare(`
@@ -749,11 +500,11 @@ finance.get('/ap-aging', async (c) => {
       si.payment_ref,
       po.po_number,
       COALESCE(s.name, po.supplier_name)         AS supplier_name,
-      CAST(
+      COALESCE(CAST(
         julianday('now') -
         julianday(DATE(si.invoice_date, '+' || COALESCE(si.due_date_days,30) || ' days'))
         AS INTEGER
-      ) AS days_overdue
+      ), 0) AS days_overdue
     FROM supplier_invoices si
     LEFT JOIN purchase_orders po ON po.id = si.po_id AND po.company_id = si.company_id
     LEFT JOIN suppliers s ON s.code = si.supplier_code AND s.company_id = si.company_id
@@ -765,8 +516,11 @@ finance.get('/ap-aging', async (c) => {
   return c.json({ success: true, data: results })
 })
 
-// PATCH /finance/supplier-invoices/:id/pay
-finance.patch('/supplier-invoices/:id/pay', async (c) => {
+// ═══════════════════════════════════════════════════════════
+// SUPPLIER INVOICE PAYMENT
+// ═══════════════════════════════════════════════════════════
+
+purchasing.patch('/supplier-invoices/:id/pay', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
   const b = await c.req.json<{
@@ -795,7 +549,6 @@ finance.patch('/supplier-invoices/:id/pay', async (c) => {
   const narration = `سداد فاتورة مورد #${inv.invoice_number}${b.payment_ref ? ` (${b.payment_ref})` : ''}`
 
   try {
-    // Atomically creates: cash_transaction (dir=م) + supplier_transaction (entry_type=م) + GL (DR AP / CR Cash)
     await FinanceCore.recordCashMovement(c.env.DB, {
       company_id,
       userId,
@@ -807,7 +560,6 @@ finance.patch('/supplier-invoices/:id/pay', async (c) => {
       status: 'posted',
     })
 
-    // Mark invoice as paid (separate from GL — GL is always authoritative)
     await c.env.DB.prepare(
       `UPDATE supplier_invoices
        SET paid_amount    = paid_amount + ?,
@@ -830,4 +582,4 @@ finance.patch('/supplier-invoices/:id/pay', async (c) => {
   return c.json({ success: true, data: null })
 })
 
-export default finance
+export default purchasing

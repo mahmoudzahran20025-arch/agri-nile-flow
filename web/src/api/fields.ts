@@ -1,4 +1,4 @@
-import { api, unwrap } from './client'
+import { api, unwrap } from './core'
 
 export interface Field {
   id: number
@@ -16,6 +16,9 @@ export interface Field {
   boundary_geojson?: string
   geofence_radius_m?: number
   status: 'active' | 'fallow' | 'rented_out' | 'sold'
+  is_active?: number
+  location?: string
+  season_id?: number
   notes?: string
   created_at?: string
 }
@@ -65,17 +68,24 @@ export const QUALITY_LABELS: Record<string, { label: string; color: string }> = 
 }
 
 export const fieldsApi = {
-  list: (): Promise<Field[]> =>
-    unwrap(api.get<Field[]>('/fields')),
+  // Optional params for backward compat with pages that filter by season
+  list: (p?: { season_id?: number; q?: string }): Promise<Field[]> => {
+    const qs = new URLSearchParams()
+    if (p?.season_id) qs.set('season_id', String(p.season_id))
+    if (p?.q)         qs.set('q', p.q)
+    const url = qs.toString() ? `/fields?${qs}` : '/fields'
+    return unwrap(api.get<Field[]>(url))
+  },
 
   get: (id: number): Promise<Field> =>
     unwrap(api.get<Field>(`/fields/${id}`)),
 
-  create: (body: Partial<Field>): Promise<Field> =>
-    unwrap(api.post<Field>('/fields', body)),
+  // Returns raw ApiResult so pages can check .success/.error
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  create: (body: any) => api.post<unknown>('/fields', body),
 
-  update: (id: number, body: Partial<Field>): Promise<Field> =>
-    unwrap(api.patch<Field>(`/fields/${id}`, body)),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  update: (id: number, body: any) => api.patch<unknown>(`/fields/${id}`, body),
 
   // ── Harvest ───────────────────────────────────────────────
   listHarvests: (params?: {

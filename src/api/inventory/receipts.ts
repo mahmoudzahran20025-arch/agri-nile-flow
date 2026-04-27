@@ -1,0 +1,102 @@
+import { Hono } from 'hono'
+import type { Env } from '../../types'
+import { getUser } from '../../middleware/auth'
+import { getOpenPeriod } from '../../lib/gl'
+import { FinanceCore } from '../../lib/finance_core'
+import { logAudit } from '../../lib/audit'
+
+const receipts = new Hono<{ Bindings: Env }>()
+
+receipts.post('/receive-po/:po_id', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const poId = Number(c.req.param('po_id'))
+
+  const b = await c.req.json<{
+    received_date: string
+    notes?: string
+    items: Array<{
+      po_item_id:   number
+      qty_received: number
+      warehouse:    string
+      unit_price?:  number
+    }>
+  }>()
+
+  if (!b.received_date || !Array.isArray(b.items) || b.items.length === 0) {
+    return c.json({ success: false, error: 'التاريخ وبنود الاستلام مطلوبة' }, 400)
+  }
+
+  const po = await c.env.DB.prepare(
+    'SELECT id, status, supplier_code FROM purchase_orders WHERE id = ? AND company_id = ?'
+  ).bind(poId, company_id)
+    .first<{ id: number; status: string; supplier_code: number | null }>()
+
+  if (!po) return c.json({ success: false, error: 'طلب الشراء غير موجود' }, 404)
+  if (po.status === 'cancelled' || po.status === 'closed') {
+    return c.json({ success: false, error: `لا يمكن استلام طلب بحالة: ${po.status}` }, 400)
+  }
+
+  const periodId = await getOpenPeriod(c.env.DB, company_id, b.received_date)
+  if (!periodId) {
+    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.received_date}` }, 400)
+  }
+
+  const invAccChk = await c.env.DB.prepare(
+    "SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'inventory'"
+  ).bind(company_id).first()
+  if (!invAccChk) return c.json({ success: false, error: 'GL_MAPPING_MISSING: حساب المخزون غير مربوط.' }, 400)
+
+  const apAccChk = await c.env.DB.prepare(
+    "SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'accounts_payable'"
+  ).bind(company_id).first()
+  if (!apAccChk) return c.json({ success: false, error: 'GL_MAPPING_MISSING: حساب الموردين غير مربوط.' }, 400)
+
+  const enrichedLines: Array<{
+    po_item_id: number; item_code: number; item_name: string
+    qty_received: number; unit_price: number; warehouse: string
+  }> = []
+
+  for (const item of b.items) {
+    const poItem = await c.env.DB.prepare(
+      `SELECT id, item_code, item_name, unit_price, qty_ordered, qty_received
+       FROM purchase_order_items WHERE id = ? AND po_id = ? AND company_id = ?`
+    ).bind(item.po_item_id, poId, company_id)
+      .first<{ id: number; item_code: number; item_name: string; unit_price: number; qty_ordered: number; qty_received: number }>()
+
+    if (!poItem) return c.json({ success: false, error: `البند ${item.po_item_id} غير موجود` }, 404)
+
+    const remaining = poItem.qty_ordered - poItem.qty_received
+    if (item.qty_received > remaining) {
+      return c.json({ success: false, error: `الكمية المستلمة (${item.qty_received}) تتجاوز المتبقي (${remaining}) لبند ${poItem.item_name}` }, 409)
+    }
+
+    enrichedLines.push({
+      po_item_id:   item.po_item_id,
+      item_code:    poItem.item_code,
+      item_name:    poItem.item_name,
+      qty_received: item.qty_received,
+      unit_price:   item.unit_price ?? poItem.unit_price,
+      warehouse:    item.warehouse
+    })
+  }
+
+  const { movements, status: newStatus } = await FinanceCore.processPOReceipt(c.env.DB, {
+    company_id, userId, po_id: poId,
+    received_date: b.received_date,
+    supplier_code: po.supplier_code ?? undefined,
+    items: enrichedLines
+  })
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'RECEIVE_PO',
+    table_name: 'purchase_orders', record_id: poId,
+    new_value: { po_id: poId, lines_count: enrichedLines.length, status: newStatus },
+  })
+
+  return c.json({
+    success: true,
+    data: { po_id: poId, status: newStatus, movements_created: movements },
+  }, 201)
+})
+
+export default receipts

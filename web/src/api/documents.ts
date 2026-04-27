@@ -1,5 +1,5 @@
 // ── Documents API Client ──────────────────────────────────────
-import { api, unwrap } from './client'
+import { api, unwrap, BASE_URL } from './core'
 
 export interface Document {
   id: number
@@ -89,12 +89,9 @@ export const documentsApi = {
   // R2 file upload — sends multipart/form-data
   uploadFile: async (id: number, file: File): Promise<{ r2Key: string; file_name: string; file_size_kb: number }> => {
     const token = localStorage.getItem('agro_token')
-    const BASE = window.location.hostname.endsWith('pages.dev')
-      ? 'https://agri-nile-flow.mahm-zahran22.workers.dev/api'
-      : '/api'
     const fd = new FormData()
     fd.append('file', file)
-    const res = await fetch(`${BASE}/documents/${id}/upload`, {
+    const res = await fetch(`${BASE_URL}/documents/${id}/upload`, {
       method: 'PUT',
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: fd,
@@ -105,12 +102,7 @@ export const documentsApi = {
   },
 
   // Get download URL (uses the /download endpoint which streams from R2)
-  downloadUrl: (id: number): string => {
-    const BASE = window.location.hostname.endsWith('pages.dev')
-      ? 'https://agri-nile-flow.mahm-zahran22.workers.dev/api'
-      : '/api'
-    return `${BASE}/documents/${id}/download`
-  },
+  downloadUrl: (id: number): string => `${BASE_URL}/documents/${id}/download`,
 
   removeFile: (id: number) => unwrap(api.delete<null>(`/documents/${id}/file`)),
 }

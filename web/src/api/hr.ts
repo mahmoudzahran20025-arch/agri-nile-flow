@@ -1,5 +1,5 @@
 // ── HR API Client ─────────────────────────────────────────────
-import { api, unwrap } from './client'
+import { api, unwrap } from './core'
 
 // Types
 export interface Branch {
