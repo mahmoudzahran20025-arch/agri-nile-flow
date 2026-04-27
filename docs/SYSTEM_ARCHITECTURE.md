@@ -1,11 +1,65 @@
 # 🏗️ System Architecture & Data Flow Design
-**Date:** April 20, 2026  
+**Date:** April 27, 2026 (updated from April 20, 2026)  
 **Level:** Enterprise Architecture  
 **Audience:** Technical Team
 
 ---
 
-## 📊 Part 1: Current Architecture
+## ✅ System Status (April 27, 2026)
+
+> All issues listed in the original "Part 1" have been resolved. The items below represent the **current production state**.
+
+| Previously Flagged Issue | Status |
+|--------------------------|--------|
+| No validation layer between API & DB | ✅ Fixed — ValidationService + Hono middleware |
+| No staging for problematic data | ✅ Fixed — `inventory_staging` table |
+| No audit trail | ✅ Fixed — `audit_log` table + `logAudit()` |
+| No cache layer | ✅ Fixed — React Query + D1 indexes |
+| Limited error handling | ✅ Fixed — structured error types per module |
+
+---
+
+## 📊 Part 0: GL Architecture (FinanceCore — Single Path)
+
+All GL posting follows one canonical chain. **Never call `postAutoEntry` directly from route handlers.**
+
+```
+Route Handler (src/api/*.ts)
+    └─▶ FinanceCore.*()           src/lib/finance_core.ts
+            └─▶ PostingEngine.*()  src/lib/posting_engine.ts
+                    └─▶ postAutoEntry()  src/lib/gl.ts
+                                └─▶ D1 batch INSERT
+                                   journal_entries + journal_entry_lines
+```
+
+### Posting Group Resolution (BPG/PPG/IPG Matrix)
+```
+postAutoEntry call
+    └─▶ PostingEngine.resolve*()
+            └─▶ Look up IPG (Inventory Posting Group)   — item-level
+            └─▶ Look up PPG (Partner Posting Group)     — supplier/customer
+            └─▶ Cascade to BPG (Business Posting Group) — company default
+            └─▶ Build debit/credit blueprint
+    └─▶ Insert balanced JE to D1
+```
+
+### FinanceCore Public Interface
+| Method | Triggered by | DR / CR |
+|--------|--------------|---------|
+| `recordCashMovement` | Treasury POST | Cash ↔ Revenue/Expense |
+| `resolveInventoryMovement` | Inventory POST | Inventory ↔ COGS/Purchases |
+| `resolveSupplierInvoice` | Suppliers POST | AP ↔ Purchases |
+| `resolvePayrollPosting` | Payroll accrual | Wages Expense ↔ Wages Payable |
+| `resolvePayrollPayment` | Payroll pay | Wages Payable ↔ Cash |
+| `resolvePartnerCapital` | Partner equity | Cash ↔ Equity |
+| `resolvePartnerCurrent` | Partner current acct | Cash ↔ Partner Current |
+
+> `gl_account_mappings` (19 rows) is **legacy read-only** — all `deprecated=1`.
+> Canonical setup: `POST /gl/posting-setup`. `PUT /gl/mappings` returns 405.
+
+---
+
+## 📊 Part 1: Current Architecture (April 20, 2026 — historical baseline)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -29,16 +83,17 @@
 │  ├─ warehouses (master data)                                │
 │  ├─ suppliers (master data)                                 │
 │  ├─ inventory_movements (transactional)                     │
-│  └─ 31 other tables...                                      │
+│  └─ 71 other tables (6 legacy tables dropped in refactor)          │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 
-Issues:
-❌ No validation layer between API & DB
-❌ No staging for problematic data
-❌ No audit trail
-❌ No cache layer
-❌ Limited error handling
+Issues (all resolved by 2026-04-27 — see Status table above):
+✅ Validation layer: ValidationService + middleware
+✅ Staging table: inventory_staging
+✅ Audit trail: audit_log + logAudit()
+✅ Cache layer: React Query + D1 indexes
+✅ Error handling: structured error types per module
+✅ GL single path: FinanceCore (see Part 0 above)
 ```
 
 ---

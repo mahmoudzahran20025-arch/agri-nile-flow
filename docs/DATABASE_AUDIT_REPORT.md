@@ -50,3 +50,23 @@
 > [!IMPORTANT]
 > **النظام الآن في حالة "جاهزية قصوى" (Production Ready).** 
 > تم دمج كافة البيانات التاريخية وتوليد الأثر المحاسبي لها، وميزان المراجعة متوازن تماماً.
+
+---
+
+## 🗂️ Schema Ownership Table (2026-04-27)
+> Who owns each table — which module writes it, which team maintains it.
+
+| Module | Tables | Code Owner | Notes |
+|--------|--------|------------|-------|
+| **GL / Finance** | `journal_entries`, `journal_entry_lines`, `financial_periods`, `gl_integration_settings` | `src/api/gl.ts`, `src/lib/finance_core.ts` | Core accounting ledger |
+| **GL Setup** | `posting_groups`, `gen_posting_setup`, `inv_posting_setup`, `chart_of_accounts` | `src/api/gl.ts` | Posting-group cascade config |
+| **GL Legacy** | `gl_account_mappings` | `src/api/gl.ts` (GET read-only) | ⚠️ Deprecated — sunset Aug 2026 |
+| **Inventory** | `inventory_movements`, `items`, `warehouses`, `stock_quants` | `src/api/inventory/` | WAC ledger, stock balances |
+| **Suppliers / AP** | `suppliers`, `supplier_transactions`, `purchase_orders`, `purchase_order_items` | `src/api/suppliers.ts` | AP ledger |
+| **Treasury** | `cash_transactions`, `partners`, `bank_accounts`, `bank_reconciliations` | `src/api/treasury.ts` | Cash + partner equity |
+| **Operations** | `seasons`, `fields`, `crops`, `work_orders`, `work_order_labor`, `contracts`, `harvests` | `src/api/operations/` | Field-level cost tracking |
+| **HR / Payroll** | `employees`, `departments`, `payroll_runs`, `payroll_items`, `salary_advances`, `leave_requests`, `leave_types`, `attendance_records`, `employee_job_details`, `employee_assets` | `src/api/hr/` | HR lifecycle |
+| **Config / Master** | `companies`, `cost_centers`, `roles`, `role_permissions`, `users`, `calendar_events`, `event_attendees` | `src/api/admin.ts`, `src/api/config.ts` | Multi-tenant config |
+| **Audit / System** | `audit_log`, `system_error_logs`, `d1_migrations` | `src/lib/audit.ts` | Immutable audit trail |
+| **Classifier** | `transaction_classifier_rules` | `src/api/classifier.ts` | Auto-tagging rules |
+| **Reports** | `reorder_rules` | `src/api/reports/` | Reorder alert thresholds |

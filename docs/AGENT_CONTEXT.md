@@ -8,32 +8,41 @@
 - **Auth**: JWT via `authMiddleware` + RBAC `roleGuard`
 - **Dev Server**: `cd web && npm run dev` → `http://localhost:5173/`
 
-## Current System State (as of 2026-04-25)
+## Current System State (as of 2026-04-27)
 ```
 Suppliers:          286 records
 Cash Transactions:  69 records
 Inventory Movements: 700 records
-Journal Entries:    955 entries (fully backfilled)
+Journal Entries:    955+ entries (fully backfilled)
 GL Balance:         88,277,909.82 EGP (SUM debit = SUM credit ✅)
 Treasury Balance:   -19,801.00 EGP (matches Excel source)
-GL Mappings:        10/15 keys configured (5 harvest keys pending)
-Chart of Accounts:  44 accounts
+GL Mappings:        19 rows (all flagged deprecated=1; posting-groups is canonical)
+Chart of Accounts:  349 accounts
+DB Tables:          71 (6 legacy tables dropped in refactor 2026-04-27)
 ```
 
 ## Non-Negotiable Axioms
 1. **Draft-to-Post Pattern**: Every financial transaction starts as `status='draft'`. It only affects balances after explicit `POST /:id/post`.
 2. **GL Must Balance**: `postAutoEntry()` in `src/lib/gl.ts` throws `GL_UNBALANCED` if debit ≠ credit. Never bypass this.
-3. **All Mutations via Hono API**: No direct D1 SQL from the frontend. All writes go through `src/api/*.ts` routes.
-4. **Company Isolation**: Every query must include `company_id` from `getUser(c)`. Never query without it.
-5. **Audit Trail**: Use `logAudit()` from `src/lib/audit.ts` for all significant mutations.
+3. **All GL Posting via FinanceCore**: Route layer must call `FinanceCore.*` methods — never call `postAutoEntry()` directly from routes. FinanceCore is the single GL path.
+4. **All Mutations via Hono API**: No direct D1 SQL from the frontend. All writes go through `src/api/*.ts` routes.
+5. **Company Isolation**: Every query must include `company_id` from `getUser(c)`. Never query without it.
+6. **Audit Trail**: Use `logAudit()` from `src/lib/audit.ts` for all significant mutations.
 
 ## Key Files & Patterns
 ```
-src/lib/gl.ts          ← GL Engine (postAutoEntry, glCashTransaction, etc.)
-src/lib/finance_core.ts← Finance Core (postCashMovement, postSupplierTransaction)
-src/api/gl.ts          ← GL REST API (accounts, mappings, entries, periods)
-src/api/config.ts      ← Config API (seasons, gl-integrations)
-web/src/api/client.ts  ← Frontend API client (glApi, configApi, etc.)
+src/lib/gl.ts           ← GL primitives ONLY: postAutoEntry, getOpenPeriod, isIntegrationEnabled
+                           (glCashTransaction / glInventoryMovement / glPayroll REMOVED — use FinanceCore)
+src/lib/finance_core.ts ← FinanceCore — SINGLE GL PATH for all posting
+                           recordCashMovement, resolveInventoryMovement, resolveSupplierInvoice,
+                           resolvePayrollPosting, resolvePayrollPayment,
+                           resolvePartnerCapital, resolvePartnerCurrent
+src/lib/posting_engine.ts← Posting-group cascade resolver (BPG/PPG/IPG matrix)
+                           Called internally by FinanceCore — do not call directly from routes
+src/api/gl.ts           ← GL REST API (accounts, posting-groups, posting-setup, entries, periods)
+                           PUT /gl/mappings → 405 LOCKED (legacy, sunset Aug 2026)
+src/api/config.ts       ← Config API (seasons, gl-integrations)
+web/src/api/client.ts   ← Frontend API client (glApi, configApi, etc.)
 ```
 
 ## API Client Pattern (Frontend)
@@ -48,7 +57,10 @@ const { data, total } = await unwrapPaginated(api.get('/endpoint?page=1'))
 const mappings = (await glApi.mappings()) as { mapping_key: string; account_code: string }[]
 ```
 
-## GL Mapping Keys (15 total, 10 configured)
+## GL Mapping Keys (legacy — `gl_account_mappings` is deprecated)
+> ⚠️ These keys are a fallback only. Canonical setup is via **Posting Groups** (`/gl/posting-setup`).
+> All 19 rows flagged `deprecated=1`. Table is read-only (PUT /gl/mappings → 405).
+
 | Key | Purpose | Status |
 |-----|---------|--------|
 | `cash` | Treasury movements | ✅ |
@@ -57,15 +69,14 @@ const mappings = (await glApi.mappings()) as { mapping_key: string; account_code
 | `revenue_default` | Cash receipts | ✅ |
 | `expense_default` | Cash payments | ✅ |
 | `purchases` | Supplier POs | ✅ |
-| `wages` | Payroll | ✅ |
+| `wages` | Payroll accrual | ✅ |
 | `cogs` | COGS / Work orders | ✅ |
 | `wages_payable` | Wage accruals | ✅ |
+| `equity` | Partner capital | ✅ |
+| `partner_current_acct` | Partner current account | ✅ |
 | `bank` | Bank reconciliation | ❌ Pending |
 | `deferred_revenue` | Contract advances | ❌ Pending |
-| `equity` | Partner capital | ❌ Pending |
 | `receivable_default` | Harvest receivables | ❌ Pending |
-| `harvest_revenue` | Harvest income | ❌ Pending |
-| `harvest_cogs` | Harvest COGS | ❌ Pending |
 
 ## Resolved Issues (Latest Session)
 - ✅ **AuditLogPage / ErrorLogPage Crashes**: Fixed backend pagination format in `src/api/audit.ts` to match `unwrapPaginated` expectations, resolving `entries.map is not a function` errors.
@@ -81,7 +92,8 @@ const mappings = (await glApi.mappings()) as { mapping_key: string; account_code
 
 ## Known Issues & Open Items
 - ❌ **No Opening Balance Entry**: Treasury -19,801 came from transactions. No "Balance Forward" JE from 2025.
-- ❌ **GL Mapping Coverage**: 5 harvest keys still unconfigured (bank, deferred_revenue, equity, receivable_default, harvest_revenue, harvest_cogs).
+- ❌ **Harvest GL keys pending**: `bank`, `deferred_revenue`, `receivable_default` still unconfigured in gl_account_mappings (low priority — posting-groups setup is the new path).
+- ⏰ **Sunset scheduled Aug 1, 2026**: Remove `GET /gl/mappings` endpoint + legacy UI tab after migration cutoff.
 
 ## Resolved — Navigation & RBAC Overhaul (2026-04-26)
 - ✅ **Sidebar restructured**: 9 sections (Suppliers/AP, Treasury, Inventory, Ops, HR, GL, Reports, System). Old 5-section flat structure retired.
