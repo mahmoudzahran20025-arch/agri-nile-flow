@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { getUser, permissionGuard } from '../../middleware/auth'
 import { logAudit } from '../../lib/audit'
-import { glPayroll, glWagesPayment } from '../../lib/gl'
+import { FinanceCore } from '../../lib/finance_core'
 
 const payroll = new Hono<{ Bindings: Env }>()
 
@@ -178,10 +178,14 @@ payroll.patch('/payroll/:id/approve', permissionGuard('hr', 'admin'), async (c) 
   const runDate = `${run.period_year}-${String(run.period_month).padStart(2,'0')}-28`
   let glId: number | null = null
   try {
-    glId = await glPayroll(
-      c.env.DB, company_id, id, run.total_net, runDate,
-      `مسيرة رواتب ${run.period_year}/${run.period_month}`, userId,
-    )
+    glId = await FinanceCore.resolvePayrollPosting(c.env.DB, {
+      company_id,
+      ref_id: id,
+      amount: run.total_net,
+      date: runDate,
+      description: `مسيرة رواتب ${run.period_year}/${run.period_month}`,
+      created_by: userId,
+    })
   } catch (e: any) {
     return c.json({ success: false, error: `فشل إنشاء القيد المحاسبي للمسيرة: ${e.message}` }, 400)
   }
@@ -209,10 +213,11 @@ payroll.patch('/payroll/:id/pay', permissionGuard('hr', 'admin'), async (c) => {
 
   let glId: number | null = null
   try {
-    glId = await glWagesPayment(
-      c.env.DB, company_id, id, run.total_net, payDate,
-      `صرف رواتب ${run.period_year}/${run.period_month}`, userId,
-    )
+    glId = await FinanceCore.resolvePayrollPayment(c.env.DB, {
+      company_id, ref_id: id, amount: run.total_net, date: payDate,
+      description: `صرف رواتب ${run.period_year}/${run.period_month}`,
+      created_by: userId,
+    })
   } catch (e: any) {
     return c.json({ success: false, error: `فشل قيد صرف الرواتب: ${e.message}` }, 400)
   }

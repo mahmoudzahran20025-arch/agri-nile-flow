@@ -137,7 +137,8 @@ classifier.post('/reconcile-legacy', async (c) => {
     // For partner/supplier we fallback to the default GL mappings
     let finalGL = glAccountCode
     if (!finalGL) {
-      const mappingKey = matchedRule.category_type === 'supplier' ? 'accounts_payable' : (matchedRule.category_type === 'partner' ? 'partner_current_account' : null)
+      const lastRule = matchedRules[matchedRules.length - 1]
+      const mappingKey = lastRule.category_type === 'supplier' ? 'accounts_payable' : (lastRule.category_type === 'partner' ? 'partner_current_account' : null)
       if (mappingKey) {
         const gm = await c.env.DB.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = ?").bind(company_id, mappingKey).first<{account_code: string}>()
         finalGL = gm?.account_code || null

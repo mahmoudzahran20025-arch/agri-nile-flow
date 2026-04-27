@@ -17,7 +17,7 @@ function csv(headers: string[], rows: unknown[][]): string {
   return [headers.join(','), ...rows.map(csvRow)].join('\r\n')
 }
 
-function csvResponse(c: { body: (b: string, init: ResponseInit) => Response }, filename: string, content: string) {
+function csvResponse(filename: string, content: string) {
   return new Response(content, {
     headers: {
       'Content-Type':        'text/csv; charset=utf-8',
@@ -43,7 +43,7 @@ exportApi.get('/suppliers', async (c) => {
 
   const headers = ['الكود','المورد','النشاط','إجمالي الدائن','إجمالي المدين','الرصيد']
   const rows    = results.map((r: Record<string,unknown>) => [r.code, r.name, r.activity, r.total_credit, r.total_debit, r.balance])
-  return csvResponse(c as never, 'الموردين', csv(headers, rows as unknown[][]))
+  return csvResponse('الموردين', csv(headers, rows as unknown[][]))
 })
 
 // GET /api/export/supplier/:code/statement — full statement
@@ -69,7 +69,7 @@ exportApi.get('/supplier/:code/statement', async (c) => {
     r.expense_category, r.unit, r.quantity, r.unit_price, r.amount,
     r.credit, r.debit, r.balance_with_checks, r.notes
   ])
-  return csvResponse(c as never, `كشف_حساب_${supplier?.name ?? code}`, csv(headers, rows as unknown[][]))
+  return csvResponse(`كشف_حساب_${supplier?.name ?? code}`, csv(headers, rows as unknown[][]))
 })
 
 // GET /api/export/treasury — cash journal
@@ -92,7 +92,7 @@ exportApi.get('/treasury', async (c) => {
     r.transaction_date, r.direction === 'د' ? 'وارد' : 'منصرف', r.document_number,
     r.recipient_name, r.narration, r.amount, r.debit, r.credit, r.running_balance, r.notes
   ])
-  return csvResponse(c as never, 'دفتر_اليومية', csv(headers, rows as unknown[][]))
+  return csvResponse('دفتر_اليومية', csv(headers, rows as unknown[][]))
 })
 
 // GET /api/export/inventory — warehouse balances
@@ -114,7 +114,7 @@ exportApi.get('/inventory', async (c) => {
   const rows    = results.map((r: Record<string,unknown>) => [
     r.warehouse, r.item_name, r.unit, r.total_in, r.total_out, r.balance_qty, r.balance_value
   ])
-  return csvResponse(c as never, 'أرصدة_المخازن', csv(headers, rows as unknown[][]))
+  return csvResponse('أرصدة_المخازن', csv(headers, rows as unknown[][]))
 })
 
 // GET /api/export/inventory/movements — movements log
@@ -136,7 +136,7 @@ exportApi.get('/inventory/movements', async (c) => {
     r.item_name, r.unit, r.quantity, r.unit_price, r.qty_in, r.qty_out,
     r.balance_qty, r.balance_value, r.document_number, r.notes
   ])
-  return csvResponse(c as never, 'حركات_المخزون', csv(headers, rows as unknown[][]))
+  return csvResponse('حركات_المخزون', csv(headers, rows as unknown[][]))
 })
 
 // GET /api/export/gl/trial-balance?start=&end=

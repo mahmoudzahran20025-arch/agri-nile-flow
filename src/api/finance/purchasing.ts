@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { getUser } from '../../middleware/auth'
 import { logAudit } from '../../lib/audit'
-import { getOpenPeriod, glSupplierInvoice } from '../../lib/gl'
+import { getOpenPeriod } from '../../lib/gl'
 import { FinanceCore } from '../../lib/finance_core'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
@@ -459,10 +459,15 @@ purchasing.post('/purchase-orders/:id/invoices', async (c) => {
     ).bind(invoiceId, i.po_item_id, company_id, i.qty_invoiced, i.unit_price)
   ))
 
-  const glEntryId = await glSupplierInvoice(
-    c.env.DB, company_id, invoiceId, totalAmount, b.invoice_date,
-    `فاتورة مورد: ${b.invoice_number}`, userId,
-  )
+  const glEntryId = await FinanceCore.resolveSupplierInvoice(c.env.DB, {
+    company_id,
+    ref_id: invoiceId,
+    supplier_code: po.supplier_code ?? null,
+    amount: totalAmount,
+    date: b.invoice_date,
+    description: `فاتورة مورد: ${b.invoice_number}`,
+    created_by: userId,
+  })
 
   if (glEntryId) {
     await c.env.DB.prepare('UPDATE supplier_invoices SET journal_entry_id = ? WHERE id = ?')

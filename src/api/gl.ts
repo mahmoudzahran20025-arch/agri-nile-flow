@@ -3,6 +3,14 @@ import type { Env } from '../types'
 import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
 import { postAutoEntry, getOpenPeriod } from '../lib/gl'
 import { logAudit } from '../lib/audit'
+import {
+  resolveInventoryMovement as peResolveInventory,
+  resolveSupplierInvoice   as peResolveSupplierInvoice,
+  resolveSupplierPayment   as peResolveSupplierPayment,
+  resolveExpensePosting    as peResolveExpense,
+  resolveSalesRevenue      as peResolveSalesRevenue,
+  clearPostingEngineCaches,
+} from '../lib/posting_engine'
 
 const gl = new Hono<{ Bindings: Env }>()
 gl.use('*', authMiddleware)
@@ -69,12 +77,43 @@ async function validateCoaParent(
 
 gl.get('/accounts', async (c) => {
   const { company_id } = getUser(c)
-  const type = c.req.query('type')
-  let sql = 'SELECT * FROM chart_of_accounts WHERE company_id = ?'
+  const type       = c.req.query('type')
+  const leafOnly   = c.req.query('leaf') === '1'   // leaf=1 → exclude header accounts
+  let sql = 'SELECT * FROM chart_of_accounts WHERE company_id = ? AND is_active = 1'
   const p: unknown[] = [company_id]
-  if (type) { sql += ' AND account_type = ?'; p.push(type) }
+  if (type)     { sql += ' AND account_type = ?'; p.push(type) }
+  if (leafOnly) { sql += ' AND is_header = 0' }
   sql += ' ORDER BY code'
   const { results } = await c.env.DB.prepare(sql).bind(...p).all()
+  return c.json({ success: true, data: results })
+})
+
+gl.get('/accounts/usage-metadata', async (c) => {
+  const { company_id } = getUser(c)
+  const { results } = await c.env.DB.prepare(
+    `SELECT
+       a.code AS account_code,
+       COALESCE(u.usage_count, 0) AS usage_count,
+       u.last_used_date,
+       CASE WHEN COALESCE(u.usage_count, 0) > 0 THEN 1 ELSE 0 END AS is_locked
+     FROM chart_of_accounts a
+     LEFT JOIN (
+       SELECT
+         l.account_code,
+         COUNT(*) AS usage_count,
+         MAX(e.entry_date) AS last_used_date
+       FROM journal_entry_lines l
+       JOIN journal_entries e
+         ON e.id = l.entry_id
+        AND e.company_id = l.company_id
+        AND e.is_posted = 1
+       WHERE l.company_id = ?
+       GROUP BY l.account_code
+     ) u ON u.account_code = a.code
+     WHERE a.company_id = ?
+     ORDER BY a.code`
+  ).bind(company_id, company_id).all()
+
   return c.json({ success: true, data: results })
 })
 
@@ -130,27 +169,39 @@ gl.patch('/accounts/:code', async (c) => {
   return c.json({ success: true, data: null })
 })
 
-// ── GL Mappings (حسابات الربط الافتراضية) ────────────────────
+// ── GL Mappings — DEPRECATED ────────────────────────────────
+// Replaced by: /gl/posting-groups/* + /gl/posting-setup/*
+// These endpoints are kept for backward-compat only.
+// Clients should migrate to the posting-engine setup routes.
+
+const MAPPINGS_DEPRECATION_DATE   = 'Sat, 01 Aug 2026 00:00:00 GMT'
+const MAPPINGS_DEPRECATION_LINK   = 'rel="sunset"; url="/gl/posting-setup"'
 
 gl.get('/mappings', async (c) => {
   const { company_id } = getUser(c)
+  c.header('Deprecation', MAPPINGS_DEPRECATION_DATE)
+  c.header('Sunset', MAPPINGS_DEPRECATION_DATE)
+  c.header('Link', MAPPINGS_DEPRECATION_LINK)
   const { results } = await c.env.DB
     .prepare('SELECT * FROM gl_account_mappings WHERE company_id = ?')
     .bind(company_id).all()
-  return c.json({ success: true, data: results })
+  return c.json({
+    success: true,
+    data: results,
+    _deprecated: 'هذا المسار قديم. استخدم /gl/posting-setup بدلاً منه.',
+  })
 })
 
+// PUT /gl/mappings — LOCKED (writes disabled, sunset Aug 2026)
 gl.put('/mappings', async (c) => {
-  const { company_id } = getUser(c)
-  const b = await c.req.json<{ mapping_key: string; account_code: string }[]>()
-  for (const m of b) {
-    await c.env.DB.prepare(
-      `INSERT INTO gl_account_mappings (company_id, mapping_key, account_code)
-       VALUES (?,?,?)
-       ON CONFLICT(company_id, mapping_key) DO UPDATE SET account_code = excluded.account_code`
-    ).bind(company_id, m.mapping_key, m.account_code).run()
-  }
-  return c.json({ success: true, data: null })
+  c.header('Deprecation', MAPPINGS_DEPRECATION_DATE)
+  c.header('Sunset', MAPPINGS_DEPRECATION_DATE)
+  c.header('Link', MAPPINGS_DEPRECATION_LINK)
+  return c.json({
+    success: false,
+    error: 'هذا المسار قديم وأُغلق للكتابة. استخدم /gl/posting-setup لإعداد مجموعات الترحيل.',
+    migrate_to: '/gl/posting-setup',
+  }, 405)
 })
 
 // ── Financial Periods ─────────────────────────────────────────
@@ -733,6 +784,389 @@ gl.get('/integrity-check', async (c) => {
   const has_blockers = checks.some(ch => !ch.ok && ch.blocker)
 
   return c.json({ success: true, data: { checks, overall_ok, has_blockers, score } })
+})
+
+// =============================================================================
+// POSTING GROUPS CRUD
+// =============================================================================
+
+const PG_TABLES = {
+  business:  'business_posting_groups',
+  product:   'product_posting_groups',
+  inventory: 'inventory_posting_groups',
+} as const
+type PgType = keyof typeof PG_TABLES
+
+const CODE_RE = /^[A-Z0-9_-]{1,20}$/
+
+// GET /api/gl/posting-groups/:type
+gl.get('/posting-groups/:type', async (c) => {
+  const type = c.req.param('type') as PgType
+  if (!PG_TABLES[type]) return c.json({ success: false, error: 'Invalid type. Use: business | product | inventory' }, 400)
+  const { company_id } = getUser(c)
+  const table = PG_TABLES[type]
+  const { results } = await c.env.DB
+    .prepare(`SELECT code, name, description, is_active, created_at FROM ${table} WHERE company_id = ? ORDER BY code`)
+    .bind(company_id).all()
+  return c.json({ success: true, data: results })
+})
+
+// POST /api/gl/posting-groups/:type
+gl.post('/posting-groups/:type', async (c) => {
+  const type = c.req.param('type') as PgType
+  if (!PG_TABLES[type]) return c.json({ success: false, error: 'Invalid type' }, 400)
+  const { company_id, sub: userId } = getUser(c)
+  const body = await c.req.json<{ code: string; name: string; description?: string }>()
+
+  if (!body.code || !CODE_RE.test(body.code.toUpperCase()))
+    return c.json({ success: false, error: 'code must be 1–20 uppercase letters, digits, underscores or dashes' }, 422)
+  if (!body.name?.trim())
+    return c.json({ success: false, error: 'name is required' }, 422)
+
+  const code = body.code.toUpperCase()
+  const table = PG_TABLES[type]
+  const exists = await c.env.DB
+    .prepare(`SELECT 1 FROM ${table} WHERE company_id = ? AND code = ?`)
+    .bind(company_id, code).first()
+  if (exists) return c.json({ success: false, error: `Code "${code}" already exists` }, 409)
+
+  await c.env.DB
+    .prepare(`INSERT INTO ${table} (company_id, code, name, description, is_active, created_at) VALUES (?,?,?,?,1,datetime('now'))`)
+    .bind(company_id, code, body.name.trim(), body.description?.trim() ?? null).run()
+
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'CREATE', table_name: table, new_value: { code } })
+  return c.json({ success: true, data: { code } }, 201)
+})
+
+// PATCH /api/gl/posting-groups/:type/:code
+gl.patch('/posting-groups/:type/:code', async (c) => {
+  const type = c.req.param('type') as PgType
+  if (!PG_TABLES[type]) return c.json({ success: false, error: 'Invalid type' }, 400)
+  const { company_id, sub: userId } = getUser(c)
+  const code = c.req.param('code').toUpperCase()
+  const table = PG_TABLES[type]
+
+  const existing = await c.env.DB
+    .prepare(`SELECT is_active FROM ${table} WHERE company_id = ? AND code = ?`)
+    .bind(company_id, code).first<{ is_active: number }>()
+  if (!existing) return c.json({ success: false, error: 'Not found' }, 404)
+
+  const body = await c.req.json<{ name?: string; description?: string; is_active?: boolean }>()
+
+  // Prevent deactivating a group that is still referenced in posting setup
+  if (body.is_active === false && existing.is_active === 1) {
+    const setupTableGeneral = 'general_posting_setup'
+    const setupTableInv     = 'inventory_posting_setup'
+    const col = type === 'business' ? 'bus_posting_group_code'
+              : type === 'product'  ? 'prod_posting_group_code'
+              : 'inv_posting_group_code'
+    const tbl = type === 'inventory' ? setupTableInv : setupTableGeneral
+    const used = await c.env.DB
+      .prepare(`SELECT 1 FROM ${tbl} WHERE company_id = ? AND ${col} = ? AND is_active = 1 LIMIT 1`)
+      .bind(company_id, code).first()
+    if (used) return c.json({ success: false, error: `Cannot deactivate: code "${code}" is still used in active posting setup rows.` }, 409)
+  }
+
+  const sets: string[] = []
+  const vals: unknown[] = []
+  if (body.name !== undefined)        { sets.push('name = ?');        vals.push(body.name.trim()) }
+  if (body.description !== undefined) { sets.push('description = ?'); vals.push(body.description?.trim() ?? null) }
+  if (body.is_active !== undefined)   { sets.push('is_active = ?');   vals.push(body.is_active ? 1 : 0) }
+  if (!sets.length) return c.json({ success: false, error: 'Nothing to update' }, 422)
+  vals.push(company_id, code)
+
+  await c.env.DB
+    .prepare(`UPDATE ${table} SET ${sets.join(', ')} WHERE company_id = ? AND code = ?`)
+    .bind(...vals).run()
+
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPDATE', table_name: table, new_value: { code, ...body } })
+  return c.json({ success: true })
+})
+
+// =============================================================================
+// GENERAL POSTING SETUP
+// =============================================================================
+
+// GET /api/gl/posting-setup/general
+gl.get('/posting-setup/general', async (c) => {
+  const { company_id } = getUser(c)
+  const { results } = await c.env.DB
+    .prepare(`SELECT id, bus_posting_group_code, prod_posting_group_code,
+               sales_account, purchases_account, cogs_account,
+               sales_returns_account, purch_returns_account, expense_account, is_active
+              FROM general_posting_setup WHERE company_id = ?
+              ORDER BY bus_posting_group_code NULLS LAST, prod_posting_group_code NULLS LAST`)
+    .bind(company_id).all()
+  return c.json({ success: true, data: results })
+})
+
+// POST /api/gl/posting-setup/general
+gl.post('/posting-setup/general', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const body = await c.req.json<{
+    bus_posting_group_code?: string | null
+    prod_posting_group_code?: string | null
+    sales_account?: string | null
+    purchases_account?: string | null
+    cogs_account?: string | null
+    sales_returns_account?: string | null
+    purch_returns_account?: string | null
+    expense_account?: string | null
+  }>()
+
+  const bpg = body.bus_posting_group_code?.toUpperCase() ?? null
+  const ppg = body.prod_posting_group_code?.toUpperCase() ?? null
+
+  const exists = await c.env.DB
+    .prepare(`SELECT 1 FROM general_posting_setup WHERE company_id = ?
+              AND (bus_posting_group_code IS ? OR (bus_posting_group_code IS NULL AND ? IS NULL))
+              AND (prod_posting_group_code IS ? OR (prod_posting_group_code IS NULL AND ? IS NULL)) LIMIT 1`)
+    .bind(company_id, bpg, bpg, ppg, ppg).first()
+  if (exists) return c.json({ success: false, error: `A setup row for BPG="${bpg ?? 'DEFAULT'}" × PPG="${ppg ?? 'DEFAULT'}" already exists.` }, 409)
+
+  const { meta } = await c.env.DB
+    .prepare(`INSERT INTO general_posting_setup
+              (company_id, bus_posting_group_code, prod_posting_group_code,
+               sales_account, purchases_account, cogs_account,
+               sales_returns_account, purch_returns_account, expense_account, is_active, created_at)
+              VALUES (?,?,?,?,?,?,?,?,?,1,datetime('now'))`)
+    .bind(company_id, bpg, ppg,
+          body.sales_account ?? null, body.purchases_account ?? null, body.cogs_account ?? null,
+          body.sales_returns_account ?? null, body.purch_returns_account ?? null, body.expense_account ?? null)
+    .run()
+
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'CREATE', table_name: 'general_posting_setup', new_value: { bpg, ppg } })
+  clearPostingEngineCaches()
+  return c.json({ success: true, data: { id: meta.last_row_id } }, 201)
+})
+
+// PATCH /api/gl/posting-setup/general/:id
+gl.patch('/posting-setup/general/:id', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const rowId = Number(c.req.param('id'))
+  if (!rowId) return c.json({ success: false, error: 'Invalid id' }, 400)
+
+  const existing = await c.env.DB
+    .prepare('SELECT id FROM general_posting_setup WHERE id = ? AND company_id = ?')
+    .bind(rowId, company_id).first()
+  if (!existing) return c.json({ success: false, error: 'Not found' }, 404)
+
+  const body = await c.req.json<{
+    sales_account?: string | null; purchases_account?: string | null; cogs_account?: string | null
+    sales_returns_account?: string | null; purch_returns_account?: string | null
+    expense_account?: string | null; is_active?: boolean
+  }>()
+
+  const sets: string[] = []
+  const vals: unknown[] = []
+  const fields = ['sales_account','purchases_account','cogs_account','sales_returns_account','purch_returns_account','expense_account'] as const
+  for (const f of fields) {
+    if (f in body) { sets.push(`${f} = ?`); vals.push(body[f] ?? null) }
+  }
+  if (body.is_active !== undefined) { sets.push('is_active = ?'); vals.push(body.is_active ? 1 : 0) }
+  if (!sets.length) return c.json({ success: false, error: 'Nothing to update' }, 422)
+  vals.push(rowId, company_id)
+
+  await c.env.DB
+    .prepare(`UPDATE general_posting_setup SET ${sets.join(', ')} WHERE id = ? AND company_id = ?`)
+    .bind(...vals).run()
+
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPDATE', table_name: 'general_posting_setup', new_value: { id: rowId, ...body } })
+  clearPostingEngineCaches()
+  return c.json({ success: true })
+})
+
+// =============================================================================
+// INVENTORY POSTING SETUP
+// =============================================================================
+
+// GET /api/gl/posting-setup/inventory
+gl.get('/posting-setup/inventory', async (c) => {
+  const { company_id } = getUser(c)
+  const { results } = await c.env.DB
+    .prepare(`SELECT id, inv_posting_group_code, prod_posting_group_code, inventory_account, is_active
+              FROM inventory_posting_setup WHERE company_id = ?
+              ORDER BY inv_posting_group_code NULLS LAST, prod_posting_group_code NULLS LAST`)
+    .bind(company_id).all()
+  return c.json({ success: true, data: results })
+})
+
+// POST /api/gl/posting-setup/inventory
+gl.post('/posting-setup/inventory', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const body = await c.req.json<{
+    inv_posting_group_code?: string | null
+    prod_posting_group_code?: string | null
+    inventory_account?: string | null
+  }>()
+
+  const ipg = body.inv_posting_group_code?.toUpperCase() ?? null
+  const ppg = body.prod_posting_group_code?.toUpperCase() ?? null
+
+  const exists = await c.env.DB
+    .prepare(`SELECT 1 FROM inventory_posting_setup WHERE company_id = ?
+              AND (inv_posting_group_code IS ? OR (inv_posting_group_code IS NULL AND ? IS NULL))
+              AND (prod_posting_group_code IS ? OR (prod_posting_group_code IS NULL AND ? IS NULL)) LIMIT 1`)
+    .bind(company_id, ipg, ipg, ppg, ppg).first()
+  if (exists) return c.json({ success: false, error: `A setup row for IPG="${ipg ?? 'DEFAULT'}" × PPG="${ppg ?? 'DEFAULT'}" already exists.` }, 409)
+
+  const { meta } = await c.env.DB
+    .prepare(`INSERT INTO inventory_posting_setup
+              (company_id, inv_posting_group_code, prod_posting_group_code, inventory_account, is_active, created_at)
+              VALUES (?,?,?,?,1,datetime('now'))`)
+    .bind(company_id, ipg, ppg, body.inventory_account ?? null)
+    .run()
+
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'CREATE', table_name: 'inventory_posting_setup', new_value: { ipg, ppg } })
+  clearPostingEngineCaches()
+  return c.json({ success: true, data: { id: meta.last_row_id } }, 201)
+})
+
+// PATCH /api/gl/posting-setup/inventory/:id
+gl.patch('/posting-setup/inventory/:id', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const rowId = Number(c.req.param('id'))
+  if (!rowId) return c.json({ success: false, error: 'Invalid id' }, 400)
+
+  const existing = await c.env.DB
+    .prepare('SELECT id FROM inventory_posting_setup WHERE id = ? AND company_id = ?')
+    .bind(rowId, company_id).first()
+  if (!existing) return c.json({ success: false, error: 'Not found' }, 404)
+
+  const body = await c.req.json<{ inventory_account?: string | null; is_active?: boolean }>()
+  const sets: string[] = []
+  const vals: unknown[] = []
+  if ('inventory_account' in body) { sets.push('inventory_account = ?'); vals.push(body.inventory_account ?? null) }
+  if (body.is_active !== undefined) { sets.push('is_active = ?');        vals.push(body.is_active ? 1 : 0) }
+  if (!sets.length) return c.json({ success: false, error: 'Nothing to update' }, 422)
+  vals.push(rowId, company_id)
+
+  await c.env.DB
+    .prepare(`UPDATE inventory_posting_setup SET ${sets.join(', ')} WHERE id = ? AND company_id = ?`)
+    .bind(...vals).run()
+
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPDATE', table_name: 'inventory_posting_setup', new_value: { id: rowId, ...body } })
+  clearPostingEngineCaches()
+  return c.json({ success: true })
+})
+
+// =============================================================================
+// POSTING SETUP HEALTH
+// =============================================================================
+
+// GET /api/gl/posting-setup/health
+gl.get('/posting-setup/health', async (c) => {
+  const { company_id } = getUser(c)
+
+  const [bpgRow, ppgRow, ipgRow, gpsRow, ipsRow,
+         gpsNullRow, ipsNullRow,
+         suppliersNoGroup, itemsNoGroup, warehousesNoGroup,
+         gpsIncomplete, ipsIncomplete] = await Promise.all([
+    c.env.DB.prepare('SELECT COUNT(*) AS n FROM business_posting_groups  WHERE company_id = ? AND is_active = 1').bind(company_id).first<{n:number}>(),
+    c.env.DB.prepare('SELECT COUNT(*) AS n FROM product_posting_groups   WHERE company_id = ? AND is_active = 1').bind(company_id).first<{n:number}>(),
+    c.env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_posting_groups WHERE company_id = ? AND is_active = 1').bind(company_id).first<{n:number}>(),
+    c.env.DB.prepare('SELECT COUNT(*) AS n FROM general_posting_setup    WHERE company_id = ? AND is_active = 1').bind(company_id).first<{n:number}>(),
+    c.env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_posting_setup  WHERE company_id = ? AND is_active = 1').bind(company_id).first<{n:number}>(),
+    // Does catch-all (NULL/NULL) row exist?
+    c.env.DB.prepare('SELECT COUNT(*) AS n FROM general_posting_setup   WHERE company_id = ? AND bus_posting_group_code IS NULL AND prod_posting_group_code IS NULL AND is_active = 1').bind(company_id).first<{n:number}>(),
+    c.env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_posting_setup WHERE company_id = ? AND inv_posting_group_code  IS NULL AND prod_posting_group_code IS NULL AND is_active = 1').bind(company_id).first<{n:number}>(),
+    // Entities missing posting groups
+    c.env.DB.prepare('SELECT COUNT(*) AS n FROM suppliers  WHERE company_id = ? AND bus_posting_group_code IS NULL').bind(company_id).first<{n:number}>(),
+    c.env.DB.prepare('SELECT COUNT(*) AS n FROM items      WHERE company_id = ? AND prod_posting_group_code IS NULL').bind(company_id).first<{n:number}>(),
+    c.env.DB.prepare('SELECT COUNT(*) AS n FROM warehouses WHERE company_id = ? AND inv_posting_group_code  IS NULL').bind(company_id).first<{n:number}>(),
+    // Setup rows missing critical accounts
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM general_posting_setup WHERE company_id = ? AND is_active = 1
+      AND (sales_account IS NULL OR purchases_account IS NULL OR cogs_account IS NULL)`).bind(company_id).first<{n:number}>(),
+    c.env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_posting_setup WHERE company_id = ? AND is_active = 1 AND inventory_account IS NULL').bind(company_id).first<{n:number}>(),
+  ])
+
+  const hasCatchAllGeneral   = (gpsNullRow?.n  ?? 0) > 0
+  const hasCatchAllInventory = (ipsNullRow?.n  ?? 0) > 0
+
+  const issues: string[] = []
+  if (!hasCatchAllGeneral)   issues.push('No catch-all General Posting Setup row (NULL/NULL). Unassigned entities will be blocked.')
+  if (!hasCatchAllInventory) issues.push('No catch-all Inventory Posting Setup row (NULL/NULL). Unassigned warehouses/items will be blocked.')
+  if ((gpsIncomplete?.n ?? 0) > 0) issues.push(`${gpsIncomplete!.n} General Posting Setup row(s) have missing accounts (sales/purchases/COGS).`)
+  if ((ipsIncomplete?.n ?? 0) > 0) issues.push(`${ipsIncomplete!.n} Inventory Posting Setup row(s) have NULL inventory_account.`)
+
+  const warnings: string[] = []
+  if ((suppliersNoGroup?.n ?? 0) > 0)  warnings.push(`${suppliersNoGroup!.n} supplier(s) have no Business Posting Group.`)
+  if ((itemsNoGroup?.n     ?? 0) > 0)  warnings.push(`${itemsNoGroup!.n} item(s) have no Product Posting Group.`)
+  if ((warehousesNoGroup?.n ?? 0) > 0) warnings.push(`${warehousesNoGroup!.n} warehouse(s) have no Inventory Posting Group.`)
+
+  return c.json({
+    success: true,
+    data: {
+      groups: {
+        business_posting_groups:  bpgRow?.n  ?? 0,
+        product_posting_groups:   ppgRow?.n  ?? 0,
+        inventory_posting_groups: ipgRow?.n  ?? 0,
+      },
+      setup: {
+        general_rows:             gpsRow?.n  ?? 0,
+        inventory_rows:           ipsRow?.n  ?? 0,
+        has_catch_all_general:    hasCatchAllGeneral,
+        has_catch_all_inventory:  hasCatchAllInventory,
+      },
+      entities: {
+        suppliers_missing_group:  suppliersNoGroup?.n  ?? 0,
+        items_missing_group:      itemsNoGroup?.n      ?? 0,
+        warehouses_missing_group: warehousesNoGroup?.n ?? 0,
+      },
+      issues,
+      warnings,
+      is_ready: issues.length === 0,
+    },
+  })
+})
+
+// =============================================================================
+// VALIDATE POSTING (dry-run resolve)
+// =============================================================================
+
+// POST /api/gl/posting-setup/validate
+gl.post('/posting-setup/validate', async (c) => {
+  const { company_id } = getUser(c)
+  const body = await c.req.json<{
+    type: 'inventory_in' | 'inventory_out' | 'supplier_invoice' | 'supplier_payment' | 'expense' | 'revenue'
+    bpg_code?: string | null
+    ppg_code?: string | null
+    ipg_code?: string | null
+    ap_code?: string
+    cash_code?: string
+    receivable_code?: string
+    amount?: number
+  }>()
+
+  const amt = body.amount ?? 1000  // dummy amount for validation
+
+  let blueprint
+  switch (body.type) {
+    case 'inventory_in':
+    case 'inventory_out':
+      blueprint = await peResolveInventory(c.env.DB, company_id, body.ipg_code ?? null, body.ppg_code ?? null, amt, body.type === 'inventory_in')
+      break
+    case 'supplier_invoice':
+      if (!body.ap_code) return c.json({ success: false, error: 'ap_code required for supplier_invoice' }, 422)
+      blueprint = await peResolveSupplierInvoice(c.env.DB, company_id, body.bpg_code ?? null, body.ppg_code ?? null, body.ap_code, amt)
+      break
+    case 'supplier_payment':
+      if (!body.ap_code || !body.cash_code) return c.json({ success: false, error: 'ap_code and cash_code required' }, 422)
+      blueprint = await peResolveSupplierPayment(c.env.DB, company_id, body.ap_code, body.cash_code, amt)
+      break
+    case 'expense':
+      if (!body.cash_code) return c.json({ success: false, error: 'cash_code required for expense' }, 422)
+      blueprint = await peResolveExpense(c.env.DB, company_id, body.bpg_code ?? null, body.ppg_code ?? null, body.cash_code, amt)
+      break
+    case 'revenue':
+      if (!body.receivable_code) return c.json({ success: false, error: 'receivable_code required for revenue' }, 422)
+      blueprint = await peResolveSalesRevenue(c.env.DB, company_id, body.bpg_code ?? null, body.ppg_code ?? null, body.receivable_code, amt)
+      break
+    default:
+      return c.json({ success: false, error: 'Invalid type. Use: inventory_in | inventory_out | supplier_invoice | supplier_payment | expense | revenue' }, 422)
+  }
+
+  return c.json({ success: true, data: blueprint })
 })
 
 export default gl

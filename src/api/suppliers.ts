@@ -1,8 +1,9 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser, roleGuard, permissionGuard } from '../middleware/auth'
-import { glSupplierTransaction, getOpenPeriod } from '../lib/gl'
+import { getOpenPeriod } from '../lib/gl'
 import { logAudit } from '../lib/audit'
+import { FinanceCore } from '../lib/finance_core'
 
 const suppliers = new Hono<{ Bindings: Env }>()
 suppliers.use('*', authMiddleware)
@@ -316,8 +317,28 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
         .prepare('SELECT name FROM suppliers WHERE code = ? AND company_id = ?')
         .bind(code, company_id).first<{name:string}>()
 
-      await glSupplierTransaction(c.env.DB, company_id, txnId, b.entry_type, b.amount,
-        b.transaction_date, `${b.expense_category ?? b.entry_type} — ${supplierRow?.name ?? code}`, userId, b.center_code)
+      if (b.entry_type === 'د') {
+        await FinanceCore.resolveExpensePosting(c.env.DB, {
+          company_id,
+          ref_id: txnId,
+          amount: b.amount,
+          date: b.transaction_date,
+          description: `${b.expense_category ?? b.entry_type} — ${supplierRow?.name ?? code}`,
+          created_by: userId,
+          center_code: b.center_code ?? undefined,
+          expense_account: b.account_code == null ? undefined : String(b.account_code),
+        })
+      } else {
+        await FinanceCore.resolveSupplierPayment(c.env.DB, {
+          company_id,
+          ref_id: txnId,
+          amount: b.amount,
+          date: b.transaction_date,
+          description: `${b.expense_category ?? b.entry_type} — ${supplierRow?.name ?? code}`,
+          created_by: userId,
+          center_code: b.center_code ?? undefined,
+        })
+      }
     } catch (e: unknown) {
       await c.env.DB.prepare(
         "UPDATE supplier_transactions SET status = 'draft' WHERE id = ?"
@@ -349,7 +370,7 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
   const id   = Number(c.req.param('id'))
 
   const txn = await c.env.DB
-    .prepare(`SELECT id, entry_type, amount, transaction_date, expense_category, center_code
+    .prepare(`SELECT id, entry_type, amount, transaction_date, expense_category, center_code, account_code
               FROM supplier_transactions WHERE id = ? AND company_id = ? AND status = 'draft'`)
     .bind(id, company_id).first<{
       id: number
@@ -358,6 +379,7 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
       transaction_date: string
       expense_category: string | null
       center_code: number | null
+      account_code: string | null
     }>()
 
   if (!txn) return c.json({ success: false, error: 'المسودة غير موجودة أو تم ترحيلها بالفعل' }, 404)
@@ -368,11 +390,28 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
       .bind(code, company_id).first<{name:string}>()
 
     // 1. Post to GL
-    await glSupplierTransaction(
-      c.env.DB, company_id, id, txn.entry_type, txn.amount,
-      txn.transaction_date, `${txn.expense_category ?? txn.entry_type} — ${supplierRow?.name ?? code}`, 
-      userId, txn.center_code ?? undefined
-    )
+    if (txn.entry_type === 'د') {
+      await FinanceCore.resolveExpensePosting(c.env.DB, {
+        company_id,
+        ref_id: id,
+        amount: txn.amount,
+        date: txn.transaction_date,
+        description: `${txn.expense_category ?? txn.entry_type} — ${supplierRow?.name ?? code}`,
+        created_by: userId,
+        center_code: txn.center_code ?? undefined,
+        expense_account: txn.account_code == null ? undefined : String(txn.account_code),
+      })
+    } else {
+      await FinanceCore.resolveSupplierPayment(c.env.DB, {
+        company_id,
+        ref_id: id,
+        amount: txn.amount,
+        date: txn.transaction_date,
+        description: `${txn.expense_category ?? txn.entry_type} — ${supplierRow?.name ?? code}`,
+        created_by: userId,
+        center_code: txn.center_code ?? undefined,
+      })
+    }
 
     // 2. Update status to posted
     await c.env.DB

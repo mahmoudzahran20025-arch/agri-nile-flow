@@ -1,7 +1,8 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { getUser } from '../../middleware/auth'
-import { glInventoryMovement, getOpenPeriod } from '../../lib/gl'
+import { getOpenPeriod } from '../../lib/gl'
+import { FinanceCore } from '../../lib/finance_core'
 
 const adjustments = new Hono<{ Bindings: Env }>()
 
@@ -129,11 +130,17 @@ adjustments.post('/adjustments/:id/post', async (c) => {
     ).run()
 
     try {
-      await glInventoryMovement(
-        c.env.DB, company_id, id,
-        movementType, totalValue, adj.adjustment_date,
-        `تسوية جردية - ${l.item_code}`, userId
-      )
+      await FinanceCore.resolveInventoryMovement(c.env.DB, {
+        company_id,
+        ref_id: id,
+        item_code: l.item_code,
+        warehouse: warehouseName,
+        movement_type: movementType,
+        value: totalValue,
+        date: adj.adjustment_date,
+        item_name: `تسوية جردية - ${l.item_code}`,
+        created_by: userId,
+      })
     } catch {
       // GL failure on adjustment lines is logged but non-fatal;
       // the physical count correction is committed, GL needs manual fix.

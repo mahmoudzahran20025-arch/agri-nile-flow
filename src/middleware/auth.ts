@@ -38,8 +38,8 @@ async function hmacKey(secret: string) {
 }
 
 export async function signJwt(payload: Omit<JwtPayload, 'exp'>, secret: string, ttlSeconds = 86_400): Promise<string> {
-  const header  = b64url(new TextEncoder().encode(JSON.stringify({ alg: 'HS256', typ: 'JWT' })))
-  const body    = b64url(new TextEncoder().encode(JSON.stringify({ ...payload, exp: Math.floor(Date.now() / 1000) + ttlSeconds })))
+  const header  = b64url(new TextEncoder().encode(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).buffer as ArrayBuffer)
+  const body    = b64url(new TextEncoder().encode(JSON.stringify({ ...payload, exp: Math.floor(Date.now() / 1000) + ttlSeconds })).buffer as ArrayBuffer)
   const sig     = b64url(await crypto.subtle.sign('HMAC', await hmacKey(secret), new TextEncoder().encode(`${header}.${body}`)))
   return `${header}.${body}.${sig}`
 }

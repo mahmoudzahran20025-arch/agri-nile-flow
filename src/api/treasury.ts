@@ -1,7 +1,6 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
-import { postAutoEntry } from '../lib/gl'
 import { FinanceCore } from '../lib/finance_core'
 import { logAudit } from '../lib/audit'
 
@@ -267,73 +266,31 @@ treasury.patch('/partners/:id', async (c) => {
   const today = new Date().toISOString().slice(0, 10)
   const partnerName = b.name?.trim() ?? current.name
 
-  const [equityMapping, cashMapping, currentAcctMapping] = await Promise.all([
-    c.env.DB.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'equity'").bind(company_id).first<{ account_code: string }>(),
-    c.env.DB.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'").bind(company_id).first<{ account_code: string }>(),
-    c.env.DB.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'partner_current_acct'").bind(company_id).first<{ account_code: string }>(),
-  ])
-  // Use dedicated partner current-account mapping if set, else fall back to equity
-  const currentAcctCode = currentAcctMapping?.account_code ?? equityMapping?.account_code
-
-  if (equityMapping && cashMapping) {
-    // Capital change → DR/CR Cash vs Equity
-    if (b.capital_paid !== undefined) {
+  if (b.capital_paid !== undefined) {
       const delta = b.capital_paid - (current.capital_paid ?? 0)
       if (Math.abs(delta) > 0.01) {
         const desc = delta > 0
           ? `زيادة رأس مال شريك: ${partnerName}`
           : `تخفيض رأس مال شريك: ${partnerName}`
-        const absDelta = Math.abs(delta)
 
-        await postAutoEntry(c.env.DB, {
-          company_id,
-          entry_date:  today,
-          description: desc,
-          ref_type:    'partner_capital',
-          ref_id:      id,
-          lines: delta > 0
-            ? [
-                { account_code: cashMapping.account_code,   debit: absDelta, credit: 0,        description: desc },
-                { account_code: equityMapping.account_code,  debit: 0,        credit: absDelta, description: desc },
-              ]
-            : [
-                { account_code: equityMapping.account_code,  debit: absDelta, credit: 0,        description: desc },
-                { account_code: cashMapping.account_code,   debit: 0,        credit: absDelta, description: desc },
-              ],
-          created_by: userId,
+        await FinanceCore.resolvePartnerCapital(c.env.DB, {
+          company_id, ref_id: id, delta, date: today, description: desc, created_by: userId,
         })
       }
     }
 
-    // Current account change → DR/CR Cash vs Partner Current Account (dedicated mapping or equity fallback)
-    if (b.current_acct !== undefined && currentAcctCode) {
+    if (b.current_acct !== undefined) {
       const delta = b.current_acct - (current.current_acct ?? 0)
       if (Math.abs(delta) > 0.01) {
         const desc = delta > 0
           ? `إيداع في حساب شريك جاري: ${partnerName}`
           : `سحب من حساب شريك جاري: ${partnerName}`
-        const absDelta = Math.abs(delta)
 
-        await postAutoEntry(c.env.DB, {
-          company_id,
-          entry_date:  today,
-          description: desc,
-          ref_type:    'partner_current',
-          ref_id:      id,
-          lines: delta > 0
-            ? [
-                { account_code: cashMapping.account_code, debit: absDelta, credit: 0,        description: desc },
-                { account_code: currentAcctCode,           debit: 0,        credit: absDelta, description: desc },
-              ]
-            : [
-                { account_code: currentAcctCode,           debit: absDelta, credit: 0,        description: desc },
-                { account_code: cashMapping.account_code, debit: 0,        credit: absDelta, description: desc },
-              ],
-          created_by: userId,
+        await FinanceCore.resolvePartnerCurrent(c.env.DB, {
+          company_id, ref_id: id, delta, date: today, description: desc, created_by: userId,
         })
       }
     }
-  }
 
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'UPDATE',

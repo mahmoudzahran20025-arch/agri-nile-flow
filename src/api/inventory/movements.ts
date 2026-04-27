@@ -1,38 +1,11 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { getUser, permissionGuard } from '../../middleware/auth'
-import { glInventoryMovement, getOpenPeriod } from '../../lib/gl'
+import { getOpenPeriod } from '../../lib/gl'
 import { FinanceCore } from '../../lib/finance_core'
 import { logAudit } from '../../lib/audit'
 
 const movements = new Hono<{ Bindings: Env }>()
-
-// ── GL mapping pre-validation helper ─────────────────────────
-
-async function validateGLMappings(
-  db: Env['DB'], company_id: number, movementType: string, paymentMethod?: string
-): Promise<string | null> {
-  const invAcc = await db.prepare(
-    "SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'inventory'"
-  ).bind(company_id).first()
-  if (!invAcc) return 'GL_MAPPING_MISSING: حساب المخزون غير مربوط في الإعدادات.'
-
-  if (movementType === 'اضافة') {
-    const method = paymentMethod ?? 'credit'
-    if (method === 'credit') {
-      const apAcc = await db.prepare(
-        "SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'accounts_payable'"
-      ).bind(company_id).first()
-      if (!apAcc) return 'GL_MAPPING_MISSING: حساب الموردين غير مربوط.'
-    } else {
-      const cashAcc = await db.prepare(
-        "SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'"
-      ).bind(company_id).first()
-      if (!cashAcc) return 'GL_MAPPING_MISSING: حساب النقدية غير مربوط.'
-    }
-  }
-  return null
-}
 
 // ── GET /movements ────────────────────────────────────────────
 
@@ -119,9 +92,6 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.movement_date}` }, 400)
   }
 
-  const glError = await validateGLMappings(c.env.DB, company_id, b.movement_type, b.payment_method)
-  if (glError) return c.json({ success: false, error: glError }, 400)
-
   let centerCode = b.center_code
   if (!centerCode && b.field_id) {
     const field = await c.env.DB.prepare("SELECT center_code FROM fields WHERE id = ? AND company_id = ?")
@@ -202,9 +172,20 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
   const glValue = b.movement_type === 'اضافة' ? valueIn : valueOut
   let glEntryId: number | null = null
   try {
-    glEntryId = await glInventoryMovement(c.env.DB, company_id, movId,
-      b.movement_type, glValue, b.movement_date, itemRow?.name ?? String(b.item_code),
-      userId, centerCode, b.payment_method, b.work_order_id)
+    glEntryId = await FinanceCore.resolveInventoryMovement(c.env.DB, {
+      company_id,
+      ref_id: movId,
+      item_code: b.item_code,
+      warehouse: b.warehouse,
+      movement_type: b.movement_type,
+      value: glValue,
+      date: b.movement_date,
+      item_name: itemRow?.name ?? String(b.item_code),
+      created_by: userId,
+      center_code: centerCode ?? undefined,
+      payment_method: b.payment_method,
+      work_order_id: b.work_order_id,
+    })
   } catch (err: any) {
     await c.env.DB.prepare('DELETE FROM inventory_movements WHERE id = ?').bind(movId).run()
     await c.env.DB.prepare(
@@ -270,9 +251,6 @@ movements.post('/movements/batch', async (c) => {
 
   const periodId = await getOpenPeriod(c.env.DB, company_id, b.movement_date)
   if (!periodId) return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.movement_date}` }, 400)
-
-  const glError = await validateGLMappings(c.env.DB, company_id, b.movement_type, b.payment_method)
-  if (glError) return c.json({ success: false, error: glError }, 400)
 
   let centerCode = b.center_code
   if (!centerCode && b.field_id) {
@@ -389,10 +367,20 @@ movements.post('/movements/batch', async (c) => {
       .bind(lr.item_code, company_id).first<{ name: string }>()
 
     try {
-      await glInventoryMovement(
-        c.env.DB, company_id, ins.id, b.movement_type, glValue, b.movement_date,
-        itemRow?.name ?? String(lr.item_code), userId, centerCode, b.payment_method, b.work_order_id
-      )
+      await FinanceCore.resolveInventoryMovement(c.env.DB, {
+        company_id,
+        ref_id: ins.id,
+        item_code: lr.item_code,
+        warehouse: b.warehouse,
+        movement_type: b.movement_type,
+        value: glValue,
+        date: b.movement_date,
+        item_name: itemRow?.name ?? String(lr.item_code),
+        created_by: userId,
+        center_code: centerCode ?? undefined,
+        payment_method: b.payment_method,
+        work_order_id: b.work_order_id,
+      })
     } catch (err: any) {
       await c.env.DB.prepare('DELETE FROM inventory_movements WHERE company_id = ? AND local_id LIKE ?')
         .bind(company_id, `${batchKey}_%`).run()

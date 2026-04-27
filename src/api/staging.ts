@@ -2,7 +2,8 @@ import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
 import { logAudit } from '../lib/audit'
-import { glInventoryMovement, getOpenPeriod } from '../lib/gl'
+import { getOpenPeriod } from '../lib/gl'
+import { FinanceCore } from '../lib/finance_core'
 
 const staging = new Hono<{ Bindings: Env }>()
 staging.use('*', authMiddleware)
@@ -333,10 +334,17 @@ staging.post('/movements/promote/:batchId', async (c) => {
       .bind(row.item_code, company_id).first<{ name: string }>()
 
     const glValue = row.movement_type === 'اضافة' ? valueIn : valueOut
-    await glInventoryMovement(
-      c.env.DB, company_id, newMovId, row.movement_type,
-      glValue, row.movement_date, itemRow?.name ?? String(row.item_code), userId,
-    )
+    await FinanceCore.resolveInventoryMovement(c.env.DB, {
+      company_id,
+      ref_id: newMovId,
+      item_code: row.item_code!,
+      warehouse: row.warehouse,
+      movement_type: row.movement_type,
+      value: glValue,
+      date: row.movement_date,
+      item_name: itemRow?.name ?? String(row.item_code),
+      created_by: userId,
+    })
 
     // Mark staging row as promoted
     await c.env.DB.prepare(
