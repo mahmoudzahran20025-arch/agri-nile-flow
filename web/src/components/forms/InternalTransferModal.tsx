@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { inventoryApi, configApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 import Modal from '../ui/Modal'
-import { ArrowRightLeft, Package, MapPin, Plus, Trash2, CheckCircle } from 'lucide-react'
+import { ArrowRightLeft, Package, Plus, Trash2, CheckCircle } from 'lucide-react'
 
 interface Props {
   open: boolean
@@ -147,7 +147,7 @@ export default function InternalTransferModal({ open, onClose, initialItemCode, 
           </div>
 
           <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
-            {lines.map((line, idx) => (
+            {lines.map((line) => (
               <div key={line.id} className="group flex gap-2 items-start bg-white border border-slate-200 rounded-xl p-3 hover:border-brand-200 hover:shadow-sm transition-all">
                 <div className="flex-1 space-y-2">
                   <select 

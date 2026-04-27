@@ -62,6 +62,10 @@ export default function AccountLedgerPage() {
 
   const [start, setStart] = useState(startOfYear())
   const [end,   setEnd]   = useState(today())
+  const [search, setSearch] = useState('')
+  const [refType, setRefType] = useState('')
+  const [minAmount, setMinAmount] = useState('')
+  const [maxAmount, setMaxAmount] = useState('')
 
   const { data, isLoading } = useQuery({
     queryKey: ['gl-ledger', code, start, end],
@@ -75,8 +79,43 @@ export default function AccountLedgerPage() {
   const account = data?.account
   const lines   = data?.lines ?? []
 
-  const totalDebit  = lines.reduce((s, l) => s + (l.debit  ?? 0), 0)
-  const totalCredit = lines.reduce((s, l) => s + (l.credit ?? 0), 0)
+  const filteredLines = lines.filter((l) => {
+    const q = search.trim().toLowerCase()
+    const byText = !q
+      || (l.narration ?? '').toLowerCase().includes(q)
+      || (l.entry_desc ?? '').toLowerCase().includes(q)
+      || String(l.entry_id).includes(q)
+    const byRef = !refType || l.ref_type === refType
+    const amount = Math.max(Number(l.debit || 0), Number(l.credit || 0))
+    const min = Number(minAmount)
+    const max = Number(maxAmount)
+    const byMin = !minAmount || amount >= min
+    const byMax = !maxAmount || amount <= max
+    return byText && byRef && byMin && byMax
+  })
+
+  const absAmounts = filteredLines
+    .map((l) => Math.max(Number(l.debit || 0), Number(l.credit || 0)))
+    .filter((n) => n > 0)
+    .sort((a, b) => a - b)
+  const unusualThreshold = absAmounts.length > 0
+    ? absAmounts[Math.floor(absAmounts.length * 0.9)]
+    : Infinity
+
+  const monthlySummary = Object.entries(
+    filteredLines.reduce<Record<string, { debit: number; credit: number }>>((acc, l) => {
+      const key = l.entry_date.slice(0, 7)
+      if (!acc[key]) acc[key] = { debit: 0, credit: 0 }
+      acc[key].debit += Number(l.debit || 0)
+      acc[key].credit += Number(l.credit || 0)
+      return acc
+    }, {})
+  )
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-6)
+
+  const totalDebit  = filteredLines.reduce((s, l) => s + (l.debit  ?? 0), 0)
+  const totalCredit = filteredLines.reduce((s, l) => s + (l.credit ?? 0), 0)
   const netBalance  = totalDebit - totalCredit
   const isDebitNormal = account?.normal_balance === 'debit'
 
@@ -133,10 +172,49 @@ export default function AccountLedgerPage() {
             onChange={e => setEnd(e.target.value)}
           />
         </div>
+        <input
+          type="text"
+          className="input w-56"
+          placeholder="بحث في البيان أو رقم القيد"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <select className="input w-40" value={refType} onChange={(e) => setRefType(e.target.value)}>
+          <option value="">كل المصادر</option>
+          <option value="cash_transaction">خزينة</option>
+          <option value="supplier_transaction">مورد</option>
+          <option value="inventory_movement">مخزون</option>
+          <option value="manual">يدوي</option>
+        </select>
+        <input
+          type="number"
+          min="0"
+          step="0.01"
+          className="input w-32"
+          placeholder="أدنى"
+          value={minAmount}
+          onChange={(e) => setMinAmount(e.target.value)}
+        />
+        <input
+          type="number"
+          min="0"
+          step="0.01"
+          className="input w-32"
+          placeholder="أعلى"
+          value={maxAmount}
+          onChange={(e) => setMaxAmount(e.target.value)}
+        />
         {(start !== startOfYear() || end !== today()) && (
           <button
             className="btn btn-ghost text-sm"
-            onClick={() => { setStart(startOfYear()); setEnd(today()) }}
+            onClick={() => {
+              setStart(startOfYear())
+              setEnd(today())
+              setSearch('')
+              setRefType('')
+              setMinAmount('')
+              setMaxAmount('')
+            }}
           >
             إعادة تعيين
           </button>
@@ -170,10 +248,28 @@ export default function AccountLedgerPage() {
         </div>
       )}
 
+      {!isLoading && monthlySummary.length > 0 && (
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-bold text-gray-800">ملخص شهري (آخر 6 أشهر ضمن النتائج)</h2>
+            <span className="text-xs text-gray-400">{filteredLines.length} حركة</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {monthlySummary.map(([month, v]) => (
+              <div key={month} className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+                <p className="text-xs font-bold text-gray-600">{month}</p>
+                <p className="text-xs text-red-600 mt-1">مدين: {egp(v.debit)}</p>
+                <p className="text-xs text-emerald-700">دائن: {egp(v.credit)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Ledger table */}
       {isLoading ? (
         <p className="text-center text-gray-500 py-10">جاري التحميل...</p>
-      ) : lines.length === 0 ? (
+      ) : filteredLines.length === 0 ? (
         <div className="card text-center py-16 text-gray-400">
           <BookOpen size={40} className="mx-auto mb-3 opacity-30" />
           <p>لا توجد حركات لهذا الحساب في الفترة المحددة</p>
@@ -193,8 +289,15 @@ export default function AccountLedgerPage() {
               </tr>
             </thead>
             <tbody>
-              {lines.map((l, i) => (
-                <tr key={l.id} className={`border-b transition-colors hover:bg-gray-50 ${i % 2 === 0 ? '' : 'bg-gray-50/40'}`}>
+              {filteredLines.map((l, i) => {
+                const lineAmount = Math.max(Number(l.debit || 0), Number(l.credit || 0))
+                const unusual = lineAmount >= unusualThreshold && lineAmount > 0
+                return (
+                <tr
+                  key={l.id}
+                  className={`border-b transition-colors hover:bg-gray-50 ${i % 2 === 0 ? '' : 'bg-gray-50/40'} ${unusual ? 'bg-amber-50/70' : ''}`}
+                  title={unusual ? 'حركة ذات قيمة مرتفعة مقارنة بباقي الفترة' : undefined}
+                >
                   <td className="td font-mono text-xs text-gray-500">
                     {new Date(l.entry_date).toLocaleDateString('en-US', {
                       day: 'numeric', month: 'short', year: 'numeric',
@@ -243,7 +346,7 @@ export default function AccountLedgerPage() {
                     </span>
                   </td>
                 </tr>
-              ))}
+                )})}
             </tbody>
             {/* Totals row */}
             <tfoot className="bg-gray-100 border-t-2 border-gray-300 font-semibold">

@@ -1,7 +1,7 @@
   import { useState, useMemo } from 'react'
   import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
   import { useNavigate } from 'react-router-dom'
-  import { BookOpen, Plus, Settings, Eye, List, GitBranch, ChevronRight, ChevronDown, Shield, Info, Pencil, PowerOff, Power } from 'lucide-react'
+  import { BookOpen, Plus, Settings, Eye, List, GitBranch, ChevronRight, ChevronDown, Shield, Info, Pencil, PowerOff, Power, Lock } from 'lucide-react'
   import { glApi } from '../../api/client'
   import { useToast } from '../../contexts/ToastContext'
   import Modal from '../../components/ui/Modal'
@@ -11,6 +11,13 @@
     id: number; code: string; name: string; account_type: string
     normal_balance: string; parent_code?: string; level: number
     is_header: number; is_active: number
+  }
+
+  interface AccountUsageMeta {
+    account_code: string
+    usage_count: number
+    last_used_date: string | null
+    is_locked: number
   }
 
   const TYPE_AR: Record<string, string> = {
@@ -55,11 +62,14 @@
 
   // ── Tree Node component ──────────────────────────────────────
   function AccountTreeNode({
-    node, navigate, depth = 0,
-  }: { node: AccountNode; navigate: (p: string) => void; depth?: number }) {
+    node, navigate, usageMap, depth = 0,
+  }: { node: AccountNode; navigate: (p: string) => void; usageMap: Record<string, AccountUsageMeta>; depth?: number }) {
     const [open, setOpen] = useState(depth < 2)
     const colors = TYPE_COLOR[node.account_type] ?? TYPE_COLOR.expense
     const hasChildren = node.children.length > 0
+    const usage = usageMap[node.code]
+    const usageCount = Number(usage?.usage_count ?? 0)
+    const isLocked = Number(usage?.is_locked ?? 0) === 1
 
     return (
       <div className="select-none">
@@ -83,9 +93,25 @@
           <span className="font-mono text-xs text-gray-400 w-14 shrink-0">{node.code}</span>
 
           {/* Name */}
-          <span className={`text-sm flex-1 ${node.is_header ? 'font-semibold text-gray-800' : 'text-gray-700'}`}>
+          <span className={`text-sm flex-1 ${node.is_header ? 'font-semibold text-gray-800' : 'text-gray-700'} ${node.is_active === 0 ? 'line-through opacity-50' : ''}`}>
             {node.name}
           </span>
+          {/* Inactive badge */}
+          {node.is_active === 0 && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-400 border border-gray-200 shrink-0">موقوف</span>
+          )}
+
+          {isLocked && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 shrink-0 inline-flex items-center gap-1">
+              <Lock size={10} /> مقفل
+            </span>
+          )}
+
+          {usageCount > 0 && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200 shrink-0">
+              استخدام: {usageCount}
+            </span>
+          )}
 
           {/* Type badge — only on headers */}
           {node.is_header && (
@@ -118,7 +144,7 @@
         {hasChildren && open && (
           <div className={`mr-2 border-r-2 ${colors.border}`}>
             {node.children.map(child => (
-              <AccountTreeNode key={child.code} node={child} navigate={navigate} depth={depth + 1} />
+              <AccountTreeNode key={child.code} node={child} navigate={navigate} usageMap={usageMap} depth={depth + 1} />
             ))}
           </div>
         )}
@@ -131,8 +157,10 @@
     const navigate = useNavigate()
     const qc = useQueryClient()
     const { toast } = useToast()
-    const [filter, setFilter]     = useState('')
-    const [viewMode, setViewMode] = useState<'table' | 'tree'>('tree')
+    const [filter, setFilter]       = useState('')
+    const [typeFilter, setTypeFilter] = useState<string>('all')
+    const [lockedOnly, setLockedOnly] = useState(false)
+    const [viewMode, setViewMode]     = useState<'table' | 'tree'>('tree')
     const [openAdd, setOpenAdd]       = useState(false)
     const [openMapping, setOpenMapping] = useState(false)
 
@@ -160,15 +188,33 @@
       queryKey: ['gl-mappings'],
       queryFn:  glApi.mappings,
     })
+    const { data: usageMetadata = [] } = useQuery({
+      queryKey: ['gl-accounts-usage-metadata'],
+      queryFn: () => glApi.accountUsageMetadata(),
+    })
 
     const [mappingForm, setMappingForm] = useState<Record<string,string>>({})
 
     const list = accounts as Account[]
-    const filtered = filter
-      ? list.filter(a => a.code.includes(filter) || a.name.includes(filter))
-      : list
+    const usageMap = useMemo(() => {
+      const map: Record<string, AccountUsageMeta> = {}
+      for (const row of usageMetadata as AccountUsageMeta[]) {
+        map[row.account_code] = row
+      }
+      return map
+    }, [usageMetadata])
+    const lockedAccountsCount = useMemo(
+      () => list.filter(a => Number(usageMap[a.code]?.is_locked ?? 0) === 1).length,
+      [list, usageMap],
+    )
+    const filtered = useMemo(() => list.filter(a => {
+      const matchText = !filter || a.code.includes(filter) || a.name.includes(filter)
+      const matchType = typeFilter === 'all' || a.account_type === typeFilter
+      const matchLocked = !lockedOnly || Number(usageMap[a.code]?.is_locked ?? 0) === 1
+      return matchText && matchType && matchLocked
+    }), [list, filter, typeFilter, lockedOnly, usageMap])
 
-    const tree = useMemo(() => buildTree(filter ? filtered : list), [list, filtered, filter])
+    const tree = useMemo(() => buildTree(filtered.length < list.length ? filtered : list), [list, filtered, filter, typeFilter])
 
 
     const editAcc = useMutation({
@@ -244,6 +290,7 @@
             <BookOpen size={24} className="text-brand-600" />
             <h1 className="text-xl font-bold text-gray-900">شجرة الحسابات</h1>
             <span className="badge badge-blue">{list.length} حساب</span>
+            <span className="badge badge-amber">{lockedAccountsCount} حساب مقفل بالحركة</span>
           </div>
           <div className="flex items-center gap-2">
             {/* View toggle */}
@@ -279,12 +326,68 @@
           </div>
         </div>
 
-        <input
-          className="input max-w-sm"
-          placeholder="بحث بالكود أو الاسم..."
-          value={filter}
-          onChange={e => setFilter(e.target.value)}
-        />
+        {/* Stats bar */}
+        <div className="flex flex-wrap gap-4 text-sm">
+          {Object.entries(TYPE_AR).map(([k, label]) => {
+            const count = list.filter(a => a.account_type === k).length
+            const c = TYPE_COLOR[k]
+            return (
+              <button
+                key={k}
+                onClick={() => setTypeFilter(prev => prev === k ? 'all' : k)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium transition-all
+                  ${ typeFilter === k
+                    ? `${c.bg} ${c.text} ${c.border} ring-2 ring-offset-1 ${c.border.replace('border-','ring-')}`
+                    : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
+                  }`}
+              >
+                <span className={`w-2 h-2 rounded-full ${c.dot}`} />
+                {label}
+                <span className={`ml-1 px-1.5 py-0.5 rounded text-[10px] ${ typeFilter === k ? 'bg-white/60' : 'bg-gray-100'}`}>
+                  {count}
+                </span>
+              </button>
+            )
+          })}
+          {typeFilter !== 'all' && (
+            <button
+              onClick={() => setTypeFilter('all')}
+              className="text-xs text-gray-400 hover:text-gray-600 underline"
+            >
+              عرض الكل
+            </button>
+          )}
+        </div>
+
+        {/* Search + result count */}
+        <div className="flex items-center gap-3">
+          <input
+            className="input max-w-sm"
+            placeholder="بحث بالكود أو الاسم..."
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+          />
+          {(filter || typeFilter !== 'all') && (
+            <span className="text-sm text-gray-500">
+              {filtered.length} من {list.length} حساب
+            </span>
+          )}
+          <button
+            onClick={() => setLockedOnly(prev => !prev)}
+            className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${lockedOnly ? 'bg-amber-50 border-amber-300 text-amber-700' : 'bg-white border-slate-200 text-slate-500 hover:text-slate-700 hover:border-slate-300'}`}
+            title="إظهار الحسابات المقفلة بالحركة فقط"
+          >
+            <span className="inline-flex items-center gap-1"><Lock size={12} /> المقفلة فقط</span>
+          </button>
+          {(filter || typeFilter !== 'all') && (
+            <button
+              onClick={() => { setFilter(''); setTypeFilter('all'); setLockedOnly(false) }}
+              className="text-xs text-gray-400 hover:text-red-500 transition-colors"
+            >
+              مسح الفلاتر
+            </button>
+          )}
+        </div>
 
         {isLoading ? (
           <p className="text-center text-gray-500 py-10">جاري التحميل...</p>
@@ -306,7 +409,7 @@
             </div>
             {tree.length === 0 && <p className="text-center text-gray-400 py-8">لا توجد نتائج</p>}
             {tree.map(node => (
-              <AccountTreeNode key={node.code} node={node} navigate={navigate} depth={0} />
+              <AccountTreeNode key={node.code} node={node} navigate={navigate} usageMap={usageMap} depth={0} />
             ))}
           </div>
         ) : (
@@ -320,12 +423,18 @@
                   <th className="th">النوع</th>
                   <th className="th">الرصيد الطبيعي</th>
                   <th className="th">المستوى</th>
+                  <th className="th">تكرار الاستخدام</th>
+                  <th className="th">آخر استخدام</th>
                   <th className="th">الحالة</th>
                   <th className="th"></th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(a => (
+                {filtered.map(a => {
+                  const usage = usageMap[a.code]
+                  const usageCount = Number(usage?.usage_count ?? 0)
+                  const isLocked = Number(usage?.is_locked ?? 0) === 1
+                  return (
                   <tr
                     key={a.code}
                     className={`border-b transition-colors ${
@@ -352,8 +461,10 @@
                       {a.normal_balance === 'debit' ? 'مدين' : 'دائن'}
                     </td>
                     <td className="td text-center text-gray-500">{a.level}</td>
+                    <td className="td text-center text-xs text-slate-600">{usageCount}</td>
+                    <td className="td text-xs text-slate-500">{usage?.last_used_date ?? '—'}</td>
                     <td className="td">
-                      {a.is_header
+                      {isLocked ? <span className="badge badge-amber inline-flex items-center gap-1"><Lock size={12} /> مقفل</span> : a.is_header
                         ? <span className="badge badge-slate">مجموعة</span>
                         : <span className="badge badge-green">حساب فرعي</span>}
                     </td>
@@ -385,8 +496,8 @@
                                 ? 'text-amber-400 hover:bg-amber-50 hover:text-amber-600'
                                 : 'text-emerald-500 hover:bg-emerald-50'
                             }`}
-                            title={a.is_active === 1 ? 'تعطيل الحساب' : 'تفعيل الحساب'}
-                            disabled={toggleActive.isPending}
+                            title={isLocked && a.is_active === 1 ? 'لا يمكن تعطيل حساب له حركة' : (a.is_active === 1 ? 'تعطيل الحساب' : 'تفعيل الحساب')}
+                            disabled={toggleActive.isPending || (isLocked && a.is_active === 1)}
                           >
                             {a.is_active === 1 ? <PowerOff size={14} /> : <Power size={14} />}
                           </button>
@@ -394,7 +505,7 @@
                       </div>
                     </td>
                   </tr>
-                ))}
+                )})}
               </tbody>
             </table>
           </div>

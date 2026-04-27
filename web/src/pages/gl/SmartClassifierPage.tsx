@@ -8,7 +8,7 @@ type CategoryType = 'expense' | 'supplier' | 'partner' | 'bank' | 'cost_center'
 
 export default function SmartClassifierPage() {
   const qc = useQueryClient()
-  const toast = useToast()
+  const { toast } = useToast()
   const [activeTab, setActiveTab] = useState<'unmapped' | 'rules'>('unmapped')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedText, setSelectedText] = useState<{ narration: string; count: number } | null>(null)
@@ -32,7 +32,7 @@ export default function SmartClassifierPage() {
   const delRuleMut = useMutation({
     mutationFn: classifierApi.deleteRule,
     onSuccess: () => {
-      toast.success('تم حذف القاعدة بنجاح')
+      toast('تم حذف القاعدة بنجاح', 'success')
       qc.invalidateQueries({ queryKey: ['dlce-rules'] })
       qc.invalidateQueries({ queryKey: ['dlce-unmapped'] })
     }
@@ -41,7 +41,7 @@ export default function SmartClassifierPage() {
   const reconMut = useMutation({
     mutationFn: classifierApi.reconcileLegacy,
     onSuccess: (res) => {
-      toast.success(`تم تسوية وتصحيح ${res.updated_count} قيد تاريخي بنجاح!`)
+      toast(`تم تسوية وتصحيح ${res.updated_count} قيد تاريخي بنجاح!`, 'success')
       qc.invalidateQueries({ queryKey: ['dlce-unmapped'] })
     }
   })
@@ -217,7 +217,7 @@ export default function SmartClassifierPage() {
                 setSelectedText(null)
                 qc.invalidateQueries({ queryKey: ['dlce-unmapped'] })
                 qc.invalidateQueries({ queryKey: ['dlce-rules'] })
-                toast.success('تم بناء القاعدة بنجاح!')
+                toast('تم بناء القاعدة بنجاح!', 'success')
               }} 
             />
           </div>
@@ -228,14 +228,19 @@ export default function SmartClassifierPage() {
 }
 
 function RuleBuilderForm({ initialKeyword, onSuccess }: { initialKeyword: string, onSuccess: () => void }) {
-  const toast = useToast()
   const [keyword, setKeyword] = useState(initialKeyword)
   const [category, setCategory] = useState<CategoryType>('expense')
   const [targetId, setTargetId] = useState<string>('')
 
   // Load dropdown data
   const { data: expenses = [] } = useQuery<{code: number, name: string}[]>({ queryKey: ['config', 'expenses'], queryFn: () => configApi.expenseTypes() as Promise<{code: number, name: string}[]> })
-  const { data: suppliers = [] } = useQuery<{code: number, name: string}[]>({ queryKey: ['suppliers'], queryFn: () => suppliersApi.list() as Promise<{code: number, name: string}[]> })
+  const { data: suppliers = [] } = useQuery<{code: number, name: string}[]>({
+    queryKey: ['suppliers', 'classifier-options'],
+    queryFn: async () => {
+      const res = await suppliersApi.list({ page: 1, size: 500 })
+      return (res.data as Array<{ code: number; name: string }>)
+    }
+  })
   const { data: partners = [] } = useQuery<{id: number, name: string}[]>({ queryKey: ['partners'], queryFn: () => treasuryApi.partners() as Promise<{id: number, name: string}[]> })
 
   const saveMut = useMutation({

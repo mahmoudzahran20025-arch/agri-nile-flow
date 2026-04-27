@@ -7,16 +7,16 @@ import SmartClassifierPage    from './SmartClassifierPage'
 
 type Tab = 'mappings' | 'classifier' | 'integrations' | 'periods'
 
-const TABS: { id: Tab; label: string; icon: React.ReactNode; desc: string }[] = [
-  { id: 'mappings',     icon: <Link2       size={15} />, label: 'الربط الثابت',    desc: 'تعيين مفاتيح الربط الافتراضية' },
-  { id: 'classifier',   icon: <BrainCircuit size={15} />,label: 'المصنف الذكي',    desc: 'إدارة الربط التفاعلي للبيانات القديمة' },
+const TABS: { id: Tab; label: string; icon: React.ReactNode; desc: string; legacy?: boolean }[] = [
   { id: 'integrations', icon: <ShieldCheck size={15} />, label: 'حوكمة الربط',     desc: 'تفعيل وتعطيل الربط التلقائي لكل وحدة' },
   { id: 'periods',      icon: <CalendarDays size={15}/>, label: 'الفترات المالية', desc: 'إدارة الفترات المالية وقفلها' },
+  { id: 'mappings',     icon: <Link2       size={15} />, label: 'الربط الثابت',    desc: 'مسار قديم للعرض فقط', legacy: true },
+  { id: 'classifier',   icon: <BrainCircuit size={15} />,label: 'المصنف الذكي',    desc: 'إدارة الربط التفاعلي للبيانات القديمة', legacy: true },
 ]
 
 export default function GLSettingsPage() {
   const [params, setParams] = useSearchParams()
-  const tab = (params.get('tab') as Tab | null) ?? 'mappings'
+  const tab = (params.get('tab') as Tab | null) ?? 'integrations'
 
   const setTab = (t: Tab) => setParams({ tab: t }, { replace: true })
 
@@ -28,7 +28,7 @@ export default function GLSettingsPage() {
           <Settings size={22} className="text-slate-500" />
           <div>
             <h1 className="page-title">إعدادات المحاسبة</h1>
-            <p className="text-sm text-slate-500">الفترات المالية · ربط الحسابات · المُصنّف الذكي · حوكمة الربط</p>
+            <p className="text-sm text-slate-500">حوكمة الربط · الفترات المالية · أدوات قديمة للعرض فقط</p>
           </div>
         </div>
       </div>
@@ -48,6 +48,9 @@ export default function GLSettingsPage() {
           >
             {t.icon}
             {t.label}
+            {t.legacy && (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">LEGACY</span>
+            )}
           </button>
         ))}
       </div>

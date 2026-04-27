@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import Modal from '../ui/Modal'
 import { configApi, inventoryApi } from '../../api/client'
+import { glApi } from '../../api/gl'
 
 interface Props { open: boolean; onClose: () => void }
 
@@ -10,7 +11,12 @@ export default function AddItemModal({ open, onClose }: Props) {
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState('')
   const [form, setForm] = useState({
-    code: '', name: '', unit: '', warehouse: '', reorder_threshold: '0', category_id: '',
+    code: '', name: '', unit: '', warehouse: '', reorder_threshold: '0', category_id: '', prod_posting_group_code: '',
+  })
+
+  const { data: ppgList = [] } = useQuery({
+    queryKey: ['posting-groups', 'product'],
+    queryFn:  () => glApi.postingGroups('product'),
   })
 
   const { data: categories } = useQuery({
@@ -27,19 +33,20 @@ export default function AddItemModal({ open, onClose }: Props) {
     setSaving(true)
     try {
       const res = await configApi.createItem({
-        code:              Number(form.code),
-        name:              form.name.trim(),
-        unit:              form.unit.trim() || undefined,
-        warehouse:         form.warehouse.trim() || undefined,
-        reorder_threshold: Number(form.reorder_threshold) || 0,
-        category_id:       form.category_id ? Number(form.category_id) : undefined,
+        code:                   Number(form.code),
+        name:                   form.name.trim(),
+        unit:                   form.unit.trim() || undefined,
+        warehouse:              form.warehouse.trim() || undefined,
+        reorder_threshold:      Number(form.reorder_threshold) || 0,
+        category_id:            form.category_id ? Number(form.category_id) : undefined,
+        prod_posting_group_code: form.prod_posting_group_code || undefined,
       })
       if (!(res as { success: boolean }).success) {
         setError((res as { error: string }).error ?? 'حدث خطأ')
         return
       }
       await qc.invalidateQueries({ queryKey: ['config', 'items'] })
-      setForm({ code: '', name: '', unit: '', warehouse: '', reorder_threshold: '0', category_id: '' })
+      setForm({ code: '', name: '', unit: '', warehouse: '', reorder_threshold: '0', category_id: '', prod_posting_group_code: '' })
       onClose()
     } catch {
       setError('حدث خطأ في الاتصال')
@@ -79,6 +86,15 @@ export default function AddItemModal({ open, onClose }: Props) {
 
         <div className="grid grid-cols-2 gap-4">
           <div>
+            <label className="label">مجموعة الترحيل (PPG)</label>
+            <select className="input" value={form.prod_posting_group_code} onChange={e => set('prod_posting_group_code', e.target.value)}>
+              <option value="">— بدون مجموعة (الافتراضي) —</option>
+              {ppgList.filter(g => g.is_active === 1).map(g => (
+                <option key={g.code} value={g.code}>{g.code} — {g.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
             <label className="label">تصنيف الصنف</label>
             <select 
               className="input" 
@@ -91,6 +107,9 @@ export default function AddItemModal({ open, onClose }: Props) {
               ))}
             </select>
           </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="label">حد التنبيه (كمية إعادة الطلب)</label>
             <input type="number" className="input" min="0" value={form.reorder_threshold}

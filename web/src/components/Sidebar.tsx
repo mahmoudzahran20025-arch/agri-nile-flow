@@ -106,10 +106,13 @@ const NAV_SECTIONS: NavSection[] = [
   // ── General Ledger ────────────────────────────────────────────
   {
     key: 'finance', label: 'دفتر الأستاذ العام', items: [
-      { to: '/gl/accounts',   icon: <Database  size={18} />, label: 'شجرة الحسابات',   permission: { module: 'finance', action: 'read' } },
-      { to: '/gl/entries',    icon: <FileText  size={18} />, label: 'قيود اليومية',     permission: { module: 'finance', action: 'read' } },
-      { to: '/gl/statements', icon: <BarChart3 size={18} />, label: 'القوائم المالية',  permission: { module: 'finance', action: 'read' } },
-      { to: '/gl/settings',   icon: <Settings  size={18} />, label: 'إعدادات المحاسبة', permission: { module: 'config',  action: 'read' } },
+      { to: '/gl/accounts',       icon: <Database  size={18} />, label: 'شجرة الحسابات',      permission: { module: 'finance', action: 'read' } },
+      { to: '/gl/entries',        icon: <FileText  size={18} />, label: 'قيود اليومية',        permission: { module: 'finance', action: 'read' } },
+      { to: '/gl/statements',     icon: <BarChart3 size={18} />, label: 'القوائم المالية',      permission: { module: 'finance', action: 'read' } },
+      { to: '/gl/setup-wizard',   icon: <ClipboardCheck size={18} />, label: 'معالج الإعداد',   permission: { module: 'config',  action: 'read' } },
+      { to: '/gl/posting-groups', icon: <Settings  size={18} />, label: 'مجموعات الترحيل',     permission: { module: 'config',  action: 'read' } },
+      { to: '/gl/posting-setup',  icon: <Settings  size={18} />, label: 'إعداد الترحيل',       permission: { module: 'config',  action: 'read' } },
+      { to: '/gl/settings',       icon: <Settings  size={18} />, label: 'إعدادات المحاسبة',    permission: { module: 'config',  action: 'read' } },
     ],
   },
 

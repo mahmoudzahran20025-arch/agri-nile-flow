@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import Modal from '../ui/Modal'
 import { suppliersApi } from '../../api/client'
+import { glApi } from '../../api/gl'
 
 interface Props { open: boolean; onClose: () => void }
 
@@ -9,7 +10,12 @@ export default function AddSupplierModal({ open, onClose }: Props) {
   const qc = useQueryClient()
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState('')
-  const [form, setForm] = useState({ code: '', name: '', activity: '', notes: '' })
+  const [form, setForm] = useState({ code: '', name: '', activity: '', notes: '', bus_posting_group_code: '' })
+
+  const { data: bpgList = [] } = useQuery({
+    queryKey: ['posting-groups', 'business'],
+    queryFn:  () => glApi.postingGroups('business'),
+  })
 
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }))
 
@@ -21,17 +27,18 @@ export default function AddSupplierModal({ open, onClose }: Props) {
     setSaving(true)
     try {
       const res = await suppliersApi.create({
-        code:     Number(form.code),
-        name:     form.name.trim(),
-        activity: form.activity.trim() || undefined,
-        notes:    form.notes.trim() || undefined,
+        code:                 Number(form.code),
+        name:                 form.name.trim(),
+        activity:             form.activity.trim() || undefined,
+        notes:                form.notes.trim() || undefined,
+        bus_posting_group_code: form.bus_posting_group_code || undefined,
       })
       if (!(res as { success: boolean }).success) {
         setError((res as { error: string }).error ?? 'حدث خطأ')
         return
       }
       await qc.invalidateQueries({ queryKey: ['suppliers'] })
-      setForm({ code: '', name: '', activity: '', notes: '' })
+      setForm({ code: '', name: '', activity: '', notes: '', bus_posting_group_code: '' })
       onClose()
     } catch {
       setError('حدث خطأ في الاتصال')
@@ -66,6 +73,19 @@ export default function AddSupplierModal({ open, onClose }: Props) {
           <label className="label">ملاحظات</label>
           <textarea className="input" rows={2} value={form.notes}
             onChange={e => set('notes', e.target.value)} />
+        </div>
+
+        <div>
+          <label className="label">مجموعة الترحيل التجاري (BPG)</label>
+          <select className="input" value={form.bus_posting_group_code} onChange={e => set('bus_posting_group_code', e.target.value)}>
+            <option value="">— بدون مجموعة (سيستخدم الافتراضي) —</option>
+            {bpgList.filter(g => g.is_active === 1).map(g => (
+              <option key={g.code} value={g.code}>{g.code} — {g.name}</option>
+            ))}
+          </select>
+          {!form.bus_posting_group_code && (
+            <p className="text-xs text-amber-600 mt-1">⚠️ بدون مجموعة، سيتم استخدام قاعدة الإعداد الافتراضية عند الترحيل.</p>
+          )}
         </div>
 
         {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}

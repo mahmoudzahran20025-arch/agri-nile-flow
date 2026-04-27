@@ -1,6 +1,5 @@
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Link2, Loader2, CheckCircle2, AlertTriangle, Save, Settings2 } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { Link2, Loader2, CheckCircle2, AlertTriangle, Settings2 } from 'lucide-react'
 import { glApi } from '../../api/client'
 import { Link } from 'react-router-dom'
 
@@ -41,10 +40,6 @@ const GROUPS = [...new Set(MAPPING_KEYS.map(k => k.group))]
 
 // ════════════════════════════════════════════════════════════
 export default function GLMappingsPage() {
-  const qc = useQueryClient()
-  const [local, setLocal] = useState<Record<string, string>>({})
-  const [saved, setSaved] = useState<string[]>([])
-
   const { data: mappings = [], isLoading: mappingLoading } = useQuery({
     queryKey: ['gl-mappings'],
     queryFn:  glApi.mappings,
@@ -59,31 +54,8 @@ export default function GLMappingsPage() {
     select: (d) => (d as Account[]).filter(a => !a.is_header),
   })
 
-  const saveMut = useMutation({
-    mutationFn: (rows: { mapping_key: string; account_code: string }[]) =>
-      glApi.saveMappings(rows),
-    onSuccess: (_, rows) => {
-      qc.invalidateQueries({ queryKey: ['gl-mappings'] })
-      setSaved(rows.map(r => r.mapping_key))
-      setLocal({})
-      setTimeout(() => setSaved([]), 3000)
-    },
-  })
-
   function getValue(key: string): string {
-    if (local[key] !== undefined) return local[key]
     return mappings.find(m => m.mapping_key === key)?.account_code ?? ''
-  }
-
-  function isDirty() {
-    return Object.keys(local).length > 0
-  }
-
-  function handleSave() {
-    const rows = Object.entries(local)
-      .filter(([, v]) => v)
-      .map(([mapping_key, account_code]) => ({ mapping_key, account_code }))
-    if (rows.length > 0) saveMut.mutate(rows)
   }
 
   // Coverage check
@@ -96,6 +68,16 @@ export default function GLMappingsPage() {
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-4xl mx-auto" dir="rtl">
+
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+        هذا المسار قديم وموجود للتوافق فقط. مسار الترحيل المعتمد الآن هو
+        {' '}
+        <Link to="/gl/posting-setup" className="font-semibold underline">إعداد الترحيل</Link>
+        {' '}
+        مع
+        {' '}
+        <Link to="/gl/posting-groups" className="font-semibold underline">مجموعات الترحيل</Link>.
+      </div>
 
       {/* Header */}
       <div className="flex items-start justify-between flex-wrap gap-4">
@@ -118,14 +100,6 @@ export default function GLMappingsPage() {
             <Settings2 size={15} />
             حوكمة الربط
           </Link>
-          <button
-            onClick={handleSave}
-            disabled={!isDirty() || saveMut.isPending}
-            className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-40 text-white text-sm font-medium px-4 py-2.5 rounded-xl transition-colors shadow-sm"
-          >
-            {saveMut.isPending ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
-            حفظ التغييرات
-          </button>
         </div>
       </div>
 
@@ -174,16 +148,12 @@ export default function GLMappingsPage() {
               <div className="space-y-2">
                 {(MAPPING_KEYS || []).filter(k => k.group === group).map(item => {
                   const val     = getValue(item.key)
-                  const isSaved = (saved || []).includes(item.key)
-                  const isDirtyRow = local[item.key] !== undefined
                   const selectedAcct = (accounts || []).find(a => a.code === val)
 
                   return (
                     <div
                       key={item.key}
                       className={`flex items-center gap-4 p-4 rounded-xl border transition-all ${
-                        isSaved       ? 'border-emerald-300 bg-emerald-50' :
-                        isDirtyRow    ? 'border-teal-300 bg-teal-50/50' :
                         !val && item.required ? 'border-red-200 bg-red-50/50' :
                         'border-gray-100 bg-white hover:border-gray-200'
                       }`}
@@ -206,12 +176,10 @@ export default function GLMappingsPage() {
                           className={`w-full border rounded-xl px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-teal-500 transition-colors ${
                             !val && item.required
                               ? 'border-red-300 focus:border-red-400'
-                              : isDirtyRow
-                              ? 'border-teal-400'
                               : 'border-gray-200'
                           }`}
                           value={val}
-                          onChange={e => setLocal(l => ({ ...l, [item.key]: e.target.value }))}
+                          disabled
                         >
                           <option value="">— اختر حساباً —</option>
                           {([...(accounts || [])])
@@ -226,11 +194,7 @@ export default function GLMappingsPage() {
 
                       {/* Status */}
                       <div className="w-32 shrink-0 text-left">
-                        {isSaved ? (
-                          <span className="flex items-center gap-1 text-xs text-emerald-600 font-medium justify-end">
-                            <CheckCircle2 size={13} /> محفوظ
-                          </span>
-                        ) : val && selectedAcct ? (
+                        {val && selectedAcct ? (
                           <div className="text-left">
                             <p className="text-xs font-medium text-gray-700">{selectedAcct.code}</p>
                             <p className="text-[11px] text-gray-400 truncate">{selectedAcct.name}</p>
@@ -247,29 +211,6 @@ export default function GLMappingsPage() {
               </div>
             </div>
           ))}
-        </div>
-      )}
-
-      {/* Save bar */}
-      {isDirty() && (
-        <div className="sticky bottom-4 flex justify-center">
-          <div className="flex items-center gap-3 bg-gray-900 text-white px-5 py-3 rounded-2xl shadow-xl">
-            <span className="text-sm">{Object.keys(local).length} تغيير غير محفوظ</span>
-            <button
-              onClick={handleSave}
-              disabled={saveMut.isPending}
-              className="flex items-center gap-1.5 bg-teal-500 hover:bg-teal-400 rounded-xl px-4 py-1.5 text-sm font-semibold transition-colors"
-            >
-              {saveMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
-              حفظ الآن
-            </button>
-            <button
-              onClick={() => setLocal({})}
-              className="text-gray-400 hover:text-white transition-colors text-sm"
-            >
-              إلغاء
-            </button>
-          </div>
         </div>
       )}
     </div>

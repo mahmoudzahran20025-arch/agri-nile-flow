@@ -59,10 +59,14 @@ import SeasonSummaryPage     from './pages/reports/SeasonSummaryPage'
 import SeasonPnLPage        from './pages/reports/SeasonPnLPage'
 import SeasonClosePage      from './pages/reports/SeasonClosePage'
 import SeasonReadinessPage  from './pages/reports/SeasonReadinessPage'
-import BudgetVsActualPage   from './pages/reports/BudgetVsActualPage'
-import SeasonReportsPage    from './pages/reports/SeasonReportsPage'
-import GLSettingsPage       from './pages/gl/GLSettingsPage'
-import AuditCenterPage      from './pages/audit/AuditCenterPage'
+import BudgetVsActualPage      from './pages/reports/BudgetVsActualPage'
+import SeasonReportsPage       from './pages/reports/SeasonReportsPage'
+import GLSettingsPage          from './pages/gl/GLSettingsPage'
+import PostingGroupsPage       from './pages/gl/PostingGroupsPage'
+import PostingSetupPage        from './pages/gl/PostingSetupPage'
+import PostingSetupHealthPage  from './pages/gl/PostingSetupHealthPage'
+import SetupWizardPage         from './pages/gl/SetupWizardPage'
+import AuditCenterPage         from './pages/audit/AuditCenterPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuth = useIsAuth()
@@ -160,7 +164,11 @@ export default function App() {
         <Route path="gl/entries"      element={<JournalEntriesPage />} />
         <Route path="gl/statements"   element={<FinancialStatementsPage />} />
         {/* GL Settings hub — tabs: mappings | integrations | periods */}
-        <Route path="gl/settings"     element={<GLSettingsPage />} />
+        <Route path="gl/settings"      element={<GLSettingsPage />} />
+        <Route path="gl/posting-groups" element={<PostingGroupsPage />} />
+        <Route path="gl/posting-setup"  element={<PostingSetupPage />} />
+        <Route path="gl/posting-setup/health" element={<PostingSetupHealthPage />} />
+        <Route path="gl/setup-wizard" element={<SetupWizardPage />} />
         {/* Keep direct routes alive for backward-compat / deep-linking */}
         <Route path="gl/periods"      element={<PeriodsPage />} />
         <Route path="gl/mappings"     element={<GLMappingsPage />} />

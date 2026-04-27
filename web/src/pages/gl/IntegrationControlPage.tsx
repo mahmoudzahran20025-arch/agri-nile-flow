@@ -43,12 +43,10 @@ export default function IntegrationControlPage() {
     queryFn:  configApi.integrations,
   })
 
-  type MappingRow = { mapping_key: string; account_code: string }
-  const { data: mappingsRaw = [], isLoading: mapLoading } = useQuery({
-    queryKey: ['gl-mappings'],
-    queryFn:  glApi.mappings,
+  const { data: postingHealth, isLoading: healthLoading } = useQuery({
+    queryKey: ['gl-posting-health'],
+    queryFn:  glApi.postingHealth,
   })
-  const mappings = mappingsRaw as MappingRow[]
 
   const toggleMut = useMutation({
     mutationFn: ({ key, enabled }: { key: string; enabled: boolean }) =>
@@ -65,9 +63,16 @@ export default function IntegrationControlPage() {
     toggleMut.mutate({ key, enabled: currentStatus === 0 })
   }
 
-  const isLoading = intLoading || mapLoading
+  const isLoading = intLoading || healthLoading
   const activeCount = integrations.filter(i => i.is_enabled === 1).length
-  const mappingScore = Math.round((mappings.length / 15) * 100)
+  const readinessChecks = [
+    postingHealth?.setup?.has_catch_all_general === true,
+    postingHealth?.setup?.has_catch_all_inventory === true,
+    (postingHealth?.entities?.suppliers_missing_group ?? 1) === 0,
+    (postingHealth?.entities?.items_missing_group ?? 1) === 0,
+    (postingHealth?.entities?.warehouses_missing_group ?? 1) === 0,
+  ]
+  const readinessScore = Math.round((readinessChecks.filter(Boolean).length / readinessChecks.length) * 100)
 
   return (
     <div className="min-h-screen bg-slate-50/50 p-4 md:p-8 space-y-10 max-w-6xl mx-auto font-sans" dir="rtl">
@@ -92,8 +97,8 @@ export default function IntegrationControlPage() {
                   <p className="text-2xl font-black text-indigo-700">{activeCount} / 4</p>
               </div>
               <div className="bg-teal-50 px-5 py-3 rounded-2xl border border-teal-100 text-center">
-                  <p className="text-[10px] uppercase tracking-wider text-teal-400 font-bold mb-1">جاهزية الربط</p>
-                  <p className="text-2xl font-black text-teal-700">{mappingScore}%</p>
+                  <p className="text-[10px] uppercase tracking-wider text-teal-400 font-bold mb-1">جاهزية التهيئة</p>
+                  <p className="text-2xl font-black text-teal-700">{readinessScore}%</p>
               </div>
           </div>
         </div>
@@ -133,8 +138,8 @@ export default function IntegrationControlPage() {
                       تحذير: تعطيل أي موديول يعني توقف النظام عن إنشاء قيود اليومية له. يجب التأكد من عمل تسويات يدوية لاحقاً.
                   </p>
               </div>
-              <Link to="/gl/mappings" className="w-full btn-secondary text-center py-3 rounded-2xl text-sm font-bold flex items-center justify-center gap-2">
-                  <Settings2 size={16} /> تهيئة إعدادات الحسابات
+                <Link to="/gl/posting-setup" className="w-full btn-secondary text-center py-3 rounded-2xl text-sm font-bold flex items-center justify-center gap-2">
+                  <Settings2 size={16} /> تهيئة إعدادات الترحيل
               </Link>
           </div>
       </div>
@@ -169,8 +174,16 @@ export default function IntegrationControlPage() {
                 const isEnabled = item.is_enabled === 1
                 
                 // Check if related keys are mapped
-                const mappedCount = mappings.filter(m => info.relatedKeys.includes(m.mapping_key)).length
-                const isReady = mappedCount >= info.relatedKeys.length
+                const moduleReadiness: Record<string, boolean> = {
+                  inventory:
+                    (postingHealth?.entities?.items_missing_group ?? 1) === 0 &&
+                    (postingHealth?.entities?.warehouses_missing_group ?? 1) === 0 &&
+                    postingHealth?.setup?.has_catch_all_inventory === true,
+                  operations: postingHealth?.setup?.has_catch_all_general === true,
+                  hr_payroll: postingHealth?.setup?.has_catch_all_general === true,
+                  harvest: postingHealth?.setup?.has_catch_all_general === true,
+                }
+                const isReady = moduleReadiness[item.module_key] ?? false
 
                 return (
                   <div 
@@ -239,8 +252,8 @@ export default function IntegrationControlPage() {
                               </span>
                           </div>
                           {!isReady && (
-                            <Link to="/gl/mappings" className="text-[11px] font-bold text-indigo-600 hover:underline flex items-center gap-1">
-                                استكمال الربط <ArrowLeft size={10} />
+                            <Link to="/gl/posting-setup" className="text-[11px] font-bold text-indigo-600 hover:underline flex items-center gap-1">
+                                استكمال التهيئة <ArrowLeft size={10} />
                             </Link>
                           )}
                       </div>

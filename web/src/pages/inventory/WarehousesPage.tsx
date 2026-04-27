@@ -4,12 +4,18 @@ import { Plus, Building2, MapPin, CheckCircle2, ShieldCheck } from 'lucide-react
 import { inventoryApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 import Modal from '../../components/ui/Modal'
+import { glApi } from '../../api/gl'
 
 export default function WarehousesPage() {
   const qc = useQueryClient()
   const { toast } = useToast()
   const [open, setOpen] = useState(false)
-  const [form, setForm] = useState({ name: '', type: 'internal', location: '' })
+  const [form, setForm] = useState({ name: '', type: 'internal', location: '', inv_posting_group_code: '' })
+
+  const { data: ipgList = [] } = useQuery({
+    queryKey: ['posting-groups', 'inventory'],
+    queryFn:  () => glApi.postingGroups('inventory'),
+  })
 
   const { data, isLoading } = useQuery({
     queryKey: ['warehouses-setup'],
@@ -22,7 +28,7 @@ export default function WarehousesPage() {
       if (res.success === false) { toast(res.error || 'خطأ', 'error'); return }
       toast('تم إضافة المخزن بنجاح', 'success')
       setOpen(false)
-      setForm({ name: '', type: 'internal', location: '' })
+      setForm({ name: '', type: 'internal', location: '', inv_posting_group_code: '' })
       qc.invalidateQueries({ queryKey: ['warehouses-setup'] })
       qc.invalidateQueries({ queryKey: ['inventory-warehouses'] })
     },
@@ -96,6 +102,18 @@ export default function WarehousesPage() {
             <label className="label">الموقع الجغرافي / العنوان</label>
             <input className="input" placeholder="اختياري..."
               value={form.location} onChange={e => setForm({ ...form, location: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">مجموعة ترحيل المخزون (IPG)</label>
+            <select className="input" value={form.inv_posting_group_code} onChange={e => setForm({ ...form, inv_posting_group_code: e.target.value })}>
+              <option value="">— بدون مجموعة (سيستخدم الافتراضي) —</option>
+              {ipgList.filter((g: any) => g.is_active === 1).map((g: any) => (
+                <option key={g.code} value={g.code}>{g.code} — {g.name}</option>
+              ))}
+            </select>
+            {!form.inv_posting_group_code && (
+              <p className="text-xs text-amber-600 mt-1">⚠️ بدون مجموعة، سيتم استخدام قاعدة حساب المخزون الافتراضية عند الترحيل.</p>
+            )}
           </div>
           <div className="flex gap-3 pt-4">
             <button className="btn-secondary flex-1" onClick={() => setOpen(false)}>إلغاء</button>
