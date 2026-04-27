@@ -114,15 +114,21 @@ export const FinanceCore = {
 
       let contraAcc = opts.contraAccount
       if (!contraAcc) {
-        const key = opts.partner_id
-          ? 'partner_current_account'
-          : opts.supplier_code
-          ? 'accounts_payable'
-          : (opts.direction === 'د' ? 'revenue_default' : 'expense_default')
-        const mapping = await db
-          .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = ?")
-          .bind(opts.company_id, key).first<{ account_code: string }>()
-        contraAcc = mapping?.account_code
+        if (opts.expense_code) {
+          const et = await db.prepare("SELECT gl_account_code FROM expense_types WHERE code = ? AND company_id = ?").bind(opts.expense_code, opts.company_id).first<{gl_account_code: string}>()
+          if (et?.gl_account_code) contraAcc = et.gl_account_code
+        }
+        if (!contraAcc) {
+          const key = opts.partner_id
+            ? 'partner_current_account'
+            : opts.supplier_code
+            ? 'accounts_payable'
+            : (opts.direction === 'د' ? 'revenue_default' : 'expense_default')
+          const mapping = await db
+            .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = ?")
+            .bind(opts.company_id, key).first<{ account_code: string }>()
+          contraAcc = mapping?.account_code
+        }
       }
 
       if (!cashAccCode) throw new Error('GL_MAPPING_MISSING: حساب الخزينة غير مربوط. أضفه من إعدادات الحسابات.')

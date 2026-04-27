@@ -918,20 +918,25 @@ export default function ConfigPage() {
           <table className="w-full text-sm">
             <thead className="bg-slate-50">
               <tr>
-                {['الكود','نوع المصروف'].map(h => (
+                {['الكود','نوع المصروف', 'حساب الـ GL المربوط'].map(h => (
                   <th key={h} className="px-4 py-3 text-xs font-semibold text-slate-500 text-right">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {(expenseTypes ?? []).map(et => (
+              {(expenseTypes ?? []).map((et: any) => (
                 <tr key={et.code} className="hover:bg-slate-50">
                   <td className="px-4 py-3 text-slate-400 font-mono w-24">{et.code}</td>
                   <td className="px-4 py-3 font-medium text-slate-800">{et.name}</td>
+                  <td className="px-4 py-3">
+                    {et.gl_account_code 
+                      ? <span className="badge-blue font-mono font-bold px-2 py-1">{et.gl_account_code}</span> 
+                      : <span className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">يستخدم الحساب الافتراضي</span>}
+                  </td>
                 </tr>
               ))}
               {!(expenseTypes ?? []).length && (
-                <tr><td colSpan={2} className="px-4 py-12 text-center text-slate-400">لا توجد أنواع مصروفات</td></tr>
+                <tr><td colSpan={3} className="px-4 py-12 text-center text-slate-400">لا توجد أنواع مصروفات</td></tr>
               )}
             </tbody>
           </table>

@@ -280,10 +280,9 @@ export default function WarehouseBalancesPage() {
         <InternalTransferModal
           open={transferData.open}
           onClose={() => setTransferData({ ...transferData, open: false })}
-          itemCode={transferData.itemCode}
-          itemName={transferData.itemName}
-          sourceWarehouse={transferData.sourceWarehouse}
-          maxQuantity={transferData.maxQuantity}
+          initialItemCode={transferData.itemCode}
+          initialItemName={transferData.itemName}
+          initialSourceWarehouse={transferData.sourceWarehouse}
         />
       )}
     </div>

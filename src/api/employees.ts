@@ -4,8 +4,8 @@ import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
 
 const employees = new Hono<{ Bindings: Env }>()
 employees.use('*', authMiddleware)
-// RBAC: Employee master data includes PII and is limited to admin roles.
-employees.use('*', roleGuard(['super_admin', 'company_admin']))
+// RBAC: Employee master data includes PII. Admins can edit, accountants can view for treasury/payroll.
+employees.use('*', roleGuard(['super_admin', 'company_admin', 'accountant', 'treasury_manager']))
 
 // GET /api/employees
 employees.get('/', async (c) => {

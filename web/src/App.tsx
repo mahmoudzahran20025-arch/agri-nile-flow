@@ -34,6 +34,7 @@ import FinancialStatementsPage from './pages/gl/FinancialStatementsPage'
 import AccountLedgerPage     from './pages/gl/AccountLedgerPage'
 import PeriodsPage           from './pages/gl/PeriodsPage'
 import IntegrationControlPage from './pages/gl/IntegrationControlPage'
+import SmartClassifierPage    from './pages/gl/SmartClassifierPage'
 import BankReconciliationPage from './pages/treasury/BankReconciliationPage'
 import PurchaseOrdersPage    from './pages/treasury/PurchaseOrdersPage'
 import APAgingPage           from './pages/treasury/APAgingPage'
@@ -163,6 +164,7 @@ export default function App() {
         {/* Keep direct routes alive for backward-compat / deep-linking */}
         <Route path="gl/periods"      element={<PeriodsPage />} />
         <Route path="gl/mappings"     element={<GLMappingsPage />} />
+        <Route path="gl/classifier"   element={<SmartClassifierPage />} />
         <Route path="gl/integrations" element={<IntegrationControlPage />} />
         <Route path="treasury/ap"     element={<APAgingPage />} />
 

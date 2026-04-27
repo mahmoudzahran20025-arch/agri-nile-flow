@@ -30,7 +30,7 @@ const COLUMNS: Column<InventoryMovement & { field_name?: string }>[] = [
           {r.movement_type === 'اضافة' ? 'وارد' : 'منصرف'}
         </span>
         {(r as any).related_movement_id && (
-          <ArrowRightLeft size={12} className="text-indigo-400" title="جزء من عملية تحويل" />
+          <ArrowRightLeft size={12} className="text-indigo-400" />
         )}
       </div>
     ),

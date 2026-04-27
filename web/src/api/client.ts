@@ -31,6 +31,7 @@ export { reportsApi }      from './reports'
 export { glApi }           from './gl'
 export { auditApi }        from './audit'
 export { adminApi }        from './admin'
+export { classifierApi }   from './classifier'
 export { exportUrl, downloadCsv } from './export'
 
 // ─── Domain types re-exported for consumers ──────────────────────────────────

@@ -58,8 +58,31 @@ function masterRoutes(
 
 masterRoutes(config, 'cost_centers',  'code', ['code', 'name'])
 masterRoutes(config, 'accounts',      'code', ['code', 'name'])
-masterRoutes(config, 'expense_types', 'code', ['code', 'name'])
 masterRoutes(config, 'sub_locations', 'code', ['code', 'name'])
+
+// Custom Expense Types routes to support gl_account_code
+config.get('/expense_types', async (c) => {
+  const { company_id } = getUser(c)
+  const { results } = await c.env.DB.prepare('SELECT code, name, gl_account_code FROM expense_types WHERE company_id = ? ORDER BY code').bind(company_id).all()
+  return c.json({ success: true, data: results })
+})
+
+config.post('/expense_types', async (c) => {
+  const { company_id } = getUser(c)
+  const b = await c.req.json<{ code: number; name: string; gl_account_code?: string }>()
+  if (!b.code || !b.name) return c.json({ success: false, error: 'الكود والاسم مطلوبان' }, 400)
+  await c.env.DB.prepare('INSERT OR IGNORE INTO expense_types (code, company_id, name, gl_account_code) VALUES (?, ?, ?, ?)').bind(b.code, company_id, b.name, b.gl_account_code || null).run()
+  return c.json({ success: true, data: null }, 201)
+})
+
+config.patch('/expense_types/:code', async (c) => {
+  const { company_id } = getUser(c)
+  const code = c.req.param('code')
+  const { name } = await c.req.json<{ name: string }>()
+  if (!name) return c.json({ success: false, error: 'الاسم مطلوب' }, 400)
+  await c.env.DB.prepare('UPDATE expense_types SET name = ? WHERE code = ? AND company_id = ?').bind(name, code, company_id).run()
+  return c.json({ success: true, data: null })
+})
 
 // Items (extra fields)
 config.get('/items', async (c) => {
