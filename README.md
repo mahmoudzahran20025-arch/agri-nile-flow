@@ -1,6 +1,6 @@
 # Agri-Nile Flow 🌾
 **نظام ERP زراعي متكامل — نواة المستقبل**  
-**الإصدار:** v1.1.0 | **آخر تحديث:** 21 أبريل 2026
+**الإصدار:** v1.2.0 | **آخر تحديث:** 27 أبريل 2026
 
 نظام إدارة مالي ومخزني متخصص للشركات الزراعية المصرية، مبني على Cloudflare Edge (Workers + D1 + Pages).
 
@@ -40,6 +40,32 @@
 | [DEPLOYMENT_STATUS.md](DEPLOYMENT_STATUS.md) | روابط الإنتاج + تفاصيل API |
 | [CHANGELOG.md](CHANGELOG.md) | سجل التغييرات بالإصدارات |
 | [DOCUMENTATION_INDEX.md](DOCUMENTATION_INDEX.md) | دليل كل ملفات التوثيق |
+
+## 🏦 GL Architecture (FinanceCore — Single Path)
+
+All financial posting goes through a single canonical path — never call `postAutoEntry` directly from route handlers.
+
+```
+Route Handler
+    └─▶ FinanceCore.*()           src/lib/finance_core.ts
+            └─▶ PostingEngine.*()  src/lib/posting_engine.ts
+                    └─▶ postAutoEntry()  src/lib/gl.ts
+                                └─▶ D1: journal_entries + journal_entry_lines
+```
+
+| FinanceCore Method | Usage |
+|--------------------|-------|
+| `recordCashMovement` | Treasury in/out |
+| `resolveInventoryMovement` | Stock IN/OUT/ADJ |
+| `resolveSupplierInvoice` | AP posting |
+| `resolvePayrollPosting` | Payroll accrual |
+| `resolvePayrollPayment` | Salary disbursement |
+| `resolvePartnerCapital` | Partner equity changes |
+| `resolvePartnerCurrent` | Partner current account |
+
+> ⚠️ `gl_account_mappings` table is **legacy read-only** (PUT blocked → 405). Canonical GL setup: `POST /gl/posting-setup`.
+
+---
 
 ## ⚡ بدء التطوير
 ```bash
