@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser, signJwt } from '../middleware/auth'
+import { logAudit } from '../lib/audit'
 
 const admin = new Hono<{ Bindings: Env }>()
 admin.use('*', authMiddleware)
@@ -74,6 +75,18 @@ admin.post('/companies', async (c) => {
     VALUES (?, ?, ?, ?, 0)
   `).bind(companyId, `السنة المالية ${year}`, `${year}-01-01`, `${year}-12-31`).run().catch(() => {})
 
+  // Audit log: record company creation
+  const { sub: userId } = getUser(c)
+  void logAudit(c.env.DB, {
+    user_id: userId,
+    company_id: companyId,
+    action: 'CREATE',
+    table_name: 'companies',
+    record_id: companyId,
+    new_value: { code: b.code.trim().toUpperCase(), name: b.name.trim() },
+    source: 'admin_panel',
+  })
+
   return c.json({ success: true, data: { id: companyId } }, 201)
 })
 
@@ -93,6 +106,19 @@ admin.patch('/companies/:id', async (c) => {
   vals.push(id)
 
   await c.env.DB.prepare(`UPDATE companies SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run()
+
+  // Audit log: record company update
+  const { sub: userId } = getUser(c)
+  void logAudit(c.env.DB, {
+    user_id: userId,
+    company_id: id,
+    action: 'UPDATE',
+    table_name: 'companies',
+    record_id: id,
+    new_value: b,
+    source: 'admin_panel',
+  })
+
   return c.json({ success: true, data: null })
 })
 
