@@ -1,7 +1,9 @@
-import { useQuery } from '@tanstack/react-query'
-import { Link2, Loader2, CheckCircle2, AlertTriangle, Settings2 } from 'lucide-react'
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link2, Loader2, CheckCircle2, AlertTriangle, Settings2, Save, RotateCcw } from 'lucide-react'
 import { glApi } from '../../api/client'
 import { Link } from 'react-router-dom'
+import { useToast } from '../../contexts/ToastContext'
 
 // ── Known mapping keys ────────────────────────────────────────
 const MAPPING_KEYS: Array<{
@@ -40,6 +42,10 @@ const GROUPS = [...new Set(MAPPING_KEYS.map(k => k.group))]
 
 // ════════════════════════════════════════════════════════════
 export default function GLMappingsPage() {
+  const qc = useQueryClient()
+  const { toast } = useToast()
+  const [edits, setEdits] = useState<Record<string, string>>({})
+
   const { data: mappings = [], isLoading: mappingLoading } = useQuery({
     queryKey: ['gl-mappings'],
     queryFn:  glApi.mappings,
@@ -54,8 +60,34 @@ export default function GLMappingsPage() {
     select: (d) => (d as Account[]).filter(a => !a.is_header),
   })
 
+  const saveMut = useMutation({
+    mutationFn: () => {
+      const allMappings = MAPPING_KEYS.map(k => ({
+        mapping_key: k.key,
+        account_code: edits[k.key] ?? mappings.find(m => m.mapping_key === k.key)?.account_code ?? null,
+      })).filter(m => m.account_code)
+      return glApi.saveMappings({ mappings: allMappings })
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['gl-mappings'] })
+      setEdits({})
+      toast('تم حفظ ربط الحسابات بنجاح', 'success')
+    },
+    onError: () => toast('فشل حفظ ربط الحسابات — تحقق من الاتصال', 'error'),
+  })
+
+  const isDirty = Object.keys(edits).length > 0
+
   function getValue(key: string): string {
-    return mappings.find(m => m.mapping_key === key)?.account_code ?? ''
+    return edits[key] ?? mappings.find(m => m.mapping_key === key)?.account_code ?? ''
+  }
+
+  function handleChange(key: string, value: string) {
+    setEdits(prev => ({ ...prev, [key]: value }))
+  }
+
+  function discardEdits() {
+    setEdits({})
   }
 
   // Coverage check
@@ -93,6 +125,26 @@ export default function GLMappingsPage() {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          {isDirty && (
+            <>
+              <button
+                onClick={discardEdits}
+                disabled={saveMut.isPending}
+                className="flex items-center gap-2 text-sm font-medium px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 transition-colors"
+              >
+                <RotateCcw size={14} />
+                تجاهل التغييرات
+              </button>
+              <button
+                onClick={() => saveMut.mutate()}
+                disabled={saveMut.isPending}
+                className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white text-sm font-bold px-5 py-2.5 rounded-xl transition-colors shadow-sm"
+              >
+                {saveMut.isPending ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                {saveMut.isPending ? 'جارٍ الحفظ...' : 'حفظ التغييرات'}
+              </button>
+            </>
+          )}
           <Link
             to="/gl/integrations"
             className="flex items-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-sm font-medium px-4 py-2.5 rounded-xl transition-colors border border-indigo-200"
@@ -176,10 +228,12 @@ export default function GLMappingsPage() {
                           className={`w-full border rounded-xl px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-teal-500 transition-colors ${
                             !val && item.required
                               ? 'border-red-300 focus:border-red-400'
+                              : edits[item.key] !== undefined
+                              ? 'border-teal-400 bg-teal-50/40'
                               : 'border-gray-200'
                           }`}
                           value={val}
-                          disabled
+                          onChange={e => handleChange(item.key, e.target.value)}
                         >
                           <option value="">— اختر حساباً —</option>
                           {([...(accounts || [])])
@@ -190,6 +244,9 @@ export default function GLMappingsPage() {
                               </option>
                             ))}
                         </select>
+                        {edits[item.key] !== undefined && (
+                          <p className="text-[10px] text-teal-600 mt-1 font-medium">● تم التعديل — لم يُحفظ بعد</p>
+                        )}
                       </div>
 
                       {/* Status */}

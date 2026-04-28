@@ -167,7 +167,7 @@ const movCount = writeSql('06a_inventory_movements', movData, row => {
   const wh = row['__EMPTY_4'] ? String(row['__EMPTY_4']).trim() : null;
   if (!wh) return null;
   const mtype = row[MOV_TYPE_COL] ? String(row[MOV_TYPE_COL]).trim() : '\u0627\u0636\u0627\u0641\u0629';
-  return 'INSERT INTO inventory_movements (company_id, season_id, supplier_code, item_code, center_code, account_code, sub_code, movement_date, warehouse, movement_type, document_number, invoice_number, po_number, package_type, pack_capacity, pack_count, quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value, year, month, notes, status, created_at) VALUES (' +
+  return 'INSERT OR IGNORE INTO inventory_movements (company_id, season_id, supplier_code, item_code, center_code, account_code, sub_code, movement_date, warehouse, movement_type, document_number, invoice_number, po_number, package_type, pack_capacity, pack_count, quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value, year, month, notes, status, created_at) VALUES (' +
     [COMPANY_ID, SEASON_ID,
      int(row['__EMPTY_8']), int(row['__EMPTY_10']),
      int(row['__EMPTY_18']), int(row['__EMPTY_16']), int(row['__EMPTY_20']),
@@ -205,7 +205,7 @@ const trsCount = writeSql('06b_cash_transactions', trsData, row => {
   const dir = row[TRS_DIR] ? String(row[TRS_DIR]).trim() : '\u062f';
   const amt = num(row['__EMPTY_12']);
   if (amt === 'NULL') return null;
-  return 'INSERT INTO cash_transactions (company_id, season_id, supplier_code, center_code, expense_code, sub_code, transaction_date, direction, document_number, recipient_name, narration, season_service, unit, quantity, unit_price, amount, debit, credit, running_balance, year, month, notes, status, created_at) VALUES (' +
+  return 'INSERT OR IGNORE INTO cash_transactions (company_id, season_id, supplier_code, center_code, expense_code, sub_code, transaction_date, direction, document_number, recipient_name, narration, season_service, unit, quantity, unit_price, amount, debit, credit, running_balance, year, month, notes, status, created_at) VALUES (' +
     [COMPANY_ID, SEASON_ID,
      int(row['__EMPTY_5']), int(row['__EMPTY_6']), int(row['__EMPTY_7']), int(row['__EMPTY_8']),
      dStr, esc(dir), int(row['__EMPTY']),
@@ -245,7 +245,7 @@ const suppTrCount = writeSql('06c_supplier_transactions', suppTrData, row => {
   const entryType = row[ST_DIR] ? String(row[ST_DIR]).trim() : '\u062f';
   const amount    = num(row['__EMPTY_18']);
   if (amount === 'NULL') return null;
-  return 'INSERT INTO supplier_transactions (company_id, season_id, supplier_code, center_code, transaction_date, entry_type, expense_category, equipment, document_type, unit, quantity, unit_price, amount, debit, credit, balance_with_checks, year, month, status, created_at) VALUES (' +
+  return 'INSERT OR IGNORE INTO supplier_transactions (company_id, season_id, supplier_code, center_code, transaction_date, entry_type, expense_category, equipment, document_type, unit, quantity, unit_price, amount, debit, credit, balance_with_checks, year, month, status, created_at) VALUES (' +
     [COMPANY_ID, SEASON_ID,
      int(row['__EMPTY_1']), int(row['__EMPTY_11']),
      dStr, esc(entryType),

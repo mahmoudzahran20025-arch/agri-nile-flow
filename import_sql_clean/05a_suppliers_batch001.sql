@@ -1,0 +1,39 @@
+UPDATE suppliers SET name='عيد شعبان-لودر', activity='موردين ألات ومعدات', notes=NULL, is_active=1 WHERE code=20300086 AND company_id=1;
+
+INSERT INTO suppliers (code, company_id, name, activity, notes, is_active, created_at) SELECT 20300086, 1, 'عيد شعبان-لودر', 'موردين ألات ومعدات', NULL, 1, datetime('now') WHERE NOT EXISTS (SELECT 1 FROM suppliers WHERE code=20300086 AND company_id=1);
+
+UPDATE suppliers SET name='جهاز مستقبل مصر للتنمية المستدامة', activity='موردين منتجات زراعية', notes=NULL, is_active=1 WHERE code=20900151 AND company_id=1;
+
+INSERT INTO suppliers (code, company_id, name, activity, notes, is_active, created_at) SELECT 20900151, 1, 'جهاز مستقبل مصر للتنمية المستدامة', 'موردين منتجات زراعية', NULL, 1, datetime('now') WHERE NOT EXISTS (SELECT 1 FROM suppliers WHERE code=20900151 AND company_id=1);
+
+UPDATE suppliers SET name='شركة عرفة للتصدير والتنمية الزراعية واستصلاح الاراضي', activity='موردين منتجات زراعية', notes=NULL, is_active=1 WHERE code=20900353 AND company_id=1;
+
+INSERT INTO suppliers (code, company_id, name, activity, notes, is_active, created_at) SELECT 20900353, 1, 'شركة عرفة للتصدير والتنمية الزراعية واستصلاح الاراضي', 'موردين منتجات زراعية', NULL, 1, datetime('now') WHERE NOT EXISTS (SELECT 1 FROM suppliers WHERE code=20900353 AND company_id=1);
+
+UPDATE suppliers SET name='احمد دسوقي-عمالة', activity='موردين عمالة', notes=NULL, is_active=1 WHERE code=21400002 AND company_id=1;
+
+INSERT INTO suppliers (code, company_id, name, activity, notes, is_active, created_at) SELECT 21400002, 1, 'احمد دسوقي-عمالة', 'موردين عمالة', NULL, 1, datetime('now') WHERE NOT EXISTS (SELECT 1 FROM suppliers WHERE code=21400002 AND company_id=1);
+
+UPDATE suppliers SET name='عمرو السمالوسي - لودر', activity='موردين ألات ومعدات', notes=NULL, is_active=1 WHERE code=20100033 AND company_id=1;
+
+INSERT INTO suppliers (code, company_id, name, activity, notes, is_active, created_at) SELECT 20100033, 1, 'عمرو السمالوسي - لودر', 'موردين ألات ومعدات', NULL, 1, datetime('now') WHERE NOT EXISTS (SELECT 1 FROM suppliers WHERE code=20100033 AND company_id=1);
+
+UPDATE suppliers SET name='ابراهيم رمضان الكيلاوي', activity='موردين عمالة', notes=NULL, is_active=1 WHERE code=21400108 AND company_id=1;
+
+INSERT INTO suppliers (code, company_id, name, activity, notes, is_active, created_at) SELECT 21400108, 1, 'ابراهيم رمضان الكيلاوي', 'موردين عمالة', NULL, 1, datetime('now') WHERE NOT EXISTS (SELECT 1 FROM suppliers WHERE code=21400108 AND company_id=1);
+
+UPDATE suppliers SET name='مورد نقدي', activity='موردين متنوعات', notes=NULL, is_active=1 WHERE code=20800286 AND company_id=1;
+
+INSERT INTO suppliers (code, company_id, name, activity, notes, is_active, created_at) SELECT 20800286, 1, 'مورد نقدي', 'موردين متنوعات', NULL, 1, datetime('now') WHERE NOT EXISTS (SELECT 1 FROM suppliers WHERE code=20800286 AND company_id=1);
+
+UPDATE suppliers SET name='عميل نقدى', activity='عملاء محليون', notes=NULL, is_active=1 WHERE code=10100192 AND company_id=1;
+
+INSERT INTO suppliers (code, company_id, name, activity, notes, is_active, created_at) SELECT 10100192, 1, 'عميل نقدى', 'عملاء محليون', NULL, 1, datetime('now') WHERE NOT EXISTS (SELECT 1 FROM suppliers WHERE code=10100192 AND company_id=1);
+
+UPDATE suppliers SET name='ميكنة احمد عبيد', activity='موردين ألات ومعدات', notes=NULL, is_active=1 WHERE code=20300121 AND company_id=1;
+
+INSERT INTO suppliers (code, company_id, name, activity, notes, is_active, created_at) SELECT 20300121, 1, 'ميكنة احمد عبيد', 'موردين ألات ومعدات', NULL, 1, datetime('now') WHERE NOT EXISTS (SELECT 1 FROM suppliers WHERE code=20300121 AND company_id=1);
+
+UPDATE suppliers SET name='شركة عرفة للتصدير والاستيراد والتوريدات', activity='موردين متنوعات', notes=NULL, is_active=1 WHERE code=35300902 AND company_id=1;
+
+INSERT INTO suppliers (code, company_id, name, activity, notes, is_active, created_at) SELECT 35300902, 1, 'شركة عرفة للتصدير والاستيراد والتوريدات', 'موردين متنوعات', NULL, 1, datetime('now') WHERE NOT EXISTS (SELECT 1 FROM suppliers WHERE code=35300902 AND company_id=1);

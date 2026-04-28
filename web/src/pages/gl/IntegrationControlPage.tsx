@@ -37,6 +37,7 @@ const MODULE_INFO: Record<string, { label: string; description: string; icon: st
 export default function IntegrationControlPage() {
   const qc = useQueryClient()
   const [updating, setUpdating] = useState<string | null>(null)
+  const [confirmKey, setConfirmKey] = useState<string | null>(null)
 
   const { data: integrations = [], isLoading: intLoading } = useQuery({
     queryKey: ['gl-integrations'],
@@ -58,9 +59,22 @@ export default function IntegrationControlPage() {
     onError: () => setUpdating(null),
   })
 
-  const handleToggle = (key: string, currentStatus: number) => {
+  const handleToggle = (key: string, currentStatus: number, isReady: boolean) => {
+    const enabling = currentStatus === 0
+    if (enabling && !isReady) {
+      // Show confirmation before enabling a module that lacks setup
+      setConfirmKey(key)
+      return
+    }
     setUpdating(key)
-    toggleMut.mutate({ key, enabled: currentStatus === 0 })
+    toggleMut.mutate({ key, enabled: enabling })
+  }
+
+  const confirmEnable = () => {
+    if (!confirmKey) return
+    setUpdating(confirmKey)
+    setConfirmKey(null)
+    toggleMut.mutate({ key: confirmKey, enabled: true })
   }
 
   const isLoading = intLoading || healthLoading
@@ -220,7 +234,7 @@ export default function IntegrationControlPage() {
                         </div>
 
                         <button
-                            onClick={() => handleToggle(item.module_key, item.is_enabled)}
+                            onClick={() => handleToggle(item.module_key, item.is_enabled, isReady)}
                             disabled={isBusy}
                             className={`relative inline-flex h-10 w-16 shrink-0 cursor-pointer rounded-full border-4 border-transparent transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2 ${
                               isEnabled ? 'bg-indigo-600' : 'bg-slate-300'
@@ -296,6 +310,53 @@ export default function IntegrationControlPage() {
           </div>
       </div>
 
+      {/* ── Readiness Confirmation Modal ─────────────────────────── */}
+      {confirmKey && (() => {
+        const info = MODULE_INFO[confirmKey]
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" dir="rtl">
+            <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-md w-full space-y-5">
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-2xl bg-amber-100 flex items-center justify-center text-3xl shrink-0">
+                  {info?.icon ?? '⚙️'}
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">تفعيل {info?.label ?? confirmKey}</h3>
+                  <p className="text-sm text-amber-700 font-medium mt-0.5">التهيئة غير مكتملة</p>
+                </div>
+              </div>
+              <div className="rounded-2xl bg-amber-50 border border-amber-200 p-4 flex gap-3">
+                <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                <p className="text-sm text-amber-800 leading-relaxed">
+                  هذا الموديول يتطلب اكتمال إعدادات الترحيل (مجموعات + قاعدة افتراضية NULL×NULL) قبل التفعيل.
+                  التفعيل بدون إعداد كامل قد يُنتج قيوداً غير متوازنة أو أخطاء في الترحيل.
+                </p>
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => setConfirmKey(null)}
+                  className="flex-1 py-3 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50 transition-colors"
+                >
+                  إلغاء
+                </button>
+                <Link
+                  to="/gl/posting-setup"
+                  onClick={() => setConfirmKey(null)}
+                  className="flex-1 py-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-bold text-center transition-colors"
+                >
+                  اكتمال التهيئة أولاً
+                </Link>
+                <button
+                  onClick={confirmEnable}
+                  className="flex-1 py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-sm font-bold transition-colors"
+                >
+                  تفعيل على كل حال
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

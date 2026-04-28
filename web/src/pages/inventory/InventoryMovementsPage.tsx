@@ -68,12 +68,6 @@ const COLUMNS: Column<InventoryMovement & { field_name?: string }>[] = [
   { key: 'notes', header: 'ملاحظات', render: r => r.notes ?? '—' },
 ]
 
-function thisMonthStart() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
-}
-function today() { return new Date().toISOString().slice(0, 10) }
-
 export default function InventoryMovementsPage() {
   const { canWrite } = usePermission()
   const navigate     = useNavigate()
@@ -84,17 +78,17 @@ export default function InventoryMovementsPage() {
   const [fieldId,      setFieldId]      = useState('')
   const [workOrderId,  setWorkOrderId]  = useState('')
   const [seasonId,     setSeasonId]     = useState('')
-  const [startDate, setStart]     = useState(thisMonthStart())
-  const [endDate,   setEnd]       = useState(today())
+  const [startDate, setStart]     = useState('')
+  const [endDate,   setEnd]       = useState('')
   const [addOpen,   setAddOpen]   = useState(false)
   const [transferOpen, setTransferOpen] = useState(false)
   const [sort,      setSort]      = useState<SortState | undefined>(undefined)
 
   const reset = () => {
     setWarehouse(''); setMovType(''); setItemCode(''); setFieldId(''); setWorkOrderId(''); setSeasonId('')
-    setStart(thisMonthStart()); setEnd(today()); setPage(1); setSort(undefined)
+    setStart(''); setEnd(''); setPage(1); setSort(undefined)
   }
-  const isDirty = warehouse || movType || itemCode || fieldId || workOrderId || seasonId || startDate !== thisMonthStart() || endDate !== today()
+  const isDirty = warehouse || movType || itemCode || fieldId || workOrderId || seasonId || startDate || endDate
 
   const { data: warehouses } = useQuery({
     queryKey: ['warehouses'],

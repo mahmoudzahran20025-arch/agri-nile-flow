@@ -7,7 +7,11 @@
     "db:init": "wrangler d1 execute agri-nile-flow-data-lake --remote --file=./schema.sql",
     "build:web": "cd web && npm install && npm run build",
     "deploy": "npm run build:web && npx wrangler pages deploy web/dist --project-name=agri-nile-flow-lake && wrangler deploy",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "import:pipeline:prepare": "node prepare_import_pipeline.js",
+    "import:pipeline:strict": "node prepare_import_pipeline.js --strict",
+    "import:sql:clean": "node generate_clean_import_sql.js",
+    "import:execute:clean": "node import_execute_clean.js"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.7.6",

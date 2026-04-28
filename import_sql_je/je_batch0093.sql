@@ -1,0 +1,12 @@
+INSERT INTO journal_entries (company_id,period_id,entry_number,entry_date,description,ref_type,ref_id,is_posted) VALUES (1,3,'IM-2026-00921','2026-03-31','حركة مخزن رقم 5991','inventory_movement',5991,1);
+INSERT INTO journal_entry_lines (entry_id,company_id,account_code,debit,credit,description) VALUES ((SELECT MAX(id) FROM journal_entries WHERE company_id=1),1,'45010001',980,0,'حركة مخزن رقم 5991');
+INSERT INTO journal_entry_lines (entry_id,company_id,account_code,debit,credit,description) VALUES ((SELECT MAX(id) FROM journal_entries WHERE company_id=1),1,'140701',0,980,'حركة مخزن رقم 5991');
+INSERT INTO journal_entries (company_id,period_id,entry_number,entry_date,description,ref_type,ref_id,is_posted) VALUES (1,3,'IM-2026-00922','2026-03-31','حركة مخزن رقم 5992','inventory_movement',5992,1);
+INSERT INTO journal_entry_lines (entry_id,company_id,account_code,debit,credit,description) VALUES ((SELECT MAX(id) FROM journal_entries WHERE company_id=1),1,'45010001',8500,0,'حركة مخزن رقم 5992');
+INSERT INTO journal_entry_lines (entry_id,company_id,account_code,debit,credit,description) VALUES ((SELECT MAX(id) FROM journal_entries WHERE company_id=1),1,'140701',0,8500,'حركة مخزن رقم 5992');
+INSERT INTO journal_entries (company_id,period_id,entry_number,entry_date,description,ref_type,ref_id,is_posted) VALUES (1,3,'IM-2026-00923','2026-03-31','حركة مخزن رقم 5993','inventory_movement',5993,1);
+INSERT INTO journal_entry_lines (entry_id,company_id,account_code,debit,credit,description) VALUES ((SELECT MAX(id) FROM journal_entries WHERE company_id=1),1,'45010001',30000,0,'حركة مخزن رقم 5993');
+INSERT INTO journal_entry_lines (entry_id,company_id,account_code,debit,credit,description) VALUES ((SELECT MAX(id) FROM journal_entries WHERE company_id=1),1,'140701',0,30000,'حركة مخزن رقم 5993');
+INSERT INTO journal_entries (company_id,period_id,entry_number,entry_date,description,ref_type,ref_id,is_posted) VALUES (1,3,'IM-2026-00924','2026-03-31','حركة مخزن رقم 5994','inventory_movement',5994,1);
+INSERT INTO journal_entry_lines (entry_id,company_id,account_code,debit,credit,description) VALUES ((SELECT MAX(id) FROM journal_entries WHERE company_id=1),1,'45010001',12250,0,'حركة مخزن رقم 5994');
+INSERT INTO journal_entry_lines (entry_id,company_id,account_code,debit,credit,description) VALUES ((SELECT MAX(id) FROM journal_entries WHERE company_id=1),1,'140701',0,12250,'حركة مخزن رقم 5994');
