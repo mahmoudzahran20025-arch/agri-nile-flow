@@ -91,19 +91,7 @@ export default function DashboardPage() {
     staleTime: 300_000,
     enabled:  isAdmin,
   })
-  type SetupMapping = { mapping_key: string; account_code: string }
-  const { data: setupMappings } = useQuery({
-    queryKey: ['gl-mappings'],
-    queryFn:  glApi.mappings as () => Promise<SetupMapping[]>,
-    staleTime: 300_000,
-    enabled:  isAdmin,
-  })
   const hasOpenPeriod   = (setupPeriods ?? []).some(p => !p.is_closed)
-  const REQUIRED_KEYS   = ['cash', 'expense_default', 'revenue_default', 'accounts_payable', 'inventory', 'wages']
-  const mappedKeys      = new Set((setupMappings ?? []).map(m => m.mapping_key))
-  const missingMappings = REQUIRED_KEYS.filter(k => !mappedKeys.has(k))
-  const setupDone       = hasOpenPeriod && missingMappings.length === 0
-  const periodsLoaded   = setupPeriods !== undefined && setupMappings !== undefined
 
   const { data: seasonPnL } = useQuery({
     queryKey: ['reports', 'season-pnl', seasonId],
@@ -158,51 +146,6 @@ export default function DashboardPage() {
         </span>
       </div>
 
-      {/* ── Setup Checklist (shown to admins until everything is configured) ── */}
-      {isAdmin && periodsLoaded && !setupDone && (
-        <div className="card border-2 border-amber-200 bg-amber-50/60 p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <ShieldAlert size={16} className="text-amber-600" />
-            <h3 className="text-sm font-bold text-amber-800">إعداد الشركة غير مكتمل — أكمل الخطوات التالية قبل الترحيل</h3>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {/* Fiscal period */}
-            <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold ${
-              hasOpenPeriod ? 'bg-emerald-50 text-emerald-700' : 'bg-white border border-amber-200 text-amber-700'
-            }`}>
-              {hasOpenPeriod
-                ? <CheckCircle2 size={13} className="text-emerald-500 shrink-0" />
-                : <AlertTriangle size={13} className="text-amber-500 shrink-0" />}
-              <span className="flex-1">فترة مالية مفتوحة</span>
-              {!hasOpenPeriod && (
-                <a href="/gl/periods" className="font-bold underline underline-offset-2 text-amber-700 hover:text-amber-900">إنشاء ←</a>
-              )}
-            </div>
-            {/* GL mappings */}
-            {REQUIRED_KEYS.map(k => {
-              const ok = mappedKeys.has(k)
-              const labels: Record<string, string> = {
-                cash: 'حساب الخزينة', expense_default: 'حساب المصروفات',
-                revenue_default: 'حساب الإيرادات', accounts_payable: 'حساب الموردين',
-                inventory: 'حساب المخزون', wages: 'حساب الأجور',
-              }
-              return (
-                <div key={k} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold ${
-                  ok ? 'bg-emerald-50 text-emerald-700' : 'bg-white border border-amber-200 text-amber-700'
-                }`}>
-                  {ok
-                    ? <CheckCircle2 size={13} className="text-emerald-500 shrink-0" />
-                    : <AlertTriangle size={13} className="text-amber-500 shrink-0" />}
-                  <span className="flex-1">{labels[k]}</span>
-                  {!ok && (
-                    <a href="/gl/mappings" className="font-bold underline underline-offset-2 text-amber-700 hover:text-amber-900">إعداد ←</a>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
 
       {/* KPI Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">

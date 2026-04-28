@@ -5,7 +5,8 @@ import {
   ClipboardList, UserCog, TrendingUp, MapPin, Wrench,
   Building2, Shield, Activity, ChevronDown, Link2,
   ShieldCheck, Target, Lock, ShoppingCart, CalendarDays,
-  Landmark, Database, BarChart3, FolderTree, ClipboardCheck
+  Landmark, Database, BarChart3, FolderTree, ClipboardCheck,
+  BookOpen, ShieldAlert, Scale
 } from 'lucide-react'
 import { useAppStore } from '../store/appStore'
 import { useQuery } from '@tanstack/react-query'
@@ -14,7 +15,7 @@ import { useIsAuth } from '../store/appStore'
 import { useState } from 'react'
 
 // suppress unused import warnings — icons kept for potential future use
-void Link2; void ShieldCheck; void Lock;
+void Link2; void ShieldCheck; void Lock; void ShieldAlert;
 
 const ROLE_LABELS: Record<string, string> = {
   super_admin:      'مدير النظام',
@@ -76,11 +77,13 @@ const NAV_SECTIONS: NavSection[] = [
   // ── Inventory ─────────────────────────────────────────────────
   {
     key: 'inventory', label: 'المخزون', items: [
-      { to: '/inventory',             icon: <Package       size={18} />, label: 'أرصدة المخازن',   permission: { module: 'inventory', action: 'read' } },
-      { to: '/inventory/categories',  icon: <FolderTree    size={18} />, label: 'تصنيفات الأصناف', permission: { module: 'inventory', action: 'read' } },
-      { to: '/inventory/adjustments', icon: <ClipboardCheck size={18} />, label: 'التسويات الجردية', permission: { module: 'inventory', action: 'read' } },
-      { to: '/inventory/movements',   icon: <ClipboardList size={18} />, label: 'حركات المخزون',   permission: { module: 'inventory', action: 'read' } },
-      { to: '/inventory/setup',       icon: <Building2     size={18} />, label: 'إدارة المستودعات', permission: { module: 'inventory', action: 'create' } },
+      { to: '/inventory',                icon: <Package       size={18} />, label: 'أرصدة المخازن',          permission: { module: 'inventory', action: 'read' } },
+      { to: '/inventory/items',          icon: <BookOpen      size={18} />, label: 'سجل الأصناف الموحد',    permission: { module: 'inventory', action: 'read' } },
+      { to: '/inventory/categories',     icon: <FolderTree    size={18} />, label: 'تصنيفات الأصناف',       permission: { module: 'inventory', action: 'read' } },
+      { to: '/inventory/adjustments',    icon: <ClipboardCheck size={18} />, label: 'التسويات الجردية',    permission: { module: 'inventory', action: 'read' } },
+      { to: '/inventory/movements',      icon: <ClipboardList size={18} />, label: 'حركات المخزون',          permission: { module: 'inventory', action: 'read' } },
+      { to: '/inventory/posting-health', icon: <ShieldAlert   size={18} />, label: 'صحة الترحيل المخزني',  permission: { module: 'inventory', action: 'read' } },
+      { to: '/inventory/setup',          icon: <Building2     size={18} />, label: 'إدارة المستودعات',       permission: { module: 'inventory', action: 'create' } },
     ],
   },
 
@@ -120,6 +123,7 @@ const NAV_SECTIONS: NavSection[] = [
   {
     key: 'reports', label: 'التقارير والتحليل', items: [
       { to: '/reports',              icon: <ClipboardList size={18} />, label: 'مركز التقارير',  permission: { module: 'reports', action: 'read' } },
+      { to: '/reports/trial-balance',icon: <Scale         size={18} />, label: 'ميزان المراجعة', permission: { module: 'reports', action: 'read' } },
       { to: '/reports/season',       icon: <Leaf          size={18} />, label: 'تقارير الموسم',  permission: { module: 'reports', action: 'read' } },
       { to: '/reports/cost-centers', icon: <Target        size={18} />, label: 'مراكز التكلفة',  permission: { module: 'reports', action: 'read' } },
     ],

@@ -4,6 +4,7 @@ import { authMiddleware, getUser, roleGuard, permissionGuard } from '../middlewa
 import { getOpenPeriod } from '../lib/gl'
 import { logAudit } from '../lib/audit'
 import { FinanceCore } from '../lib/finance_core'
+import { resolveControlAccount } from '../lib/posting_engine'
 
 const suppliers = new Hono<{ Bindings: Env }>()
 suppliers.use('*', authMiddleware)
@@ -98,6 +99,7 @@ suppliers.get('/aging', permissionGuard('suppliers', 'read'), async (c) => {
 suppliers.get('/:code/summary', permissionGuard('suppliers', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const code = Number(c.req.param('code'))
+  const apAccountCode = await resolveControlAccount(c.env.DB, company_id, 'accounts_payable')
 
   const [invoices, payments, glLedger] = await Promise.all([
     // All supplier transactions (invoices / credit notes)
@@ -129,9 +131,8 @@ suppliers.get('/:code/summary', permissionGuard('suppliers', 'read'), async (c) 
         COALESCE(SUM(l.credit), 0) AS total_credit
       FROM journal_entry_lines l
       JOIN journal_entries e ON e.id = l.entry_id AND e.company_id = l.company_id
-      JOIN gl_account_mappings m ON m.company_id = l.company_id AND m.mapping_key = 'accounts_payable'
-      WHERE l.company_id = ? AND l.account_code = m.account_code AND e.is_posted = 1
-    `).bind(company_id).first<{ total_debit: number; total_credit: number }>(),
+      WHERE l.company_id = ? AND l.account_code = ? AND e.is_posted = 1
+    `).bind(company_id, apAccountCode).first<{ total_debit: number; total_credit: number }>(),
   ])
 
   const openBalance = (invoices?.total_credit ?? 0) - (invoices?.total_debit ?? 0)
@@ -318,15 +319,14 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
         .bind(code, company_id).first<{name:string}>()
 
       if (b.entry_type === 'د') {
-        await FinanceCore.resolveExpensePosting(c.env.DB, {
+        await FinanceCore.resolveSupplierInvoice(c.env.DB, {
           company_id,
           ref_id: txnId,
           amount: b.amount,
           date: b.transaction_date,
           description: `${b.expense_category ?? b.entry_type} — ${supplierRow?.name ?? code}`,
           created_by: userId,
-          center_code: b.center_code ?? undefined,
-          expense_account: b.account_code == null ? undefined : String(b.account_code),
+          supplier_code: code
         })
       } else {
         await FinanceCore.resolveSupplierPayment(c.env.DB, {
@@ -337,6 +337,7 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
           description: `${b.expense_category ?? b.entry_type} — ${supplierRow?.name ?? code}`,
           created_by: userId,
           center_code: b.center_code ?? undefined,
+          supplier_code: code,
         })
       }
     } catch (e: unknown) {
@@ -391,15 +392,14 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
 
     // 1. Post to GL
     if (txn.entry_type === 'د') {
-      await FinanceCore.resolveExpensePosting(c.env.DB, {
+      await FinanceCore.resolveSupplierInvoice(c.env.DB, {
         company_id,
         ref_id: id,
         amount: txn.amount,
         date: txn.transaction_date,
         description: `${txn.expense_category ?? txn.entry_type} — ${supplierRow?.name ?? code}`,
         created_by: userId,
-        center_code: txn.center_code ?? undefined,
-        expense_account: txn.account_code == null ? undefined : String(txn.account_code),
+        supplier_code: code
       })
     } else {
       await FinanceCore.resolveSupplierPayment(c.env.DB, {
@@ -410,6 +410,7 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
         description: `${txn.expense_category ?? txn.entry_type} — ${supplierRow?.name ?? code}`,
         created_by: userId,
         center_code: txn.center_code ?? undefined,
+        supplier_code: code,
       })
     }
 

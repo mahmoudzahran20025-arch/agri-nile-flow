@@ -4,70 +4,30 @@ import { Link2, Loader2, CheckCircle2, AlertTriangle, Settings2, Save, RotateCcw
 import { glApi } from '../../api/client'
 import { Link } from 'react-router-dom'
 import { useToast } from '../../contexts/ToastContext'
+import { useAppStore } from '../../store/appStore'
+import { GL_MAPPING_KEYS, GL_MAPPING_GROUPS, validateMappingCoverage, buildMappingPayload, SavedMapping } from '../../lib/gl/glSchema'
+import AccountPicker from '../../components/gl/AccountPicker'
 
-// ── Known mapping keys ────────────────────────────────────────
-const MAPPING_KEYS: Array<{
-  key: string; label: string; group: string
-  description: string; required: boolean
-}> = [
-  // Assets
-  { key: 'cash',             label: 'الخزينة الرئيسية',       group: 'أصول',       description: 'يُستخدم في قيود المقبوضات والمدفوعات النقدية',           required: true },
-  { key: 'bank',             label: 'حساب البنك',              group: 'أصول',       description: 'يُستخدم في مطابقة كشوف البنك والتحويلات',                required: false },
-  { key: 'inventory',        label: 'المخزون',                 group: 'أصول',       description: 'يُستخدم في إضافة وصرف المخزون',                         required: true },
-  // Liabilities
-  { key: 'accounts_payable', label: 'الدائنون / الموردون',    group: 'التزامات',   description: 'يُستخدم في فواتير الموردين وأوامر الشراء',               required: true },
-  // Revenue
-  { key: 'revenue_default',  label: 'الإيرادات (افتراضي)',    group: 'إيرادات',    description: 'يُستخدم في المقبوضات النقدية غير المصنّفة',              required: true },
-  // Expenses
-  { key: 'expense_default',  label: 'المصروفات (افتراضي)',    group: 'مصروفات',    description: 'يُستخدم في المدفوعات النقدية وصرف المخزون غير المصنّف',  required: true },
-  { key: 'purchases',        label: 'المشتريات',               group: 'مصروفات',    description: 'يُستخدم في فواتير الموردين (DR المشتريات / CR الموردون)', required: true },
-  { key: 'wages',            label: 'أجور ورواتب',             group: 'مصروفات',    description: 'يُستخدم في اعتماد مسيرات الرواتب (DR أجور / CR مستحقات)',  required: true },
-  { key: 'cogs',             label: 'تكلفة البضاعة المباعة',   group: 'مصروفات',    description: 'يُستخدم في تكلفة عمالة الحقول وأوامر العمل (DR تكلفة / CR مستحقات)', required: true },
-  // Liabilities
-  { key: 'wages_payable',    label: 'مستحقات الرواتب',         group: 'التزامات',   description: 'الالتزام المقابل عند اعتماد الرواتب قبل الصرف (CR مستحقات)', required: true },
-  { key: 'deferred_revenue', label: 'إيرادات مؤجلة',           group: 'التزامات',   description: 'يُستخدم عند استلام دفعات مقدمة من عقود البيع (CR مؤجل)',   required: false },
-  // Equity
-  { key: 'equity',                label: 'حقوق الملكية',               group: 'حقوق ملكية', description: 'يُستخدم عند إضافة رأس مال شريك جديد (CR ملكية)',                       required: false },
-  { key: 'partner_current_acct',  label: 'حساب الشريك الجاري',         group: 'حقوق ملكية', description: 'الحساب الجاري للشريك — يفصل بين رأس المال والسحوبات الجارية (CR/DR)',  required: false },
-  // Harvest GL — only needed when harvest integration is enabled
-  { key: 'receivable_default', label: 'الذمم المدينة / عملاء', group: 'حصاد (اختياري)', description: 'الجانب المدين لقيد إيراد الحصاد (DR ذمم عملاء أو صندوق)',   required: false },
-  { key: 'harvest_revenue',   label: 'إيراد الحصاد',           group: 'حصاد (اختياري)', description: 'الجانب الدائن لقيد إيراد الحصاد (CR إيرادات الموسم)',       required: false },
-  { key: 'harvest_cogs',      label: 'تكلفة الحصاد (COGS)',    group: 'حصاد (اختياري)', description: 'الجانب المدين لقيد تكلفة الحصاد — مطلوب مع حساب المخزون',  required: false },
-]
-
-interface Mapping { mapping_key: string; account_code: string }
-interface Account  { code: string; name: string; account_type: string; is_header: number }
-
-const GROUPS = [...new Set(MAPPING_KEYS.map(k => k.group))]
+// Groups and keys sourced from GL_MAPPING_GROUPS / GL_MAPPING_KEYS in glSchema.
 
 // ════════════════════════════════════════════════════════════
 export default function GLMappingsPage() {
-  const qc = useQueryClient()
+  const qc        = useQueryClient()
   const { toast } = useToast()
+  const companyId = useAppStore(s => s.company?.id)
+  const scope     = companyId ? String(companyId) : undefined
   const [edits, setEdits] = useState<Record<string, string>>({})
 
   const { data: mappings = [], isLoading: mappingLoading } = useQuery({
     queryKey: ['gl-mappings'],
     queryFn:  glApi.mappings,
     staleTime: 60_000,
-    select: (d) => d as Mapping[],
+    select: (d) => d as SavedMapping[],
   })
-
-  const { data: accounts = [], isLoading: acctLoading } = useQuery({
-    queryKey: ['gl-accounts'],
-    queryFn:  () => glApi.accounts(),
-    staleTime: 120_000,
-    select: (d) => (d as Account[]).filter(a => !a.is_header),
-  })
+  // AccountPicker loads its own account list; no separate query needed here.
 
   const saveMut = useMutation({
-    mutationFn: () => {
-      const allMappings = MAPPING_KEYS.map(k => ({
-        mapping_key: k.key,
-        account_code: edits[k.key] ?? mappings.find(m => m.mapping_key === k.key)?.account_code ?? null,
-      })).filter(m => m.account_code)
-      return glApi.saveMappings({ mappings: allMappings })
-    },
+    mutationFn: () => glApi.saveMappings({ mappings: buildMappingPayload(edits, mappings) }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['gl-mappings'] })
       setEdits({})
@@ -91,12 +51,10 @@ export default function GLMappingsPage() {
   }
 
   // Coverage check
-  const configured  = MAPPING_KEYS.filter(k => getValue(k.key)).length
-  const required    = MAPPING_KEYS.filter(k => k.required)
-  const missingReq  = required.filter(k => !getValue(k.key))
-  const coverage    = Math.round((configured / MAPPING_KEYS.length) * 100)
+  const { configured, total, coverage, missingRequired: missingReq } = validateMappingCoverage(
+    GL_MAPPING_KEYS.map(k => k.key).filter(key => getValue(key))
+  )
 
-  const isLoading = mappingLoading || acctLoading
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-4xl mx-auto" dir="rtl">
@@ -182,31 +140,30 @@ export default function GLMappingsPage() {
           <p className={`text-2xl font-bold ${missingReq.length === 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
             {coverage}%
           </p>
-          <p className="text-xs text-gray-500">{configured}/{MAPPING_KEYS.length} مُعيَّن</p>
+          <p className="text-xs text-gray-500">{configured}/{total} مُعيَّن</p>
         </div>
       </div>
 
       {/* Mapping groups */}
-      {isLoading ? (
+      {mappingLoading ? (
         <div className="flex justify-center py-16 text-gray-400"><Loader2 className="animate-spin" size={32} /></div>
       ) : (
         <div className="space-y-6">
-          {(GROUPS || []).map(group => (
+          {GL_MAPPING_GROUPS.map(group => (
             <div key={group}>
               <div className="flex items-center gap-3 mb-3">
                 <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">{group}</span>
                 <div className="flex-1 h-px bg-gray-100" />
               </div>
               <div className="space-y-2">
-                {(MAPPING_KEYS || []).filter(k => k.group === group).map(item => {
-                  const val     = getValue(item.key)
-                  const selectedAcct = (accounts || []).find(a => a.code === val)
-
+                {GL_MAPPING_KEYS.filter(k => k.group === group).map(item => {
+                  const val = getValue(item.key)
                   return (
                     <div
                       key={item.key}
                       className={`flex items-center gap-4 p-4 rounded-xl border transition-all ${
                         !val && item.required ? 'border-red-200 bg-red-50/50' :
+                        edits[item.key] !== undefined ? 'border-teal-200 bg-teal-50/20' :
                         'border-gray-100 bg-white hover:border-gray-200'
                       }`}
                     >
@@ -214,50 +171,31 @@ export default function GLMappingsPage() {
                       <div className="w-52 shrink-0">
                         <div className="flex items-center gap-1.5">
                           <p className="text-sm font-semibold text-gray-800">{item.label}</p>
-                          {item.required && (
-                            <span className="text-[10px] text-red-500 font-bold">*</span>
-                          )}
+                          {item.required && <span className="text-[10px] text-red-500 font-bold">*</span>}
                         </div>
                         <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">{item.description}</p>
                         <code className="text-[10px] text-gray-300 font-mono">{item.key}</code>
                       </div>
 
-                      {/* Account selector */}
+                      {/* Account picker — search + favorites built-in */}
                       <div className="flex-1">
-                        <select
-                          className={`w-full border rounded-xl px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-teal-500 transition-colors ${
-                            !val && item.required
-                              ? 'border-red-300 focus:border-red-400'
-                              : edits[item.key] !== undefined
-                              ? 'border-teal-400 bg-teal-50/40'
-                              : 'border-gray-200'
-                          }`}
-                          value={val}
-                          onChange={e => handleChange(item.key, e.target.value)}
-                        >
-                          <option value="">— اختر حساباً —</option>
-                          {([...(accounts || [])])
-                            .sort((a, b) => a.code.localeCompare(b.code))
-                            .map(a => (
-                              <option key={a.code} value={a.code}>
-                                {a.code} — {a.name}
-                              </option>
-                            ))}
-                        </select>
+                        <AccountPicker
+                          value={val || null}
+                          onChange={v => handleChange(item.key, v ?? '')}
+                          storageScope={scope}
+                          showFavorites
+                        />
                         {edits[item.key] !== undefined && (
                           <p className="text-[10px] text-teal-600 mt-1 font-medium">● تم التعديل — لم يُحفظ بعد</p>
                         )}
                       </div>
 
-                      {/* Status */}
-                      <div className="w-32 shrink-0 text-left">
-                        {val && selectedAcct ? (
-                          <div className="text-left">
-                            <p className="text-xs font-medium text-gray-700">{selectedAcct.code}</p>
-                            <p className="text-[11px] text-gray-400 truncate">{selectedAcct.name}</p>
-                          </div>
-                        ) : item.required ? (
-                          <span className="text-xs text-red-500 font-medium">مطلوب</span>
+                      {/* Required / optional badge */}
+                      <div className="w-24 shrink-0 text-left">
+                        {item.required ? (
+                          val
+                            ? <span className="text-xs text-emerald-600 font-medium">✓ مُعيَّن</span>
+                            : <span className="text-xs text-red-500 font-medium">مطلوب</span>
                         ) : (
                           <span className="text-xs text-gray-300">اختياري</span>
                         )}

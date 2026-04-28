@@ -1,8 +1,8 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
-import { postAutoEntry, getOpenPeriod } from '../lib/gl'
 import { logAudit } from '../lib/audit'
+import { FinanceCore } from '../lib/finance_core'
 import {
   resolveInventoryMovement as peResolveInventory,
   resolveSupplierInvoice   as peResolveSupplierInvoice,
@@ -169,40 +169,7 @@ gl.patch('/accounts/:code', async (c) => {
   return c.json({ success: true, data: null })
 })
 
-// ── GL Mappings — DEPRECATED ────────────────────────────────
-// Replaced by: /gl/posting-groups/* + /gl/posting-setup/*
-// These endpoints are kept for backward-compat only.
-// Clients should migrate to the posting-engine setup routes.
-
-const MAPPINGS_DEPRECATION_DATE   = 'Sat, 01 Aug 2026 00:00:00 GMT'
-const MAPPINGS_DEPRECATION_LINK   = 'rel="sunset"; url="/gl/posting-setup"'
-
-gl.get('/mappings', async (c) => {
-  const { company_id } = getUser(c)
-  c.header('Deprecation', MAPPINGS_DEPRECATION_DATE)
-  c.header('Sunset', MAPPINGS_DEPRECATION_DATE)
-  c.header('Link', MAPPINGS_DEPRECATION_LINK)
-  const { results } = await c.env.DB
-    .prepare('SELECT * FROM gl_account_mappings WHERE company_id = ?')
-    .bind(company_id).all()
-  return c.json({
-    success: true,
-    data: results,
-    _deprecated: 'هذا المسار قديم. استخدم /gl/posting-setup بدلاً منه.',
-  })
-})
-
-// PUT /gl/mappings — LOCKED (writes disabled, sunset Aug 2026)
-gl.put('/mappings', async (c) => {
-  c.header('Deprecation', MAPPINGS_DEPRECATION_DATE)
-  c.header('Sunset', MAPPINGS_DEPRECATION_DATE)
-  c.header('Link', MAPPINGS_DEPRECATION_LINK)
-  return c.json({
-    success: false,
-    error: 'هذا المسار قديم وأُغلق للكتابة. استخدم /gl/posting-setup لإعداد مجموعات الترحيل.',
-    migrate_to: '/gl/posting-setup',
-  }, 405)
-})
+// Legacy /gl/mappings endpoints removed in strict zero-legacy mode.
 
 // ── Financial Periods ─────────────────────────────────────────
 
@@ -231,13 +198,53 @@ gl.post('/periods', async (c) => {
 gl.patch('/periods/:id/close', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
+  const force = c.req.query('force') === '1'
+
+  const period = await c.env.DB.prepare(
+    'SELECT id, name, is_closed FROM financial_periods WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ id: number; name: string; is_closed: number }>()
+  if (!period) return c.json({ success: false, error: 'الفترة غير موجودة' }, 404)
+  if (period.is_closed) return c.json({ success: false, error: 'الفترة مغلقة مسبقاً' }, 409)
+
+  // Guard: no unbalanced entries in this period
+  const unbalanced = await c.env.DB.prepare(`
+    SELECT COUNT(*) AS n FROM (
+      SELECT je.id FROM journal_entries je
+      JOIN journal_entry_lines jel ON jel.entry_id = je.id
+      WHERE je.company_id = ? AND je.period_id = ?
+      GROUP BY je.id
+      HAVING ABS(ROUND(SUM(jel.debit), 2) - ROUND(SUM(jel.credit), 2)) > 0.01
+    )`).bind(company_id, id).first<{ n: number }>()
+
+  // Guard: no business events in 'error' or 'pending' state for this period
+  const pendingEvents = await c.env.DB.prepare(`
+    SELECT COUNT(*) AS n FROM business_events be
+    JOIN journal_entries je ON je.id = be.journal_entry_id
+    WHERE be.company_id = ? AND je.period_id = ? AND be.status IN ('pending','error')
+  `).bind(company_id, id).first<{ n: number }>()
+
+  const blockers: string[] = []
+  if ((unbalanced?.n ?? 0) > 0) blockers.push(`يوجد ${unbalanced!.n} قيد غير متوازن في هذه الفترة`)
+  if ((pendingEvents?.n ?? 0) > 0) blockers.push(`يوجد ${pendingEvents!.n} حدث أعمال معلق أو خاطئ`)
+
+  if (blockers.length > 0 && !force) {
+    return c.json({
+      success: false,
+      error: 'لا يمكن إغلاق الفترة بسبب مشاكل في البيانات',
+      blockers,
+      hint: 'أضف force=1 للتجاهل (للمحاسبين الكبار فقط)',
+    }, 409)
+  }
+
   await c.env.DB.prepare(
     `UPDATE financial_periods SET is_closed = 1, closed_at = datetime('now'), closed_by = ? WHERE id = ? AND company_id = ?`
   ).bind(userId, id, company_id).run()
+
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'CLOSE', table_name: 'financial_periods', record_id: id,
+    new_value: { forced: force, blockers_ignored: blockers },
   })
-  return c.json({ success: true, data: null })
+  return c.json({ success: true, data: { period_id: id, closed_with_warnings: blockers.length > 0 } })
 })
 
 gl.patch('/periods/:id/reopen', async (c) => {
@@ -310,39 +317,10 @@ gl.get('/entries/:id', async (c) => {
 })
 
 gl.post('/entries', async (c) => {
-  const { company_id, sub: userId } = getUser(c)
-  const b = await c.req.json<{
-    entry_date: string
-    description: string
-    lines: { account_code: string; debit: number; credit: number; description?: string }[]
-  }>()
-
-  if (!b.entry_date || !b.description || !b.lines?.length) {
-    return c.json({ success: false, error: 'بيانات القيد ناقصة' }, 400)
-  }
-  const totalDebit  = b.lines.reduce((s, l) => s + (l.debit  ?? 0), 0)
-  const totalCredit = b.lines.reduce((s, l) => s + (l.credit ?? 0), 0)
-  if (Math.abs(totalDebit - totalCredit) > 0.01) {
-    return c.json({ success: false, error: `القيد غير متوازن — مدين: ${totalDebit.toFixed(2)} / دائن: ${totalCredit.toFixed(2)}` }, 400)
-  }
-
-  const periodId = await getOpenPeriod(c.env.DB, company_id, b.entry_date)
-  if (!periodId) {
-    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.entry_date}` }, 400)
-  }
-
-  await postAutoEntry(c.env.DB, {
-    company_id, entry_date: b.entry_date, description: b.description,
-    ref_type: 'manual', ref_id: 0, lines: b.lines, created_by: userId,
-  })
-
-  void logAudit(c.env.DB, {
-    user_id: userId, company_id, action: 'CREATE',
-    table_name: 'journal_entries',
-    new_value: { entry_date: b.entry_date, description: b.description, total: totalDebit },
-  })
-
-  return c.json({ success: true, data: null }, 201)
+  return c.json({
+    success: false,
+    error: 'DIRECT_GL_WRITE_BLOCKED: الإدخال اليدوي المباشر للقيود تم تعطيله في وضع zero-legacy. استخدم مسارات أحداث الأعمال المعتمدة.',
+  }, 410)
 })
 
 // ── Account Ledger (دفتر الأستاذ) ────────────────────────────
@@ -564,77 +542,289 @@ gl.get('/balance-sheet', async (c) => {
   const totalLiabilities = raw.results.filter(r => r.account_type === 'liability').reduce((s, r) => s + r.balance, 0)
   const totalEquity      = raw.results.filter(r => r.account_type === 'equity').reduce((s, r) => s + r.balance, 0)
 
+  // Accounting equation assertion: Assets = Liabilities + Equity + YTD Net Income
+  // YTD net income from P&L is part of equity until period close
+  const ytdRaw = await c.env.DB.prepare(
+    `SELECT
+       SUM(CASE WHEN a.account_type = 'revenue' THEN l.credit - l.debit ELSE 0 END) AS revenue,
+       SUM(CASE WHEN a.account_type = 'expense' THEN l.debit - l.credit ELSE 0 END) AS expense
+     FROM journal_entry_lines l
+     JOIN journal_entries e ON e.id = l.entry_id AND e.is_posted = 1 AND e.entry_date <= ?
+     JOIN chart_of_accounts a ON a.code = l.account_code AND a.company_id = ?
+     WHERE l.company_id = ?`
+  ).bind(asOf, company_id, company_id).first<{ revenue: number; expense: number }>()
+
+  const ytdNetIncome = (ytdRaw?.revenue ?? 0) - (ytdRaw?.expense ?? 0)
+  const imbalance    = Math.abs(totalAssets - (totalLiabilities + totalEquity + ytdNetIncome))
+  const is_balanced  = imbalance < 0.01
+
   return c.json({ success: true, data: {
     assets, liabilities, equity,
     total_assets: totalAssets, total_liabilities: totalLiabilities, total_equity: totalEquity,
+    ytd_net_income: ytdNetIncome,
     as_of: asOf,
+    is_balanced,
+    imbalance: is_balanced ? 0 : imbalance,
+    balance_check: is_balanced
+      ? 'PASS: Assets = Liabilities + Equity + YTD Net Income'
+      : `FAIL: Imbalance of ${imbalance.toFixed(2)} detected — run /api/gl/audit/orphans to locate the cause`,
   }})
 })
 
-// POST /api/gl/entries/:id/reverse — create a mirror entry with negated lines
+// ── Entry Trace ──────────────────────────────────────────────────────────────
+// GET /api/gl/entries/:id/trace — return the full posting rule resolution trace
+
+gl.get('/entries/:id/trace', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const entry = await c.env.DB.prepare(
+    `SELECT id, entry_number, entry_date, description, ref_type, ref_id,
+            is_posted, posting_rule_trace, created_by, created_at
+     FROM journal_entries WHERE id = ? AND company_id = ?`
+  ).bind(id, company_id).first<{
+    id: number; entry_number: string | null; entry_date: string
+    description: string; ref_type: string; ref_id: number
+    is_posted: number; posting_rule_trace: string | null
+    created_by: number | null; created_at: string
+  }>()
+  if (!entry) return c.json({ success: false, error: 'القيد غير موجود' }, 404)
+
+  // Parse the stored trace JSON
+  let trace: unknown = null
+  if (entry.posting_rule_trace) {
+    try { trace = JSON.parse(entry.posting_rule_trace) } catch { trace = null }
+  }
+
+  // Fetch the lines with rule_slot
+  const { results: lines } = await c.env.DB.prepare(
+    `SELECT l.id, l.account_code, a.name AS account_name, a.account_type,
+            l.debit, l.credit, l.description, l.rule_slot,
+            l.center_code, l.season_id, l.field_id
+     FROM journal_entry_lines l
+     LEFT JOIN chart_of_accounts a ON a.code = l.account_code AND a.company_id = l.company_id
+     WHERE l.entry_id = ? ORDER BY l.id`
+  ).bind(id).all()
+
+  // Fetch the source business event if linked
+  let sourceEvent: unknown = null
+  if (entry.ref_type === 'business_event' && entry.ref_id) {
+    sourceEvent = await c.env.DB.prepare(
+      `SELECT id, event_type, event_date, source_module, source_id, status, payload
+       FROM business_events WHERE id = ? AND company_id = ?`
+    ).bind(entry.ref_id, company_id).first()
+  }
+
+  return c.json({
+    success: true,
+    data: {
+      entry:        { ...entry, posting_rule_trace: undefined },
+      lines,
+      trace,
+      source_event: sourceEvent,
+      has_trace:    trace !== null,
+    },
+  })
+})
+
+// ── Reversal Engine ───────────────────────────────────────────────────────────
+// POST /api/gl/entries/:id/reverse — create a reversing entry via business event
+
 gl.post('/entries/:id/reverse', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
+  const body = await c.req.json<{ reason: string }>()
 
-  // Fetch original entry
-  const [entry, linesRes] = await Promise.all([
-    c.env.DB.prepare('SELECT * FROM journal_entries WHERE id = ? AND company_id = ?')
-      .bind(id, company_id).first<{
-        id: number; description: string; entry_date: string; is_posted: number; ref_type: string
-      }>(),
-    c.env.DB.prepare(
-      'SELECT account_code, debit, credit, description, center_code, season_id, field_id FROM journal_entry_lines WHERE entry_id = ?'
-    ).bind(id).all<{
-      account_code: string; debit: number; credit: number
-      description: string | null; center_code: number | null; season_id: number | null; field_id: number | null
-    }>(),
-  ])
+  if (!body.reason?.trim()) {
+    return c.json({ success: false, error: 'سبب العكس مطلوب (reason)' }, 400)
+  }
 
-  if (!entry) return c.json({ success: false, error: 'القيد غير موجود' }, 404)
-  if (!entry.is_posted) return c.json({ success: false, error: 'لا يمكن عكس قيد غير مرحّل' }, 400)
+  // Load the original entry
+  const original = await c.env.DB.prepare(
+    `SELECT id, entry_date, description, ref_type, ref_id, is_posted, period_id
+     FROM journal_entries WHERE id = ? AND company_id = ?`
+  ).bind(id, company_id).first<{
+    id: number; entry_date: string; description: string
+    ref_type: string; ref_id: number; is_posted: number; period_id: number
+  }>()
+  if (!original) return c.json({ success: false, error: 'القيد غير موجود' }, 404)
+  if (!original.is_posted) return c.json({ success: false, error: 'لا يمكن عكس قيد غير مرحَّل' }, 400)
 
-  // Check not already reversed
+  // Check it hasn't already been reversed
   const alreadyReversed = await c.env.DB.prepare(
-    "SELECT id FROM journal_entries WHERE company_id = ? AND ref_type = 'reversal' AND ref_id = ?"
+    `SELECT id FROM journal_entries
+     WHERE company_id = ? AND ref_type = 'reversal' AND ref_id = ? LIMIT 1`
   ).bind(company_id, id).first()
   if (alreadyReversed) {
-    return c.json({ success: false, error: 'هذا القيد تم عكسه مسبقاً' }, 409)
+    return c.json({ success: false, error: 'تم عكس هذا القيد مسبقاً' }, 409)
   }
 
+  // Check target period is open
   const today = new Date().toISOString().slice(0, 10)
-  const periodId = await getOpenPeriod(c.env.DB, company_id, today)
+  const periodId = await c.env.DB.prepare(
+    `SELECT id FROM financial_periods
+     WHERE company_id = ? AND start_date <= ? AND end_date >= ? AND is_closed = 0
+     ORDER BY start_date DESC LIMIT 1`
+  ).bind(company_id, today, today).first<{ id: number }>()
   if (!periodId) {
-    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${today}` }, 400)
+    return c.json({ success: false, error: 'لا توجد فترة مالية مفتوحة لليوم' }, 400)
   }
 
-  const lines = linesRes.results
-  if (!lines.length) return c.json({ success: false, error: 'القيد لا يحتوي على سطور' }, 400)
+  // Load original lines
+  const { results: originalLines } = await c.env.DB.prepare(
+    `SELECT account_code, debit, credit, description, center_code, season_id, field_id, rule_slot
+     FROM journal_entry_lines WHERE entry_id = ? ORDER BY id`
+  ).bind(id).all<{
+    account_code: string; debit: number; credit: number
+    description: string | null; center_code: number | null
+    season_id: number | null; field_id: number | null; rule_slot: string | null
+  }>()
 
-  const reversalEntryId = await postAutoEntry(c.env.DB, {
-    company_id,
-    entry_date:  today,
-    description: `عكس القيد: ${entry.description}`,
-    ref_type:    'reversal',
-    ref_id:      id,
-    created_by:  userId,
-    lines: lines.map(l => ({
-      account_code: l.account_code,
-      debit:        l.credit,
-      credit:       l.debit,
-      description:  l.description ?? undefined,
-      center_code:  l.center_code ?? undefined,
-      season_id:    l.season_id  ?? undefined,
-      field_id:     l.field_id   ?? undefined,
-    })),
-  })
+  if (!originalLines.length) {
+    return c.json({ success: false, error: 'القيد الأصلي لا يحتوي على سطور' }, 400)
+  }
 
-  void logAudit(c.env.DB, {
-    user_id: userId, company_id, action: 'CREATE',
-    table_name: 'journal_entries',
-    new_value: { reversal_of: id, reversal_entry_id: reversalEntryId },
-  })
+  // Validate balance of reversal lines
+  const revLines = originalLines.map(l => ({
+    account_code: l.account_code,
+    debit:        l.credit,      // swap
+    credit:       l.debit,       // swap
+    description:  `عكس: ${l.description ?? ''}`.trim(),
+    center_code:  l.center_code  ?? undefined,
+    season_id:    l.season_id    ?? undefined,
+    field_id:     l.field_id     ?? undefined,
+    rule_slot:    l.rule_slot    ?? undefined,
+  }))
 
-  return c.json({ success: true, data: { reversal_entry_id: reversalEntryId } }, 201)
+  const totalDr = revLines.reduce((s, l) => s + l.debit, 0)
+  const totalCr = revLines.reduce((s, l) => s + l.credit, 0)
+  if (Math.abs(totalDr - totalCr) > 0.01) {
+    return c.json({ success: false, error: 'INTERNAL: القيد المعكوس غير متوازن' }, 500)
+  }
+
+  // Write reversal business event → journal entry via FinanceCore
+  try {
+    const revEntryId = await FinanceCore.postManualReversal(c.env.DB, {
+      company_id,
+      original_entry_id: id,
+      date: today,
+      reason: body.reason,
+      lines: revLines,
+      created_by: userId
+    })
+
+    void logAudit(c.env.DB, {
+      user_id: userId, company_id, action: 'REVERSE',
+      table_name: 'journal_entries', record_id: id,
+      new_value: { reversal_entry_id: revEntryId, reason: body.reason },
+    })
+
+    return c.json({
+      success: true,
+      data: {
+        reversal_entry_id: revEntryId,
+        reversed_entry_id: id,
+        lines_count:       revLines.length,
+        total_debit:       totalDr,
+        total_credit:      totalCr,
+      },
+    }, 201)
+  } catch (err: any) {
+    return c.json({ success: false, error: `فشل إنشاء قيد العكس: ${err.message}` }, 500)
+  }
+})
+
+// ── Manual Journal Entry ──────────────────────────────────────────────────────
+// POST /api/gl/manual-entries — CHIEF_ACCOUNTANT only
+
+gl.post('/manual-entries', roleGuard(['super_admin', 'company_admin', 'accountant']), async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const body = await c.req.json<{
+    entry_date:  string
+    description: string
+    lines: Array<{
+      account_code: string
+      debit:        number
+      credit:       number
+      description?: string
+      center_code?: number
+      season_id?:   number
+      field_id?:    number
+    }>
+  }>()
+
+  if (!body.entry_date || !body.description?.trim() || !Array.isArray(body.lines) || body.lines.length < 2) {
+    return c.json({ success: false, error: 'التاريخ والوصف وسطرين على الأقل مطلوبة' }, 400)
+  }
+
+  const totalDr = body.lines.reduce((s, l) => s + (l.debit ?? 0), 0)
+  const totalCr = body.lines.reduce((s, l) => s + (l.credit ?? 0), 0)
+  if (Math.abs(totalDr - totalCr) > 0.01) {
+    return c.json({
+      success: false,
+      error: `القيد غير متوازن: مدين=${totalDr.toFixed(2)} ، دائن=${totalCr.toFixed(2)}`,
+    }, 400)
+  }
+
+  // Validate all accounts exist and are posting accounts
+  const errors: string[] = []
+  for (const line of body.lines) {
+    if (line.debit === 0 && line.credit === 0) {
+      errors.push(`السطر (${line.account_code}) المبلغ صفر`)
+      continue
+    }
+    if (line.debit > 0 && line.credit > 0) {
+      errors.push(`السطر (${line.account_code}) لا يمكن أن يكون له مدين ودائن في نفس الوقت`)
+    }
+    const acct = await c.env.DB.prepare(
+      'SELECT is_active, is_header FROM chart_of_accounts WHERE code = ? AND company_id = ?'
+    ).bind(line.account_code, company_id).first<{ is_active: number; is_header: number }>()
+    if (!acct) errors.push(`الحساب (${line.account_code}) غير موجود`)
+    else if (!acct.is_active) errors.push(`الحساب (${line.account_code}) غير نشط`)
+    else if (acct.is_header) errors.push(`الحساب (${line.account_code}) حساب إجمالي لا يُرحَّل مباشرة`)
+  }
+  if (errors.length) return c.json({ success: false, errors }, 422)
+
+  const periodId = await c.env.DB.prepare(
+    `SELECT id FROM financial_periods
+     WHERE company_id = ? AND start_date <= ? AND end_date >= ? AND is_closed = 0
+     ORDER BY start_date DESC LIMIT 1`
+  ).bind(company_id, body.entry_date, body.entry_date).first<{ id: number }>()
+  if (!periodId) {
+    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${body.entry_date}` }, 400)
+  }
+
+  // Write manual business event → journal entry via FinanceCore
+  try {
+    const entryId = await FinanceCore.postManualEntry(c.env.DB, {
+      company_id,
+      date: body.entry_date,
+      description: body.description,
+      lines: body.lines.map(l => ({
+        account_code: l.account_code,
+        debit: l.debit ?? 0,
+        credit: l.credit ?? 0,
+        description: l.description ?? body.description,
+        center_code: l.center_code,
+        season_id: l.season_id,
+        field_id: l.field_id,
+        rule_slot: 'manual_line'
+      })),
+      created_by: userId
+    })
+
+    void logAudit(c.env.DB, {
+      user_id: userId, company_id, action: 'CREATE',
+      table_name: 'journal_entries', record_id: entryId!,
+      new_value: { type: 'manual_entry', entry_id: entryId, lines: body.lines.length },
+    })
+
+    return c.json({
+      success: true,
+      data: { entry_id: entryId, total_debit: totalDr, total_credit: totalCr },
+    }, 201)
+  } catch (err: any) {
+    return c.json({ success: false, error: `فشل إنشاء القيد اليدوي: ${err.message}` }, 500)
+  }
 })
 
 // GET /api/gl/integrity-check — 6 data quality checks for this company
@@ -685,8 +875,8 @@ gl.get('/integrity-check', async (c) => {
 
       // 5. Required GL mapping keys present
       c.env.DB.prepare(`
-        SELECT COUNT(*) AS n FROM gl_account_mappings
-        WHERE company_id = ? AND mapping_key IN (${REQUIRED_MAPPINGS.map(() => '?').join(',')})
+        SELECT COUNT(*) AS n FROM posting_rules
+        WHERE company_id = ? AND rule_type = 'control' AND mapping_key IN (${REQUIRED_MAPPINGS.map(() => '?').join(',')})
       `).bind(company_id, ...REQUIRED_MAPPINGS).first<{ n: number }>(),
 
       // 6. Purchase orders in sent/partial state for > 90 days
@@ -703,8 +893,8 @@ gl.get('/integrity-check', async (c) => {
 
       // 7b. How many of the 3 harvest mapping keys are configured?
       c.env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM gl_account_mappings
-         WHERE company_id = ? AND mapping_key IN ('harvest_revenue','harvest_cogs','receivable_default')`
+        `SELECT COUNT(*) AS n FROM posting_rules
+         WHERE company_id = ? AND rule_type = 'control' AND mapping_key IN ('harvest_revenue','harvest_cogs','receivable_default')`
       ).bind(company_id).first<{ n: number }>(),
     ])
 
@@ -756,7 +946,7 @@ gl.get('/integrity-check', async (c) => {
       count: missingMappings,
       ok: missingMappings === 0,
       blocker: true,
-      action_url: '/gl/mappings',
+      action_url: '/gl/posting-setup',
     },
     {
       key: 'old_purchase_orders',
@@ -774,7 +964,7 @@ gl.get('/integrity-check', async (c) => {
       count: harvestEnabled ? harvestMissing : 0,
       ok: !harvestEnabled || harvestMissing === 0,
       blocker: false,
-      action_url: '/gl/mappings',
+      action_url: '/gl/posting-setup',
     },
   ]
 
@@ -789,6 +979,72 @@ gl.get('/integrity-check', async (c) => {
 // =============================================================================
 // POSTING GROUPS CRUD
 // =============================================================================
+
+// =============================================================================
+// POSTING RULES (admin/debug listing)
+// =============================================================================
+
+// GET /api/gl/posting-rules
+// Optional filters:
+//   rule_type = general | inventory | control
+//   active    = 1 | 0
+//   mapping_key, bus_posting_group_code, prod_posting_group_code, inv_posting_group_code
+gl.get('/posting-rules', async (c) => {
+  const { company_id } = getUser(c)
+  const ruleType = c.req.query('rule_type')
+  const activeQ = c.req.query('active')
+  const mappingKey = c.req.query('mapping_key')
+  const bpg = c.req.query('bus_posting_group_code')
+  const ppg = c.req.query('prod_posting_group_code')
+  const ipg = c.req.query('inv_posting_group_code')
+
+  if (ruleType && !['general', 'inventory', 'control'].includes(ruleType)) {
+    return c.json({ success: false, error: 'Invalid rule_type. Use: general | inventory | control' }, 400)
+  }
+  if (activeQ !== undefined && activeQ !== '0' && activeQ !== '1') {
+    return c.json({ success: false, error: 'Invalid active filter. Use: 0 or 1' }, 400)
+  }
+
+  const page = Math.max(1, Number(c.req.query('page') ?? 1))
+  const size = Math.min(200, Math.max(1, Number(c.req.query('size') ?? 100)))
+  const offset = (page - 1) * size
+
+  let where = 'WHERE company_id = ?'
+  const binds: unknown[] = [company_id]
+
+  if (ruleType) { where += ' AND rule_type = ?'; binds.push(ruleType) }
+  if (activeQ !== undefined) { where += ' AND is_active = ?'; binds.push(Number(activeQ)) }
+  if (mappingKey) { where += ' AND mapping_key = ?'; binds.push(mappingKey) }
+  if (bpg) { where += ' AND bus_posting_group_code = ?'; binds.push(bpg.toUpperCase()) }
+  if (ppg) { where += ' AND prod_posting_group_code = ?'; binds.push(ppg.toUpperCase()) }
+  if (ipg) { where += ' AND inv_posting_group_code = ?'; binds.push(ipg.toUpperCase()) }
+
+  const [rows, totalRow] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT id, company_id, rule_type,
+              bus_posting_group_code, prod_posting_group_code, inv_posting_group_code,
+              mapping_key, account_code,
+              sales_account, purchases_account, cogs_account,
+              sales_returns_account, purch_returns_account, expense_account,
+              inventory_account,
+              priority, is_active, created_at, updated_at
+       FROM posting_rules
+       ${where}
+       ORDER BY rule_type ASC, priority ASC, id ASC
+       LIMIT ? OFFSET ?`
+    ).bind(...binds, size, offset).all(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM posting_rules ${where}`)
+      .bind(...binds).first<{ n: number }>(),
+  ])
+
+  return c.json({
+    success: true,
+    data: rows.results,
+    total: totalRow?.n ?? 0,
+    page,
+    page_size: size,
+  })
+})
 
 const PG_TABLES = {
   business:  'business_posting_groups',
@@ -855,15 +1111,13 @@ gl.patch('/posting-groups/:type/:code', async (c) => {
 
   // Prevent deactivating a group that is still referenced in posting setup
   if (body.is_active === false && existing.is_active === 1) {
-    const setupTableGeneral = 'general_posting_setup'
-    const setupTableInv     = 'inventory_posting_setup'
     const col = type === 'business' ? 'bus_posting_group_code'
               : type === 'product'  ? 'prod_posting_group_code'
               : 'inv_posting_group_code'
-    const tbl = type === 'inventory' ? setupTableInv : setupTableGeneral
+    const ruleType = type === 'inventory' ? 'inventory' : 'general'
     const used = await c.env.DB
-      .prepare(`SELECT 1 FROM ${tbl} WHERE company_id = ? AND ${col} = ? AND is_active = 1 LIMIT 1`)
-      .bind(company_id, code).first()
+      .prepare(`SELECT 1 FROM posting_rules WHERE company_id = ? AND rule_type = ? AND ${col} = ? AND is_active = 1 LIMIT 1`)
+      .bind(company_id, ruleType, code).first()
     if (used) return c.json({ success: false, error: `Cannot deactivate: code "${code}" is still used in active posting setup rows.` }, 409)
   }
 
@@ -894,7 +1148,7 @@ gl.get('/posting-setup/general', async (c) => {
     .prepare(`SELECT id, bus_posting_group_code, prod_posting_group_code,
                sales_account, purchases_account, cogs_account,
                sales_returns_account, purch_returns_account, expense_account, is_active
-              FROM general_posting_setup WHERE company_id = ?
+              FROM posting_rules WHERE company_id = ? AND rule_type = 'general'
               ORDER BY bus_posting_group_code NULLS LAST, prod_posting_group_code NULLS LAST`)
     .bind(company_id).all()
   return c.json({ success: true, data: results })
@@ -918,24 +1172,25 @@ gl.post('/posting-setup/general', async (c) => {
   const ppg = body.prod_posting_group_code?.toUpperCase() ?? null
 
   const exists = await c.env.DB
-    .prepare(`SELECT 1 FROM general_posting_setup WHERE company_id = ?
+    .prepare(`SELECT 1 FROM posting_rules WHERE company_id = ? AND rule_type = 'general'
               AND (bus_posting_group_code IS ? OR (bus_posting_group_code IS NULL AND ? IS NULL))
               AND (prod_posting_group_code IS ? OR (prod_posting_group_code IS NULL AND ? IS NULL)) LIMIT 1`)
     .bind(company_id, bpg, bpg, ppg, ppg).first()
   if (exists) return c.json({ success: false, error: `A setup row for BPG="${bpg ?? 'DEFAULT'}" × PPG="${ppg ?? 'DEFAULT'}" already exists.` }, 409)
 
   const { meta } = await c.env.DB
-    .prepare(`INSERT INTO general_posting_setup
-              (company_id, bus_posting_group_code, prod_posting_group_code,
+    .prepare(`INSERT INTO posting_rules
+              (company_id, rule_type, bus_posting_group_code, prod_posting_group_code,
                sales_account, purchases_account, cogs_account,
-               sales_returns_account, purch_returns_account, expense_account, is_active, created_at)
-              VALUES (?,?,?,?,?,?,?,?,?,1,datetime('now'))`)
-    .bind(company_id, bpg, ppg,
+               sales_returns_account, purch_returns_account, expense_account,
+               priority, is_active, created_at, updated_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,100,1,datetime('now'),datetime('now'))`)
+    .bind(company_id, 'general', bpg, ppg,
           body.sales_account ?? null, body.purchases_account ?? null, body.cogs_account ?? null,
           body.sales_returns_account ?? null, body.purch_returns_account ?? null, body.expense_account ?? null)
     .run()
 
-  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'CREATE', table_name: 'general_posting_setup', new_value: { bpg, ppg } })
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'CREATE', table_name: 'posting_rules', new_value: { rule_type: 'general', bpg, ppg } })
   clearPostingEngineCaches()
   return c.json({ success: true, data: { id: meta.last_row_id } }, 201)
 })
@@ -947,7 +1202,7 @@ gl.patch('/posting-setup/general/:id', async (c) => {
   if (!rowId) return c.json({ success: false, error: 'Invalid id' }, 400)
 
   const existing = await c.env.DB
-    .prepare('SELECT id FROM general_posting_setup WHERE id = ? AND company_id = ?')
+    .prepare("SELECT id FROM posting_rules WHERE id = ? AND company_id = ? AND rule_type = 'general'")
     .bind(rowId, company_id).first()
   if (!existing) return c.json({ success: false, error: 'Not found' }, 404)
 
@@ -968,10 +1223,10 @@ gl.patch('/posting-setup/general/:id', async (c) => {
   vals.push(rowId, company_id)
 
   await c.env.DB
-    .prepare(`UPDATE general_posting_setup SET ${sets.join(', ')} WHERE id = ? AND company_id = ?`)
+    .prepare(`UPDATE posting_rules SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ? AND company_id = ? AND rule_type = 'general'`)
     .bind(...vals).run()
 
-  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPDATE', table_name: 'general_posting_setup', new_value: { id: rowId, ...body } })
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPDATE', table_name: 'posting_rules', new_value: { id: rowId, rule_type: 'general', ...body } })
   clearPostingEngineCaches()
   return c.json({ success: true })
 })
@@ -985,7 +1240,7 @@ gl.get('/posting-setup/inventory', async (c) => {
   const { company_id } = getUser(c)
   const { results } = await c.env.DB
     .prepare(`SELECT id, inv_posting_group_code, prod_posting_group_code, inventory_account, is_active
-              FROM inventory_posting_setup WHERE company_id = ?
+              FROM posting_rules WHERE company_id = ? AND rule_type = 'inventory'
               ORDER BY inv_posting_group_code NULLS LAST, prod_posting_group_code NULLS LAST`)
     .bind(company_id).all()
   return c.json({ success: true, data: results })
@@ -1004,20 +1259,20 @@ gl.post('/posting-setup/inventory', async (c) => {
   const ppg = body.prod_posting_group_code?.toUpperCase() ?? null
 
   const exists = await c.env.DB
-    .prepare(`SELECT 1 FROM inventory_posting_setup WHERE company_id = ?
+    .prepare(`SELECT 1 FROM posting_rules WHERE company_id = ? AND rule_type = 'inventory'
               AND (inv_posting_group_code IS ? OR (inv_posting_group_code IS NULL AND ? IS NULL))
               AND (prod_posting_group_code IS ? OR (prod_posting_group_code IS NULL AND ? IS NULL)) LIMIT 1`)
     .bind(company_id, ipg, ipg, ppg, ppg).first()
   if (exists) return c.json({ success: false, error: `A setup row for IPG="${ipg ?? 'DEFAULT'}" × PPG="${ppg ?? 'DEFAULT'}" already exists.` }, 409)
 
   const { meta } = await c.env.DB
-    .prepare(`INSERT INTO inventory_posting_setup
-              (company_id, inv_posting_group_code, prod_posting_group_code, inventory_account, is_active, created_at)
-              VALUES (?,?,?,?,1,datetime('now'))`)
-    .bind(company_id, ipg, ppg, body.inventory_account ?? null)
+    .prepare(`INSERT INTO posting_rules
+              (company_id, rule_type, inv_posting_group_code, prod_posting_group_code, inventory_account, priority, is_active, created_at, updated_at)
+              VALUES (?,?,?,?,?,100,1,datetime('now'),datetime('now'))`)
+    .bind(company_id, 'inventory', ipg, ppg, body.inventory_account ?? null)
     .run()
 
-  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'CREATE', table_name: 'inventory_posting_setup', new_value: { ipg, ppg } })
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'CREATE', table_name: 'posting_rules', new_value: { rule_type: 'inventory', ipg, ppg } })
   clearPostingEngineCaches()
   return c.json({ success: true, data: { id: meta.last_row_id } }, 201)
 })
@@ -1029,7 +1284,7 @@ gl.patch('/posting-setup/inventory/:id', async (c) => {
   if (!rowId) return c.json({ success: false, error: 'Invalid id' }, 400)
 
   const existing = await c.env.DB
-    .prepare('SELECT id FROM inventory_posting_setup WHERE id = ? AND company_id = ?')
+    .prepare("SELECT id FROM posting_rules WHERE id = ? AND company_id = ? AND rule_type = 'inventory'")
     .bind(rowId, company_id).first()
   if (!existing) return c.json({ success: false, error: 'Not found' }, 404)
 
@@ -1042,10 +1297,10 @@ gl.patch('/posting-setup/inventory/:id', async (c) => {
   vals.push(rowId, company_id)
 
   await c.env.DB
-    .prepare(`UPDATE inventory_posting_setup SET ${sets.join(', ')} WHERE id = ? AND company_id = ?`)
+    .prepare(`UPDATE posting_rules SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ? AND company_id = ? AND rule_type = 'inventory'`)
     .bind(...vals).run()
 
-  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPDATE', table_name: 'inventory_posting_setup', new_value: { id: rowId, ...body } })
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPDATE', table_name: 'posting_rules', new_value: { id: rowId, rule_type: 'inventory', ...body } })
   clearPostingEngineCaches()
   return c.json({ success: true })
 })
@@ -1065,19 +1320,19 @@ gl.get('/posting-setup/health', async (c) => {
     c.env.DB.prepare('SELECT COUNT(*) AS n FROM business_posting_groups  WHERE company_id = ? AND is_active = 1').bind(company_id).first<{n:number}>(),
     c.env.DB.prepare('SELECT COUNT(*) AS n FROM product_posting_groups   WHERE company_id = ? AND is_active = 1').bind(company_id).first<{n:number}>(),
     c.env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_posting_groups WHERE company_id = ? AND is_active = 1').bind(company_id).first<{n:number}>(),
-    c.env.DB.prepare('SELECT COUNT(*) AS n FROM general_posting_setup    WHERE company_id = ? AND is_active = 1').bind(company_id).first<{n:number}>(),
-    c.env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_posting_setup  WHERE company_id = ? AND is_active = 1').bind(company_id).first<{n:number}>(),
+    c.env.DB.prepare("SELECT COUNT(*) AS n FROM posting_rules WHERE company_id = ? AND rule_type = 'general' AND is_active = 1").bind(company_id).first<{n:number}>(),
+    c.env.DB.prepare("SELECT COUNT(*) AS n FROM posting_rules WHERE company_id = ? AND rule_type = 'inventory' AND is_active = 1").bind(company_id).first<{n:number}>(),
     // Does catch-all (NULL/NULL) row exist?
-    c.env.DB.prepare('SELECT COUNT(*) AS n FROM general_posting_setup   WHERE company_id = ? AND bus_posting_group_code IS NULL AND prod_posting_group_code IS NULL AND is_active = 1').bind(company_id).first<{n:number}>(),
-    c.env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_posting_setup WHERE company_id = ? AND inv_posting_group_code  IS NULL AND prod_posting_group_code IS NULL AND is_active = 1').bind(company_id).first<{n:number}>(),
+    c.env.DB.prepare("SELECT COUNT(*) AS n FROM posting_rules WHERE company_id = ? AND rule_type = 'general' AND bus_posting_group_code IS NULL AND prod_posting_group_code IS NULL AND is_active = 1").bind(company_id).first<{n:number}>(),
+    c.env.DB.prepare("SELECT COUNT(*) AS n FROM posting_rules WHERE company_id = ? AND rule_type = 'inventory' AND inv_posting_group_code  IS NULL AND prod_posting_group_code IS NULL AND is_active = 1").bind(company_id).first<{n:number}>(),
     // Entities missing posting groups
     c.env.DB.prepare('SELECT COUNT(*) AS n FROM suppliers  WHERE company_id = ? AND bus_posting_group_code IS NULL').bind(company_id).first<{n:number}>(),
     c.env.DB.prepare('SELECT COUNT(*) AS n FROM items      WHERE company_id = ? AND prod_posting_group_code IS NULL').bind(company_id).first<{n:number}>(),
     c.env.DB.prepare('SELECT COUNT(*) AS n FROM warehouses WHERE company_id = ? AND inv_posting_group_code  IS NULL').bind(company_id).first<{n:number}>(),
     // Setup rows missing critical accounts
-    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM general_posting_setup WHERE company_id = ? AND is_active = 1
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM posting_rules WHERE company_id = ? AND rule_type = 'general' AND is_active = 1
       AND (sales_account IS NULL OR purchases_account IS NULL OR cogs_account IS NULL)`).bind(company_id).first<{n:number}>(),
-    c.env.DB.prepare('SELECT COUNT(*) AS n FROM inventory_posting_setup WHERE company_id = ? AND is_active = 1 AND inventory_account IS NULL').bind(company_id).first<{n:number}>(),
+    c.env.DB.prepare("SELECT COUNT(*) AS n FROM posting_rules WHERE company_id = ? AND rule_type = 'inventory' AND is_active = 1 AND inventory_account IS NULL").bind(company_id).first<{n:number}>(),
   ])
 
   const hasCatchAllGeneral   = (gpsNullRow?.n  ?? 0) > 0
@@ -1167,6 +1422,343 @@ gl.post('/posting-setup/validate', async (c) => {
   }
 
   return c.json({ success: true, data: blueprint })
+})
+
+// =============================================================================
+// SYSTEM INTEGRITY SCORE
+// =============================================================================
+
+async function computeIntegrityScore(c: Context<{ Bindings: Env }>) {
+  const { company_id } = getUser(c)
+
+  const [
+    totalEntriesRow,
+    unbalancedRow,
+    totalEventsRow,
+    postedEventsRow,
+    errorEventsRow,
+    orphanEntriesRow,
+    orphanEventsRow,
+    inventoryGLRow,
+    ruleGapRow,
+  ] = await Promise.all([
+    c.env.DB.prepare('SELECT COUNT(*) AS n FROM journal_entries WHERE company_id = ?')
+      .bind(company_id).first<{ n: number }>(),
+
+    c.env.DB.prepare(`
+      SELECT COUNT(*) AS n FROM (
+        SELECT je.id FROM journal_entries je
+        JOIN journal_entry_lines jel ON jel.entry_id = je.id
+        WHERE je.company_id = ?
+        GROUP BY je.id
+        HAVING ABS(ROUND(SUM(jel.debit), 2) - ROUND(SUM(jel.credit), 2)) > 0.01
+      )`).bind(company_id).first<{ n: number }>(),
+
+    c.env.DB.prepare('SELECT COUNT(*) AS n FROM business_events WHERE company_id = ?')
+      .bind(company_id).first<{ n: number }>(),
+
+    c.env.DB.prepare("SELECT COUNT(*) AS n FROM business_events WHERE company_id = ? AND status = 'posted'")
+      .bind(company_id).first<{ n: number }>(),
+
+    c.env.DB.prepare("SELECT COUNT(*) AS n FROM business_events WHERE company_id = ? AND status IN ('error','pending')")
+      .bind(company_id).first<{ n: number }>(),
+
+    c.env.DB.prepare(`
+      SELECT COUNT(*) AS n FROM journal_entries je
+      WHERE je.company_id = ?
+        AND je.ref_type = 'business_event'
+        AND NOT EXISTS (
+          SELECT 1 FROM business_events be WHERE be.id = je.ref_id AND be.company_id = je.company_id
+        )`).bind(company_id).first<{ n: number }>(),
+
+    c.env.DB.prepare(`
+      SELECT COUNT(*) AS n FROM business_events
+      WHERE company_id = ? AND status = 'posted' AND journal_entry_id IS NULL`
+    ).bind(company_id).first<{ n: number }>(),
+
+    c.env.DB.prepare(`
+      SELECT COUNT(*) AS n FROM inventory_movements
+      WHERE company_id = ? AND status = 'posted' AND journal_entry_id IS NULL`
+    ).bind(company_id).first<{ n: number }>(),
+
+    c.env.DB.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM suppliers  WHERE company_id = ? AND bus_posting_group_code IS NULL) +
+        (SELECT COUNT(*) FROM items      WHERE company_id = ? AND prod_posting_group_code IS NULL) +
+        (SELECT COUNT(*) FROM warehouses WHERE company_id = ? AND inv_posting_group_code  IS NULL)
+      AS n`).bind(company_id, company_id, company_id).first<{ n: number }>(),
+  ])
+
+  const totalEntries  = totalEntriesRow?.n  ?? 0
+  const unbalanced    = unbalancedRow?.n    ?? 0
+  const totalEvents   = totalEventsRow?.n   ?? 0
+  const postedEvents  = postedEventsRow?.n  ?? 0
+  const errorEvents   = errorEventsRow?.n   ?? 0
+  const orphanEntries = orphanEntriesRow?.n ?? 0
+  const orphanEvents  = orphanEventsRow?.n  ?? 0
+  const invUnlinked   = inventoryGLRow?.n   ?? 0
+  const ruleGaps      = ruleGapRow?.n       ?? 0
+
+  const balanceScore = totalEntries > 0
+    ? Math.max(0, Math.round(((totalEntries - unbalanced) / totalEntries) * 100))
+    : 100
+
+  const coverageScore = totalEvents > 0
+    ? Math.max(0, Math.round((postedEvents / totalEvents) * 100))
+    : 100
+
+  const totalOrphans = orphanEntries + orphanEvents
+  const orphanScore  = totalEntries > 0
+    ? Math.max(0, Math.round(((totalEntries - totalOrphans) / totalEntries) * 100))
+    : 100
+
+  const totalInvRow = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM inventory_movements WHERE company_id = ? AND status = 'posted'"
+  ).bind(company_id).first<{ n: number }>()
+  const totalInv    = totalInvRow?.n ?? 0
+  const invRecScore = totalInv > 0
+    ? Math.max(0, Math.round(((totalInv - invUnlinked) / totalInv) * 100))
+    : 100
+
+  const hasCatchAllGeneral = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM posting_rules WHERE company_id = ? AND rule_type = 'general' AND bus_posting_group_code IS NULL AND prod_posting_group_code IS NULL AND is_active = 1"
+  ).bind(company_id).first<{ n: number }>()
+  const hasCatchAllInv = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM posting_rules WHERE company_id = ? AND rule_type = 'inventory' AND inv_posting_group_code IS NULL AND prod_posting_group_code IS NULL AND is_active = 1"
+  ).bind(company_id).first<{ n: number }>()
+  const ruleScore = ((hasCatchAllGeneral?.n ?? 0) > 0 ? 50 : 0)
+                  + ((hasCatchAllInv?.n     ?? 0) > 0 ? 50 : 0)
+                  - Math.min(50, ruleGaps)
+
+  const overallScore = Math.max(0, Math.round(
+    balanceScore  * 0.30 +
+    coverageScore * 0.25 +
+    orphanScore   * 0.20 +
+    invRecScore   * 0.15 +
+    Math.max(0, ruleScore) * 0.10
+  ))
+
+  const alerts: Array<{ level: 'error' | 'warning' | 'info'; message: string; action: string }> = []
+
+  if (unbalanced > 0) alerts.push({
+    level: 'error',
+    message: `${unbalanced} قيد غير متوازن في دفتر الأستاذ`,
+    action: '/api/gl/audit/orphans',
+  })
+  if (errorEvents > 0) alerts.push({
+    level: 'error',
+    message: `${errorEvents} حدث أعمال فشل ترحيله`,
+    action: '/api/gl/audit/business-events',
+  })
+  if (orphanEntries > 0) alerts.push({
+    level: 'warning',
+    message: `${orphanEntries} قيد بدون حدث أعمال مرتبط`,
+    action: '/api/gl/audit/orphans',
+  })
+  if (invUnlinked > 0) alerts.push({
+    level: 'warning',
+    message: `${invUnlinked} حركة مخزنية لم تُرحَّل للأستاذ`,
+    action: '/inventory',
+  })
+  if (ruleGaps > 0) alerts.push({
+    level: 'info',
+    message: `${ruleGaps} جهة (مورد/صنف/مخزن) بدون مجموعة ترحيل`,
+    action: '/gl/posting-setup',
+  })
+
+  void c.env.DB.prepare(`
+    INSERT INTO system_integrity_scores
+    (company_id, overall_score, posting_coverage_score, balance_integrity_score,
+     orphan_score, reconciliation_score, rule_coverage_score,
+     unbalanced_count, orphan_count, draft_event_count, error_event_count)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(
+    company_id, overallScore, coverageScore, balanceScore,
+    orphanScore, invRecScore, Math.max(0, ruleScore),
+    unbalanced, totalOrphans,
+    0, errorEvents,
+  ).run().catch(() => {/* non-blocking */})
+
+  const status = overallScore >= 95 ? 'healthy'
+    : overallScore >= 80 ? 'warning'
+    : overallScore >= 60 ? 'critical'
+    : 'emergency'
+
+  return {
+    success: true,
+    data: {
+      overall_score: overallScore,
+      status,
+      components: {
+        balance_integrity:  { score: balanceScore,  weight: '30%', detail: `${unbalanced} قيد غير متوازن من ${totalEntries}` },
+        posting_coverage:   { score: coverageScore, weight: '25%', detail: `${postedEvents} من ${totalEvents} أحداث مرحَّلة` },
+        orphan_score:       { score: orphanScore,   weight: '20%', detail: `${totalOrphans} قيد/حدث يتيم` },
+        inv_reconciliation: { score: invRecScore,   weight: '15%', detail: `${invUnlinked} حركة غير مرحَّلة من ${totalInv}` },
+        rule_coverage:      { score: Math.max(0, ruleScore), weight: '10%', detail: `${ruleGaps} جهة بدون مجموعة ترحيل` },
+      },
+      alerts,
+      computed_at: new Date().toISOString(),
+    },
+  }
+}
+
+// GET /api/gl/integrity/score — weighted health score (0-100)
+gl.get('/integrity/score', async (c) => {
+  return c.json(await computeIntegrityScore(c))
+})
+
+// POST /api/gl/integrity/score — manual recompute trigger
+gl.post('/integrity/score', async (c) => {
+  return c.json(await computeIntegrityScore(c))
+})
+
+// GET /api/gl/integrity/score/history — last 30 days of scores
+gl.get('/integrity/score/history', async (c) => {
+  const { company_id } = getUser(c)
+  const { results } = await c.env.DB.prepare(
+    `SELECT overall_score, posting_coverage_score, balance_integrity_score,
+            orphan_score, reconciliation_score, rule_coverage_score,
+            unbalanced_count, orphan_count, error_event_count, scored_at
+     FROM system_integrity_scores
+     WHERE company_id = ?
+     ORDER BY scored_at DESC LIMIT 30`
+  ).bind(company_id).all()
+  return c.json({ success: true, data: results })
+})
+
+// =============================================================================
+// ORPHAN DETECTION & AUDIT
+// =============================================================================
+
+// GET /api/gl/audit/orphans — detect all data integrity violations
+gl.get('/audit/orphans', async (c) => {
+  const { company_id } = getUser(c)
+
+  const [
+    unbalancedEntries,
+    orphanJournalEntries,
+    orphanPostedEvents,
+    imbalancedInventory,
+    errorEvents,
+  ] = await Promise.all([
+    // 1. Journal entries where Dr ≠ Cr
+    c.env.DB.prepare(`
+      SELECT je.id, je.entry_date, je.description, je.ref_type, je.ref_id,
+             ROUND(SUM(jel.debit), 2)  AS total_debit,
+             ROUND(SUM(jel.credit), 2) AS total_credit,
+             ROUND(ABS(SUM(jel.debit) - SUM(jel.credit)), 2) AS imbalance
+      FROM journal_entries je
+      JOIN journal_entry_lines jel ON jel.entry_id = je.id
+      WHERE je.company_id = ?
+      GROUP BY je.id
+      HAVING imbalance > 0.01
+      ORDER BY imbalance DESC LIMIT 50`
+    ).bind(company_id).all(),
+
+    // 2. Journal entries with ref_type='business_event' but no matching event
+    c.env.DB.prepare(`
+      SELECT je.id, je.entry_date, je.description, je.ref_type, je.ref_id
+      FROM journal_entries je
+      WHERE je.company_id = ?
+        AND je.ref_type = 'business_event'
+        AND NOT EXISTS (
+          SELECT 1 FROM business_events be
+          WHERE be.id = je.ref_id AND be.company_id = je.company_id
+        )
+      ORDER BY je.entry_date DESC LIMIT 50`
+    ).bind(company_id).all(),
+
+    // 3. Business events marked 'posted' but no journal entry
+    c.env.DB.prepare(`
+      SELECT id, event_type, event_date, source_module, source_id, status, error_message
+      FROM business_events
+      WHERE company_id = ? AND status = 'posted' AND journal_entry_id IS NULL
+      ORDER BY event_date DESC LIMIT 50`
+    ).bind(company_id).all(),
+
+    // 4. Inventory movements posted but no GL link
+    c.env.DB.prepare(`
+      SELECT im.id, im.movement_date, im.item_code, i.name AS item_name,
+             im.movement_type, im.quantity, im.unit_price
+      FROM inventory_movements im
+      LEFT JOIN items i ON i.code = im.item_code AND i.company_id = im.company_id
+      WHERE im.company_id = ? AND im.status = 'posted' AND im.journal_entry_id IS NULL
+      ORDER BY im.movement_date DESC LIMIT 50`
+    ).bind(company_id).all(),
+
+    // 5. Business events in error state
+    c.env.DB.prepare(`
+      SELECT id, event_type, event_date, source_module, source_id, error_message, status
+      FROM business_events
+      WHERE company_id = ? AND status IN ('error', 'pending')
+      ORDER BY event_date DESC LIMIT 50`
+    ).bind(company_id).all(),
+  ])
+
+  const totalIssues = (unbalancedEntries.results.length)
+    + (orphanJournalEntries.results.length)
+    + (orphanPostedEvents.results.length)
+    + (imbalancedInventory.results.length)
+    + (errorEvents.results.length)
+
+  return c.json({
+    success: true,
+    data: {
+      summary: {
+        total_issues:          totalIssues,
+        unbalanced_entries:    unbalancedEntries.results.length,
+        orphan_journal_entries: orphanJournalEntries.results.length,
+        orphan_posted_events:  orphanPostedEvents.results.length,
+        unlinked_inventory:    imbalancedInventory.results.length,
+        error_events:          errorEvents.results.length,
+        is_clean:              totalIssues === 0,
+      },
+      details: {
+        unbalanced_entries:    unbalancedEntries.results,
+        orphan_journal_entries: orphanJournalEntries.results,
+        orphan_posted_events:  orphanPostedEvents.results,
+        unlinked_inventory:    imbalancedInventory.results,
+        error_events:          errorEvents.results,
+      },
+    },
+  })
+})
+
+// GET /api/gl/audit/business-events — list all business events with filter
+gl.get('/audit/business-events', async (c) => {
+  const { company_id } = getUser(c)
+  const status    = c.req.query('status')     ?? null
+  const eventType = c.req.query('event_type') ?? null
+  const page      = Math.max(1, Number(c.req.query('page') ?? 1))
+  const size      = Math.min(100, Number(c.req.query('size') ?? 50))
+  const offset    = (page - 1) * size
+
+  let where = 'WHERE be.company_id = ?'
+  const binds: unknown[] = [company_id]
+  if (status)    { where += ' AND be.status = ?';      binds.push(status) }
+  if (eventType) { where += ' AND be.event_type = ?';  binds.push(eventType) }
+
+  const [rows, cnt] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT be.id, be.event_type, be.event_date, be.source_module, be.source_id,
+              be.status, be.error_message, be.posted_at, be.journal_entry_id,
+              je.entry_date AS gl_entry_date, je.description AS gl_description
+       FROM business_events be
+       LEFT JOIN journal_entries je ON je.id = be.journal_entry_id
+       ${where}
+       ORDER BY be.event_date DESC, be.id DESC LIMIT ? OFFSET ?`
+    ).bind(...binds, size, offset).all(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM business_events be ${where}`)
+      .bind(...binds).first<{ n: number }>(),
+  ])
+
+  return c.json({
+    success: true,
+    data: rows.results,
+    total: cnt?.n ?? 0,
+    page,
+    page_size: size,
+  })
 })
 
 export default gl

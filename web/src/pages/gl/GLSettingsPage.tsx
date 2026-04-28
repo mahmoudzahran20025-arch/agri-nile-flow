@@ -1,6 +1,5 @@
 import { useSearchParams } from 'react-router-dom'
 import { Settings, Link2, ShieldCheck, CalendarDays, BrainCircuit } from 'lucide-react'
-import GLMappingsPage        from './GLMappingsPage'
 import IntegrationControlPage from './IntegrationControlPage'
 import PeriodsPage            from './PeriodsPage'
 import SmartClassifierPage    from './SmartClassifierPage'
@@ -10,7 +9,6 @@ type Tab = 'mappings' | 'classifier' | 'integrations' | 'periods'
 const TABS: { id: Tab; label: string; icon: React.ReactNode; desc: string; legacy?: boolean }[] = [
   { id: 'integrations', icon: <ShieldCheck size={15} />, label: 'حوكمة الربط',     desc: 'تفعيل وتعطيل الربط التلقائي لكل وحدة' },
   { id: 'periods',      icon: <CalendarDays size={15}/>, label: 'الفترات المالية', desc: 'إدارة الفترات المالية وقفلها' },
-  { id: 'mappings',     icon: <Link2       size={15} />, label: 'الربط الثابت',    desc: 'مسار قديم للعرض فقط', legacy: true },
   { id: 'classifier',   icon: <BrainCircuit size={15} />,label: 'المصنف الذكي',    desc: 'إدارة الربط التفاعلي للبيانات القديمة', legacy: true },
 ]
 
@@ -57,7 +55,6 @@ export default function GLSettingsPage() {
 
       {/* Tab content — render each page inline, suppressing their own h1 header */}
       <div className="[&_.page-header]:hidden [&_.page-title]:hidden">
-        {tab === 'mappings'     && <GLMappingsPage />}
         {tab === 'classifier'   && <SmartClassifierPage />}
         {tab === 'integrations' && <IntegrationControlPage />}
         {tab === 'periods'      && <PeriodsPage />}

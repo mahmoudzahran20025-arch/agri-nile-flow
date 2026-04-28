@@ -13,7 +13,7 @@ import AddItemModal         from '../../components/forms/AddItemModal'
 import AddMasterRecordModal from '../../components/forms/AddMasterRecordModal'
 import type { Season, Item, CostCenter, FinancialPeriod } from '../../types'
 
-type Tab = 'seasons' | 'items' | 'cost_centers' | 'accounts' | 'expense_types' | 'periods' | 'mappings' | 'roles'
+type Tab = 'seasons' | 'items' | 'cost_centers' | 'accounts' | 'expense_types' | 'periods' | 'roles'
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'seasons',       label: 'المواسم',         icon: <Calendar size={16} /> },
@@ -22,7 +22,6 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'accounts',      label: 'الحسابات',         icon: <BookOpen size={16} /> },
   { id: 'expense_types', label: 'أنواع المصروفات',  icon: <Tag      size={16} /> },
   { id: 'periods',       label: 'الفترات المالية',  icon: <Lock     size={16} /> },
-  { id: 'mappings',      label: 'ربط الحسابات',     icon: <Settings size={16} /> },
   { id: 'roles',         label: 'صلاحيات الأدوار',  icon: <Info     size={16} /> },
 ]
 
@@ -618,17 +617,6 @@ function MappingsTab({ canManage }: { canManage: boolean }) {
     queryFn:  () => configApi.accounts() as Promise<Account[]>,
   })
 
-  const [localMap, setLocalMap] = useState<Record<string, string>>({})
-
-  // Sync local state when data arrives
-  useEffect(() => {
-    if (mappings.length) {
-      const m: Record<string, string> = {}
-      mappings.forEach(x => { m[x.mapping_key] = String(x.account_code) })
-      setLocalMap(m)
-    }
-  }, [mappings])
-
   const KEYS = [
     { key: 'inventory',        label: 'حساب المخزون الرئيسي',    desc: 'يُستخدم في حركات الإضافة والصرف للمخازن' },
     { key: 'cash',             label: 'حساب النقدية (الصندوق)', desc: 'يُستخدم في المشتريات النقدية للمخزون' },
@@ -946,11 +934,6 @@ export default function ConfigPage() {
       {/* Financial Periods */}
       {tab === 'periods' && (
         <PeriodsTab canManage={canWrite('gl')} />
-      )}
-
-      {/* GL Mappings */}
-      {tab === 'mappings' && (
-        <MappingsTab canManage={canWrite('config')} />
       )}
 
       {/* RBAC Roles Matrix */}

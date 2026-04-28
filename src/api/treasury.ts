@@ -3,6 +3,7 @@ import type { Env } from '../types'
 import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
 import { FinanceCore } from '../lib/finance_core'
 import { logAudit } from '../lib/audit'
+import { resolveControlAccount } from '../lib/posting_engine'
 
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
@@ -126,7 +127,7 @@ treasury.post('/transactions', zValidator('json', transactionSchema), async (c) 
       center_code: b.center_code,
       field_id: b.field_id,
       season_id: b.season_id,
-      expense_code: b.expense_code,
+      expense_code: b.expense_code == null ? null : String(b.expense_code),
       notes: b.notes,
       status: b.status,
       document_type: b.document_type,
@@ -208,15 +209,16 @@ treasury.post('/partners', async (c) => {
   // GL entry for initial capital if > 0
   if (capitalPaid > 0) {
     const today = new Date().toISOString().slice(0, 10)
-    // Try to get equity account mapping, fallback to default
-    const equityMapping = await c.env.DB
-      .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'equity'")
-      .bind(company_id).first<{ account_code: string }>()
-    const cashMapping = await c.env.DB
-      .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'")
-      .bind(company_id).first<{ account_code: string }>()
+    let equityCode: string | null = null
+    let cashCode: string | null = null
+    try {
+      equityCode = await resolveControlAccount(c.env.DB, company_id, 'equity')
+      cashCode = await resolveControlAccount(c.env.DB, company_id, 'cash')
+    } catch {
+      // If control mapping is not ready yet, keep partner creation successful and skip auto-posting.
+    }
 
-    if (equityMapping && cashMapping) {
+    if (equityCode && cashCode) {
       // Record Cash Movement (which also handles GL entry)
       await FinanceCore.recordCashMovement(c.env.DB, {
         company_id, userId,
@@ -224,7 +226,7 @@ treasury.post('/partners', async (c) => {
         direction: 'د',
         amount: capitalPaid,
         narration: `إضافة رأس مال شريك: ${b.name.trim()}`,
-        contraAccount: equityMapping.account_code // link to equity instead of revenue
+        contraAccount: equityCode // link to equity instead of revenue
       })
     }
   }

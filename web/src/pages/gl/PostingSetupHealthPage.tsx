@@ -198,8 +198,8 @@ export default function PostingSetupHealthPage() {
   // Quick-fix: create catch-all general posting setup row
   const fixGeneral = useMutation({
     mutationFn: () => glApi.createGeneralSetup({
-      business_posting_group: null,
-      product_posting_group:  null,
+      bus_posting_group_code:  null,
+      prod_posting_group_code: null,
     } as Parameters<typeof glApi.createGeneralSetup>[0]),
     onSuccess: (res: { success?: boolean; error?: string } | undefined) => {
       if (res && !res.success) { toast(res.error ?? 'خطأ في الإنشاء', 'error'); return }
@@ -212,7 +212,8 @@ export default function PostingSetupHealthPage() {
   // Quick-fix: create catch-all inventory posting setup row
   const fixInventory = useMutation({
     mutationFn: () => glApi.createInventorySetup({
-      inventory_posting_group: null,
+      inv_posting_group_code:  null,
+      prod_posting_group_code: null,
     } as Parameters<typeof glApi.createInventorySetup>[0]),
     onSuccess: (res: { success?: boolean; error?: string } | undefined) => {
       if (res && !res.success) { toast(res.error ?? 'خطأ في الإنشاء', 'error'); return }
@@ -306,7 +307,7 @@ export default function PostingSetupHealthPage() {
               <div className="flex-1">
                 <p className="font-medium text-sm">قاعدة الافتراضي — الإعداد العام</p>
                 <p className="text-xs text-slate-500 mt-1">
-                  صف NULL × NULL في general_posting_setup
+                  صف NULL × NULL في إعدادات الترحيل العام (posting_rules)
                 </p>
                 <p className="text-xs font-mono text-slate-400 mt-1">
                   {setup.general_rows} صف إجمالاً

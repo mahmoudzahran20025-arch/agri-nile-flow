@@ -238,7 +238,6 @@ season.get('/season-pnl', async (c) => {
     c.env.DB.prepare(`
       SELECT COALESCE(SUM(ct.amount), 0) AS total
       FROM cash_transactions ct
-      LEFT JOIN gl_account_mappings gm ON gm.mapping_key = 'inventory' AND gm.company_id = ct.company_id
       WHERE ct.company_id = ? AND ct.season_id = ? AND ct.direction = 'م' AND ct.status = 'posted'
         AND (ct.supplier_code IS NULL)
     `).bind(company_id, seasonId).first<{ total: number }>(),

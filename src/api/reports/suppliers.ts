@@ -59,25 +59,85 @@ suppliers.get('/suppliers-balance', async (c) => {
   const { company_id } = getUser(c)
   const seasonId = c.req.query('season_id') ? Number(c.req.query('season_id')) : null
 
-  const seasonWhere  = seasonId ? 'AND st.season_id = ?' : ''
-  const queryBinds: unknown[] = seasonId ? [seasonId, company_id] : [company_id]
+  // Resolve active AP control account from posting_rules
+  const ap = await c.env.DB.prepare(
+    `SELECT account_code
+     FROM posting_rules
+     WHERE company_id = ?
+       AND rule_type = 'control'
+       AND mapping_key = 'accounts_payable'
+       AND is_active = 1
+     ORDER BY priority ASC, id DESC
+     LIMIT 1`
+  ).bind(company_id).first<{ account_code: string }>()
+
+  if (!ap?.account_code) {
+    return c.json({
+      success: false,
+      error: 'No active control mapping found for accounts_payable in posting_rules',
+      code: 'MISSING_AP_CONTROL_MAPPING',
+    }, 409)
+  }
+
+  // Season filter is applied via journal_entry_lines.season_id — no supplier_transactions needed
+  const seasonWhere = seasonId ? 'AND jl.season_id = ?' : ''
+
+  // Supplier dimension sourced from business_events.payload (supplier_code field).
+  // Both supplier_invoice and supplier_payment events now carry supplier_code in payload.
+  // Events created before this change (old payment events with no supplier_code in payload)
+  // are gracefully excluded via the IS NOT NULL guard and do NOT affect invoice totals.
+  //
+  // Bind order for the final SQL:
+  // 1. ap.account_code  (SUM CASE credit)
+  // 2. ap.account_code  (SUM CASE debit)
+  // 3. company_id       (be.company_id filter)
+  // 4. seasonId?        (jl.season_id filter, only when set)
+  // 5. ap.account_code  (control_account literal column)
+  // 6. company_id       (s.company_id filter)
+  const queryBinds: unknown[] = [
+    ap.account_code, ap.account_code,
+    company_id,
+    ...(seasonId ? [seasonId] : []),
+    ap.account_code,
+    company_id,
+  ]
 
   const { results } = await c.env.DB.prepare(`
+    WITH gl_by_supplier AS (
+      SELECT
+        CAST(json_extract(be.payload, '$.supplier_code') AS INTEGER) AS supplier_code,
+        COALESCE(SUM(CASE WHEN jl.account_code = ? THEN jl.credit ELSE 0 END), 0) AS total_credit,
+        COALESCE(SUM(CASE WHEN jl.account_code = ? THEN jl.debit  ELSE 0 END), 0) AS total_debit,
+        COUNT(DISTINCT je.id) AS tx_count
+      FROM business_events be
+      JOIN journal_entries je
+        ON je.id = be.journal_entry_id
+       AND je.company_id = be.company_id
+       AND je.is_posted = 1
+      JOIN journal_entry_lines jl
+        ON jl.entry_id = je.id
+       AND jl.company_id = je.company_id
+      WHERE be.company_id = ?
+        AND be.source_module = 'suppliers'
+        AND be.status = 'posted'
+        AND json_extract(be.payload, '$.supplier_code') IS NOT NULL
+        ${seasonWhere}
+      GROUP BY supplier_code
+    )
     SELECT
       s.code,
       s.name,
       s.activity,
-      COALESCE(SUM(st.credit), 0)              AS total_credit,
-      COALESCE(SUM(st.debit),  0)              AS total_debit,
-      COALESCE(SUM(st.credit) - SUM(st.debit), 0) AS balance,
-      COALESCE(MAX(st.balance_with_checks), 0) AS last_balance,
-      COUNT(st.id)                             AS tx_count
+      COALESCE(g.total_credit, 0)                      AS total_credit,
+      COALESCE(g.total_debit,  0)                      AS total_debit,
+      COALESCE(g.total_credit - g.total_debit, 0)      AS balance,
+      COALESCE(g.total_credit - g.total_debit, 0)      AS last_balance,
+      COALESCE(g.tx_count, 0)                          AS tx_count,
+      'gl_business_events'                             AS data_source,
+      ?                                                AS control_account
     FROM suppliers s
-    LEFT JOIN supplier_transactions st
-      ON st.supplier_code = s.code AND st.company_id = s.company_id AND st.status = 'posted'
-      ${seasonWhere}
+    LEFT JOIN gl_by_supplier g ON g.supplier_code = s.code
     WHERE s.company_id = ?
-    GROUP BY s.code
     ORDER BY ABS(balance) DESC
   `).bind(...queryBinds).all()
 

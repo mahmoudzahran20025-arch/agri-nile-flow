@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
+import { FinanceCore } from '../lib/finance_core'
 import { logAudit } from '../lib/audit'
 
 const operations = new Hono<{ Bindings: Env }>()
@@ -180,16 +181,17 @@ operations.patch('/orders/:id/status', async (c) => {
       const totalCost = tasks?.total_cost ?? 0
 
       if (totalCost > 0) {
-        const { glWorkOrderLabor } = await import('../lib/gl')
-        await glWorkOrderLabor(
-          c.env.DB, company_id, id, totalCost,
-          actual_date ?? order?.actual_date ?? new Date().toISOString().slice(0, 10),
-          `تكلفة عمالة ميدانية: أمر عمل #${id}`,
-          userId,
-          order?.center_code,
-          order?.season_id,
-          order?.field_id
-        )
+        await FinanceCore.resolveWorkOrderLabor(c.env.DB, {
+          company_id,
+          ref_id: id,
+          amount: totalCost,
+          date: actual_date ?? order?.actual_date ?? new Date().toISOString().slice(0, 10),
+          description: `تكلفة عمالة ميدانية: أمر عمل #${id}`,
+          created_by: userId,
+          center_code: order?.center_code ?? undefined,
+          season_id: order?.season_id,
+          field_id: order?.field_id,
+        })
       }
     } catch (e: any) {
       return c.json({ success: false, error: `فشل ترحيل التكاليف: ${e.message}` }, 400)

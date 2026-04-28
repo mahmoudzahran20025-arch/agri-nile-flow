@@ -1,15 +1,10 @@
   import { useState, useMemo } from 'react'
   import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-  import { useNavigate } from 'react-router-dom'
+  import { useNavigate, Link } from 'react-router-dom'
   import { BookOpen, Plus, Settings, Eye, List, GitBranch, ChevronRight, ChevronDown, Shield, Info, Pencil, PowerOff, Power, Lock } from 'lucide-react'
   import { glApi } from '../../api/client'
   import { useToast } from '../../contexts/ToastContext'
-  import Modal from '../../components/ui/Modal'
-  import { usePermission } from '../../hooks/usePermission'
 
-  interface Account {
-    id: number; code: string; name: string; account_type: string
-    normal_balance: string; parent_code?: string; level: number
     is_header: number; is_active: number
   }
 
@@ -35,13 +30,7 @@
     revenue:   { bg: 'bg-emerald-50',text: 'text-emerald-800',border: 'border-emerald-200',dot: 'bg-emerald-400' },
     expense:   { bg: 'bg-orange-50', text: 'text-orange-800', border: 'border-orange-200', dot: 'bg-orange-400' },
   }
-  const MAPPING_KEYS = [
-    { key: 'cash',             label: 'الخزينة والبنوك' },
-    { key: 'accounts_payable', label: 'الذمم الدائنة (موردون)' },
-    { key: 'inventory',        label: 'المخزون' },
-    { key: 'revenue_default',  label: 'الإيراد الافتراضي' },
-    { key: 'expense_default',  label: 'المصروف الافتراضي' },
-  ]
+  // Mapping keys sourced from central schema — do not redefine here.
 
   // ── Build tree from flat list ────────────────────────────────
   interface AccountNode extends Account { children: AccountNode[] }
@@ -162,7 +151,6 @@
     const [lockedOnly, setLockedOnly] = useState(false)
     const [viewMode, setViewMode]     = useState<'table' | 'tree'>('tree')
     const [openAdd, setOpenAdd]       = useState(false)
-    const [openMapping, setOpenMapping] = useState(false)
 
     const [form, setForm] = useState({
       code: '', name: '', account_type: 'expense', parent_code: '', notes: '',
@@ -184,16 +172,10 @@
       queryKey: ['gl-accounts'],
       queryFn:  () => glApi.accounts(),
     })
-    const { data: mappings = [] } = useQuery({
-      queryKey: ['gl-mappings'],
-      queryFn:  glApi.mappings,
-    })
     const { data: usageMetadata = [] } = useQuery({
       queryKey: ['gl-accounts-usage-metadata'],
       queryFn: () => glApi.accountUsageMetadata(),
     })
-
-    const [mappingForm, setMappingForm] = useState<Record<string,string>>({})
 
     const list = accounts as Account[]
     const usageMap = useMemo(() => {
@@ -251,27 +233,6 @@
       },
     })
 
-    const saveMappings = useMutation({
-      mutationFn: () => glApi.saveMappings(
-        MAPPING_KEYS.map(m => ({ mapping_key: m.key, account_code: mappingForm[m.key] ?? '' }))
-          .filter(m => m.account_code)
-      ),
-      onSuccess: () => {
-        qc.invalidateQueries({ queryKey: ['gl-mappings'] })
-        toast('تم حفظ إعدادات الربط', 'success')
-        setOpenMapping(false)
-      },
-    })
-
-    function openMappingModal() {
-      const current: Record<string,string> = {}
-      for (const m of mappings as { mapping_key: string; account_code: string }[]) {
-        current[m.mapping_key] = m.account_code
-      }
-      setMappingForm(current)
-      setOpenMapping(true)
-    }
-
     const leafAccounts = list.filter(a => !a.is_header)
 
     return (
@@ -313,11 +274,6 @@
               </button>
             </div>
 
-            {canWrite('gl') && (
-              <button className="btn btn-ghost" onClick={openMappingModal}>
-                <Settings size={16} /> إعدادات الربط
-              </button>
-            )}
             {canWrite('gl') && (
               <button className="btn btn-primary" onClick={() => setOpenAdd(true)}>
                 <Plus size={16} /> حساب جديد
@@ -599,37 +555,6 @@
           </div>
         </Modal>
 
-        {/* Mappings Modal */}
-        <Modal open={openMapping} onClose={() => setOpenMapping(false)} title="إعدادات ربط الحسابات الافتراضية" size="md">
-          <p className="text-sm text-gray-500 mb-4">
-            هذه الحسابات تُستخدم لتوليد القيود تلقائياً عند إنشاء الحركات.
-          </p>
-          <div className="space-y-3">
-            {MAPPING_KEYS.map(m => (
-              <div key={m.key} className="flex items-center gap-3">
-                <label className="text-sm font-medium w-48 flex-shrink-0">{m.label}</label>
-                <select
-                  className="input flex-1"
-                  value={mappingForm[m.key] ?? ''}
-                  onChange={e => setMappingForm(p => ({ ...p, [m.key]: e.target.value }))}
-                >
-                  <option value="">— اختر حساباً —</option>
-                  {leafAccounts.map(a => <option key={a.code} value={a.code}>{a.code} — {a.name}</option>)}
-                </select>
-              </div>
-            ))}
-          </div>
-          <div className="flex justify-end gap-3 mt-6">
-            <button className="btn btn-ghost" onClick={() => setOpenMapping(false)}>إلغاء</button>
-            <button
-              className="btn btn-primary"
-              onClick={() => saveMappings.mutate()}
-              disabled={saveMappings.isPending}
-            >
-              {saveMappings.isPending ? 'جاري الحفظ...' : 'حفظ الإعدادات'}
-            </button>
-          </div>
-        </Modal>
         </>)}
       </div>
     )

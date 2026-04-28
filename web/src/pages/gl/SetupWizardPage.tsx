@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { glApi } from '../../api/gl'
+import { AlertTriangle, CheckCircle } from 'lucide-react'
+import { glApi } from '../../api/client'
 import PostingGroupSelector from '../../components/gl/PostingGroupSelector'
 import AccountPicker from '../../components/gl/AccountPicker'
 import JournalEntryPreview from '../../components/gl/JournalEntryPreview'
+import { useAppStore } from '../../store/appStore'
 
-const STORAGE_KEY = 'gl-setup-wizard-draft'
+function storageKey(companyId: string | number | undefined) {
+  return companyId ? `gl-setup-wizard-draft:${companyId}` : 'gl-setup-wizard-draft'
+}
 
 const STEPS = [
   'مرحباً',
@@ -17,6 +21,7 @@ const STEPS = [
 ]
 
 export default function SetupWizardPage() {
+  const companyId = useAppStore(s => s.company?.id)
   const [step, setStep] = useState(0)
   const [bpg, setBpg] = useState<string | null>(null)
   const [ppg, setPpg] = useState<string | null>(null)
@@ -33,7 +38,7 @@ export default function SetupWizardPage() {
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY)
+      const raw = localStorage.getItem(storageKey(companyId))
       if (!raw) return
       const draft = JSON.parse(raw) as { bpg: string | null; ppg: string | null; inventoryAccount: string | null; receivableAccount: string | null; amount: number; step: number }
       setBpg(draft.bpg)
@@ -45,11 +50,11 @@ export default function SetupWizardPage() {
     } catch {
       // ignore invalid localStorage
     }
-  }, [])
+  }, [companyId])
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ bpg, ppg, inventoryAccount, receivableAccount, amount, step }))
-  }, [amount, bpg, inventoryAccount, ppg, receivableAccount, step])
+    localStorage.setItem(storageKey(companyId), JSON.stringify({ bpg, ppg, inventoryAccount, receivableAccount, amount, step }))
+  }, [amount, bpg, companyId, inventoryAccount, ppg, receivableAccount, step])
 
   const completion = useMemo(() => Math.round(((step + 1) / STEPS.length) * 100), [step])
 
@@ -163,21 +168,79 @@ export default function SetupWizardPage() {
 
       {step === 4 && (
         <div className="card p-6 space-y-4">
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
-            انتهى المعالج. عند هذه النقطة يكون لديك مسار واضح: راجع الصحة، أكمل أي مجموعات ناقصة، ثم ابدأ إدخال البيانات الحقيقية.
+          {health?.is_ready === false && (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-4 flex gap-3">
+              <AlertTriangle size={20} className="text-red-500 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-red-800 mb-1">لا يمكن الانطلاق — الإعداد غير مكتمل</p>
+                <ul className="list-disc list-inside space-y-1">
+                  {health.issues.map((issue, i) => (
+                    <li key={i} className="text-xs text-red-700">{issue}</li>
+                  ))}
+                </ul>
+                <p className="text-xs text-red-600 mt-2">أكمل الإعداد أولاً ثم عد لهذه الخطوة.</p>
+              </div>
+            </div>
+          )}
+          {health?.is_ready && (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 flex gap-3">
+              <CheckCircle size={20} className="text-emerald-500 shrink-0 mt-0.5" />
+              <p className="text-sm text-emerald-800">الإعداد مكتمل. يمكنك البدء في إدخال البيانات الحقيقية.</p>
+            </div>
+          )}
+
+          {/* Fix-path: always accessible */}
+          <div className="space-y-2">
+            <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">إصلاح الإعداد</p>
+            <div className="grid grid-cols-3 gap-3 text-sm">
+              <Link to="/gl/posting-setup/health" className="btn-secondary text-center">لوحة الصحة</Link>
+              <Link to="/gl/posting-setup" className="btn-secondary text-center">إعداد الترحيل</Link>
+              <Link to="/gl/posting-groups" className="btn-secondary text-center">إدارة المجموعات</Link>
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <Link to="/gl/posting-setup/health" className="btn-secondary text-center">لوحة الصحة</Link>
-            <Link to="/gl/posting-setup" className="btn-secondary text-center">صفحة الإعداد</Link>
-            <Link to="/gl/posting-groups" className="btn-secondary text-center">إدارة المجموعات</Link>
-            <Link to="/gl/entries" className="btn-secondary text-center">قيود اليومية</Link>
+
+          {/* Launch path: blocked when not ready */}
+          <div className="space-y-2">
+            <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">بدء العمل</p>
+            {health?.is_ready ? (
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <Link to="/gl/entries"   className="btn-primary text-center">قيود اليومية</Link>
+                <Link to="/gl/accounts"  className="btn-secondary text-center">دليل الحسابات</Link>
+              </div>
+            ) : (
+              <div
+                className="rounded-xl border-2 border-dashed border-gray-200 p-4 text-center text-sm text-gray-400 select-none"
+                title="أكمل الإعداد أولاً"
+              >
+                <AlertTriangle size={16} className="inline mr-1 text-gray-300" />
+                تعذّر الانطلاق — أكمل متطلبات الإعداد أعلاه أولاً
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      <div className="flex justify-between">
+      <div className="flex justify-between items-center">
         <button type="button" className="btn-secondary" disabled={step === 0} onClick={() => setStep(current => Math.max(0, current - 1))}>السابق</button>
-        <button type="button" className="btn-primary" disabled={step === STEPS.length - 1} onClick={() => setStep(current => Math.min(STEPS.length - 1, current + 1))}>التالي</button>
+        {step === 3 && (health?.issues?.length ?? 0) > 0 && (
+          <span className="text-xs text-red-600 flex items-center gap-1 font-medium">
+            <AlertTriangle size={13} /> يوجد خلل حرج — أصلح الإعداد قبل المتابعة
+          </span>
+        )}
+        {step === 3 && !((health?.issues?.length ?? 0) > 0) && health?.is_ready === false && (
+          <span className="text-xs text-amber-600 flex items-center gap-1">
+            <AlertTriangle size={13} /> الإعداد غير مكتمل — يمكنك المتابعة للمراجعة
+          </span>
+        )}
+        <button
+          type="button"
+          className="btn-primary disabled:opacity-40 disabled:cursor-not-allowed"
+          disabled={step === STEPS.length - 1 || (step === 3 && (health?.issues?.length ?? 0) > 0)}
+          onClick={() => setStep(current => Math.min(STEPS.length - 1, current + 1))}
+          title={step === 3 && (health?.issues?.length ?? 0) > 0 ? 'أصلح المشكلات الحرجة أولاً' : undefined}
+        >
+          التالي
+        </button>
       </div>
     </div>
   )

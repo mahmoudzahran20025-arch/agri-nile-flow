@@ -77,4 +77,77 @@ export const inventoryApi = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   createAdjustment: (body: any) => api.post('/inventory/adjustments', body),
   postAdjustment:   (id: number) => api.post(`/inventory/adjustments/${id}/post`, {}),
+
+  // ── Governance / Financial Integrity ────────────────────────────────────
+
+  glPreview: (body: {
+    warehouse:       string
+    item_code:       number
+    movement_type:   'اضافة' | 'صرف'
+    quantity:        number
+    unit_price?:     number
+    payment_method?: 'cash' | 'credit'
+    center_code?:    number
+  }) => unwrap(api.post<{
+    item_name:   string
+    item_unit:   string | null
+    ipg:         string | null
+    ppg:         string | null
+    unit_price:  number
+    value:       number
+    is_balanced: boolean
+    warnings:    string[]
+    lines: Array<{
+      side:          'DR' | 'CR'
+      account_code:  string
+      account_label: string
+      amount:        number
+      narration:     string
+    }>
+  }>('/inventory/gl-preview', body)),
+
+  itemsMaster: () => unwrap(api.get<Array<{
+    code:                    number
+    name:                    string
+    unit:                    string | null
+    category_id:             number | null
+    prod_posting_group_code: string | null
+    inv_posting_group_code:  string | null
+    standard_cost:           number | null
+    reorder_threshold:       number | null
+    category_name:           string | null
+    total_qty:               number
+    total_value:             number
+    warehouse_count:         number
+  }>>('/inventory/items-master')),
+
+  updateItemMaster: (code: number, body: {
+    prod_posting_group_code?: string | null
+    inv_posting_group_code?:  string | null
+    standard_cost?:           number | null
+    reorder_threshold?:       number | null
+    name?:                    string
+    unit?:                    string
+  }) => api.patch(`/inventory/items-master/${code}`, body),
+
+  postingHealth: () => unwrap(api.get<{
+    data: Array<{
+      warehouse:         string
+      ipg:               string | null
+      ppg:               string | null
+      movement_count:    number
+      total_value:       number
+      has_exact_setup:   boolean
+      has_fallback_setup: boolean
+      is_covered:        boolean
+      gaps:              string[]
+    }>
+    summary: {
+      total_combos:  number
+      covered:       number
+      exact_setup:   number
+      missing_setup: number
+      health_pct:    number
+    }
+  }>('/inventory/posting-health')),
 }

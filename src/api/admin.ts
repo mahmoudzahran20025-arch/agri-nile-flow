@@ -60,9 +60,12 @@ admin.post('/companies', async (c) => {
   `).run().catch(() => {/* ignore if no template */})
 
   await c.env.DB.prepare(`
-    INSERT OR IGNORE INTO gl_account_mappings (company_id, mapping_key, account_code)
-    SELECT ${companyId}, mapping_key, account_code
-    FROM gl_account_mappings WHERE company_id = 1
+    INSERT OR IGNORE INTO posting_rules
+      (company_id, rule_type, mapping_key, account_code, priority, is_active, created_at, updated_at)
+    SELECT ${companyId}, 'control', mapping_key, account_code,
+           COALESCE(priority, 100), COALESCE(is_active, 1), datetime('now'), datetime('now')
+    FROM posting_rules
+    WHERE company_id = 1 AND rule_type = 'control'
   `).run().catch(() => {})
 
   const year = new Date().getFullYear()

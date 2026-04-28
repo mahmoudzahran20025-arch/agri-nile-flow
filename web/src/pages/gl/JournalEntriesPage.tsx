@@ -1,13 +1,17 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import {
-  BookMarked, Plus, Trash2, ChevronDown, ArrowUp, ArrowDown, ArrowUpDown,
-  CheckCircle2, X, Save, RotateCcw, Download, FileText, Bookmark, BookmarkCheck, Printer,
+  BookMarked, Plus, ChevronDown, ArrowUp, ArrowDown, ArrowUpDown,
+  CheckCircle2, X, Download, RotateCcw, Printer, GitBranch,
 } from 'lucide-react'
 import { glApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 import { usePermission } from '../../hooks/usePermission'
 import { useAppStore } from '../../store/appStore'
+import NewEntryForm from '../../components/gl/NewEntryForm'
+import QueryError from '../../components/ui/QueryError'
+import QueryBoundary from '../../components/ui/QueryBoundary'
 
 interface JournalEntry {
   id: number; entry_date: string; description: string; entry_number?: string
@@ -16,10 +20,24 @@ interface JournalEntry {
   reversal_entry_id?: number | null
 }
 interface EntryLine {
-  account_code: string; account_name?: string; debit: number; credit: number; description?: string
+  account_code: string; account_name?: string; debit: number; credit: number
+  description?: string; rule_slot?: string
 }
-interface EntryDetail extends JournalEntry { lines: EntryLine[] }
-interface NewLine { account_code: string; debit: string; credit: string; description: string }
+interface EntryDetail extends JournalEntry {
+  lines: EntryLine[]
+  posting_rule_trace?: string | null
+}
+
+interface RuleTrace {
+  rule_type?:        string
+  input_bpg?:        string | null
+  input_ppg?:        string | null
+  input_ipg?:        string | null
+  resolution_step?:  number | null
+  matched_rule_id?:  number | null
+  resolved_accounts?: Record<string, string>
+  resolved_at?:      string
+}
 
 const REF_LABELS: Record<string, string> = {
   cash_transaction:     'خزينة',
@@ -44,367 +62,13 @@ function esc(v: string) {
     .replace(/'/g, '&#39;')
 }
 
-// ── Entry template helpers (localStorage) ─────────────────────
-const TEMPLATES_KEY = 'gl_entry_templates_v1'
-
-interface EntryTemplate {
-  id: string; name: string; lines: NewLine[]
-}
-
-function loadTemplates(): EntryTemplate[] {
-  try { return JSON.parse(localStorage.getItem(TEMPLATES_KEY) ?? '[]') } catch { return [] }
-}
-
-function saveTemplate(t: EntryTemplate) {
-  const existing = loadTemplates().filter(x => x.id !== t.id)
-  localStorage.setItem(TEMPLATES_KEY, JSON.stringify([t, ...existing].slice(0, 20)))
-}
-
-function deleteTemplate(id: string) {
-  const existing = loadTemplates().filter(x => x.id !== id)
-  localStorage.setItem(TEMPLATES_KEY, JSON.stringify(existing))
-}
-
-// ── Full-page New Entry Form ──────────────────────────────────
-function NewEntryForm({
-  onCancel, onSaved,
-}: { onCancel: () => void; onSaved: () => void }) {
-  const { toast } = useToast()
-  const [header, setHeader] = useState({ entry_date: new Date().toISOString().slice(0, 10), description: '' })
-  const [lines, setLines]   = useState<NewLine[]>([
-    { account_code: '', debit: '', credit: '', description: '' },
-    { account_code: '', debit: '', credit: '', description: '' },
-  ])
-  const [showTemplates, setShowTemplates] = useState(false)
-  const [templates, setTemplates]         = useState<EntryTemplate[]>(loadTemplates)
-  const [savingName, setSavingName]       = useState('')
-  const [showSaveTemplate, setShowSaveTemplate] = useState(false)
-
-  const { data: accounts = [] } = useQuery({
-    queryKey: ['gl-accounts'],
-    queryFn:  () => glApi.accounts(),
-  })
-  const accountList = (accounts as { code: string; name: string; is_header: number }[]).filter(a => !a.is_header)
-
-  const totalDebit  = lines.reduce((s, l) => s + (Number(l.debit)  || 0), 0)
-  const totalCredit = lines.reduce((s, l) => s + (Number(l.credit) || 0), 0)
-  const isBalanced  = Math.abs(totalDebit - totalCredit) < 0.01 && totalDebit > 0
-  const diff        = totalDebit - totalCredit
-
-  const addLine    = () => setLines(p => [...p, { account_code: '', debit: '', credit: '', description: '' }])
-  const removeLine = (i: number) => setLines(p => p.filter((_, idx) => idx !== i))
-  const updateLine = (i: number, f: Partial<NewLine>) =>
-    setLines(p => p.map((l, idx) => idx === i ? { ...l, ...f } : l))
-
-  function applyTemplate(t: EntryTemplate) {
-    setLines(t.lines.map(l => ({ ...l })))
-    if (t.name) setHeader(h => ({ ...h, description: h.description || t.name }))
-    setShowTemplates(false)
-    toast(`تم تطبيق القالب: ${t.name}`, 'success')
-  }
-
-  function handleSaveTemplate() {
-    if (!savingName.trim()) return
-    const t: EntryTemplate = {
-      id:    Date.now().toString(),
-      name:  savingName.trim(),
-      lines: lines.filter(l => l.account_code),
-    }
-    saveTemplate(t)
-    setTemplates(loadTemplates())
-    setSavingName('')
-    setShowSaveTemplate(false)
-    toast('تم حفظ القالب', 'success')
-  }
-
-  const saveMutation = useMutation({
-    mutationFn: () => glApi.createEntry({
-      entry_date:  header.entry_date,
-      description: header.description,
-      lines: lines
-        .filter(l => l.account_code && (Number(l.debit) > 0 || Number(l.credit) > 0))
-        .map(l => ({
-          account_code: l.account_code,
-          debit:        Number(l.debit)  || 0,
-          credit:       Number(l.credit) || 0,
-          description:  l.description || undefined,
-        })),
-    }),
-    onSuccess: (res: { success: boolean; error?: string }) => {
-      if (!res.success) { toast(res.error ?? 'خطأ', 'error'); return }
-      toast('تم حفظ القيد وترحيله بنجاح', 'success')
-      onSaved()
-    },
-    onError: () => toast('فشل حفظ القيد', 'error'),
-  })
-
-  return (
-    <div className="bg-white border border-slate-200 rounded-2xl shadow-xl overflow-hidden animate-fade-in">
-      {/* Form Header */}
-      <div className="flex items-center justify-between px-5 py-4 bg-gradient-to-r from-purple-600 to-blue-600">
-        <div className="flex items-center gap-2 text-white">
-          <BookMarked size={18} />
-          <span className="font-bold text-sm">قيد يومية يدوي جديد</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowTemplates(s => !s)}
-            className="flex items-center gap-1 text-white/80 hover:text-white text-xs border border-white/30 hover:border-white/60 px-2.5 py-1 rounded-lg transition-all"
-            title="القوالب المحفوظة"
-          >
-            <Bookmark size={13} /> قوالب
-            {templates.length > 0 && (
-              <span className="bg-white/20 text-white text-[10px] px-1 rounded">{templates.length}</span>
-            )}
-          </button>
-          <button onClick={onCancel} className="text-white/70 hover:text-white transition-colors">
-            <X size={18} />
-          </button>
-        </div>
-      </div>
-
-      {/* Templates Panel */}
-      {showTemplates && (
-        <div className="px-5 py-3 bg-purple-50 border-b border-purple-100">
-          {templates.length === 0 ? (
-            <p className="text-xs text-slate-400">لا توجد قوالب محفوظة. أكمل القيد وانقر "حفظ كقالب".</p>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {templates.map(t => (
-                <div key={t.id} className="flex items-center gap-1 bg-white border border-purple-200 rounded-lg px-2 py-1 text-xs">
-                  <button
-                    onClick={() => applyTemplate(t)}
-                    className="text-purple-700 font-medium hover:text-purple-900 transition-colors"
-                  >
-                    <BookmarkCheck size={11} className="inline ml-1" />
-                    {t.name}
-                    <span className="text-slate-400 mr-1">({t.lines.length} سطر)</span>
-                  </button>
-                  <button
-                    onClick={() => { deleteTemplate(t.id); setTemplates(loadTemplates()) }}
-                    className="text-slate-300 hover:text-red-400 transition-colors p-0.5"
-                    title="حذف القالب"
-                  >
-                    <X size={10} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Meta fields */}
-      <div className="grid grid-cols-2 gap-4 px-5 py-4 border-b border-slate-100 bg-slate-50/50">
-        <div>
-          <label className="label">التاريخ *</label>
-          <input
-            className="input"
-            type="date"
-            value={header.entry_date}
-            onChange={e => setHeader(p => ({ ...p, entry_date: e.target.value }))}
-          />
-        </div>
-        <div>
-          <label className="label">البيان *</label>
-          <input
-            className="input"
-            value={header.description}
-            onChange={e => setHeader(p => ({ ...p, description: e.target.value }))}
-            placeholder="مثال: قيد افتتاحي / تسوية حسابية..."
-            autoFocus
-          />
-        </div>
-      </div>
-
-      {/* Lines grid — Excel-style */}
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="bg-slate-50 border-b border-slate-200">
-              <th className="th text-right w-8 text-slate-400">#</th>
-              <th className="th text-right">الحساب</th>
-              <th className="th text-right w-40">مدين</th>
-              <th className="th text-right w-40">دائن</th>
-              <th className="th text-right">بيان السطر</th>
-              <th className="th w-8" />
-            </tr>
-          </thead>
-          <tbody>
-            {lines.map((l, i) => {
-              const acct = accountList.find(a => a.code === l.account_code)
-              return (
-                <tr
-                  key={i}
-                  className={`border-b border-slate-100 transition-colors ${
-                    l.account_code ? 'bg-white hover:bg-slate-50/50' : 'bg-slate-50/30'
-                  }`}
-                >
-                  <td className="td text-slate-300 text-xs text-center">{i + 1}</td>
-                  <td className="td">
-                    <div className="flex flex-col gap-0.5">
-                      <select
-                        className="input text-xs py-1"
-                        value={l.account_code}
-                        onChange={e => updateLine(i, { account_code: e.target.value })}
-                      >
-                        <option value="">— اختر حساب —</option>
-                        {accountList.map(a => (
-                          <option key={a.code} value={a.code}>{a.code} — {a.name}</option>
-                        ))}
-                      </select>
-                      {acct && (
-                        <span className="text-[10px] text-slate-400 pr-1">{acct.name}</span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="td">
-                    <input
-                      className={`input text-xs py-1 w-full tabular-nums text-left ${
-                        Number(l.debit) > 0 ? 'border-red-300 bg-red-50/50 font-semibold text-red-700' : ''
-                      }`}
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={l.debit}
-                      placeholder="0"
-                      onChange={e => updateLine(i, { debit: e.target.value, credit: e.target.value ? '' : l.credit })}
-                    />
-                  </td>
-                  <td className="td">
-                    <input
-                      className={`input text-xs py-1 w-full tabular-nums text-left ${
-                        Number(l.credit) > 0 ? 'border-green-300 bg-green-50/50 font-semibold text-green-700' : ''
-                      }`}
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={l.credit}
-                      placeholder="0"
-                      onChange={e => updateLine(i, { credit: e.target.value, debit: e.target.value ? '' : l.debit })}
-                    />
-                  </td>
-                  <td className="td">
-                    <input
-                      className="input text-xs py-1 w-full"
-                      value={l.description}
-                      placeholder="اختياري..."
-                      onChange={e => updateLine(i, { description: e.target.value })}
-                    />
-                  </td>
-                  <td className="td">
-                    {lines.length > 2 && (
-                      <button onClick={() => removeLine(i)} className="text-slate-300 hover:text-red-500 transition-colors p-1 rounded">
-                        <Trash2 size={13} />
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-
-          {/* Totals footer */}
-          <tfoot>
-            <tr className="bg-slate-50 border-t-2 border-slate-200">
-              <td className="td text-xs font-bold text-slate-500" colSpan={2}>
-                الإجمالي ({lines.filter(l => l.account_code).length} سطر)
-              </td>
-              <td className="td">
-                <span className={`text-sm font-black tabular-nums ${isBalanced ? 'text-emerald-700' : 'text-red-600'}`}>
-                  {fmt(totalDebit)}
-                </span>
-              </td>
-              <td className="td">
-                <span className={`text-sm font-black tabular-nums ${isBalanced ? 'text-emerald-700' : 'text-red-600'}`}>
-                  {fmt(totalCredit)}
-                </span>
-              </td>
-              <td className="td" colSpan={2}>
-                {isBalanced ? (
-                  <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-lg">
-                    <CheckCircle2 size={12} /> متوازن
-                  </span>
-                ) : totalDebit > 0 || totalCredit > 0 ? (
-                  <span className="text-xs font-bold text-red-600">
-                    فرق: {fmt(Math.abs(diff))} {diff > 0 ? '(مدين أكبر)' : '(دائن أكبر)'}
-                  </span>
-                ) : null}
-              </td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-
-      {/* Bottom actions */}
-      <div className="flex items-center justify-between px-5 py-4 bg-slate-50 border-t border-slate-200">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={addLine}
-            className="flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-700 font-semibold border border-dashed border-blue-300 hover:border-blue-400 px-3 py-1.5 rounded-lg transition-all"
-          >
-            <Plus size={14} /> إضافة سطر
-          </button>
-          <button
-            onClick={() => setShowSaveTemplate(s => !s)}
-            className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-purple-600 border border-slate-200 hover:border-purple-300 px-2.5 py-1.5 rounded-lg transition-all"
-            title="حفظ كقالب للاستخدام لاحقاً"
-          >
-            <Bookmark size={12} /> حفظ كقالب
-          </button>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onCancel}
-            className="btn-secondary gap-1.5 text-sm"
-          >
-            <RotateCcw size={13} /> إلغاء
-          </button>
-          <button
-            className="btn-primary gap-1.5 shadow-lg shadow-blue-100"
-            onClick={() => saveMutation.mutate()}
-            disabled={saveMutation.isPending || !header.entry_date || !header.description || !isBalanced}
-          >
-            <Save size={13} />
-            {saveMutation.isPending ? 'جاري الحفظ...' : 'ترحيل القيد'}
-          </button>
-        </div>
-      </div>
-
-      {/* Save as template panel */}
-      {showSaveTemplate && (
-        <div className="px-5 py-3 bg-purple-50/80 border-t border-purple-100 flex items-center gap-3">
-          <FileText size={14} className="text-purple-500 shrink-0" />
-          <input
-            className="input text-xs h-8 flex-1 max-w-xs"
-            placeholder="اسم القالب (مثال: رسوم بنكية شهرية)"
-            value={savingName}
-            onChange={e => setSavingName(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSaveTemplate()}
-            autoFocus
-          />
-          <button
-            onClick={handleSaveTemplate}
-            disabled={!savingName.trim() || lines.filter(l => l.account_code).length === 0}
-            className="text-xs px-3 py-1.5 rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 transition-colors"
-          >
-            حفظ
-          </button>
-          <button onClick={() => setShowSaveTemplate(false)} className="text-slate-400 hover:text-slate-600">
-            <X size={14} />
-          </button>
-        </div>
-      )}
-    </div>
-  )
-}
-
 // ── Main Page ─────────────────────────────────────────────────
 export default function JournalEntriesPage() {
   const { canWrite } = usePermission()
   const { toast }    = useToast()
   const company = useAppStore(state => state.company)
   const qc = useQueryClient()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [start,     setStart]    = useState('')
   const [end,       setEnd]      = useState('')
@@ -413,11 +77,29 @@ export default function JournalEntriesPage() {
   const [minAmount, setMinAmount] = useState('')
   const [maxAmount, setMaxAmount] = useState('')
   const [page,      setPage]     = useState(1)
-  const [selectedId,setSelected] = useState<number | null>(null)
+  const [selectedId,setSelected] = useState<number | null>(() => {
+    const idParam = searchParams.get('id')
+    return idParam ? Number(idParam) : null
+  })
   const [selectedIds, setSelectedIds] = useState<number[]>([])
-  const [showNew,   setShowNew]  = useState(false)
+  const [showNew,     setShowNew]  = useState(false)
+  const [detailTab,   setDetailTab] = useState<'lines' | 'trace'>('lines')
   const [sortKey,   setSortKey]  = useState<'entry_date' | 'total_debit'>('entry_date')
   const [sortDir,   setSortDir]  = useState<'asc' | 'desc'>('desc')
+
+  // Keep ?id= URL param in sync so links like /gl/entries?id=123 work as deep links.
+  useEffect(() => {
+    if (selectedId != null) {
+      setSearchParams(p => { p.set('id', String(selectedId)); return p }, { replace: true })
+    } else {
+      setSearchParams(p => { p.delete('id'); return p }, { replace: true })
+    }
+  }, [selectedId, setSearchParams])
+
+  function selectEntry(id: number | null) {
+    setSelected(id)
+    setShowNew(false)
+  }
 
   const reverseMutation = useMutation({
     mutationFn: (id: number) => glApi.reverseEntry(id),
@@ -459,7 +141,7 @@ export default function JournalEntriesPage() {
       : <ArrowDown size={11} className="text-blue-500" />
   }
 
-  const { data: entriesData, isLoading } = useQuery({
+  const { data: entriesData, isLoading, isError, refetch } = useQuery({
     queryKey: ['gl-entries', page, start, end, refType],
     queryFn:  () => glApi.entries({ page, size: 50, start: start || undefined, end: end || undefined, ref_type: refType || undefined }),
   })
@@ -678,7 +360,7 @@ export default function JournalEntriesPage() {
             >
               <Download size={14} /> CSV المحدد
             </button>
-            <button className="btn-primary gap-2" onClick={() => { setShowNew(true); setSelected(null) }}>
+            <button className="btn-primary gap-2" onClick={() => { setShowNew(true); selectEntry(null) }}>
               <Plus size={16} /> قيد يدوي
             </button>
           </div>
@@ -845,70 +527,69 @@ export default function JournalEntriesPage() {
             ))}
           </div>
 
-          {isLoading && (
-            <div className="space-y-2">
-              {[...Array(6)].map((_, i) => (
-                <div key={i} className="card animate-pulse h-16 bg-slate-100/60" />
-              ))}
-            </div>
+          {isError && (
+            <QueryError onRetry={() => refetch()} />
           )}
 
-          {entries.map(e => {
-            const refColor = REF_COLORS[e.ref_type ?? ''] ?? 'bg-slate-50 text-slate-500 border-slate-200'
-            const isSelected = selectedId === e.id
-            const isChecked = selectedIds.includes(e.id)
-            return (
-              <div
-                key={e.id}
-                onClick={() => { setSelected(e.id); setShowNew(false) }}
-                className={`card cursor-pointer transition-all hover:shadow-md ${
-                  isSelected ? 'ring-2 ring-blue-500 bg-blue-50/30' : 'hover:bg-slate-50/50'
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <div className="flex items-start gap-2 flex-1 min-w-0">
-                    <input
-                      type="checkbox"
-                      checked={isChecked}
-                      onClick={(ev) => ev.stopPropagation()}
-                      onChange={() => toggleEntrySelection(e.id)}
-                      disabled={!!e.reversal_entry_id}
-                      title={e.reversal_entry_id ? 'هذا القيد معكوس مسبقاً' : 'تحديد القيد'}
-                      className="mt-0.5"
-                    />
-                    <p className="text-sm font-semibold text-slate-800 truncate flex-1">{e.description}</p>
+          <QueryBoundary
+            isLoading={isLoading}
+            isError={false}
+            isEmpty={!isLoading && entries.length === 0}
+            emptyMessage="لا توجد قيود في هذه الفترة"
+            loadingRows={6}
+          >
+            <>
+            {entries.map(e => {
+              const refColor = REF_COLORS[e.ref_type ?? ''] ?? 'bg-slate-50 text-slate-500 border-slate-200'
+              const isSelected = selectedId === e.id
+              const isChecked = selectedIds.includes(e.id)
+              return (
+                <div
+                  key={e.id}
+                  onClick={() => selectEntry(e.id)}
+                  className={`card cursor-pointer transition-all hover:shadow-md ${
+                    isSelected ? 'ring-2 ring-blue-500 bg-blue-50/30' : 'hover:bg-slate-50/50'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <div className="flex items-start gap-2 flex-1 min-w-0">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onClick={(ev) => ev.stopPropagation()}
+                        onChange={() => toggleEntrySelection(e.id)}
+                        disabled={!!e.reversal_entry_id}
+                        title={e.reversal_entry_id ? 'هذا القيد معكوس مسبقاً' : 'تحديد القيد'}
+                        className="mt-0.5"
+                      />
+                      <p className="text-sm font-semibold text-slate-800 truncate flex-1">{e.description}</p>
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {e.reversal_entry_id && (
+                        <span className="inline-flex px-2 py-0.5 rounded-md text-[10px] font-bold border bg-slate-100 text-slate-400 border-slate-200">
+                          معكوس
+                        </span>
+                      )}
+                      {e.ref_type && (
+                        <span className={`inline-flex px-2 py-0.5 rounded-md text-[10px] font-bold border ${refColor}`}>
+                          {REF_LABELS[e.ref_type] ?? e.ref_type}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    {e.reversal_entry_id && (
-                      <span className="inline-flex px-2 py-0.5 rounded-md text-[10px] font-bold border bg-slate-100 text-slate-400 border-slate-200">
-                        معكوس
-                      </span>
-                    )}
-                    {e.ref_type && (
-                      <span className={`inline-flex px-2 py-0.5 rounded-md text-[10px] font-bold border ${refColor}`}>
-                        {REF_LABELS[e.ref_type] ?? e.ref_type}
-                      </span>
-                    )}
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-400">{e.entry_date}</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-red-600 font-mono">{fmt(e.total_debit)}</span>
+                      <span className="text-slate-300">|</span>
+                      <span className="text-emerald-700 font-mono">{fmt(e.total_credit)}</span>
+                    </div>
                   </div>
                 </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-400">{e.entry_date}</span>
-                  <div className="flex items-center gap-3">
-                    <span className="text-red-600 font-mono">{fmt(e.total_debit)}</span>
-                    <span className="text-slate-300">|</span>
-                    <span className="text-emerald-700 font-mono">{fmt(e.total_credit)}</span>
-                  </div>
-                </div>
-              </div>
-            )
-          })}
-
-          {!isLoading && entries.length === 0 && (
-            <div className="card text-center py-14 text-slate-400">
-              <BookMarked size={36} className="mx-auto mb-3 opacity-20" />
-              <p className="text-sm font-medium">لا توجد قيود في هذه الفترة</p>
-            </div>
-          )}
+              )
+            })}
+            </>
+          </QueryBoundary>
 
           {/* Pagination */}
           {total > 50 && (
@@ -981,46 +662,163 @@ export default function JournalEntriesPage() {
                 </div>
               </div>
 
+              {/* Tab switcher */}
+              <div className="flex gap-1 bg-slate-100 rounded-xl p-1 w-fit">
+                <button
+                  onClick={() => setDetailTab('lines')}
+                  className={`px-3 py-1 text-xs font-semibold rounded-lg transition-all ${
+                    detailTab === 'lines' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  السطور
+                </button>
+                <button
+                  onClick={() => setDetailTab('trace')}
+                  className={`flex items-center gap-1 px-3 py-1 text-xs font-semibold rounded-lg transition-all ${
+                    detailTab === 'trace' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-700'
+                  } ${!detail.posting_rule_trace ? 'opacity-40' : ''}`}
+                  disabled={!detail.posting_rule_trace}
+                  title={!detail.posting_rule_trace ? 'لا يوجد تتبع ترحيل لهذا القيد' : 'عرض تتبع قاعدة الترحيل'}
+                >
+                  <GitBranch size={11} /> تتبع الترحيل
+                </button>
+              </div>
+
               {/* Lines table */}
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-slate-50 rounded-xl">
-                    <th className="th text-right">الحساب</th>
-                    <th className="th text-right">الاسم</th>
-                    <th className="th text-left">مدين</th>
-                    <th className="th text-left">دائن</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {detail.lines?.map((l, i) => (
-                    <tr key={i} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
-                      <td className="td font-mono text-blue-700 text-xs">{l.account_code}</td>
-                      <td className="td text-slate-700">{l.account_name ?? l.account_code}</td>
-                      <td className="td text-left tabular-nums">
-                        {l.debit > 0
-                          ? <span className="font-semibold text-red-600">{fmt(l.debit)}</span>
-                          : <span className="text-slate-200">—</span>}
+              {detailTab === 'lines' && (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 rounded-xl">
+                      <th className="th text-right">الحساب</th>
+                      <th className="th text-right">الاسم</th>
+                      <th className="th text-right text-[10px]">الفتحة</th>
+                      <th className="th text-left">مدين</th>
+                      <th className="th text-left">دائن</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detail.lines?.map((l, i) => (
+                      <tr key={i} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                        <td className="td font-mono text-blue-700 text-xs">{l.account_code}</td>
+                        <td className="td text-slate-700">{l.account_name ?? l.account_code}</td>
+                        <td className="td">
+                          {l.rule_slot
+                            ? <span className="text-[10px] font-mono bg-violet-50 text-violet-700 px-1.5 py-0.5 rounded border border-violet-100">{l.rule_slot}</span>
+                            : <span className="text-slate-200 text-xs">—</span>}
+                        </td>
+                        <td className="td text-left tabular-nums">
+                          {l.debit > 0
+                            ? <span className="font-semibold text-red-600">{fmt(l.debit)}</span>
+                            : <span className="text-slate-200">—</span>}
+                        </td>
+                        <td className="td text-left tabular-nums">
+                          {l.credit > 0
+                            ? <span className="font-semibold text-emerald-700">{fmt(l.credit)}</span>
+                            : <span className="text-slate-200">—</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="bg-slate-50 border-t-2 border-slate-200">
+                    <tr>
+                      <td className="td font-bold text-slate-600" colSpan={3}>الإجمالي</td>
+                      <td className="td text-left font-black text-red-600 tabular-nums">
+                        {fmt(detail.lines?.reduce((s, l) => s + (l.debit ?? 0), 0) ?? 0)}
                       </td>
-                      <td className="td text-left tabular-nums">
-                        {l.credit > 0
-                          ? <span className="font-semibold text-emerald-700">{fmt(l.credit)}</span>
-                          : <span className="text-slate-200">—</span>}
+                      <td className="td text-left font-black text-emerald-700 tabular-nums">
+                        {fmt(detail.lines?.reduce((s, l) => s + (l.credit ?? 0), 0) ?? 0)}
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-                <tfoot className="bg-slate-50 border-t-2 border-slate-200">
-                  <tr>
-                    <td className="td font-bold text-slate-600" colSpan={2}>الإجمالي</td>
-                    <td className="td text-left font-black text-red-600 tabular-nums">
-                      {fmt(detail.lines?.reduce((s, l) => s + (l.debit ?? 0), 0) ?? 0)}
-                    </td>
-                    <td className="td text-left font-black text-emerald-700 tabular-nums">
-                      {fmt(detail.lines?.reduce((s, l) => s + (l.credit ?? 0), 0) ?? 0)}
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
+                  </tfoot>
+                </table>
+              )}
+
+              {/* Trace panel */}
+              {detailTab === 'trace' && detail.posting_rule_trace && (() => {
+                let trace: RuleTrace | null = null
+                try { trace = JSON.parse(detail.posting_rule_trace) } catch { /* ignore */ }
+                if (!trace) return <p className="text-xs text-slate-400">بيانات التتبع تالفة</p>
+
+                const STEP_LABELS: Record<number, string> = {
+                  1: 'تطابق كامل (BPG + PPG + IPG)',
+                  2: 'BPG + PPG (IPG عام)',
+                  3: 'BPG + IPG (PPG عام)',
+                  4: 'PPG + IPG (BPG عام)',
+                  5: 'BPG فقط',
+                  6: 'PPG فقط',
+                  7: 'IPG فقط',
+                  8: 'افتراضي عام (كل الأبعاد عامة)',
+                }
+
+                return (
+                  <div className="space-y-3 text-sm">
+                    {/* Resolution summary */}
+                    <div className="bg-violet-50 border border-violet-100 rounded-xl p-3 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <GitBranch size={14} className="text-violet-600" />
+                        <span className="font-bold text-violet-900 text-xs">نتيجة حل قاعدة الترحيل</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">نوع القاعدة</span>
+                          <span className="font-mono font-semibold text-slate-800">{trace.rule_type ?? '—'}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">رقم القاعدة</span>
+                          <span className="font-mono font-semibold text-violet-700">#{trace.matched_rule_id ?? '—'}</span>
+                        </div>
+                        <div className="flex justify-between col-span-2">
+                          <span className="text-slate-500">خطوة الحل</span>
+                          <span className="font-semibold text-violet-700">
+                            {trace.resolution_step != null
+                              ? `الخطوة ${trace.resolution_step}: ${STEP_LABELS[trace.resolution_step] ?? ''}`
+                              : '—'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Input dimensions */}
+                    <div>
+                      <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-1.5">أبعاد الإدخال</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {[
+                          { l: 'BPG', v: trace.input_bpg },
+                          { l: 'PPG', v: trace.input_ppg },
+                          { l: 'IPG', v: trace.input_ipg },
+                        ].map(({ l, v }) => (
+                          <span key={l} className={`text-xs px-2 py-0.5 rounded-full border font-mono ${
+                            v ? 'bg-slate-100 text-slate-700 border-slate-200' : 'bg-slate-50 text-slate-300 border-slate-100'
+                          }`}>
+                            {l}: {v ?? 'عام'}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Resolved accounts */}
+                    {trace.resolved_accounts && Object.keys(trace.resolved_accounts).length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-1.5">الحسابات المُحددة</p>
+                        <div className="space-y-1">
+                          {Object.entries(trace.resolved_accounts).map(([slot, code]) => (
+                            <div key={slot} className="flex items-center justify-between bg-slate-50 rounded-lg px-2.5 py-1.5 border border-slate-100">
+                              <span className="text-[11px] font-mono text-violet-600">{slot}</span>
+                              <span className="text-xs font-bold text-slate-800 font-mono">{code}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {trace.resolved_at && (
+                      <p className="text-[10px] text-slate-400 text-left">
+                        حُسم في: {new Date(trace.resolved_at).toLocaleString('ar-EG')}
+                      </p>
+                    )}
+                  </div>
+                )
+              })()}
             </div>
           )}
         </div>

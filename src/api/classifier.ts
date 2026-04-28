@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 import type { Env } from '../types'
 import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
+import { resolveControlAccount } from '../lib/posting_engine'
 
 const classifier = new Hono<{ Bindings: Env }>()
 
@@ -140,16 +141,28 @@ classifier.post('/reconcile-legacy', async (c) => {
       const lastRule = matchedRules[matchedRules.length - 1]
       const mappingKey = lastRule.category_type === 'supplier' ? 'accounts_payable' : (lastRule.category_type === 'partner' ? 'partner_current_account' : null)
       if (mappingKey) {
-        const gm = await c.env.DB.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = ?").bind(company_id, mappingKey).first<{account_code: string}>()
-        finalGL = gm?.account_code || null
+        try {
+          finalGL = await resolveControlAccount(c.env.DB, company_id, mappingKey)
+        } catch {
+          finalGL = null
+        }
       }
     }
 
     if (finalGL) {
       // Find the associated journal entry lines
       // The default contra account used for legacy was either 'expense_default' or 'revenue_default'
-      const defMapping = await c.env.DB.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key IN ('expense_default', 'revenue_default')").bind(company_id).all<{account_code: string}>()
-      const defCodes = defMapping.results?.map(r => r.account_code) || []
+      const defCodes: string[] = []
+      for (const mappingKey of ['expense_default', 'revenue_default'] as const) {
+        try {
+          const code = await resolveControlAccount(c.env.DB, company_id, mappingKey)
+          if (code) {
+            defCodes.push(code)
+          }
+        } catch {
+          // Ignore missing fallback keys during rewrite.
+        }
+      }
 
       if (defCodes.length > 0) {
         const qs = defCodes.map(() => '?').join(',')

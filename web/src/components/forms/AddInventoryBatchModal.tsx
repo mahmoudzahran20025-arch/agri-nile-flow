@@ -1,8 +1,8 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import {
   Plus, Trash2, AlertTriangle, CheckCircle,
-  ChevronRight, ChevronLeft, Package, Warehouse, Info, Leaf,
+  ChevronRight, ChevronLeft, Package, Warehouse, Info, Leaf, BookOpen,
 } from 'lucide-react'
 import Modal from '../ui/Modal'
 import { inventoryApi, configApi, fieldsApi, operationsApi, suppliersApi } from '../../api/client'
@@ -85,6 +85,118 @@ function StepBar({ current }: { current: number }) {
           )}
         </div>
       ))}
+    </div>
+  )
+}
+
+// ─── GL Preview Panel (Step 3) ────────────────────────────────
+
+interface GLPreviewPanelProps {
+  warehouse:     string
+  movementType:  'اضافة' | 'صرف'
+  lines:         LineItem[]
+  paymentMethod: 'cash' | 'credit'
+  centerCode?:   number
+}
+
+function GLPreviewPanel({ warehouse, movementType, lines, paymentMethod, centerCode }: GLPreviewPanelProps) {
+  const [expanded, setExpanded] = useState(false)
+
+  // Preview the first non-zero line as a representative sample
+  const sampleLine = useMemo(() => lines.find(l => l.item_code && Number(l.quantity) > 0), [lines])
+
+  const totalValue = useMemo(() =>
+    lines.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.unit_price) || 0), 0),
+  [lines])
+
+  const { data: preview, isLoading: previewLoading } = useQuery({
+    queryKey: ['gl-preview', warehouse, movementType, sampleLine?.item_code, sampleLine?.quantity, sampleLine?.unit_price, paymentMethod],
+    queryFn: () => inventoryApi.glPreview({
+      warehouse,
+      item_code:      Number(sampleLine!.item_code),
+      movement_type:  movementType,
+      quantity:       Number(sampleLine!.quantity),
+      unit_price:     sampleLine!.unit_price ? Number(sampleLine!.unit_price) : undefined,
+      payment_method: paymentMethod,
+      center_code:    centerCode,
+    }),
+    enabled: !!sampleLine && !!warehouse,
+    staleTime: 30_000,
+  })
+
+  if (!sampleLine || !warehouse) return null
+
+  const warnings = preview?.warnings ?? []
+  const hasWarnings = warnings.length > 0
+
+  return (
+    <div className={`rounded-xl border ${hasWarnings ? 'border-amber-200 bg-amber-50' : 'border-indigo-200 bg-indigo-50'} p-3`}>
+      <button
+        type="button"
+        className="w-full flex items-center gap-2 text-sm font-semibold"
+        onClick={() => setExpanded(e => !e)}
+      >
+        <BookOpen size={14} className={hasWarnings ? 'text-amber-600' : 'text-indigo-600'} />
+        <span className={hasWarnings ? 'text-amber-800' : 'text-indigo-800'}>
+          القيد المحاسبي التلقائي {hasWarnings ? '⚠' : '✓'}
+        </span>
+        <span className="mr-auto text-xs font-normal opacity-70">
+          {previewLoading ? 'جاري التحميل...' : expanded ? 'إخفاء ▲' : 'عرض ▼'}
+        </span>
+      </button>
+
+      {expanded && !previewLoading && preview && (
+        <div className="mt-3 space-y-2">
+          {warnings.map((w, i) => (
+            <div key={i} className="flex items-start gap-1.5 text-xs text-amber-700 bg-amber-100 rounded-lg px-2.5 py-1.5">
+              <AlertTriangle size={11} className="shrink-0 mt-0.5" />
+              {w}
+            </div>
+          ))}
+
+          <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+            <div className="px-3 py-2 bg-slate-50 border-b border-slate-200 text-xs text-slate-500 flex justify-between">
+              <span>القيد المولَّد (نموذج — لكل صنف)</span>
+              <span className={preview.is_balanced ? 'text-green-600 font-semibold' : 'text-red-600 font-semibold'}>
+                {preview.is_balanced ? '✓ متوازن' : '✗ غير متوازن'}
+              </span>
+            </div>
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-slate-100">
+                  <th className="px-3 py-1.5 text-right text-slate-400">الجانب</th>
+                  <th className="px-3 py-1.5 text-right text-slate-400">الحساب</th>
+                  <th className="px-3 py-1.5 text-right text-slate-400">البيان</th>
+                  <th className="px-3 py-1.5 text-right text-slate-400">المبلغ</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {preview.lines.map((line, i) => (
+                  <tr key={i}>
+                    <td className="px-3 py-1.5">
+                      <span className={`font-bold ${line.side === 'DR' ? 'text-blue-600' : 'text-red-600'}`}>
+                        {line.side}
+                      </span>
+                    </td>
+                    <td className="px-3 py-1.5 font-mono text-slate-600">{line.account_code}</td>
+                    <td className="px-3 py-1.5 text-slate-500 truncate max-w-[180px]">{line.account_label}</td>
+                    <td className="px-3 py-1.5 font-semibold text-slate-700">
+                      {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(line.amount)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {totalValue > 0 && (
+            <p className="text-xs text-indigo-700 bg-indigo-100 rounded-lg px-2.5 py-1.5">
+              القيمة الكلية للدفعة: <strong>{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(totalValue)}</strong>
+              {' '}— سيتم إنشاء قيد مستقل لكل صنف
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -783,6 +895,15 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
               </tbody>
             </table>
           </div>
+
+          {/* GL Preview Panel */}
+          <GLPreviewPanel
+            warehouse={form.warehouse}
+            movementType={form.movement_type as 'اضافة' | 'صرف'}
+            lines={filledLines}
+            paymentMethod={form.payment_method as 'cash' | 'credit'}
+            centerCode={form.center_code ? Number(form.center_code) : undefined}
+          />
 
           <div className="flex items-center gap-2 text-green-700 bg-green-50 border border-green-200 rounded-lg p-3 text-sm">
             <CheckCircle size={16} className="shrink-0" />

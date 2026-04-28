@@ -2,11 +2,17 @@ import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types'
 import { getOpenPeriod, postAutoEntry } from './gl'
 import {
   resolveInventoryMovement  as peResolveInventory,
+  resolveInventoryTransfer  as peResolveTransfer,
+  resolvePurchaseReceipt    as peResolvePurchaseReceipt,
+  resolveCashTransaction     as peResolveCash,
   resolveSupplierInvoice    as peResolveSupplierInvoice,
   resolveSupplierPayment    as peResolveSupplierPayment,
   resolveExpensePosting     as peResolveExpense,
   resolveSalesRevenue       as peResolveSalesRevenue,
   resolvePayrollPosting     as peResolvePayroll,
+  resolveWorkOrderLabor      as peResolveWorkOrderLabor,
+  resolveContractAdvance     as peResolveContractAdvance,
+  resolveControlAccount,
 } from './posting_engine'
 
 interface CashMovementInput {
@@ -21,7 +27,7 @@ interface CashMovementInput {
   supplier_code?:   number | null
   center_code?:     number | null
   field_id?:        number | null
-  expense_code?:    number | null
+  expense_code?:    string | null
   season_id?:       number | null
   notes?:           string | null
   document_type?:   string | null
@@ -32,6 +38,7 @@ interface CashMovementInput {
   partner_id?:           number | null
   financial_account_id?: number | null
   status?:          'draft' | 'posted'
+  skipSupplierMirror?:   boolean
 }
 
 interface CashDraftRow {
@@ -44,6 +51,87 @@ interface CashDraftRow {
   center_code: number | null
   partner_id: number | null
   financial_account_id: number | null
+  expense_code?: string | null
+}
+
+interface EventBackedPostOpts {
+  company_id: number
+  event_type: string
+  source_module: string
+  source_id: number
+  event_date: string
+  description: string
+  created_by?: number
+  payload: Record<string, unknown>
+  trace?: import('./posting_engine').RuleTrace | null
+  lines: Array<{
+    account_code: string
+    debit: number
+    credit: number
+    description?: string
+    center_code?: number
+    season_id?: number
+    field_id?: number
+    rule_slot?: string
+    source_ledger?: 'cash' | 'supplier' | 'inventory' | 'payroll' | 'manual' | 'adjustment' | 'harvest'
+    source_record_id?: number | null
+  }>
+}
+
+async function postFromBusinessEvent(
+  db: D1Database,
+  opts: EventBackedPostOpts,
+): Promise<number | null> {
+  const eventInsert = await db.prepare(
+    `INSERT INTO business_events (
+      company_id,
+      event_type,
+      event_date,
+      source_module,
+      source_id,
+      payload,
+      status,
+      posted_by,
+      posted_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, NULL)`
+  ).bind(
+    opts.company_id,
+    opts.event_type,
+    opts.event_date,
+    opts.source_module,
+    opts.source_id,
+    JSON.stringify(opts.payload),
+    opts.created_by ?? null,
+  ).run()
+
+  const eventId = Number(eventInsert.meta.last_row_id)
+  try {
+    const entryId = await postAutoEntry(db, {
+      company_id:         opts.company_id,
+      entry_date:         opts.event_date,
+      description:        opts.description,
+      ref_type:           'business_event',
+      ref_id:             eventId,
+      created_by:         opts.created_by,
+      posting_rule_trace: opts.trace ? JSON.stringify(opts.trace) : undefined,
+      lines:              opts.lines,
+    })
+
+    await db.prepare(
+      `UPDATE business_events
+       SET status = 'posted', journal_entry_id = ?, posted_at = datetime('now')
+       WHERE id = ? AND company_id = ?`
+    ).bind(entryId ?? null, eventId, opts.company_id).run()
+
+    return entryId
+  } catch (error: any) {
+    await db.prepare(
+      `UPDATE business_events
+       SET status = 'error', error_message = ?
+       WHERE id = ? AND company_id = ?`
+    ).bind(error?.message ?? String(error), eventId, opts.company_id).run()
+    throw error
+  }
 }
 
 export const FinanceCore = {
@@ -116,8 +204,8 @@ export const FinanceCore = {
       }
 
       if (!cashAccCode) {
-        const cashMapping = await db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'").bind(opts.company_id).first<{ account_code: string }>()
-        cashAccCode = cashMapping?.account_code || ''
+        const resolvedControl = await resolveControlAccount(db, opts.company_id, 'cash')
+        cashAccCode = resolvedControl || ''
       }
 
       let contraAcc = opts.contraAccount
@@ -132,42 +220,12 @@ export const FinanceCore = {
             : opts.supplier_code
             ? 'accounts_payable'
             : (opts.direction === 'د' ? 'revenue_default' : 'expense_default')
-          const mapping = await db
-            .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = ?")
-            .bind(opts.company_id, key).first<{ account_code: string }>()
-          contraAcc = mapping?.account_code
+          const resolvedContra = await resolveControlAccount(db, opts.company_id, key)
+          contraAcc = resolvedContra || ''
         }
       }
 
-      if (!cashAccCode) throw new Error('GL_MAPPING_MISSING: حساب الخزينة غير مربوط. أضفه من إعدادات الحسابات.')
-      if (!contraAcc) {
-        const missingKey = opts.partner_id ? 'partner_current_account' : (opts.supplier_code ? 'accounts_payable' : (opts.direction === 'د' ? 'revenue_default' : 'expense_default'))
-        throw new Error(`GL_MAPPING_MISSING: حساب المقابل (${missingKey}) غير مربوط. أضفه من إعدادات الحسابات.`)
-      }
-
-      const jeKey = `je_${batchKey}`
-      stmts.push(db.prepare(
-        `INSERT INTO journal_entries (company_id, period_id, entry_date, description, ref_type, ref_id, is_posted, created_by, local_id)
-         VALUES (?,?,?,?,?,?,?,?,?)`
-      ).bind(opts.company_id, periodId, opts.transaction_date, opts.narration, 'cash_transaction', 0, 1, opts.userId, jeKey))
-
-      stmts.push(db.prepare(
-        `INSERT INTO journal_entry_lines (entry_id, company_id, account_code, debit, credit, description, center_code)
-         VALUES ((SELECT id FROM journal_entries WHERE local_id = ?), ?, ?, ?, ?, ?, ?)`
-      ).bind(jeKey, opts.company_id, cashAccCode,
-        opts.direction === 'د' ? opts.amount : 0,
-        opts.direction === 'م' ? opts.amount : 0,
-        opts.narration, opts.center_code ?? null))
-
-      stmts.push(db.prepare(
-        `INSERT INTO journal_entry_lines (entry_id, company_id, account_code, debit, credit, description, center_code)
-         VALUES ((SELECT id FROM journal_entries WHERE local_id = ?), ?, ?, ?, ?, ?, ?)`
-      ).bind(jeKey, opts.company_id, contraAcc,
-        opts.direction === 'م' ? opts.amount : 0,
-        opts.direction === 'د' ? opts.amount : 0,
-        opts.narration, opts.center_code ?? null))
-
-      if (opts.supplier_code) {
+      if (opts.supplier_code && !opts.skipSupplierMirror) {
         const supKey = `st_${batchKey}`
         stmts.push(db.prepare(
           `INSERT INTO supplier_transactions
@@ -185,7 +243,7 @@ export const FinanceCore = {
       }
     } else {
       // Draft supplier mirror
-      if (opts.supplier_code) {
+      if (opts.supplier_code && !opts.skipSupplierMirror) {
         const supKey = `st_${batchKey}`
         stmts.push(db.prepare(
           `INSERT INTO supplier_transactions
@@ -212,7 +270,27 @@ export const FinanceCore = {
     const txn = await db
       .prepare('SELECT id FROM cash_transactions WHERE local_id = ?')
       .bind(batchKey).first<{ id: number }>()
-    return { txnId: txn?.id, balance: newBalance }
+
+    let glId: number | null = null
+    if (opts.status === 'posted' && txn?.id) {
+      glId = await this.resolveCashLedger(db, {
+        company_id: opts.company_id,
+        ref_id: txn.id,
+        amount: opts.amount,
+        direction: opts.direction,
+        date: opts.transaction_date,
+        narration: opts.narration,
+        financial_account_id: opts.financial_account_id,
+        contraAccount: opts.contraAccount,
+        expense_code: opts.expense_code,
+        supplier_code: opts.supplier_code,
+        partner_id: opts.partner_id,
+        center_code: opts.center_code,
+        created_by: opts.userId
+      })
+    }
+
+    return { txnId: txn?.id, balance: newBalance, glId }
   },
 
   async postCashMovement(db: D1Database, company_id: number, txnId: number, userId: number) {
@@ -251,52 +329,6 @@ export const FinanceCore = {
          AND (transaction_date > ? OR (transaction_date = ? AND id > ?))`
     ).bind(delta, company_id, txn.financial_account_id, txn.transaction_date, txn.transaction_date, txnId))
 
-    let cashAccCode = ''
-    if (txn.financial_account_id) {
-      const accInfo = await db.prepare("SELECT gl_account_code FROM bank_accounts WHERE id = ?").bind(txn.financial_account_id).first<{ gl_account_code: string }>()
-      cashAccCode = accInfo?.gl_account_code || ''
-    }
-    if (!cashAccCode) {
-      const cashMapping = await db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'").bind(company_id).first<{ account_code: string }>()
-      cashAccCode = cashMapping?.account_code || ''
-    }
-
-    const contraKey = txn.partner_id
-      ? 'partner_current_account'
-      : txn.supplier_code
-      ? 'accounts_payable'
-      : (txn.direction === 'د' ? 'revenue_default' : 'expense_default')
-    const mapping = await db
-      .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = ?")
-      .bind(company_id, contraKey).first<{ account_code: string }>()
-    const contraAcc = mapping?.account_code
-
-    if (!cashAccCode) throw new Error('GL_MAPPING_MISSING: حساب الخزينة غير مربوط. أضفه من إعدادات الحسابات.')
-    if (!contraAcc)   throw new Error(`GL_MAPPING_MISSING: حساب المقابل (${contraKey}) غير مربوط. أضفه من إعدادات الحسابات.`)
-
-    const jeKey = `je_post_${txnId}`
-
-    stmts.push(db.prepare(
-      `INSERT INTO journal_entries (company_id, period_id, entry_date, description, ref_type, ref_id, is_posted, created_by, local_id)
-       VALUES (?,?,?,?,?,?,?,?,?)`
-    ).bind(company_id, periodId, txn.transaction_date, txn.narration, 'cash_transaction', txnId, 1, userId, jeKey))
-
-    stmts.push(db.prepare(
-      `INSERT INTO journal_entry_lines (entry_id, company_id, account_code, debit, credit, description, center_code)
-       VALUES ((SELECT id FROM journal_entries WHERE local_id = ?), ?, ?, ?, ?, ?, ?)`
-    ).bind(jeKey, company_id, cashAccCode,
-      txn.direction === 'د' ? txn.amount : 0,
-      txn.direction === 'م' ? txn.amount : 0,
-      txn.narration, txn.center_code))
-
-    stmts.push(db.prepare(
-      `INSERT INTO journal_entry_lines (entry_id, company_id, account_code, debit, credit, description, center_code)
-       VALUES ((SELECT id FROM journal_entries WHERE local_id = ?), ?, ?, ?, ?, ?, ?)`
-    ).bind(jeKey, company_id, contraAcc,
-      txn.direction === 'م' ? txn.amount : 0,
-      txn.direction === 'د' ? txn.amount : 0,
-      txn.narration, txn.center_code))
-
     if (txn.supplier_code) {
       stmts.push(db.prepare(
         `UPDATE supplier_transactions SET status = 'posted'
@@ -305,7 +337,130 @@ export const FinanceCore = {
     }
 
     await db.batch(stmts)
-    return { success: true, balance: newBalance }
+
+    const glId = await this.resolveCashLedger(db, {
+      company_id,
+      ref_id: txnId,
+      amount: txn.amount,
+      direction: txn.direction,
+      date: txn.transaction_date,
+      narration: txn.narration,
+      financial_account_id: txn.financial_account_id,
+      supplier_code: txn.supplier_code,
+      partner_id: txn.partner_id,
+      center_code: txn.center_code,
+      created_by: userId
+    })
+
+    return glId
+  },
+
+  /**
+   * resolveWorkOrderLabor
+   * Post production labor cost via posting_engine.
+   */
+  async resolveWorkOrderLabor(
+    db: D1Database,
+    opts: {
+      company_id:   number
+      ref_id:       number
+      amount:       number
+      date:         string
+      description:  string
+      created_by?:  number
+      center_code?: number
+      season_id?:   number | null
+      field_id?:    number | null
+    }
+  ): Promise<number | null> {
+    const [cogsCode, payableCode] = await Promise.all([
+      resolveControlAccount(db, opts.company_id, 'cogs'),
+      resolveControlAccount(db, opts.company_id, 'wages_payable'),
+    ])
+    if (!cogsCode)    throw new Error('GL_MAPPING_MISSING: حساب التكلفة (cogs) غير مربوط.')
+    if (!payableCode) throw new Error('GL_MAPPING_MISSING: حساب الأجور المستحقة (wages_payable) غير مربوط.')
+
+    const blueprint = await peResolveWorkOrderLabor(
+      db, opts.company_id,
+      cogsCode, payableCode,
+      opts.amount, opts.description,
+      { 
+        center_code: opts.center_code ?? undefined,
+        season_id:   opts.season_id   ?? undefined,
+        field_id:    opts.field_id    ?? undefined
+      }
+    )
+    if (blueprint.isBlocked) {
+      throw new Error(`POSTING_ENGINE_BLOCKED: ${blueprint.validationErrors.join('; ')}`)
+    }
+    return await postFromBusinessEvent(db, {
+      company_id: opts.company_id,
+      event_type: 'work_order_labor',
+      source_module: 'operations',
+      source_id: opts.ref_id,
+      event_date: opts.date,
+      description: opts.description,
+      created_by: opts.created_by,
+      trace: blueprint.trace,
+      payload: { ...opts },
+      lines: blueprint.lines.map(l => ({
+        ...l,
+        source_ledger: 'payroll',
+        source_record_id: opts.ref_id,
+      })),
+    })
+  },
+
+  /**
+   * resolveContractAdvance
+   * DR Cash / CR Deferred Revenue
+   */
+  async resolveContractAdvance(
+    db: D1Database,
+    opts: {
+      company_id:   number
+      ref_id:       number
+      amount:       number
+      date:         string
+      description:  string
+      created_by?:  number
+    }
+  ): Promise<number | null> {
+    const [cashCode, deferredCode] = await Promise.all([
+      resolveControlAccount(db, opts.company_id, 'cash'),
+      resolveControlAccount(db, opts.company_id, 'deferred_revenue'),
+    ])
+    if (!cashCode) throw new Error('GL_MAPPING_MISSING: حساب الخزينة (cash) غير مربوط.')
+    
+    // Fallback to accounts_receivable/payable if deferred_revenue is missing?
+    // Usually contract advances are liabilities, so fallback to AP is safer than nothing.
+    const finalDeferred = deferredCode || await resolveControlAccount(db, opts.company_id, 'accounts_payable')
+    if (!finalDeferred) throw new Error('GL_MAPPING_MISSING: حساب الإيرادات المقدمة (deferred_revenue) غير مربوط.')
+
+    const blueprint = await peResolveContractAdvance(
+      db, opts.company_id,
+      cashCode, finalDeferred,
+      opts.amount, opts.description
+    )
+    if (blueprint.isBlocked) {
+      throw new Error(`POSTING_ENGINE_BLOCKED: ${blueprint.validationErrors.join('; ')}`)
+    }
+    return await postFromBusinessEvent(db, {
+      company_id: opts.company_id,
+      event_type: 'contract_advance',
+      source_module: 'sales',
+      source_id: opts.ref_id,
+      event_date: opts.date,
+      description: opts.description,
+      created_by: opts.created_by,
+      trace: blueprint.trace,
+      payload: { ...opts },
+      lines: blueprint.lines.map(l => ({
+        ...l,
+        source_ledger: 'adjustment',
+        source_record_id: opts.ref_id,
+      })),
+    })
   },
 
   async processPOReceipt(
@@ -329,17 +484,8 @@ export const FinanceCore = {
     const periodId = await getOpenPeriod(db, opts.company_id, opts.received_date)
     if (!periodId) throw new Error(`PERIOD_CLOSED: No open period for ${opts.received_date}`)
 
-    const apAcc = await db
-      .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'accounts_payable'")
-      .bind(opts.company_id).first<{ account_code: string }>()
-
-    if (!apAcc) throw new Error('GL_MAPPING_MISSING: حساب الدائنين (accounts_payable) غير مربوط.')
-
-    const probe = await peResolveInventory(db, opts.company_id, null, null, 1, true)
-    if (probe.isBlocked) {
-      throw new Error(`POSTING_ENGINE_BLOCKED (PO receipt — inventory account): ${probe.validationErrors.join('; ')}`)
-    }
-    const resolvedInvAccCode = probe.lines[0].account_code
+    const apAccCode = await resolveControlAccount(db, opts.company_id, 'accounts_payable')
+    if (!apAccCode) throw new Error('GL_MAPPING_MISSING: حساب الدائنين (accounts_payable) غير مربوط.')
 
     const stmts: D1PreparedStatement[] = []
     const batchKey = `po_rcv_${Date.now()}`
@@ -357,12 +503,10 @@ export const FinanceCore = {
       let prevVal: number
 
       if (runningBal.has(bwKey)) {
-        // Use the in-batch running total for this SKU+warehouse
         const cur = runningBal.get(bwKey)!
         prevQty = cur.qty
         prevVal = cur.val
       } else {
-        // First occurrence — read last committed row from DB
         const lastBal = await db.prepare(
           `SELECT balance_qty, balance_value FROM inventory_movements
            WHERE company_id = ? AND item_code = ? AND warehouse = ?
@@ -380,7 +524,6 @@ export const FinanceCore = {
 
       runningBal.set(bwKey, { qty: newQty, val: newVal })
 
-      // FIX: narration→notes in supplier_transactions; use correct running balances
       stmts.push(db.prepare(
         `INSERT INTO inventory_movements
          (company_id, item_code, movement_date, warehouse, movement_type, quantity, unit_price,
@@ -393,26 +536,9 @@ export const FinanceCore = {
       stmts.push(db.prepare(
         `UPDATE purchase_order_items SET qty_received = qty_received + ? WHERE id = ?`
       ).bind(item.qty_received, item.po_item_id))
-
-      const jeKey = `je_${localId}`
-      stmts.push(db.prepare(
-        `INSERT INTO journal_entries (company_id, period_id, entry_date, description, ref_type, ref_id, is_posted, created_by, local_id)
-         VALUES (?,?,?,?,?,?,?,?,?)`
-      ).bind(opts.company_id, periodId, opts.received_date,
-        `استلام مخزني: ${item.item_name} (PO #${opts.po_id})`, 'inventory_movement', 0, 1, opts.userId, jeKey))
-
-      stmts.push(db.prepare(
-        `INSERT INTO journal_entry_lines (entry_id, company_id, account_code, debit, credit, description)
-         VALUES ((SELECT id FROM journal_entries WHERE local_id = ?), ?, ?, ?, ?, ?)`
-      ).bind(jeKey, opts.company_id, resolvedInvAccCode, valIn, 0, item.item_name))
-
-      stmts.push(db.prepare(
-        `INSERT INTO journal_entry_lines (entry_id, company_id, account_code, debit, credit, description)
-         VALUES ((SELECT id FROM journal_entries WHERE local_id = ?), ?, ?, ?, ?, ?)`
-      ).bind(jeKey, opts.company_id, apAcc.account_code, 0, valIn, item.item_name))
     }
 
-    // Supplier statement — FIX: narration→notes column
+    // Supplier statement
     if (opts.supplier_code && totalValue > 0) {
       stmts.push(db.prepare(
         `INSERT INTO supplier_transactions
@@ -435,7 +561,27 @@ export const FinanceCore = {
 
     await db.batch(stmts)
 
-    // FIX: Return fields the caller actually destructures: { movements, status }
+    // GL Posting via Unified Engine
+    const { results: inserted } = await db.prepare(
+      `SELECT id, item_code, local_id FROM inventory_movements
+       WHERE company_id = ? AND local_id LIKE ? ORDER BY id ASC`
+    ).bind(opts.company_id, `${batchKey}_itm_%`).all<{ id: number; item_code: number; local_id: string }>()
+
+    for (const ins of inserted) {
+      const idx = Number(ins.local_id.split('_')[3])
+      const item = opts.items[idx]
+      await this.resolvePurchaseReceipt(db, {
+        company_id: opts.company_id,
+        ref_id: ins.id,
+        item_code: ins.item_code,
+        warehouse: item.warehouse,
+        amount: item.qty_received * item.unit_price,
+        date: opts.received_date,
+        item_name: item.item_name,
+        created_by: opts.userId
+      })
+    }
+
     return { success: true, movements: opts.items.length, status: 'partial' }
   },
 
@@ -477,16 +623,14 @@ export const FinanceCore = {
       "DELETE FROM journal_entries WHERE company_id = ? AND ref_type IN ('harvest_revenue', 'harvest_cogs') AND ref_id = ?"
     ).bind(opts.company_id, opts.harvest_id).run()
 
-    const cashOrAr = await db.prepare(
-      "SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'receivable_default'"
-    ).bind(opts.company_id).first<{ account_code: string }>()
+    const receivableCode = await resolveControlAccount(db, opts.company_id, 'receivable_default')
 
     let revenueEntryId: number | null = null
     let costEntryId: number | null = null
 
     // 3. Post Revenue (DR Cash/AR, CR Revenue)
     if (opts.total_revenue > 0) {
-      const receivableAcc = cashOrAr?.account_code
+      const receivableAcc = receivableCode
       if (!receivableAcc) throw new Error('GL_MAPPING_MISSING: يجب تحديد حساب (العملاء/الصندوق) في الإعدادات أولاً.')
       const revBlueprint = await peResolveSalesRevenue(
         db, opts.company_id, null, null,
@@ -498,11 +642,21 @@ export const FinanceCore = {
       if (revBlueprint.isBlocked) {
         throw new Error(`POSTING_ENGINE_BLOCKED: ${revBlueprint.validationErrors.join('; ')}`)
       }
-      revenueEntryId = await postAutoEntry(db, {
-        company_id: opts.company_id, entry_date: opts.harvest_date,
+      revenueEntryId = await postFromBusinessEvent(db, {
+        company_id: opts.company_id,
+        event_type: 'harvest_revenue',
+        source_module: 'harvest',
+        source_id: opts.harvest_id,
+        event_date: opts.harvest_date,
         description: `إيراد حصاد: ${opts.crop_name} - ${opts.field_name}`,
-        ref_type: 'harvest_revenue', ref_id: opts.harvest_id,
-        created_by: opts.userId, lines: revBlueprint.lines,
+        created_by: opts.userId,
+        payload: {
+          harvest_id: opts.harvest_id,
+          crop_name: opts.crop_name,
+          field_name: opts.field_name,
+          total_revenue: opts.total_revenue,
+        },
+        lines: revBlueprint.lines,
       })
     }
 
@@ -517,11 +671,21 @@ export const FinanceCore = {
       if (cogsBlueprint.isBlocked) {
         throw new Error(`POSTING_ENGINE_BLOCKED: ${cogsBlueprint.validationErrors.join('; ')}`)
       }
-      costEntryId = await postAutoEntry(db, {
-        company_id: opts.company_id, entry_date: opts.harvest_date,
+      costEntryId = await postFromBusinessEvent(db, {
+        company_id: opts.company_id,
+        event_type: 'harvest_cogs',
+        source_module: 'harvest',
+        source_id: opts.harvest_id,
+        event_date: opts.harvest_date,
         description: `تكلفة حصاد: ${opts.crop_name} - ${opts.field_name}`,
-        ref_type: 'harvest_cogs', ref_id: opts.harvest_id,
-        created_by: opts.userId, lines: cogsBlueprint.lines,
+        created_by: opts.userId,
+        payload: {
+          harvest_id: opts.harvest_id,
+          crop_name: opts.crop_name,
+          field_name: opts.field_name,
+          total_actual_cost: opts.total_actual_cost,
+        },
+        lines: cogsBlueprint.lines,
       })
     }
 
@@ -531,7 +695,7 @@ export const FinanceCore = {
   // ============================================================================
   // POSTING ENGINE BRIDGE FUNCTIONS
   // All routes now use posting_engine.ts with posting-group cascade lookup.
-  // gl_account_mappings is used only as a fallback data source (legacy compat).
+  // posting_rules is the single source of truth for control and setup resolution.
   // ============================================================================
 
   /**
@@ -551,6 +715,7 @@ export const FinanceCore = {
       item_name:       string
       created_by?:     number
       center_code?:    number
+      supplier_code?:  number | null
       payment_method?: 'cash' | 'credit'
       work_order_id?:  number
     }
@@ -562,6 +727,8 @@ export const FinanceCore = {
         .bind(opts.warehouse, opts.company_id).first<{ inv_posting_group_code: string | null }>(),
     ])
     const isIncrease = opts.movement_type === 'اضافة'
+    
+    // Resolve blueprint
     const blueprint = await peResolveInventory(
       db, opts.company_id,
       whRow?.inv_posting_group_code  ?? null,
@@ -572,14 +739,305 @@ export const FinanceCore = {
     if (blueprint.isBlocked) {
       throw new Error(`POSTING_ENGINE_BLOCKED: ${blueprint.validationErrors.join('; ')}`)
     }
-    return await postAutoEntry(db, {
-      company_id:  opts.company_id,
-      entry_date:  opts.date,
+
+    // ENFORCE TWO-LEG CONTRACT: For receipts ('اضافة'), always credit Accounts Payable
+    // even if the posting engine suggests 'purchases_account', to ensure supplier parity.
+    if (isIncrease) {
+      const apCode = await resolveControlAccount(db, opts.company_id, 'accounts_payable')
+      if (!apCode) throw new Error('GL_MAPPING_MISSING: حساب الدائنين (accounts_payable) غير مربوط.')
+      
+      blueprint.lines.forEach(line => {
+        if (line.credit > 0 && line.rule_slot === 'purchases_account') {
+          line.account_code = apCode
+          line.rule_slot = 'accounts_payable'
+        }
+      })
+    }
+
+    return await postFromBusinessEvent(db, {
+      company_id: opts.company_id,
+      event_type: 'inventory_movement',
+      source_module: 'inventory',
+      source_id: opts.ref_id,
+      event_date: opts.date,
       description: opts.item_name,
-      ref_type:    'inventory_movement',
-      ref_id:      opts.ref_id,
-      lines:       blueprint.lines,
-      created_by:  opts.created_by,
+      created_by: opts.created_by,
+      trace: blueprint.trace,
+      payload: {
+        item_code: opts.item_code,
+        warehouse: opts.warehouse,
+        movement_type: opts.movement_type,
+        value: opts.value,
+        supplier_code: opts.supplier_code ?? null,
+        payment_method: opts.payment_method ?? 'credit'
+      },
+      lines: blueprint.lines.map(l => ({
+        ...l,
+        source_ledger: 'inventory',
+        source_record_id: opts.ref_id,
+      })),
+    })
+  },
+
+  /**
+   * resolveInventoryTransfer
+   * Inventory stock transfer GL poster via posting_engine.
+   */
+  async resolveInventoryTransfer(
+    db: D1Database,
+    opts: {
+      company_id:     number
+      ref_id:         number
+      item_code:      number
+      from_warehouse: string
+      to_warehouse:   string
+      value:          number
+      date:           string
+      item_name:      string
+      created_by?:    number
+    }
+  ): Promise<number | null> {
+    const [itemRow, srcWh, dstWh] = await Promise.all([
+      db.prepare('SELECT prod_posting_group_code FROM items WHERE code = ? AND company_id = ?')
+        .bind(opts.item_code, opts.company_id).first<{ prod_posting_group_code: string | null }>(),
+      db.prepare('SELECT inv_posting_group_code FROM warehouses WHERE name = ? AND company_id = ?')
+        .bind(opts.from_warehouse, opts.company_id).first<{ inv_posting_group_code: string | null }>(),
+      db.prepare('SELECT inv_posting_group_code FROM warehouses WHERE name = ? AND company_id = ?')
+        .bind(opts.to_warehouse, opts.company_id).first<{ inv_posting_group_code: string | null }>(),
+    ])
+
+    const blueprint = await peResolveTransfer(
+      db, opts.company_id,
+      srcWh?.inv_posting_group_code ?? null,
+      dstWh?.inv_posting_group_code ?? null,
+      itemRow?.prod_posting_group_code ?? null,
+      opts.value, opts.item_name
+    )
+
+    if (blueprint.isBlocked) {
+      throw new Error(`POSTING_ENGINE_BLOCKED: ${blueprint.validationErrors.join('; ')}`)
+    }
+
+    return await postFromBusinessEvent(db, {
+      company_id: opts.company_id,
+      event_type: 'inventory_transfer',
+      source_module: 'inventory',
+      source_id: opts.ref_id,
+      event_date: opts.date,
+      description: `تحويل مخزني: ${opts.item_name} (${opts.from_warehouse} → ${opts.to_warehouse})`,
+      created_by: opts.created_by,
+      trace: blueprint.trace,
+      payload: {
+        item_code: opts.item_code,
+        from_warehouse: opts.from_warehouse,
+        to_warehouse: opts.to_warehouse,
+        value: opts.value,
+      },
+      lines: blueprint.lines.map(l => ({
+        ...l,
+        source_ledger: 'inventory',
+        source_record_id: opts.ref_id,
+      })),
+    })
+  },
+
+  /**
+   * resolveCashLedger
+   * Treasury GL poster via posting_engine.
+   */
+  async resolveCashLedger(
+    db: D1Database,
+    opts: {
+      company_id:     number
+      ref_id:         number
+      amount:         number
+      direction:      'د' | 'م'
+      date:           string
+      narration:      string
+      financial_account_id?: number | null
+      contraAccount?: string | null
+      expense_code?:  string | null
+      supplier_code?: number | null
+      partner_id?:    number | null
+      center_code?:   number | null
+      created_by?:    number
+    }
+  ): Promise<number | null> {
+    let cashAccCode = ''
+    if (opts.financial_account_id) {
+      const accInfo = await db.prepare("SELECT gl_account_code FROM bank_accounts WHERE id = ?")
+        .bind(opts.financial_account_id).first<{ gl_account_code: string }>()
+      cashAccCode = accInfo?.gl_account_code || ''
+    }
+    if (!cashAccCode) {
+      const resolvedCash = await resolveControlAccount(db, opts.company_id, 'cash')
+      cashAccCode = resolvedCash || ''
+    }
+
+    let contraAcc = opts.contraAccount
+    if (!contraAcc) {
+      if (opts.expense_code) {
+        const et = await db.prepare("SELECT gl_account_code FROM expense_types WHERE code = ? AND company_id = ?")
+          .bind(opts.expense_code, opts.company_id).first<{gl_account_code: string}>()
+        if (et?.gl_account_code) contraAcc = et.gl_account_code
+      }
+      if (!contraAcc) {
+        const key = opts.partner_id
+          ? 'partner_current_account'
+          : opts.supplier_code
+          ? 'accounts_payable'
+          : (opts.direction === 'د' ? 'revenue_default' : 'expense_default')
+        contraAcc = await resolveControlAccount(db, opts.company_id, key)
+      }
+    }
+
+    if (!cashAccCode) throw new Error('GL_MAPPING_MISSING: حساب الخزينة غير مربوط.')
+    if (!contraAcc) throw new Error('GL_MAPPING_MISSING: حساب المقابل غير مربوط.')
+
+    const blueprint = await peResolveCash(
+      db, opts.company_id,
+      cashAccCode, contraAcc,
+      opts.amount, opts.direction === 'د',
+      opts.narration,
+      { center_code: opts.center_code ?? undefined }
+    )
+
+    if (blueprint.isBlocked) {
+      throw new Error(`POSTING_ENGINE_BLOCKED: ${blueprint.validationErrors.join('; ')}`)
+    }
+
+    return await postFromBusinessEvent(db, {
+      company_id: opts.company_id,
+      event_type: 'cash_transaction',
+      source_module: 'treasury',
+      source_id: opts.ref_id,
+      event_date: opts.date,
+      description: opts.narration,
+      created_by: opts.created_by,
+      trace: blueprint.trace,
+      payload: { direction: opts.direction, amount: opts.amount },
+      lines: blueprint.lines.map(l => ({
+        ...l,
+        source_ledger: 'cash',
+        source_record_id: opts.ref_id,
+      })),
+    })
+  },
+
+  /**
+   * postManualEntry
+   * Direct manual GL entry via business_event.
+   */
+  async postManualEntry(
+    db: D1Database,
+    opts: {
+      company_id: number
+      date:       string
+      description: string
+      lines:      EventBackedPostOpts['lines']
+      created_by?: number
+    }
+  ): Promise<number | null> {
+    return await postFromBusinessEvent(db, {
+      company_id: opts.company_id,
+      event_type: 'manual_entry',
+      source_module: 'gl',
+      source_id: 0,
+      event_date: opts.date,
+      description: opts.description,
+      payload: { lines_count: opts.lines.length },
+      lines: opts.lines,
+      created_by: opts.created_by,
+      trace: { rule_type: 'manual_entry' } as any
+    })
+  },
+
+  /**
+   * postManualReversal
+   * Reverses an existing entry via business_event.
+   */
+  async postManualReversal(
+    db: D1Database,
+    opts: {
+      company_id: number
+      original_entry_id: number
+      date:       string
+      reason:     string
+      lines:      EventBackedPostOpts['lines']
+      created_by?: number
+    }
+  ): Promise<number | null> {
+    return await postFromBusinessEvent(db, {
+      company_id: opts.company_id,
+      event_type: 'manual_reversal',
+      source_module: 'gl',
+      source_id: opts.original_entry_id,
+      event_date: opts.date,
+      description: `عكس القيد #${opts.original_entry_id}: ${opts.reason}`,
+      payload: { original_entry_id: opts.original_entry_id, reason: opts.reason },
+      lines: opts.lines,
+      created_by: opts.created_by,
+      trace: { rule_type: 'manual_reversal', original_entry_id: opts.original_entry_id } as any
+    })
+  },
+
+  /**
+   * resolvePurchaseReceipt
+   * PO receipt GL poster via posting_engine.
+   */
+  async resolvePurchaseReceipt(
+    db: D1Database,
+    opts: {
+      company_id:     number
+      ref_id:         number
+      item_code:      number
+      warehouse:      string
+      amount:         number
+      date:           string
+      item_name:      string
+      created_by?:    number
+    }
+  ): Promise<number | null> {
+    const [itemRow, whRow, apCode] = await Promise.all([
+      db.prepare('SELECT prod_posting_group_code FROM items WHERE code = ? AND company_id = ?')
+        .bind(opts.item_code, opts.company_id).first<{ prod_posting_group_code: string | null }>(),
+      db.prepare('SELECT inv_posting_group_code FROM warehouses WHERE name = ? AND company_id = ?')
+        .bind(opts.warehouse, opts.company_id).first<{ inv_posting_group_code: string | null }>(),
+      resolveControlAccount(db, opts.company_id, 'accounts_payable'),
+    ])
+
+    if (!apCode) throw new Error('GL_MAPPING_MISSING: حساب الدائنين (accounts_payable) غير مربوط.')
+
+    const blueprint = await peResolvePurchaseReceipt(
+      db, opts.company_id,
+      whRow?.inv_posting_group_code ?? null,
+      itemRow?.prod_posting_group_code ?? null,
+      apCode, opts.amount, opts.item_name
+    )
+
+    if (blueprint.isBlocked) {
+      throw new Error(`POSTING_ENGINE_BLOCKED: ${blueprint.validationErrors.join('; ')}`)
+    }
+
+    return await postFromBusinessEvent(db, {
+      company_id: opts.company_id,
+      event_type: 'purchase_receipt',
+      source_module: 'inventory',
+      source_id: opts.ref_id,
+      event_date: opts.date,
+      description: `استلام طلب شراء: ${opts.item_name} (مخزن: ${opts.warehouse})`,
+      created_by: opts.created_by,
+      trace: blueprint.trace,
+      payload: {
+        item_code: opts.item_code,
+        warehouse: opts.warehouse,
+        amount: opts.amount,
+      },
+      lines: blueprint.lines.map(l => ({
+        ...l,
+        source_ledger: 'inventory',
+        source_record_id: opts.ref_id,
+      })),
     })
   },
 
@@ -605,30 +1063,38 @@ export const FinanceCore = {
         .prepare('SELECT bus_posting_group_code FROM suppliers WHERE code = ? AND company_id = ?')
         .bind(opts.supplier_code, opts.company_id)
         .first<{ bus_posting_group_code: string | null }>()
-    const apMapping = await db
-      .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'accounts_payable'")
-      .bind(opts.company_id).first<{ account_code: string }>()
-    if (!apMapping?.account_code) {
+    const apCode = await resolveControlAccount(db, opts.company_id, 'accounts_payable')
+    if (!apCode) {
       throw new Error('GL_MAPPING_MISSING: حساب الدائنين (accounts_payable) غير مربوط.')
     }
     const blueprint = await peResolveSupplierInvoice(
       db, opts.company_id,
       supplierRow?.bus_posting_group_code ?? null,
       null,
-      apMapping.account_code,
+      apCode,
       opts.amount, opts.description
     )
     if (blueprint.isBlocked) {
       throw new Error(`POSTING_ENGINE_BLOCKED: ${blueprint.validationErrors.join('; ')}`)
     }
-    return await postAutoEntry(db, {
-      company_id:  opts.company_id,
-      entry_date:  opts.date,
+    return await postFromBusinessEvent(db, {
+      company_id: opts.company_id,
+      event_type: 'supplier_invoice',
+      source_module: 'suppliers',
+      source_id: opts.ref_id,
+      event_date: opts.date,
       description: opts.description,
-      ref_type:    'supplier_invoice',
-      ref_id:      opts.ref_id,
-      lines:       blueprint.lines,
-      created_by:  opts.created_by,
+      created_by: opts.created_by,
+      trace: blueprint.trace,
+      payload: {
+        supplier_code: opts.supplier_code ?? null,
+        amount: opts.amount,
+      },
+      lines: blueprint.lines.map(l => ({
+        ...l,
+        source_ledger: 'supplier',
+        source_record_id: opts.ref_id,
+      })),
     })
   },
 
@@ -639,42 +1105,78 @@ export const FinanceCore = {
   async resolveSupplierPayment(
     db: D1Database,
     opts: {
-      company_id:   number
-      ref_id:       number
-      amount:       number
-      date:         string
-      description:  string
-      created_by?:  number
-      center_code?: number
+      company_id:    number
+      ref_id:        number
+      amount:        number
+      date:          string
+      description:   string
+      created_by?:   number
+      center_code?:  number
+      supplier_code?: number | null
+      financial_account_id?: number | null
     }
   ): Promise<number | null> {
-    const [apRow, cashRow] = await Promise.all([
-      db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'accounts_payable'")
-        .bind(opts.company_id).first<{ account_code: string }>(),
-      db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'")
-        .bind(opts.company_id).first<{ account_code: string }>(),
+    const [apCode, cashCode] = await Promise.all([
+      resolveControlAccount(db, opts.company_id, 'accounts_payable'),
+      resolveControlAccount(db, opts.company_id, 'cash'),
     ])
-    if (!apRow?.account_code)   throw new Error('GL_MAPPING_MISSING: حساب الدائنين (accounts_payable) غير مربوط.')
-    if (!cashRow?.account_code) throw new Error('GL_MAPPING_MISSING: حساب الخزينة (cash) غير مربوط.')
+    if (!apCode)   throw new Error('GL_MAPPING_MISSING: حساب الدائنين (accounts_payable) غير مربوط.')
+    if (!cashCode) throw new Error('GL_MAPPING_MISSING: حساب الخزينة (cash) غير مربوط.')
 
     const blueprint = await peResolveSupplierPayment(
       db, opts.company_id,
-      apRow.account_code, cashRow.account_code,
+      apCode, cashCode,
       opts.amount, opts.description,
       { center_code: opts.center_code }
     )
     if (blueprint.isBlocked) {
       throw new Error(`POSTING_ENGINE_BLOCKED: ${blueprint.validationErrors.join('; ')}`)
     }
-    return await postAutoEntry(db, {
-      company_id:  opts.company_id,
-      entry_date:  opts.date,
+    
+    // 1. Post to GL
+    const entryId = await postFromBusinessEvent(db, {
+      company_id: opts.company_id,
+      event_type: 'supplier_payment',
+      source_module: 'suppliers',
+      source_id: opts.ref_id,
+      event_date: opts.date,
       description: opts.description,
-      ref_type:    'supplier_payment',
-      ref_id:      opts.ref_id,
-      lines:       blueprint.lines,
-      created_by:  opts.created_by,
+      created_by: opts.created_by,
+      trace: blueprint.trace,
+      payload: {
+        supplier_code: opts.supplier_code ?? null,
+        amount: opts.amount,
+      },
+      lines: blueprint.lines.map(l => ({
+        ...l,
+        source_ledger: 'supplier',
+        source_record_id: opts.ref_id,
+      })),
     })
+
+    // 2. Maintain Treasury Parity (Sync)
+    try {
+      const { stmts } = await this.prepareCashMovement(db, {
+        company_id: opts.company_id,
+        userId: opts.created_by ?? 0,
+        transaction_date: opts.date,
+        direction: 'م',
+        amount: opts.amount,
+        narration: opts.description,
+        supplier_code: opts.supplier_code,
+        center_code: opts.center_code,
+        financial_account_id: opts.financial_account_id,
+        status: 'posted',
+        skipSupplierMirror: true // Already handled by the caller (suppliers module)
+      })
+      await db.batch(stmts)
+    } catch (err: any) {
+      console.error('TREASURY_SYNC_FAILED in resolveSupplierPayment:', err.message)
+      // We don't throw here to avoid rolling back GL if treasury sync fails, 
+      // but in a strict system we might want to.
+    }
+
+    return entryId
   },
 
   /**
@@ -694,14 +1196,12 @@ export const FinanceCore = {
       expense_account?: string   // direct override, bypasses mapping lookup
     }
   ): Promise<number | null> {
-    const cashRow = await db
-      .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'")
-      .bind(opts.company_id).first<{ account_code: string }>()
-    if (!cashRow?.account_code) throw new Error('GL_MAPPING_MISSING: حساب الخزينة (cash) غير مربوط.')
+    const cashCode = await resolveControlAccount(db, opts.company_id, 'cash')
+    if (!cashCode) throw new Error('GL_MAPPING_MISSING: حساب الخزينة (cash) غير مربوط.')
 
     const blueprint = await peResolveExpense(
       db, opts.company_id, null, null,
-      cashRow.account_code, opts.amount,
+      cashCode, opts.amount,
       opts.expense_account,
       opts.description,
       { center_code: opts.center_code }
@@ -709,14 +1209,24 @@ export const FinanceCore = {
     if (blueprint.isBlocked) {
       throw new Error(`POSTING_ENGINE_BLOCKED: ${blueprint.validationErrors.join('; ')}`)
     }
-    return await postAutoEntry(db, {
-      company_id:  opts.company_id,
-      entry_date:  opts.date,
+    return await postFromBusinessEvent(db, {
+      company_id: opts.company_id,
+      event_type: 'expense',
+      source_module: 'treasury',
+      source_id: opts.ref_id,
+      event_date: opts.date,
       description: opts.description,
-      ref_type:    'expense',
-      ref_id:      opts.ref_id,
-      lines:       blueprint.lines,
-      created_by:  opts.created_by,
+      created_by: opts.created_by,
+      trace: blueprint.trace,
+      payload: {
+        amount: opts.amount,
+        expense_account: opts.expense_account ?? null,
+      },
+      lines: blueprint.lines.map(l => ({
+        ...l,
+        source_ledger: 'cash',
+        source_record_id: opts.ref_id,
+      })),
     })
   },
 
@@ -738,28 +1248,38 @@ export const FinanceCore = {
       field_id?:    number
     }
   ): Promise<number | null> {
-    const receivableRow = await db
-      .prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'receivable_default'")
-      .bind(opts.company_id).first<{ account_code: string }>()
-    if (!receivableRow?.account_code) throw new Error('GL_MAPPING_MISSING: حساب المدينين (receivable_default) غير مربوط.')
+    const receivableCode = await resolveControlAccount(db, opts.company_id, 'receivable_default')
+    if (!receivableCode) throw new Error('GL_MAPPING_MISSING: حساب المدينين (receivable_default) غير مربوط.')
 
     const blueprint = await peResolveSalesRevenue(
       db, opts.company_id, null, null,
-      receivableRow.account_code, opts.amount,
+      receivableCode, opts.amount,
       opts.description,
       { center_code: opts.center_code, season_id: opts.season_id, field_id: opts.field_id }
     )
     if (blueprint.isBlocked) {
       throw new Error(`POSTING_ENGINE_BLOCKED: ${blueprint.validationErrors.join('; ')}`)
     }
-    return await postAutoEntry(db, {
-      company_id:  opts.company_id,
-      entry_date:  opts.date,
+    return await postFromBusinessEvent(db, {
+      company_id: opts.company_id,
+      event_type: 'revenue',
+      source_module: 'sales',
+      source_id: opts.ref_id,
+      event_date: opts.date,
       description: opts.description,
-      ref_type:    'revenue',
-      ref_id:      opts.ref_id,
-      lines:       blueprint.lines,
-      created_by:  opts.created_by,
+      created_by: opts.created_by,
+      trace: blueprint.trace,
+      payload: {
+        amount: opts.amount,
+        center_code: opts.center_code ?? null,
+        season_id: opts.season_id ?? null,
+        field_id: opts.field_id ?? null,
+      },
+      lines: blueprint.lines.map(l => ({
+        ...l,
+        source_ledger: 'harvest',
+        source_record_id: opts.ref_id,
+      })),
     })
   },
 
@@ -777,34 +1297,48 @@ export const FinanceCore = {
       description: string
       created_by?: number
       center_code?: number
+      season_id?:   number | null
+      field_id?:    number | null
     }
   ): Promise<number | null> {
-    const [wagesRow, payableRow] = await Promise.all([
-      db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'wages'")
-        .bind(opts.company_id).first<{ account_code: string }>(),
-      db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'wages_payable'")
-        .bind(opts.company_id).first<{ account_code: string }>(),
+    const [wagesCode, payableCode] = await Promise.all([
+      resolveControlAccount(db, opts.company_id, 'wages'),
+      resolveControlAccount(db, opts.company_id, 'wages_payable'),
     ])
-    if (!wagesRow?.account_code)   throw new Error('GL_MAPPING_MISSING: حساب الأجور (wages) غير مربوط.')
-    if (!payableRow?.account_code) throw new Error('GL_MAPPING_MISSING: حساب الأجور المستحقة (wages_payable) غير مربوط.')
+    if (!wagesCode)   throw new Error('GL_MAPPING_MISSING: حساب الأجور (wages) غير مربوط.')
+    if (!payableCode) throw new Error('GL_MAPPING_MISSING: حساب الأجور المستحقة (wages_payable) غير مربوط.')
 
     const blueprint = await peResolvePayroll(
       db, opts.company_id,
-      wagesRow.account_code, payableRow.account_code,
+      wagesCode, payableCode,
       opts.amount, opts.description,
-      { center_code: opts.center_code }
+      { 
+        center_code: opts.center_code ?? undefined,
+        season_id:   opts.season_id   ?? undefined,
+        field_id:    opts.field_id    ?? undefined
+      }
     )
     if (blueprint.isBlocked) {
       throw new Error(`POSTING_ENGINE_BLOCKED: ${blueprint.validationErrors.join('; ')}`)
     }
-    return await postAutoEntry(db, {
-      company_id:  opts.company_id,
-      entry_date:  opts.date,
+    return await postFromBusinessEvent(db, {
+      company_id: opts.company_id,
+      event_type: 'payroll_run',
+      source_module: 'hr',
+      source_id: opts.ref_id,
+      event_date: opts.date,
       description: opts.description,
-      ref_type:    'payroll_run',
-      ref_id:      opts.ref_id,
-      lines:       blueprint.lines,
-      created_by:  opts.created_by,
+      created_by: opts.created_by,
+      trace: blueprint.trace,
+      payload: { ...opts },
+      lines: blueprint.lines.map(l => ({
+        ...l,
+        center_code: l.center_code ?? opts.center_code ?? undefined,
+        season_id:   l.season_id   ?? opts.season_id   ?? undefined,
+        field_id:    l.field_id    ?? opts.field_id    ?? undefined,
+        source_ledger: 'payroll',
+        source_record_id: opts.ref_id,
+      })),
     })
   },
 
@@ -823,27 +1357,29 @@ export const FinanceCore = {
       created_by?: number
     }
   ): Promise<number | null> {
-    const [payableRow, cashRow] = await Promise.all([
-      db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'wages_payable'")
-        .bind(opts.company_id).first<{ account_code: string }>(),
-      db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'")
-        .bind(opts.company_id).first<{ account_code: string }>(),
+    const [payableCode, cashCode] = await Promise.all([
+      resolveControlAccount(db, opts.company_id, 'wages_payable'),
+      resolveControlAccount(db, opts.company_id, 'cash'),
     ])
-    if (!payableRow?.account_code) throw new Error('GL_MAPPING_MISSING: حساب الأجور المستحقة (wages_payable) غير مربوط.')
-    if (!cashRow?.account_code)    throw new Error('GL_MAPPING_MISSING: حساب الصندوق (cash) غير مربوط.')
+    if (!payableCode) throw new Error('GL_MAPPING_MISSING: حساب الأجور المستحقة (wages_payable) غير مربوط.')
+    if (!cashCode)    throw new Error('GL_MAPPING_MISSING: حساب الصندوق (cash) غير مربوط.')
     if (opts.amount <= 0) return null
 
-    return await postAutoEntry(db, {
-      company_id:  opts.company_id,
-      entry_date:  opts.date,
+    return await postFromBusinessEvent(db, {
+      company_id: opts.company_id,
+      event_type: 'payroll_payment',
+      source_module: 'hr',
+      source_id: opts.ref_id,
+      event_date: opts.date,
       description: opts.description,
-      ref_type:    'payroll_payment',
-      ref_id:      opts.ref_id,
+      created_by: opts.created_by,
+      payload: {
+        amount: opts.amount,
+      },
       lines: [
-        { account_code: payableRow.account_code, debit: opts.amount, credit: 0,           description: opts.description },
-        { account_code: cashRow.account_code,    debit: 0,           credit: opts.amount, description: opts.description },
+        { account_code: payableCode, debit: opts.amount, credit: 0,           description: opts.description, source_ledger: 'payroll', source_record_id: opts.ref_id },
+        { account_code: cashCode,    debit: 0,           credit: opts.amount, description: opts.description, source_ledger: 'payroll', source_record_id: opts.ref_id },
       ],
-      created_by:  opts.created_by,
     })
   },
 
@@ -863,32 +1399,36 @@ export const FinanceCore = {
     }
   ): Promise<number | null> {
     if (Math.abs(opts.delta) < 0.01) return null
-    const [cashRow, equityRow] = await Promise.all([
-      db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'")
-        .bind(opts.company_id).first<{ account_code: string }>(),
-      db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'equity'")
-        .bind(opts.company_id).first<{ account_code: string }>(),
+    const [cashCode, equityCode] = await Promise.all([
+      resolveControlAccount(db, opts.company_id, 'cash'),
+      resolveControlAccount(db, opts.company_id, 'equity'),
     ])
-    if (!cashRow?.account_code)   throw new Error('GL_MAPPING_MISSING: حساب الصندوق (cash) غير مربوط.')
-    if (!equityRow?.account_code) throw new Error('GL_MAPPING_MISSING: حساب رأس المال (equity) غير مربوط.')
+    if (!cashCode)   throw new Error('GL_MAPPING_MISSING: حساب الصندوق (cash) غير مربوط.')
+    if (!equityCode) throw new Error('GL_MAPPING_MISSING: حساب رأس المال (equity) غير مربوط.')
     const abs = Math.abs(opts.delta)
     const lines = opts.delta > 0
       ? [
-          { account_code: cashRow.account_code,   debit: abs, credit: 0,   description: opts.description },
-          { account_code: equityRow.account_code,  debit: 0,   credit: abs, description: opts.description },
+          { account_code: cashCode,   debit: abs, credit: 0,   description: opts.description },
+          { account_code: equityCode, debit: 0,   credit: abs, description: opts.description },
         ]
       : [
-          { account_code: equityRow.account_code,  debit: abs, credit: 0,   description: opts.description },
-          { account_code: cashRow.account_code,   debit: 0,   credit: abs, description: opts.description },
+          { account_code: equityCode, debit: abs, credit: 0,   description: opts.description },
+          { account_code: cashCode,   debit: 0,   credit: abs, description: opts.description },
         ]
-    return await postAutoEntry(db, {
-      company_id:  opts.company_id,
-      entry_date:  opts.date,
+    return await postFromBusinessEvent(db, {
+      company_id: opts.company_id,
+      event_type: 'partner_capital',
+      source_module: 'treasury',
+      source_id: opts.ref_id,
+      event_date: opts.date,
       description: opts.description,
-      ref_type:    'partner_capital',
-      ref_id:      opts.ref_id,
-      lines,
-      created_by:  opts.created_by,
+      payload: { delta: opts.delta },
+      lines: lines.map(l => ({
+        ...l,
+        source_ledger: 'manual',
+        source_record_id: opts.ref_id,
+      })),
+      created_by: opts.created_by,
     })
   },
 
@@ -908,35 +1448,38 @@ export const FinanceCore = {
     }
   ): Promise<number | null> {
     if (Math.abs(opts.delta) < 0.01) return null
-    const [cashRow, currentRow, equityRow] = await Promise.all([
-      db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'cash'")
-        .bind(opts.company_id).first<{ account_code: string }>(),
-      db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'partner_current_acct'")
-        .bind(opts.company_id).first<{ account_code: string }>(),
-      db.prepare("SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'equity'")
-        .bind(opts.company_id).first<{ account_code: string }>(),
+    const [cashCode, currentCode, equityCode] = await Promise.all([
+      resolveControlAccount(db, opts.company_id, 'cash'),
+      resolveControlAccount(db, opts.company_id, 'partner_current_account').catch(() => null),
+      resolveControlAccount(db, opts.company_id, 'equity').catch(() => null),
     ])
-    if (!cashRow?.account_code) throw new Error('GL_MAPPING_MISSING: حساب الصندوق (cash) غير مربوط.')
-    const currentAcctCode = currentRow?.account_code ?? equityRow?.account_code
+    if (!cashCode) throw new Error('GL_MAPPING_MISSING: حساب الصندوق (cash) غير مربوط.')
+    const currentAcctCode = currentCode ?? equityCode
     if (!currentAcctCode) throw new Error('GL_MAPPING_MISSING: حساب الشريك الجاري (partner_current_acct) غير مربوط.')
     const abs = Math.abs(opts.delta)
     const lines = opts.delta > 0
       ? [
-          { account_code: cashRow.account_code, debit: abs, credit: 0,   description: opts.description },
+          { account_code: cashCode,        debit: abs, credit: 0,   description: opts.description },
           { account_code: currentAcctCode,       debit: 0,   credit: abs, description: opts.description },
         ]
       : [
           { account_code: currentAcctCode,       debit: abs, credit: 0,   description: opts.description },
-          { account_code: cashRow.account_code, debit: 0,   credit: abs, description: opts.description },
+          { account_code: cashCode,        debit: 0,   credit: abs, description: opts.description },
         ]
-    return await postAutoEntry(db, {
-      company_id:  opts.company_id,
-      entry_date:  opts.date,
+    return await postFromBusinessEvent(db, {
+      company_id: opts.company_id,
+      event_type: 'partner_current',
+      source_module: 'treasury',
+      source_id: opts.ref_id,
+      event_date: opts.date,
       description: opts.description,
-      ref_type:    'partner_current',
-      ref_id:      opts.ref_id,
-      lines,
-      created_by:  opts.created_by,
+      payload: { delta: opts.delta },
+      lines: lines.map(l => ({
+        ...l,
+        source_ledger: 'manual',
+        source_record_id: opts.ref_id,
+      })),
+      created_by: opts.created_by,
     })
   },
 }

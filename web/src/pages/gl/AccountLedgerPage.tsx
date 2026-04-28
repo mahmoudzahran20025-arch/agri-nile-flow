@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, BookOpen, Download, TrendingUp, TrendingDown } from 'lucide-react'
+import { ArrowRight, BookOpen, Download, TrendingUp, TrendingDown, ChevronLeft, ChevronRight } from 'lucide-react'
 import { glApi, downloadCsv } from '../../api/client'
+import QueryBoundary from '../../components/ui/QueryBoundary'
 
 interface LedgerLine {
   id:              number
@@ -66,18 +67,39 @@ export default function AccountLedgerPage() {
   const [refType, setRefType] = useState('')
   const [minAmount, setMinAmount] = useState('')
   const [maxAmount, setMaxAmount] = useState('')
+  const [page, setPage]     = useState(1)
+  const [pageSize, setPageSize] = useState(100)
+  const [jumpInput, setJumpInput] = useState('')
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['gl-ledger', code, start, end],
-    queryFn:  () => glApi.ledger(code!, start || undefined, end || undefined) as Promise<{
-      account: Account
-      lines:   LedgerLine[]
+  function resetFilters() {
+    setStart(startOfYear())
+    setEnd(today())
+    setSearch('')
+    setRefType('')
+    setMinAmount('')
+    setMaxAmount('')
+    setPage(1)
+    setJumpInput('')
+  }
+
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ['gl-ledger', code, start, end, page, pageSize],
+    queryFn:  () => glApi.ledger(code!, start || undefined, end || undefined, page, pageSize) as Promise<{
+      account:         Account
+      lines:           LedgerLine[]
+      total:           number
+      page:            number
+      size:            number
+      total_pages:     number
+      opening_balance: number
     }>,
     enabled: !!code,
   })
 
-  const account = data?.account
-  const lines   = data?.lines ?? []
+  const account         = data?.account
+  const lines           = data?.lines ?? []
+  const totalPages      = data?.total_pages ?? 1
+  const openingBalance  = data?.opening_balance ?? 0
 
   const filteredLines = lines.filter((l) => {
     const q = search.trim().toLowerCase()
@@ -160,7 +182,7 @@ export default function AccountLedgerPage() {
             type="date"
             className="input w-40"
             value={start}
-            onChange={e => setStart(e.target.value)}
+            onChange={e => { setStart(e.target.value); setPage(1) }}
           />
         </div>
         <div className="flex items-center gap-2">
@@ -169,7 +191,7 @@ export default function AccountLedgerPage() {
             type="date"
             className="input w-40"
             value={end}
-            onChange={e => setEnd(e.target.value)}
+            onChange={e => { setEnd(e.target.value); setPage(1) }}
           />
         </div>
         <input
@@ -207,14 +229,7 @@ export default function AccountLedgerPage() {
         {(start !== startOfYear() || end !== today()) && (
           <button
             className="btn btn-ghost text-sm"
-            onClick={() => {
-              setStart(startOfYear())
-              setEnd(today())
-              setSearch('')
-              setRefType('')
-              setMinAmount('')
-              setMaxAmount('')
-            }}
+            onClick={resetFilters}
           >
             إعادة تعيين
           </button>
@@ -267,14 +282,14 @@ export default function AccountLedgerPage() {
       )}
 
       {/* Ledger table */}
-      {isLoading ? (
-        <p className="text-center text-gray-500 py-10">جاري التحميل...</p>
-      ) : filteredLines.length === 0 ? (
-        <div className="card text-center py-16 text-gray-400">
-          <BookOpen size={40} className="mx-auto mb-3 opacity-30" />
-          <p>لا توجد حركات لهذا الحساب في الفترة المحددة</p>
-        </div>
-      ) : (
+      <QueryBoundary
+        isLoading={isLoading}
+        isError={isError}
+        isEmpty={filteredLines.length === 0}
+        onRetry={() => refetch()}
+        emptyMessage="لا توجد حركات لهذا الحساب في الفترة المحددة"
+        loadingRows={8}
+      >
         <div className="card overflow-hidden p-0">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b">
@@ -289,6 +304,22 @@ export default function AccountLedgerPage() {
               </tr>
             </thead>
             <tbody>
+              {/* Opening balance row (shown only when paginating beyond page 1) */}
+              {page > 1 && (
+                <tr className="border-b bg-blue-50/50">
+                  <td className="td text-xs text-gray-400 italic" colSpan={6}>
+                    رصيد مرحّل (الصفحات السابقة)
+                  </td>
+                  <td className="td text-left">
+                    <span className={`font-bold text-sm ${openingBalance >= 0 ? 'text-gray-700' : 'text-red-600'}`}>
+                      {egp(Math.abs(openingBalance))}
+                      <span className="text-xs font-normal text-gray-400 mr-1">
+                        {openingBalance >= 0 ? 'م' : 'د'}
+                      </span>
+                    </span>
+                  </td>
+                </tr>
+              )}
               {filteredLines.map((l, i) => {
                 const lineAmount = Math.max(Number(l.debit || 0), Number(l.credit || 0))
                 const unusual = lineAmount >= unusualThreshold && lineAmount > 0
@@ -318,7 +349,7 @@ export default function AccountLedgerPage() {
                   </td>
                   <td className="td">
                     <Link
-                      to="/gl/entries"
+                      to={`/gl/entries?id=${l.entry_id}`}
                       className="font-mono text-brand-600 hover:underline text-xs"
                       title="عرض القيد"
                     >
@@ -351,7 +382,7 @@ export default function AccountLedgerPage() {
             {/* Totals row */}
             <tfoot className="bg-gray-100 border-t-2 border-gray-300 font-semibold">
               <tr>
-                <td className="td" colSpan={4}>الإجمالي</td>
+                <td className="td" colSpan={4}>الإجمالي (هذه الصفحة)</td>
                 <td className="td text-left text-gray-800">{egp(totalDebit)}</td>
                 <td className="td text-left text-gray-800">{egp(totalCredit)}</td>
                 <td className="td text-left">
@@ -365,8 +396,69 @@ export default function AccountLedgerPage() {
               </tr>
             </tfoot>
           </table>
+
+          {/* Pagination controls */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between gap-3 flex-wrap px-4 py-3 border-t bg-gray-50">
+              <button
+                className="btn btn-ghost gap-1 text-sm"
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page <= 1}
+              >
+                <ChevronRight size={16} /> السابق
+              </button>
+
+              {/* Page jump */}
+              <form
+                className="flex items-center gap-2"
+                onSubmit={e => {
+                  e.preventDefault()
+                  const n = parseInt(jumpInput, 10)
+                  if (n >= 1 && n <= totalPages) { setPage(n); setJumpInput('') }
+                }}
+              >
+                <span className="text-sm text-gray-600">صفحة</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={totalPages}
+                  className="input w-16 text-center text-sm py-1"
+                  placeholder={String(page)}
+                  value={jumpInput}
+                  onChange={e => setJumpInput(e.target.value)}
+                />
+                <span className="text-sm text-gray-400">من {totalPages}</span>
+                {data?.total != null && (
+                  <span className="text-xs text-gray-400">({data.total} حركة)</span>
+                )}
+              </form>
+
+              {/* Page size */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500">حجم الصفحة:</span>
+                <select
+                  className="input py-1 text-xs w-20"
+                  value={pageSize}
+                  onChange={e => { setPageSize(Number(e.target.value)); setPage(1); setJumpInput('') }}
+                >
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={200}>200</option>
+                </select>
+              </div>
+
+              <button
+                className="btn btn-ghost gap-1 text-sm"
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+              >
+                التالي <ChevronLeft size={16} />
+              </button>
+            </div>
+          )}
         </div>
-      )}
+      </QueryBoundary>
     </div>
   )
 }

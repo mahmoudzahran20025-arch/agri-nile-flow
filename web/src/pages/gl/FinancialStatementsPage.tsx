@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { TrendingUp, Scale, BarChart3, Download } from 'lucide-react'
+import { TrendingUp, Scale, BarChart3, Download, CalendarDays } from 'lucide-react'
 import { glApi, downloadCsv } from '../../api/client'
+import { GlPeriod, fiscalYearStart, fiscalYearEnd, periodLabel } from '../../lib/gl/glPeriods'
+import QueryBoundary from '../../components/ui/QueryBoundary'
 
 type Tab = 'pl' | 'balance' | 'trial'
 
@@ -19,23 +21,48 @@ function fmt(n: number) {
 }
 function egp(n: number) { return `${fmt(n)} ج` }
 
-export default function FinancialStatementsPage() {
-  const [tab, setTab]     = useState<Tab>('pl')
-  const [startDate, setS] = useState('2025-01-01') // Include historical data
-  const [endDate,   setE] = useState(new Date().toISOString().slice(0,10))
-  const [asOf,    setAO]  = useState(new Date().toISOString().slice(0,10))
+const TODAY = new Date().toISOString().slice(0, 10)
 
-  const { data: plData } = useQuery({
+export default function FinancialStatementsPage() {
+  const [tab,       setTab] = useState<Tab>('pl')
+  const [startDate, setS]   = useState<string>(TODAY)  // replaced once periods load
+  const [endDate,   setE]   = useState<string>(TODAY)
+  const [asOf,      setAO]  = useState<string>(TODAY)
+  const [periodsReady, setPeriodsReady] = useState(false)
+
+  // Load fiscal periods — dates must come from here, not from system time.
+  const { data: periods = [] } = useQuery({
+    queryKey:  ['gl-periods'],
+    queryFn:   () => glApi.periods() as Promise<GlPeriod[]>,
+    staleTime: 300_000,
+  })
+
+  // Once periods load, seed the date range from the active fiscal window.
+  useEffect(() => {
+    if (!periodsReady && periods.length > 0) {
+      setS(fiscalYearStart(periods))
+      setE(fiscalYearEnd(periods))
+      setPeriodsReady(true)
+    }
+  }, [periods, periodsReady])
+
+  function applyPeriod(p: GlPeriod) {
+    setS(p.start_date)
+    setE(p.end_date)
+    setAO(p.end_date)
+  }
+
+  const { data: plData, isLoading: plLoading, isError: plError, refetch: plRefetch } = useQuery({
     queryKey: ['gl-pl', startDate, endDate],
     queryFn:  () => glApi.incomeStatement(startDate, endDate),
     enabled:  tab === 'pl',
   })
-  const { data: bsData } = useQuery({
+  const { data: bsData, isLoading: bsLoading, isError: bsError, refetch: bsRefetch } = useQuery({
     queryKey: ['gl-bs', asOf],
     queryFn:  () => glApi.balanceSheet(asOf),
     enabled:  tab === 'balance',
   })
-  const { data: tbData } = useQuery({
+  const { data: tbData, isLoading: tbLoading, isError: tbError, refetch: tbRefetch } = useQuery({
     queryKey: ['gl-tb', startDate, endDate],
     queryFn:  () => glApi.trialBalance(startDate, endDate),
     enabled:  tab === 'trial',
@@ -108,23 +135,54 @@ export default function FinancialStatementsPage() {
       </div>
 
       {/* Date Controls */}
-      {tab !== 'balance' ? (
-        <div className="flex items-center gap-3 flex-wrap">
-          <label className="text-sm font-medium">من:</label>
-          <input type="date" className="input w-40" value={startDate} onChange={e => setS(e.target.value)} />
-          <label className="text-sm font-medium">إلى:</label>
-          <input type="date" className="input w-40" value={endDate} onChange={e => setE(e.target.value)} />
-        </div>
-      ) : (
-        <div className="flex items-center gap-3">
-          <label className="text-sm font-medium">بتاريخ:</label>
-          <input type="date" className="input w-40" value={asOf} onChange={e => setAO(e.target.value)} />
-        </div>
-      )}
+      <div className="flex items-center gap-3 flex-wrap">
+        {/* Period quick-select — single source of truth for date ranges */}
+        {periods.length > 0 && (
+          <div className="flex items-center gap-2">
+            <CalendarDays size={15} className="text-gray-400" />
+            <select
+              className="input w-56 text-sm"
+              defaultValue=""
+              onChange={e => {
+                const p = periods.find(x => String(x.id) === e.target.value)
+                if (p) applyPeriod(p)
+              }}
+            >
+              <option value="">— اختر فترة محاسبية —</option>
+              {[...periods]
+                .sort((a, b) => b.start_date.localeCompare(a.start_date))
+                .map(p => (
+                  <option key={p.id} value={p.id}>{periodLabel(p)}</option>
+                ))}
+            </select>
+          </div>
+        )}
+        {tab !== 'balance' ? (
+          <>
+            <label className="text-sm font-medium">من:</label>
+            <input type="date" className="input w-40" value={startDate} onChange={e => setS(e.target.value)} />
+            <label className="text-sm font-medium">إلى:</label>
+            <input type="date" className="input w-40" value={endDate} onChange={e => setE(e.target.value)} />
+          </>
+        ) : (
+          <>
+            <label className="text-sm font-medium">بتاريخ:</label>
+            <input type="date" className="input w-40" value={asOf} onChange={e => setAO(e.target.value)} />
+          </>
+        )}
+      </div>
 
       {/* ── P&L ──────────────────────────────────────────────── */}
       {tab === 'pl' && (
-        <div className="space-y-4">
+        <QueryBoundary
+          isLoading={plLoading}
+          isError={plError}
+          isEmpty={!pl}
+          onRetry={() => plRefetch()}
+          emptyMessage="لا توجد بيانات لقائمة الدخل في هذه الفترة"
+          loadingRows={4}
+        >
+          <div className="space-y-4">
           {/* Summary cards */}
           {pl && (
             <div className="grid grid-cols-3 gap-4">
@@ -212,10 +270,19 @@ export default function FinancialStatementsPage() {
             </div>
           )}
         </div>
+        </QueryBoundary>
       )}
 
       {/* ── Balance Sheet ────────────────────────────────────── */}
       {tab === 'balance' && (
+        <QueryBoundary
+          isLoading={bsLoading}
+          isError={bsError}
+          isEmpty={!bs}
+          onRetry={() => bsRefetch()}
+          emptyMessage="لا توجد بيانات للميزانية العمومية"
+          loadingRows={4}
+        >
         <div className="space-y-4">
           {bs && (
             <div className="grid grid-cols-3 gap-4">
@@ -270,15 +337,21 @@ export default function FinancialStatementsPage() {
             </div>
           )}
         </div>
+        </QueryBoundary>
       )}
 
       {/* ── Trial Balance ─────────────────────────────────────── */}
       {tab === 'trial' && (
+        <QueryBoundary
+          isLoading={tbLoading}
+          isError={tbError}
+          isEmpty={!tb}
+          onRetry={() => tbRefetch()}
+          emptyMessage="لا توجد بيانات لميزان المراجعة في هذه الفترة"
+          loadingRows={6}
+        >
         <div className="card overflow-hidden p-0">
-          {!tb ? (
-            <p className="text-center text-gray-400 py-8">جاري التحميل...</p>
-          ) : (
-            <table className="w-full text-sm">
+          <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b">
                 <tr>
                   <th className="th">كود</th>
@@ -290,7 +363,7 @@ export default function FinancialStatementsPage() {
                 </tr>
               </thead>
               <tbody>
-                {(tb.accounts ?? []).map(a => (
+                {(tb?.accounts ?? []).map(a => (
                   <tr
                     key={a.code}
                     className={`border-b ${a.is_header ? 'bg-gray-50 font-semibold' : 'hover:bg-gray-50'}`}
@@ -317,22 +390,22 @@ export default function FinancialStatementsPage() {
               <tfoot className="bg-gray-100 border-t-2 font-bold">
                 <tr>
                   <td className="td" colSpan={3}>الإجمالي</td>
-                  <td className={`td text-red-600 ${Math.abs((tb.total_debit ?? 0) - (tb.total_credit ?? 0)) < 1 ? '' : 'text-red-800'}`}>
-                    {fmt(tb.total_debit ?? 0)}
+                  <td className={`td text-red-600 ${Math.abs((tb?.total_debit ?? 0) - (tb?.total_credit ?? 0)) < 1 ? '' : 'text-red-800'}`}>
+                    {fmt(tb?.total_debit ?? 0)}
                   </td>
-                  <td className={`td text-green-700 ${Math.abs((tb.total_debit ?? 0) - (tb.total_credit ?? 0)) < 1 ? '' : 'text-red-800'}`}>
-                    {fmt(tb.total_credit ?? 0)}
+                  <td className={`td text-green-700 ${Math.abs((tb?.total_debit ?? 0) - (tb?.total_credit ?? 0)) < 1 ? '' : 'text-red-800'}`}>
+                    {fmt(tb?.total_credit ?? 0)}
                   </td>
                   <td className="td">
-                    {Math.abs((tb.total_debit ?? 0) - (tb.total_credit ?? 0)) < 1
+                    {Math.abs((tb?.total_debit ?? 0) - (tb?.total_credit ?? 0)) < 1
                       ? <span className="badge badge-green">متوازن ✓</span>
-                      : <span className="badge badge-red">فرق: {fmt(Math.abs((tb.total_debit ?? 0) - (tb.total_credit ?? 0)))}</span>}
+                      : <span className="badge badge-red">فرق: {fmt(Math.abs((tb?.total_debit ?? 0) - (tb?.total_credit ?? 0)))}</span>}
                   </td>
                 </tr>
               </tfoot>
             </table>
-          )}
         </div>
+        </QueryBoundary>
       )}
     </div>
   )

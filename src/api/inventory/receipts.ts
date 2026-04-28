@@ -4,6 +4,7 @@ import { getUser } from '../../middleware/auth'
 import { getOpenPeriod } from '../../lib/gl'
 import { FinanceCore } from '../../lib/finance_core'
 import { logAudit } from '../../lib/audit'
+import { resolveControlAccount } from '../../lib/posting_engine'
 
 const receipts = new Hono<{ Bindings: Env }>()
 
@@ -41,15 +42,12 @@ receipts.post('/receive-po/:po_id', async (c) => {
     return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.received_date}` }, 400)
   }
 
-  const invAccChk = await c.env.DB.prepare(
-    "SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'inventory'"
-  ).bind(company_id).first()
-  if (!invAccChk) return c.json({ success: false, error: 'GL_MAPPING_MISSING: حساب المخزون غير مربوط.' }, 400)
-
-  const apAccChk = await c.env.DB.prepare(
-    "SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = 'accounts_payable'"
-  ).bind(company_id).first()
-  if (!apAccChk) return c.json({ success: false, error: 'GL_MAPPING_MISSING: حساب الموردين غير مربوط.' }, 400)
+  try {
+    await resolveControlAccount(c.env.DB, company_id, 'inventory')
+    await resolveControlAccount(c.env.DB, company_id, 'accounts_payable')
+  } catch {
+    return c.json({ success: false, error: 'GL_MAPPING_MISSING: حسابات التحكم (المخزون/الموردين) غير مربوطة في posting_rules.' }, 400)
+  }
 
   const enrichedLines: Array<{
     po_item_id: number; item_code: number; item_name: string

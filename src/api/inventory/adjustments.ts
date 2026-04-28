@@ -140,6 +140,7 @@ adjustments.post('/adjustments/:id/post', async (c) => {
         date: adj.adjustment_date,
         item_name: `تسوية جردية - ${l.item_code}`,
         created_by: userId,
+        // Adjustments are internal, no supplier or payment method
       })
     } catch {
       // GL failure on adjustment lines is logged but non-fatal;

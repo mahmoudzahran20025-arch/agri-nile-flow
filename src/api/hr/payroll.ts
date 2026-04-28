@@ -171,7 +171,7 @@ payroll.patch('/payroll/:id/approve', permissionGuard('hr', 'admin'), async (c) 
   const id = Number(c.req.param('id'))
 
   const run = await c.env.DB.prepare('SELECT * FROM payroll_runs WHERE id = ? AND company_id = ?')
-    .bind(id, company_id).first<{ status: string; total_net: number; period_year: number; period_month: number }>()
+    .bind(id, company_id).first<{ status: string; total_net: number; period_year: number; period_month: number; season_id: number | null }>()
   if (!run) return c.json({ success: false, error: 'المسيرة غير موجودة' }, 404)
   if (run.status !== 'draft') return c.json({ success: false, error: 'المسيرة ليست في حالة مسودة' }, 400)
 
@@ -180,11 +180,12 @@ payroll.patch('/payroll/:id/approve', permissionGuard('hr', 'admin'), async (c) 
   try {
     glId = await FinanceCore.resolvePayrollPosting(c.env.DB, {
       company_id,
-      ref_id: id,
-      amount: run.total_net,
-      date: runDate,
+      ref_id:      id,
+      amount:      run.total_net,
+      date:        runDate,
       description: `مسيرة رواتب ${run.period_year}/${run.period_month}`,
-      created_by: userId,
+      created_by:  userId,
+      season_id:   run.season_id,
     })
   } catch (e: any) {
     return c.json({ success: false, error: `فشل إنشاء القيد المحاسبي للمسيرة: ${e.message}` }, 400)

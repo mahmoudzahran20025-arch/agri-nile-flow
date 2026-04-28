@@ -8,23 +8,20 @@ interface GLLine {
   center_code?: number
   season_id?:   number
   field_id?:    number
+  rule_slot?:   string   // which posting slot produced this line
+  source_ledger?: 'cash' | 'supplier' | 'inventory' | 'payroll' | 'manual' | 'adjustment' | 'harvest'
+  source_record_id?: number | null
 }
 
 interface PostEntryOpts {
-  company_id:  number
-  entry_date:  string
-  description: string
-  ref_type:    string
-  ref_id:      number
-  lines:       GLLine[]
-  created_by?: number
-}
-
-async function getMapping(db: D1Database, company_id: number, key: string): Promise<string | null> {
-  const row = await db
-    .prepare('SELECT account_code FROM gl_account_mappings WHERE company_id = ? AND mapping_key = ?')
-    .bind(company_id, key).first<{ account_code: string }>()
-  return row?.account_code ?? null
+  company_id:         number
+  entry_date:         string
+  description:        string
+  ref_type:           string
+  ref_id:             number
+  lines:              GLLine[]
+  created_by?:        number
+  posting_rule_trace?: string   // JSON trace from posting engine
 }
 
 export async function isIntegrationEnabled(db: D1Database, company_id: number, module_key: string): Promise<boolean> {
@@ -60,10 +57,11 @@ export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promis
     // Step 1: Insert the header to get the entry ID
     const entry = await db
       .prepare(`INSERT INTO journal_entries
-                (company_id, period_id, entry_date, description, ref_type, ref_id, is_posted, created_by)
-                VALUES (?,?,?,?,?,?,1,?)`)
+                (company_id, period_id, entry_date, description, ref_type, ref_id, is_posted, created_by, posting_rule_trace)
+                VALUES (?,?,?,?,?,?,1,?,?)`)
       .bind(opts.company_id, periodId, opts.entry_date, opts.description,
-            opts.ref_type, opts.ref_id, opts.created_by ?? null).run()
+            opts.ref_type, opts.ref_id, opts.created_by ?? null,
+            opts.posting_rule_trace ?? null).run()
 
     const entryId = entry.meta.last_row_id
 
@@ -71,12 +69,13 @@ export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promis
     const lineStmts = opts.lines.map(l =>
       db.prepare(
         `INSERT INTO journal_entry_lines
-         (entry_id, company_id, account_code, debit, credit, description, center_code, season_id, field_id)
-         VALUES (?,?,?,?,?,?,?,?,?)`
+         (entry_id, company_id, account_code, debit, credit, description, center_code, season_id, field_id, rule_slot, source_ledger, source_record_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
       ).bind(
         entryId, opts.company_id, l.account_code,
         l.debit, l.credit, l.description ?? null, l.center_code ?? null,
-        l.season_id ?? null, l.field_id ?? null
+        l.season_id ?? null, l.field_id ?? null, l.rule_slot ?? null,
+        l.source_ledger ?? 'manual', l.source_record_id ?? null
       )
     )
     await db.batch(lineStmts)
@@ -106,104 +105,6 @@ export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promis
 
 // ── Auto-entry builders ────────────────────────────────────────
 // NOTE: glCashTransaction, glSupplierTransaction, glSupplierInvoice,
-//       glInventoryMovement were removed — use FinanceCore equivalents:
-//       FinanceCore.postCashMovement / resolveSupplierInvoice /
-//       resolveInventoryMovement / resolveExpensePosting
+//       glInventoryMovement, glWorkOrderLabor, glWagesPayment, 
+//       glContractAdvance were removed — use FinanceCore equivalents.
 
-// Work-order labor: DR Production Cost / CR Accrued Labor (field piece-rate)
-export async function glWorkOrderLabor(
-  db: D1Database,
-  company_id: number,
-  ref_id: number,
-  amount: number,
-  date: string,
-  description: string,
-  created_by?: number,
-  center_code?: number,
-  season_id?: number | null,
-  field_id?: number | null,
-): Promise<number | null> {
-  const enabled = await isIntegrationEnabled(db, company_id, 'operations')
-  if (!enabled) return null
-
-  const cogsAcc    = await getMapping(db, company_id, 'cogs')
-                  ?? await getMapping(db, company_id, 'expense_default')
-  const payableAcc = await getMapping(db, company_id, 'wages_payable')
-                  ?? await getMapping(db, company_id, 'accounts_payable')
-
-  if (!cogsAcc || !payableAcc) {
-    throw new Error('GL_MAPPING_MISSING: Missing default accounts for COGS or Wages Payable.')
-  }
-  if (amount <= 0) return null
-
-  return await postAutoEntry(db, {
-    company_id, entry_date: date, description,
-    ref_type: 'work_order', ref_id,
-    lines: [
-      { account_code: cogsAcc,    debit: amount, credit: 0,      description, center_code, season_id: season_id ?? undefined, field_id: field_id ?? undefined },
-      { account_code: payableAcc, debit: 0,      credit: amount, description, center_code, season_id: season_id ?? undefined, field_id: field_id ?? undefined },
-    ],
-    created_by,
-  })
-}
-
-// Salary disbursement: DR Wages Payable / CR Cash (actual bank transfer to employees)
-export async function glWagesPayment(
-  db: D1Database,
-  company_id: number,
-  ref_id: number,
-  amount: number,
-  date: string,
-  description: string,
-  created_by?: number,
-): Promise<number | null> {
-  const payableAcc = await getMapping(db, company_id, 'wages_payable')
-                  ?? await getMapping(db, company_id, 'accounts_payable')
-  const cashAcc    = await getMapping(db, company_id, 'cash')
-
-  if (!payableAcc || !cashAcc) {
-    throw new Error('GL_MAPPING_MISSING: Missing default accounts for Wages Payable or Cash.')
-  }
-  if (amount <= 0) return null
-
-  return await postAutoEntry(db, {
-    company_id, entry_date: date, description,
-    ref_type: 'payroll_payment', ref_id,
-    lines: [
-      { account_code: payableAcc, debit: amount, credit: 0,      description },
-      { account_code: cashAcc,    debit: 0,      credit: amount, description },
-    ],
-    created_by,
-  })
-}
-
-// Contract advance from customer: DR Cash / CR Deferred Revenue (liability)
-export async function glContractAdvance(
-  db: D1Database,
-  company_id: number,
-  ref_id: number,
-  amount: number,
-  date: string,
-  description: string,
-  created_by?: number,
-): Promise<number | null> {
-  const cashAcc     = await getMapping(db, company_id, 'cash')
-  const deferredAcc = await getMapping(db, company_id, 'deferred_revenue')
-                   ?? await getMapping(db, company_id, 'accounts_payable')
-
-  if (!cashAcc || !deferredAcc) {
-    throw new Error('GL_MAPPING_MISSING: Missing default accounts for Cash or Deferred Revenue.')
-  }
-  if (amount <= 0) return null
-
-  return await postAutoEntry(db, {
-    company_id, entry_date: date, description,
-    ref_type: 'contract_advance', ref_id,
-    lines: [
-      { account_code: cashAcc,     debit: amount, credit: 0,      description },
-      { account_code: deferredAcc, debit: 0,      credit: amount, description },
-    ],
-    created_by,
-  })
-}
-// NOTE: glPayroll removed — superseded by FinanceCore.resolvePayrollPosting

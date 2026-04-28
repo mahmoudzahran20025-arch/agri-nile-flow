@@ -35,6 +35,7 @@ const MORE_SECTIONS: MoreSection[] = [
     items: [
       { to: '/treasury/partners',        icon: TrendingUp,    label: 'الشركاء'         },
       { to: '/inventory/movements',      icon: ClipboardList, label: 'حركات المخزون'   },
+      { to: '/inventory/posting-health', icon: Shield,        label: 'صحة الترحيل المخزني' },
       { to: '/inventory/cost-by-field',  icon: Wheat,         label: 'تكلفة الحقل'     },
       { to: '/fields',                   icon: MapPin,        label: 'قطع الأراضي'     },
       { to: '/fields/harvest',           icon: Leaf,          label: 'محصول وحصاد'     },
@@ -66,9 +67,8 @@ const MORE_SECTIONS: MoreSection[] = [
       { to: '/gl/entries',    icon: BookMarked,   label: 'قيود اليومية'     },
       { to: '/gl/statements', icon: BarChart3,    label: 'القوائم المالية'  },
       { to: '/gl/periods',    icon: Lock,         label: 'الفترات المالية'  },
-      { to: '/gl/mappings',   icon: Link2,        label: 'ربط الحسابات'     },
-      { to: '/treasury/bank', icon: Landmark,     label: 'تسوية بنكية'      },
-      { to: '/treasury/po',   icon: ShoppingCart, label: 'طلبات الشراء'     },
+      { to: '/gl/posting-setup', icon: Link2,        label: 'ربط الحسابات'     },
+      { to: '/treasury/bank', icon: Landmark,     label: 'تسوية بنكية'      },      { to: '/treasury/po',   icon: ShoppingCart, label: 'طلبات الشراء'     },
       { to: '/treasury/ap',   icon: CreditCard,   label: 'ذمم الموردين'     },
     ],
   },
@@ -77,6 +77,7 @@ const MORE_SECTIONS: MoreSection[] = [
     color: 'bg-amber-50 border-amber-100',
     items: [
       { to: '/reports',                   icon: FileText,     label: 'التقارير'              },
+      { to: '/reports/trial-balance',     icon: Scale,        label: 'ميزان المراجعة'         },
       { to: '/reports/charts',            icon: BarChart3,    label: 'التقارير المرئية'       },
       { to: '/reports/cost-centers',      icon: Target,       label: 'مراكز التكلفة'         },
       { to: '/reports/suppliers-balance', icon: Scale,        label: 'أرصدة الموردين'         },

@@ -18,6 +18,8 @@ import CostByFieldPage from './pages/inventory/CostByFieldPage'
 import ItemCategoriesPage from './pages/inventory/ItemCategoriesPage'
 import InventoryAdjustmentsPage from './pages/inventory/InventoryAdjustmentsPage'
 import AdjustmentDetailPage from './pages/inventory/AdjustmentDetailPage'
+import ItemMasterPage from './pages/inventory/ItemMasterPage'
+import InventoryPostingHealthPage from './pages/inventory/InventoryPostingHealthPage'
 import UsersPage       from './pages/users/UsersPage'
 import PartnersPage    from './pages/treasury/PartnersPage'
 import ReportsPage     from './pages/ReportsPage'
@@ -127,6 +129,7 @@ export default function App() {
 
         {/* Inventory */}
         <Route path="inventory"                  element={<WarehouseBalancesPage />} />
+        <Route path="inventory/items"            element={<ItemMasterPage />} />
         <Route path="inventory/categories"       element={<ItemCategoriesPage />} />
         <Route path="inventory/adjustments"      element={<InventoryAdjustmentsPage />} />
         <Route path="inventory/adjustments/:id"  element={<AdjustmentDetailPage />} />
@@ -134,6 +137,7 @@ export default function App() {
         <Route path="inventory/movements"        element={<InventoryMovementsPage />} />
         <Route path="inventory/item/:code"       element={<ItemCardPage />} />
         <Route path="inventory/cost-by-field"    element={<CostByFieldPage />} />
+        <Route path="inventory/posting-health"   element={<InventoryPostingHealthPage />} />
 
         {/* HR Module */}
         <Route path="hr/dashboard"            element={<HrDashboardPage />} />
@@ -171,7 +175,6 @@ export default function App() {
         <Route path="gl/setup-wizard" element={<SetupWizardPage />} />
         {/* Keep direct routes alive for backward-compat / deep-linking */}
         <Route path="gl/periods"      element={<PeriodsPage />} />
-        <Route path="gl/mappings"     element={<GLMappingsPage />} />
         <Route path="gl/classifier"   element={<SmartClassifierPage />} />
         <Route path="gl/integrations" element={<IntegrationControlPage />} />
         <Route path="treasury/ap"     element={<APAgingPage />} />

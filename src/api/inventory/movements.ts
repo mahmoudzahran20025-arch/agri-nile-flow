@@ -184,6 +184,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
       created_by: userId,
       center_code: centerCode ?? undefined,
       payment_method: b.payment_method,
+      supplier_code: b.supplier_code,
       work_order_id: b.work_order_id,
     })
   } catch (err: any) {
@@ -379,6 +380,7 @@ movements.post('/movements/batch', async (c) => {
         created_by: userId,
         center_code: centerCode ?? undefined,
         payment_method: b.payment_method,
+        supplier_code: b.supplier_code,
         work_order_id: b.work_order_id,
       })
     } catch (err: any) {
@@ -427,11 +429,9 @@ movements.post('/movements/batch', async (c) => {
   }, 201)
 })
 
-// ── POST /transfer ────────────────────────────────────────────
+// ── POST /movements/transfer ─────────────────────────────────────
 
-// ── POST /transfer ────────────────────────────────────────────
-
-movements.post('/transfer', permissionGuard('inventory', 'create'), async (c) => {
+movements.post('/movements/transfer', permissionGuard('inventory', 'create'), async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const b = await c.req.json<{
     movement_date: string; item_code: number; quantity: number
@@ -508,6 +508,27 @@ movements.post('/transfer', permissionGuard('inventory', 'create'), async (c) =>
   const outId = rows.results.find(r => r.movement_type === 'صرف')?.id
   const inId  = rows.results.find(r => r.movement_type === 'اضافة')?.id
 
+  // 3. GL Posting
+  const itemRow = await c.env.DB.prepare("SELECT name FROM items WHERE code = ? AND company_id = ?")
+    .bind(b.item_code, company_id).first<{ name: string }>()
+
+  try {
+    await FinanceCore.resolveInventoryTransfer(c.env.DB, {
+      company_id,
+      ref_id: outId!,
+      item_code: b.item_code,
+      from_warehouse: b.from_warehouse,
+      to_warehouse: b.to_warehouse,
+      value: totalValue,
+      date: b.movement_date,
+      item_name: itemRow?.name ?? String(b.item_code),
+      created_by: userId,
+    })
+  } catch (err: any) {
+    // If GL fails, we keep the movement but log it as a sync issue for reconciliation.
+    // In a stricter system, we might rollback, but inventory takes physical precedence here.
+    console.error(`GL_TRANSFER_POSTING_FAILED: ${err.message}`)
+  }
 
   return c.json({ 
     success: true, 
@@ -521,9 +542,9 @@ movements.post('/transfer', permissionGuard('inventory', 'create'), async (c) =>
   })
 })
 
-// ── POST /transfer-batch ──────────────────────────────────────
+// ── POST /movements/transfer-batch ───────────────────────────────
 
-movements.post('/transfer-batch', permissionGuard('inventory', 'create'), async (c) => {
+movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create'), async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const b = await c.req.json<{
     movement_date: string; from_warehouse: string; to_warehouse: string; notes?: string
@@ -589,6 +610,47 @@ movements.post('/transfer-batch', permissionGuard('inventory', 'create'), async 
   }
 
   await c.env.DB.batch(stmts)
+
+  // 3. GL Posting for Batch
+  const { results: inserted } = await c.env.DB.prepare(
+    `SELECT id, item_code, movement_type, local_id FROM inventory_movements
+     WHERE company_id = ? AND local_id LIKE ? AND movement_type = 'صرف'`
+  ).bind(company_id, `${batchKey}_%_out`).all<{ id: number; item_code: number; local_id: string }>()
+
+  for (const ins of inserted) {
+    const idx = Number(ins.local_id.split('_')[2])
+    const item = b.items[idx]
+    
+    // We need the value. We recalculate it or fetch it.
+    // Re-fetching price for accuracy.
+    const srcBal = await c.env.DB.prepare(
+      `SELECT balance_qty, balance_value FROM inventory_movements
+       WHERE company_id = ? AND item_code = ? AND warehouse = ? AND id < ?
+       ORDER BY id DESC LIMIT 1`
+    ).bind(company_id, ins.item_code, b.from_warehouse, ins.id).first<{ balance_qty: number; balance_value: number }>()
+    
+    const avgPrice  = (srcBal?.balance_value ?? 0) / (srcBal?.balance_qty ?? 1)
+    const totVal    = item.quantity * avgPrice
+
+    const itemRow = await c.env.DB.prepare("SELECT name FROM items WHERE code = ? AND company_id = ?")
+      .bind(ins.item_code, company_id).first<{ name: string }>()
+
+    try {
+      await FinanceCore.resolveInventoryTransfer(c.env.DB, {
+        company_id,
+        ref_id: ins.id,
+        item_code: ins.item_code,
+        from_warehouse: b.from_warehouse,
+        to_warehouse: b.to_warehouse,
+        value: totVal,
+        date: b.movement_date,
+        item_name: itemRow?.name ?? String(ins.item_code),
+        created_by: userId,
+      })
+    } catch (err: any) {
+      console.error(`GL_BATCH_TRANSFER_POSTING_FAILED: Item ${ins.item_code}, Error: ${err.message}`)
+    }
+  }
 
   return c.json({ success: true, data: { count: b.items.length, batch_key: batchKey } })
 })

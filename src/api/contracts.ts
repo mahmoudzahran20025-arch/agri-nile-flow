@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
-import { glContractAdvance } from '../lib/gl'
+import { FinanceCore } from '../lib/finance_core'
 
 const contracts = new Hono<{ Bindings: Env }>()
 contracts.use('*', authMiddleware)
@@ -164,11 +164,14 @@ contracts.post('/sales/:id/receive-advance', async (c) => {
 
   let glId: number | null = null
   try {
-    glId = await glContractAdvance(
-      c.env.DB, company_id, id, amount, receipt_date,
-      `دفعة مقدمة عقد بيع #${contract.contract_number}${notes ? ` — ${notes}` : ''}`,
-      userId,
-    )
+    glId = await FinanceCore.resolveContractAdvance(c.env.DB, {
+      company_id,
+      ref_id: id,
+      amount,
+      date: receipt_date,
+      description: `دفعة مقدمة عقد بيع #${contract.contract_number}${notes ? ` — ${notes}` : ''}`,
+      created_by: userId,
+    })
   } catch (e: any) {
     return c.json({ success: false, error: `فشل إنشاء القيد المحاسبي: ${e.message}` }, 400)
   }

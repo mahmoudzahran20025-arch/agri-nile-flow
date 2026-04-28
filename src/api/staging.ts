@@ -344,6 +344,7 @@ staging.post('/movements/promote/:batchId', async (c) => {
       date: row.movement_date,
       item_name: itemRow?.name ?? String(row.item_code),
       created_by: userId,
+      supplier_code: row.supplier_code ?? undefined,
     })
 
     // Mark staging row as promoted
