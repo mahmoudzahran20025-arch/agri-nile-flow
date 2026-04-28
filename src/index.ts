@@ -25,6 +25,8 @@ import financeRoutes    from './api/finance'
 import reportsRoutes    from './api/reports'
 import budgetsRoutes    from './api/budgets'
 import classifierRoutes from './api/classifier'
+import validationRoutes from './api/validation'
+import assetsRoutes     from './api/assets'
 
 const app = new Hono<{ Bindings: Env; Variables: { jwtPayload: JwtPayload } }>()
 
@@ -75,6 +77,8 @@ app.route('/api/finance',    financeRoutes)
 app.route('/api/reports',    reportsRoutes)
 app.route('/api/budgets',    budgetsRoutes)
 app.route('/api/classifier', classifierRoutes)
+app.route('/api/validation', validationRoutes)
+app.route('/api/assets',     assetsRoutes)
 
 // ─── Health Check ─────────────────────────────────────────────
 app.get('/api/health', (c) => c.json({ status: 'ok', ts: new Date().toISOString() }))

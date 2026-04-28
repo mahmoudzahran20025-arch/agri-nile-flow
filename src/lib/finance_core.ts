@@ -1482,4 +1482,279 @@ export const FinanceCore = {
       created_by: opts.created_by,
     })
   },
+
+  /**
+   * carryForwardWIP
+   * When closing a season, identify uncompleted crops and carry forward their costs.
+   * Finds fields with work_tasks cost but no harvest_records, then:
+   * 1. Creates wip_balances records
+   * 2. Posts GL entry: DR WIP Asset / CR WIP Contra
+   * Returns list of WIP entries created.
+   */
+  async carryForwardWIP(
+    db: D1Database,
+    opts: {
+      company_id: number
+      season_id: number
+      user_id: number
+    }
+  ): Promise<Array<{ field_id: number; crop_name: string; cost_balance: number }>> {
+    const wipAssetCode = await resolveControlAccount(db, opts.company_id, 'wip_asset')
+    const wipContraCode = await resolveControlAccount(db, opts.company_id, 'wip_contra')
+    if (!wipAssetCode) throw new Error('GL_MAPPING_MISSING: حساب WIP (wip_asset) غير مربوط.')
+    if (!wipContraCode) throw new Error('GL_MAPPING_MISSING: حساب WIP مقابل (wip_contra) غير مربوط.')
+
+    // Find unfinished crops: fields with work_tasks cost but no harvest_records
+    const unfinishedCrops = await db.prepare(`
+      SELECT
+        f.id as field_id,
+        f.name as field_name,
+        COALESCE(f.current_crop, 'محصول') as crop_name,
+        COALESCE(SUM(wt.quantity * wt.unit_cost), 0) as labor_cost,
+        COALESCE(
+          (SELECT SUM(amount) FROM cash_transactions ct
+           WHERE ct.company_id = ? AND ct.season_id = ? AND ct.field_id = f.id),
+          0
+        ) as cash_cost
+      FROM fields f
+      LEFT JOIN work_orders wo ON wo.field_id = f.id AND wo.company_id = f.company_id AND wo.season_id = ?
+      LEFT JOIN work_tasks wt ON wt.work_order_id = wo.id
+      WHERE f.company_id = ? AND f.is_active = 1
+      GROUP BY f.id
+      HAVING (labor_cost > 0 OR cash_cost > 0)
+        AND NOT EXISTS (
+          SELECT 1 FROM harvest_records hr
+          WHERE hr.field_id = f.id AND hr.season_id = ? AND hr.company_id = ?
+        )
+    `).bind(
+      opts.company_id, opts.season_id, opts.season_id,
+      opts.company_id,
+      opts.season_id, opts.company_id
+    ).all<{
+      field_id: number
+      field_name: string
+      crop_name: string
+      labor_cost: number
+      cash_cost: number
+    }>()
+
+    const wipEntries: Array<{ field_id: number; crop_name: string; cost_balance: number }> = []
+
+    if (!unfinishedCrops.results || unfinishedCrops.results.length === 0) {
+      return wipEntries
+    }
+
+    let totalWipCost = 0
+    const wipRecordStmts: ReturnType<typeof db.prepare>[] = []
+
+    // Create wip_balances records for each unfinished crop
+    for (const crop of unfinishedCrops.results) {
+      const totalCost = crop.labor_cost + crop.cash_cost
+      totalWipCost += totalCost
+
+      wipRecordStmts.push(
+        db.prepare(`
+          INSERT INTO wip_balances (company_id, from_season_id, field_id, crop_name, cost_balance, created_by, status)
+          VALUES (?, ?, ?, ?, ?, ?, 'pending')
+        `).bind(
+          opts.company_id,
+          opts.season_id,
+          crop.field_id,
+          crop.crop_name,
+          totalCost,
+          opts.user_id
+        )
+      )
+
+      wipEntries.push({
+        field_id: crop.field_id,
+        crop_name: crop.crop_name,
+        cost_balance: totalCost,
+      })
+    }
+
+    // Batch insert WIP records
+    if (wipRecordStmts.length > 0) {
+      await db.batch(wipRecordStmts)
+    }
+
+    // If there's total WIP cost > 0, post GL entry
+    if (totalWipCost > 0.01) {
+      const glLines = [
+        { account_code: wipAssetCode, debit: totalWipCost, credit: 0, description: `حمل WIP من موسم ${opts.season_id}`, source_ledger: 'manual' as const, source_record_id: opts.season_id },
+        { account_code: wipContraCode, debit: 0, credit: totalWipCost, description: `حمل WIP من موسم ${opts.season_id}`, source_ledger: 'manual' as const, source_record_id: opts.season_id },
+      ]
+
+      const entryId = await postAutoEntry(db, {
+        company_id: opts.company_id,
+        entry_date: new Date().toISOString().slice(0, 10),
+        description: `حمل WIP من الموسم ${opts.season_id}`,
+        ref_type: 'wip_carryforward',
+        ref_id: opts.season_id,
+        lines: glLines,
+        created_by: opts.user_id,
+      })
+
+      // Link WIP records to the GL entry
+      if (entryId) {
+        await db.prepare(`
+          UPDATE wip_balances
+          SET journal_entry_id = ?, status = 'carried'
+          WHERE company_id = ? AND from_season_id = ? AND status = 'pending'
+        `).bind(entryId, opts.company_id, opts.season_id).run()
+      }
+    }
+
+    return wipEntries
+  },
+
+  /**
+   * postMonthlyDepreciation
+   * Calculate and post depreciation for all active fixed assets for a given period.
+   * Posts GL entry: DR Depreciation Expense / CR Accumulated Depreciation
+   * Returns list of assets depreciated.
+   */
+  async postMonthlyDepreciation(
+    db: D1Database,
+    opts: {
+      company_id: number
+      period_year: number
+      period_month: number
+      user_id: number
+    }
+  ): Promise<Array<{ asset_id: number; asset_code: string; amount: number; journal_entry_id: number | null }>> {
+    const expenseCode = await resolveControlAccount(db, opts.company_id, 'depreciation_expense')
+    const accumulatedCode = await resolveControlAccount(db, opts.company_id, 'accumulated_depreciation')
+    if (!expenseCode) throw new Error('GL_MAPPING_MISSING: حساب مصروف الاستهلاك (depreciation_expense) غير مربوط.')
+    if (!accumulatedCode) throw new Error('GL_MAPPING_MISSING: حساب الاستهلاك المتراكم (accumulated_depreciation) غير مربوط.')
+
+    const result: Array<{ asset_id: number; asset_code: string; amount: number; journal_entry_id: number | null }> = []
+
+    // Get all active assets
+    const assets = await db.prepare(`
+      SELECT id, asset_code, cost, salvage_value, useful_life_months, depreciation_method, acquisition_date
+      FROM fixed_assets
+      WHERE company_id = ? AND is_active = 1
+    `).bind(opts.company_id).all<{
+      id: number
+      asset_code: string
+      cost: number
+      salvage_value: number
+      useful_life_months: number
+      depreciation_method: string
+      acquisition_date: string
+    }>()
+
+    if (!assets.results || assets.results.length === 0) {
+      return result
+    }
+
+    let totalDepreciation = 0
+    const updateStmts: ReturnType<typeof db.prepare>[] = []
+
+    for (const asset of assets.results) {
+      // Check if acquisition date is before or during the period
+      const acqDate = new Date(asset.acquisition_date)
+      const periodDate = new Date(`${opts.period_year}-${String(opts.period_month).padStart(2, '0')}-01`)
+      if (acqDate > periodDate) {
+        // Asset not yet acquired in this period, skip
+        continue
+      }
+
+      // Check if schedule row already exists (idempotent)
+      const existing = await db.prepare(`
+        SELECT id, status FROM depreciation_schedules
+        WHERE asset_id = ? AND period_year = ? AND period_month = ?
+      `).bind(asset.id, opts.period_year, opts.period_month).first<{ id: number; status: string }>()
+
+      if (existing && existing.status === 'posted') {
+        // Already posted, skip
+        continue
+      }
+
+      // Calculate depreciation based on method
+      let monthlyAmount = 0
+      if (asset.depreciation_method === 'straight_line') {
+        monthlyAmount = (asset.cost - asset.salvage_value) / asset.useful_life_months
+      } else if (asset.depreciation_method === 'declining_balance') {
+        // Declining balance: book_value * (2 / useful_life_months)
+        // For simplicity, use cost first month, then look up accumulated
+        const accumulated = await db.prepare(`
+          SELECT COALESCE(SUM(amount), 0) as total FROM depreciation_schedules
+          WHERE asset_id = ? AND status = 'posted'
+        `).bind(asset.id).first<{ total: number }>()
+        const bookValue = asset.cost - (accumulated?.total ?? 0)
+        monthlyAmount = Math.max(0, bookValue * (2 / asset.useful_life_months))
+      }
+
+      if (monthlyAmount < 0.01) {
+        // Skip zero depreciation
+        if (existing) {
+          updateStmts.push(
+            db.prepare(`
+              UPDATE depreciation_schedules SET status = 'skipped' WHERE id = ?
+            `).bind(existing.id)
+          )
+        }
+        continue
+      }
+
+      totalDepreciation += monthlyAmount
+
+      // Insert or update schedule entry
+      if (existing) {
+        updateStmts.push(
+          db.prepare(`
+            UPDATE depreciation_schedules SET amount = ?, status = 'pending' WHERE id = ?
+          `).bind(monthlyAmount, existing.id)
+        )
+      } else {
+        updateStmts.push(
+          db.prepare(`
+            INSERT INTO depreciation_schedules
+            (company_id, asset_id, period_year, period_month, amount, status)
+            VALUES (?, ?, ?, ?, ?, 'pending')
+          `).bind(opts.company_id, asset.id, opts.period_year, opts.period_month, monthlyAmount)
+        )
+      }
+
+      result.push({ asset_id: asset.id, asset_code: asset.asset_code, amount: monthlyAmount, journal_entry_id: null })
+    }
+
+    // Batch update/insert schedule entries
+    if (updateStmts.length > 0) {
+      await db.batch(updateStmts)
+    }
+
+    // If total depreciation > 0, post GL entry
+    if (totalDepreciation > 0.01) {
+      const glLines = [
+        { account_code: expenseCode, debit: totalDepreciation, credit: 0, description: `استهلاك الفترة ${opts.period_year}/${opts.period_month}`, source_ledger: 'manual' as const, source_record_id: 0 },
+        { account_code: accumulatedCode, debit: 0, credit: totalDepreciation, description: `استهلاك الفترة ${opts.period_year}/${opts.period_month}`, source_ledger: 'manual' as const, source_record_id: 0 },
+      ]
+
+      const entryId = await postAutoEntry(db, {
+        company_id: opts.company_id,
+        entry_date: `${opts.period_year}-${String(opts.period_month).padStart(2, '0')}-01`,
+        description: `استهلاك شهري ${opts.period_year}/${opts.period_month}`,
+        ref_type: 'depreciation',
+        ref_id: opts.period_month * 10000 + opts.period_year, // Use period as ref_id
+        lines: glLines,
+        created_by: opts.user_id,
+      })
+
+      // Link schedule entries to GL entry
+      if (entryId) {
+        await db.prepare(`
+          UPDATE depreciation_schedules
+          SET journal_entry_id = ?, status = 'posted'
+          WHERE company_id = ? AND period_year = ? AND period_month = ? AND status = 'pending'
+        `).bind(entryId, opts.company_id, opts.period_year, opts.period_month).run()
+
+        result.forEach(r => r.journal_entry_id = entryId)
+      }
+    }
+
+    return result
+  },
 }

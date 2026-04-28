@@ -195,6 +195,8 @@ season.get('/season-pnl', async (c) => {
     supCostRow,
     rentCostRow,
     payrollCostRow,
+    depreciatioRow,
+    wipCostRow,
     areaRow,
     byField,
   ] = await Promise.all([
@@ -264,6 +266,23 @@ season.get('/season-pnl', async (c) => {
       WHERE company_id = ? AND season_id = ? AND status IN ('approved', 'paid')
     `).bind(company_id, seasonId).first<{ total: number }>(),
 
+    // Cost 7: Depreciation
+    c.env.DB.prepare(`
+      SELECT COALESCE(SUM(amount), 0) AS total
+      FROM depreciation_schedules ds
+      JOIN financial_periods fp ON fp.company_id = ?
+        AND fp.start_date <= (ds.period_year || '-' || PRINTF('%02d', ds.period_month) || '-01')
+        AND fp.end_date >= (ds.period_year || '-' || PRINTF('%02d', ds.period_month) || '-01')
+      WHERE fp.company_id = ? AND fp.season_id = ? AND ds.status = 'posted'
+    `).bind(company_id, company_id, seasonId).first<{ total: number }>(),
+
+    // Cost 8: WIP Carry-forward
+    c.env.DB.prepare(`
+      SELECT COALESCE(SUM(cost_balance), 0) AS total
+      FROM wip_balances
+      WHERE company_id = ? AND from_season_id = ? AND status IN ('pending', 'carried')
+    `).bind(company_id, seasonId).first<{ total: number }>(),
+
     c.env.DB.prepare(`
       SELECT COALESCE(SUM(area_feddan), 0) AS total
       FROM fields WHERE company_id = ? AND season_id = ?
@@ -319,7 +338,9 @@ season.get('/season-pnl', async (c) => {
   const supCost      = supCostRow?.total ?? 0
   const rentCost     = rentCostRow?.total ?? 0
   const payrollCost  = payrollCostRow?.total ?? 0
-  const totalCosts   = invCost + laborCost + cashCost + supCost + rentCost + payrollCost
+  const depreciationCost = depreciatioRow?.total ?? 0
+  const wipCost      = wipCostRow?.total ?? 0
+  const totalCosts   = invCost + laborCost + cashCost + supCost + rentCost + payrollCost + depreciationCost + wipCost
   const netMargin    = revenue - totalCosts
   const totalArea    = areaRow?.total ?? 0
   const marginPF     = totalArea > 0 ? netMargin / totalArea : null
@@ -340,6 +361,8 @@ season.get('/season-pnl', async (c) => {
         supplier_credit:  supCost,
         land_rent:        rentCost,
         payroll:          payrollCost,
+        depreciation:     depreciationCost,
+        wip_carryforward: wipCost,
         total:            totalCosts,
       },
       net_margin:          netMargin,

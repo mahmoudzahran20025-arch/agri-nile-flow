@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
+import { FinanceCore } from '../lib/finance_core'
 
 const config = new Hono<{ Bindings: Env }>()
 config.use('*', authMiddleware)
@@ -289,13 +290,26 @@ config.post('/seasons/:id/close', async (c) => {
   if (!season) return c.json({ success: false, error: 'الموسم غير موجود' }, 404)
   if (season.status === 'closed') return c.json({ success: false, error: 'الموسم مغلق مسبقاً' }, 422)
 
+  let wipEntries: Array<{ field_id: number; crop_name: string; cost_balance: number }> = []
+  try {
+    // Carry forward any unfinished crops to next season
+    wipEntries = await FinanceCore.carryForwardWIP(c.env.DB, {
+      company_id,
+      season_id: id,
+      user_id: userId,
+    })
+  } catch (err: any) {
+    console.warn('WIP carry-forward warning (non-fatal):', err.message)
+    // Don't fail season close if WIP carry-forward fails
+  }
+
   await c.env.DB.prepare(
     `UPDATE seasons
      SET status = 'closed', closed_at = datetime('now'), closed_by = ?, close_notes = ?
      WHERE id = ? AND company_id = ?`
   ).bind(userId, close_notes ?? null, id, company_id).run()
 
-  return c.json({ success: true, data: { id, status: 'closed' } })
+  return c.json({ success: true, data: { id, status: 'closed', wip_carried: wipEntries.length, wip_details: wipEntries } })
 })
 
 // ── GL Integration Settings (Modular Control) ───────────────
