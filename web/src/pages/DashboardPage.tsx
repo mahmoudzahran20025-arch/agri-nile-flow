@@ -84,15 +84,6 @@ export default function DashboardPage() {
     enabled:  canReadFinance,
   })
 
-  type SetupPeriod = { id: number; is_closed: number }
-  const { data: setupPeriods } = useQuery({
-    queryKey: ['gl-periods'],
-    queryFn:  glApi.periods as () => Promise<SetupPeriod[]>,
-    staleTime: 300_000,
-    enabled:  isAdmin,
-  })
-  const hasOpenPeriod   = (setupPeriods ?? []).some(p => !p.is_closed)
-
   const { data: seasonPnL } = useQuery({
     queryKey: ['reports', 'season-pnl', seasonId],
     queryFn:  () => reportsApi.seasonPnL(seasonId!),

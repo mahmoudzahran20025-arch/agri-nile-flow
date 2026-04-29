@@ -1,441 +1,326 @@
-import { useState, useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { TrendingUp, Scale, BarChart3, Download, CalendarDays } from 'lucide-react'
-import { glApi, downloadCsv } from '../../api/client'
-import { GlPeriod, fiscalYearStart, fiscalYearEnd, periodLabel } from '../../lib/gl/glPeriods'
-import QueryBoundary from '../../components/ui/QueryBoundary'
+import { useState, useEffect, useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Download, Printer } from 'lucide-react';
+import { glApi, downloadCsv } from '../../api/client';
+import { GlPeriod, fiscalYearStart, fiscalYearEnd, periodLabel } from '../../lib/gl/glPeriods';
+import { KpiStrip, KpiItem } from '../../components/ui/KpiStrip';
+import { CommandBar, CommandAction } from '../../components/shell/CommandBar';
+import DataTable, { Column } from '../../components/ui/DataTable';
 
-type Tab = 'pl' | 'balance' | 'trial'
+type Tab = 'pl' | 'balance' | 'trial';
 
-interface PLRow     { code: string; name: string; account_type: string; amount: number }
-interface BSRow     { code: string; name: string; account_type: string; is_header: number; balance: number }
-interface TBRow     { code: string; name: string; account_type: string; level: number; is_header: number
-                      total_debit: number; total_credit: number; balance: number; normal_balance: string }
+interface PLRow { code: string; name: string; account_type: string; amount: number; }
+interface BSRow { code: string; name: string; account_type: string; is_header: number; balance: number; }
+interface TBRow {
+  code: string; name: string; account_type: string; level: number; is_header: number;
+  total_debit: number; total_credit: number; balance: number; normal_balance: string;
+}
 
 const TYPE_AR: Record<string, string> = {
-  asset: 'أصول', liability: 'خصوم', equity: 'حقوق ملكية', revenue: 'إيرادات', expense: 'مصروفات',
-}
+  asset: 'Asset', liability: 'Liability', equity: 'Equity', revenue: 'Revenue', expense: 'Expense',
+};
 
 function fmt(n: number) {
-  return new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n || 0)
+  return new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n || 0);
 }
-function egp(n: number) { return `${fmt(n)} ج` }
 
-const TODAY = new Date().toISOString().slice(0, 10)
+const TODAY = new Date().toISOString().slice(0, 10);
 
 export default function FinancialStatementsPage() {
-  const [tab,       setTab] = useState<Tab>('pl')
-  const [startDate, setS]   = useState<string>(TODAY)  // replaced once periods load
-  const [endDate,   setE]   = useState<string>(TODAY)
-  const [asOf,      setAO]  = useState<string>(TODAY)
-  const [periodsReady, setPeriodsReady] = useState(false)
+  const [tab, setTab] = useState<Tab>('trial');
+  const [startDate, setS] = useState<string>(TODAY);
+  const [endDate, setE] = useState<string>(TODAY);
+  const [asOf, setAO] = useState<string>(TODAY);
+  const [periodsReady, setPeriodsReady] = useState(false);
 
-  // Load fiscal periods — dates must come from here, not from system time.
   const { data: periods = [] } = useQuery({
-    queryKey:  ['gl-periods'],
-    queryFn:   () => glApi.periods() as Promise<GlPeriod[]>,
+    queryKey: ['gl-periods'],
+    queryFn: () => glApi.periods() as Promise<GlPeriod[]>,
     staleTime: 300_000,
-  })
+  });
 
-  // Once periods load, seed the date range from the active fiscal window.
   useEffect(() => {
     if (!periodsReady && periods.length > 0) {
-      setS(fiscalYearStart(periods))
-      setE(fiscalYearEnd(periods))
-      setPeriodsReady(true)
+      setS(fiscalYearStart(periods));
+      setE(fiscalYearEnd(periods));
+      setAO(fiscalYearEnd(periods));
+      setPeriodsReady(true);
     }
-  }, [periods, periodsReady])
+  }, [periods, periodsReady]);
 
   function applyPeriod(p: GlPeriod) {
-    setS(p.start_date)
-    setE(p.end_date)
-    setAO(p.end_date)
+    setS(p.start_date);
+    setE(p.end_date);
+    setAO(p.end_date);
   }
 
-  const { data: plData, isLoading: plLoading, isError: plError, refetch: plRefetch } = useQuery({
+  const { data: plData } = useQuery({
     queryKey: ['gl-pl', startDate, endDate],
-    queryFn:  () => glApi.incomeStatement(startDate, endDate),
-    enabled:  tab === 'pl',
-  })
-  const { data: bsData, isLoading: bsLoading, isError: bsError, refetch: bsRefetch } = useQuery({
+    queryFn: () => glApi.incomeStatement(startDate, endDate),
+    enabled: tab === 'pl',
+  });
+  const { data: bsData } = useQuery({
     queryKey: ['gl-bs', asOf],
-    queryFn:  () => glApi.balanceSheet(asOf),
-    enabled:  tab === 'balance',
-  })
-  const { data: tbData, isLoading: tbLoading, isError: tbError, refetch: tbRefetch } = useQuery({
+    queryFn: () => glApi.balanceSheet(asOf),
+    enabled: tab === 'balance',
+  });
+  const { data: tbData, isLoading: tbLoading } = useQuery({
     queryKey: ['gl-tb', startDate, endDate],
-    queryFn:  () => glApi.trialBalance(startDate, endDate),
-    enabled:  tab === 'trial',
-  })
+    queryFn: () => glApi.trialBalance(startDate, endDate),
+    enabled: tab === 'trial',
+  });
 
-  const pl = plData as { revenue?: PLRow[]; expenses?: PLRow[]; total_revenue?: number; total_expenses?: number; net_income?: number } | undefined
-  const bs = bsData as { assets?: BSRow[]; liabilities?: BSRow[]; equity?: BSRow[]
-                         total_assets?: number; total_liabilities?: number; total_equity?: number; as_of?: string } | undefined
-  const tb = tbData as { accounts?: TBRow[]; total_debit?: number; total_credit?: number } | undefined
+  const pl = plData as any;
+  const bs = bsData as any;
+  const tb = tbData as any;
 
-  return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <BarChart3 size={24} className="text-brand-600" />
-          <h1 className="text-xl font-bold text-gray-900">القوائم المالية</h1>
-        </div>
+  // KPIs
+  const kpiItems = useMemo<KpiItem[]>(() => {
+    if (tab === 'trial') {
+      const v = Math.abs((tb?.total_debit || 0) - (tb?.total_credit || 0));
+      return [
+        { id: 'dr', label: 'TOTAL DEBITS', value: fmt(tb?.total_debit || 0) },
+        { id: 'cr', label: 'TOTAL CREDITS', value: fmt(tb?.total_credit || 0) },
+        { id: 'var', label: 'VARIANCE', value: fmt(v), variant: v < 1 ? 'success' : 'warning' },
+        { id: 'ni', label: 'NET INCOME', value: 'Calculated' } // Optional static placeholder
+      ];
+    }
+    if (tab === 'pl') {
+      return [
+        { id: 'rev', label: 'REVENUE', value: fmt(pl?.total_revenue || 0), variant: 'success' },
+        { id: 'exp', label: 'EXPENSES', value: fmt(pl?.total_expenses || 0), variant: 'warning' },
+        { id: 'ni', label: 'NET INCOME', value: fmt(Math.abs(pl?.net_income || 0)), variant: (pl?.net_income || 0) >= 0 ? 'success' : 'warning' },
+      ];
+    }
+    if (tab === 'balance') {
+      const v = Math.abs((bs?.total_assets || 0) - ((bs?.total_liabilities || 0) + (bs?.total_equity || 0)));
+      return [
+        { id: 'ast', label: 'ASSETS', value: fmt(bs?.total_assets || 0), variant: 'default' },
+        { id: 'liab', label: 'LIABILITIES', value: fmt(bs?.total_liabilities || 0), variant: 'warning' },
+        { id: 'eq', label: 'EQUITY', value: fmt(bs?.total_equity || 0), variant: 'success' },
+        { id: 'var', label: 'BALANCE CHECK', value: v < 1 ? 'BALANCED' : 'UNBALANCED', variant: v < 1 ? 'success' : 'warning' },
+      ];
+    }
+    return [];
+  }, [tab, tb, pl, bs]);
+
+  const actions: CommandAction[] = [
+    { id: 'export', label: 'Export CSV', icon: <Download />, onClick: () => {
+      if (tab === 'pl') downloadCsv('/gl/income-statement', 'income-statement', { start: startDate, end: endDate });
+      if (tab === 'trial') downloadCsv('/gl/trial-balance', 'trial-balance', { start: startDate, end: endDate });
+      if (tab === 'balance') downloadCsv('/gl/balance-sheet', 'balance-sheet', { as_of: asOf });
+    }},
+    { id: 'print', label: 'Print', icon: <Printer />, variant: 'secondary', onClick: () => window.print() },
+  ];
+
+  const rightSlot = (
+    <div className="flex items-center gap-3 mr-4">
+      {periods.length > 0 && (
+        <select
+          className="input h-8 text-[12px] py-1 w-48"
+          defaultValue=""
+          onChange={e => {
+            const p = periods.find(x => String(x.id) === e.target.value);
+            if (p) applyPeriod(p);
+          }}
+        >
+          <option value="">— Select Period —</option>
+          {[...periods].sort((a, b) => b.start_date.localeCompare(a.start_date)).map(p => (
+            <option key={p.id} value={p.id}>{periodLabel(p)}</option>
+          ))}
+        </select>
+      )}
+      {tab !== 'balance' ? (
         <div className="flex items-center gap-2">
-          {tab === 'pl' && (
-            <button
-              className="btn btn-ghost gap-2"
-              onClick={() => downloadCsv('/gl/income-statement', 'قائمة_الدخل', {
-                start: startDate, end: endDate,
-              })}
-            >
-              <Download size={16} /> تصدير CSV
-            </button>
-          )}
-          {tab === 'trial' && (
-            <button
-              className="btn btn-ghost gap-2"
-              onClick={() => downloadCsv('/gl/trial-balance', 'ميزان_المراجعة', {
-                start: startDate, end: endDate,
-              })}
-            >
-              <Download size={16} /> تصدير CSV
-            </button>
-          )}
-          {tab === 'balance' && (
-            <button
-              className="btn btn-ghost gap-2"
-              onClick={() => downloadCsv('/gl/balance-sheet', 'الميزانية_العمومية', { as_of: asOf })}
-            >
-              <Download size={16} /> تصدير CSV
-            </button>
-          )}
-          <button className="btn btn-ghost gap-2" onClick={() => window.print()}>
-            <Download size={16} /> طباعة
-          </button>
+          <input type="date" className="input h-8 text-[12px] py-1 w-32" value={startDate} onChange={e => setS(e.target.value)} />
+          <span className="text-slate-400">-</span>
+          <input type="date" className="input h-8 text-[12px] py-1 w-32" value={endDate} onChange={e => setE(e.target.value)} />
         </div>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex gap-1 border-b">
-        {([
-          { id: 'pl',      label: 'قائمة الدخل', icon: <TrendingUp size={15} /> },
-          { id: 'balance', label: 'الميزانية العمومية', icon: <Scale size={15} /> },
-          { id: 'trial',   label: 'ميزان المراجعة', icon: <BarChart3 size={15} /> },
-        ] as { id: Tab; label: string; icon: React.ReactNode }[]).map(t => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`flex items-center gap-2 px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-              tab === t.id ? 'border-brand-600 text-brand-700' : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {t.icon}{t.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Date Controls */}
-      <div className="flex items-center gap-3 flex-wrap">
-        {/* Period quick-select — single source of truth for date ranges */}
-        {periods.length > 0 && (
-          <div className="flex items-center gap-2">
-            <CalendarDays size={15} className="text-gray-400" />
-            <select
-              className="input w-56 text-sm"
-              defaultValue=""
-              onChange={e => {
-                const p = periods.find(x => String(x.id) === e.target.value)
-                if (p) applyPeriod(p)
-              }}
-            >
-              <option value="">— اختر فترة محاسبية —</option>
-              {[...periods]
-                .sort((a, b) => b.start_date.localeCompare(a.start_date))
-                .map(p => (
-                  <option key={p.id} value={p.id}>{periodLabel(p)}</option>
-                ))}
-            </select>
-          </div>
-        )}
-        {tab !== 'balance' ? (
-          <>
-            <label className="text-sm font-medium">من:</label>
-            <input type="date" className="input w-40" value={startDate} onChange={e => setS(e.target.value)} />
-            <label className="text-sm font-medium">إلى:</label>
-            <input type="date" className="input w-40" value={endDate} onChange={e => setE(e.target.value)} />
-          </>
-        ) : (
-          <>
-            <label className="text-sm font-medium">بتاريخ:</label>
-            <input type="date" className="input w-40" value={asOf} onChange={e => setAO(e.target.value)} />
-          </>
-        )}
-      </div>
-
-      {/* ── P&L ──────────────────────────────────────────────── */}
-      {tab === 'pl' && (
-        <QueryBoundary
-          isLoading={plLoading}
-          isError={plError}
-          isEmpty={!pl}
-          onRetry={() => plRefetch()}
-          emptyMessage="لا توجد بيانات لقائمة الدخل في هذه الفترة"
-          loadingRows={4}
-        >
-          <div className="space-y-4">
-          {/* Summary cards */}
-          {pl && (
-            <div className="grid grid-cols-3 gap-4">
-              {[
-                { label: 'إجمالي الإيرادات', value: pl.total_revenue ?? 0, color: 'text-green-700', bg: 'bg-green-50' },
-                { label: 'إجمالي المصروفات', value: pl.total_expenses ?? 0, color: 'text-red-600', bg: 'bg-red-50' },
-                { label: (pl.net_income ?? 0) >= 0 ? 'صافي الربح' : 'صافي الخسارة',
-                  value: Math.abs(pl.net_income ?? 0),
-                  color: (pl.net_income ?? 0) >= 0 ? 'text-brand-700' : 'text-red-700',
-                  bg:    (pl.net_income ?? 0) >= 0 ? 'bg-brand-50' : 'bg-red-50' },
-              ].map(k => (
-                <div key={k.label} className={`${k.bg} rounded-xl p-4 text-center`}>
-                  <p className="text-xs text-gray-500 mb-1">{k.label}</p>
-                  <p className={`text-xl font-bold ${k.color}`}>{egp(k.value)}</p>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* Revenue */}
-            <div className="card overflow-hidden p-0">
-              <div className="bg-green-50 border-b px-4 py-3">
-                <h3 className="font-bold text-green-800 text-sm">الإيرادات</h3>
-              </div>
-              <table className="w-full text-sm">
-                <tbody>
-                  {(pl?.revenue ?? []).map(r => (
-                    <tr key={r.code} className="border-b hover:bg-gray-50">
-                      <td className="td font-mono text-xs text-gray-400">{r.code}</td>
-                      <td className="td">{r.name}</td>
-                      <td className="td text-green-700 font-medium">{egp(r.amount)}</td>
-                    </tr>
-                  ))}
-                  {!(pl?.revenue?.length) && (
-                    <tr><td className="td text-center text-gray-400 py-6" colSpan={3}>لا توجد إيرادات في هذه الفترة</td></tr>
-                  )}
-                </tbody>
-                <tfoot className="bg-green-50 border-t">
-                  <tr>
-                    <td className="td font-bold" colSpan={2}>إجمالي الإيرادات</td>
-                    <td className="td font-bold text-green-700">{egp(pl?.total_revenue ?? 0)}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-
-            {/* Expenses */}
-            <div className="card overflow-hidden p-0">
-              <div className="bg-red-50 border-b px-4 py-3">
-                <h3 className="font-bold text-red-800 text-sm">المصروفات</h3>
-              </div>
-              <table className="w-full text-sm">
-                <tbody>
-                  {(pl?.expenses ?? []).map(r => (
-                    <tr key={r.code} className="border-b hover:bg-gray-50">
-                      <td className="td font-mono text-xs text-gray-400">{r.code}</td>
-                      <td className="td">{r.name}</td>
-                      <td className="td text-red-600 font-medium">{egp(r.amount)}</td>
-                    </tr>
-                  ))}
-                  {!(pl?.expenses?.length) && (
-                    <tr><td className="td text-center text-gray-400 py-6" colSpan={3}>لا توجد مصروفات في هذه الفترة</td></tr>
-                  )}
-                </tbody>
-                <tfoot className="bg-red-50 border-t">
-                  <tr>
-                    <td className="td font-bold" colSpan={2}>إجمالي المصروفات</td>
-                    <td className="td font-bold text-red-600">{egp(pl?.total_expenses ?? 0)}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </div>
-
-          {/* Net Income */}
-          {pl && (
-            <div className={`rounded-xl p-5 text-center ${(pl.net_income ?? 0) >= 0 ? 'bg-brand-50 border border-brand-200' : 'bg-red-50 border border-red-200'}`}>
-              <p className="text-sm text-gray-600 mb-1">
-                {(pl.net_income ?? 0) >= 0 ? '🌾 صافي الربح للفترة' : '⚠️ صافي الخسارة للفترة'}
-              </p>
-              <p className={`text-3xl font-bold ${(pl.net_income ?? 0) >= 0 ? 'text-brand-700' : 'text-red-700'}`}>
-                {egp(Math.abs(pl.net_income ?? 0))}
-              </p>
-            </div>
-          )}
+      ) : (
+        <div className="flex items-center gap-2">
+          <span className="text-[12px] font-medium text-slate-500">As of:</span>
+          <input type="date" className="input h-8 text-[12px] py-1 w-32" value={asOf} onChange={e => setAO(e.target.value)} />
         </div>
-        </QueryBoundary>
-      )}
-
-      {/* ── Balance Sheet ────────────────────────────────────── */}
-      {tab === 'balance' && (
-        <QueryBoundary
-          isLoading={bsLoading}
-          isError={bsError}
-          isEmpty={!bs}
-          onRetry={() => bsRefetch()}
-          emptyMessage="لا توجد بيانات للميزانية العمومية"
-          loadingRows={4}
-        >
-        <div className="space-y-4">
-          {bs && (
-            <div className="grid grid-cols-3 gap-4">
-              {[
-                { label: 'إجمالي الأصول',      value: bs.total_assets      ?? 0, color: 'text-blue-700', bg: 'bg-blue-50' },
-                { label: 'إجمالي الخصوم',      value: bs.total_liabilities ?? 0, color: 'text-red-600',  bg: 'bg-red-50' },
-                { label: 'إجمالي حقوق الملكية', value: bs.total_equity      ?? 0, color: 'text-brand-700', bg: 'bg-brand-50' },
-              ].map(k => (
-                <div key={k.label} className={`${k.bg} rounded-xl p-4 text-center`}>
-                  <p className="text-xs text-gray-500 mb-1">{k.label}</p>
-                  <p className={`text-xl font-bold ${k.color}`}>{egp(k.value)}</p>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* Assets */}
-            <div className="card overflow-hidden p-0">
-              <div className="bg-blue-50 border-b px-4 py-3">
-                <h3 className="font-bold text-blue-800 text-sm">الأصول</h3>
-              </div>
-              <BSSection rows={bs?.assets ?? []} totalKey="إجمالي الأصول" total={bs?.total_assets ?? 0} color="text-blue-700" />
-            </div>
-
-            {/* Liabilities + Equity */}
-            <div className="space-y-4">
-              <div className="card overflow-hidden p-0">
-                <div className="bg-red-50 border-b px-4 py-3">
-                  <h3 className="font-bold text-red-800 text-sm">الخصوم</h3>
-                </div>
-                <BSSection rows={bs?.liabilities ?? []} totalKey="إجمالي الخصوم" total={bs?.total_liabilities ?? 0} color="text-red-600" />
-              </div>
-              <div className="card overflow-hidden p-0">
-                <div className="bg-brand-50 border-b px-4 py-3">
-                  <h3 className="font-bold text-brand-800 text-sm">حقوق الملكية</h3>
-                </div>
-                <BSSection rows={bs?.equity ?? []} totalKey="إجمالي حقوق الملكية" total={bs?.total_equity ?? 0} color="text-brand-700" />
-              </div>
-            </div>
-          </div>
-
-          {/* Balance check */}
-          {bs && (
-            <div className={`rounded-xl p-3 text-center text-sm font-medium ${
-              Math.abs((bs.total_assets ?? 0) - ((bs.total_liabilities ?? 0) + (bs.total_equity ?? 0))) < 1
-                ? 'bg-green-50 text-green-700'
-                : 'bg-red-50 text-red-700'
-            }`}>
-              الأصول = الخصوم + حقوق الملكية &nbsp;
-              {egp(bs.total_assets ?? 0)} = {egp((bs.total_liabilities ?? 0) + (bs.total_equity ?? 0))}
-            </div>
-          )}
-        </div>
-        </QueryBoundary>
-      )}
-
-      {/* ── Trial Balance ─────────────────────────────────────── */}
-      {tab === 'trial' && (
-        <QueryBoundary
-          isLoading={tbLoading}
-          isError={tbError}
-          isEmpty={!tb}
-          onRetry={() => tbRefetch()}
-          emptyMessage="لا توجد بيانات لميزان المراجعة في هذه الفترة"
-          loadingRows={6}
-        >
-        <div className="card overflow-hidden p-0">
-          <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b">
-                <tr>
-                  <th className="th">كود</th>
-                  <th className="th">اسم الحساب</th>
-                  <th className="th">النوع</th>
-                  <th className="th">مجموع المدين</th>
-                  <th className="th">مجموع الدائن</th>
-                  <th className="th">الرصيد</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(tb?.accounts ?? []).map(a => (
-                  <tr
-                    key={a.code}
-                    className={`border-b ${a.is_header ? 'bg-gray-50 font-semibold' : 'hover:bg-gray-50'}`}
-                  >
-                    <td className="td font-mono text-brand-700 text-xs">{a.code}</td>
-                    <td className="td" style={{ paddingRight: `${(a.level - 1) * 12}px` }}>
-                      {a.is_header ? '▸ ' : ''}{a.name}
-                    </td>
-                    <td className="td">
-                      <span className="text-xs text-gray-500">{TYPE_AR[a.account_type] ?? a.account_type}</span>
-                    </td>
-                    <td className="td text-red-600">
-                      {a.total_debit > 0 ? fmt(a.total_debit) : '—'}
-                    </td>
-                    <td className="td text-green-700">
-                      {a.total_credit > 0 ? fmt(a.total_credit) : '—'}
-                    </td>
-                    <td className={`td font-medium ${a.balance >= 0 ? 'text-gray-800' : 'text-red-600'}`}>
-                      {a.balance !== 0 ? fmt(Math.abs(a.balance)) : '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot className="bg-gray-100 border-t-2 font-bold">
-                <tr>
-                  <td className="td" colSpan={3}>الإجمالي</td>
-                  <td className={`td text-red-600 ${Math.abs((tb?.total_debit ?? 0) - (tb?.total_credit ?? 0)) < 1 ? '' : 'text-red-800'}`}>
-                    {fmt(tb?.total_debit ?? 0)}
-                  </td>
-                  <td className={`td text-green-700 ${Math.abs((tb?.total_debit ?? 0) - (tb?.total_credit ?? 0)) < 1 ? '' : 'text-red-800'}`}>
-                    {fmt(tb?.total_credit ?? 0)}
-                  </td>
-                  <td className="td">
-                    {Math.abs((tb?.total_debit ?? 0) - (tb?.total_credit ?? 0)) < 1
-                      ? <span className="badge badge-green">متوازن ✓</span>
-                      : <span className="badge badge-red">فرق: {fmt(Math.abs((tb?.total_debit ?? 0) - (tb?.total_credit ?? 0)))}</span>}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
-        </div>
-        </QueryBoundary>
       )}
     </div>
-  )
-}
+  );
 
-function BSSection({ rows, totalKey, total, color }: {
-  rows: BSRow[]; totalKey: string; total: number; color: string
-}) {
+  const tbColumns: Column<TBRow>[] = [
+    { key: 'code', header: 'Account Code', render: r => <span className="font-mono text-[#0F2D5C]">{r.code}</span> },
+    { key: 'name', header: 'Account Name', render: r => <span className={r.is_header ? 'font-semibold' : ''}>{r.is_header ? '▸ ' : ''}{r.name}</span> },
+    { key: 'account_type', header: 'Type', render: r => <span className="text-slate-500">{TYPE_AR[r.account_type] || r.account_type}</span> },
+    { key: 'total_debit', header: 'Dr', align: 'right', render: r => <span className="text-[#0F2D5C] font-mono">{r.total_debit > 0 ? fmt(r.total_debit) : '—'}</span> },
+    { key: 'total_credit', header: 'Cr', align: 'right', render: r => <span className="text-[#1D9E75] font-mono">{r.total_credit > 0 ? fmt(r.total_credit) : '—'}</span> },
+    { key: 'balance', header: 'Closing Bal', align: 'right', render: r => <span className={`font-mono font-bold ${r.balance < 0 ? 'text-red-600' : 'text-slate-800'}`}>{r.balance !== 0 ? fmt(Math.abs(r.balance)) : '—'}</span> },
+  ];
+
   return (
-    <table className="w-full text-sm">
-      <tbody>
-        {rows.map(r => (
-          <tr key={r.code} className={`border-b ${r.is_header ? 'bg-gray-50 font-semibold' : 'hover:bg-gray-50'}`}>
-            <td className="td font-mono text-xs text-gray-400">{r.code}</td>
-            <td className="td">{r.is_header ? '▸ ' : ''}{r.name}</td>
-            <td className={`td font-medium ${color}`}>
-              {!r.is_header && r.balance !== 0 ? `${fmt(r.balance)} ج` : ''}
-            </td>
-          </tr>
-        ))}
-        {!rows.length && (
-          <tr><td className="td text-center text-gray-400 py-4" colSpan={3}>لا توجد بيانات</td></tr>
+    <div className="flex flex-col h-full bg-[#f8fafc]">
+      <div className="px-6 py-5 flex items-center justify-between shrink-0 bg-white">
+        <div>
+          <h1 className="text-[18px] font-bold text-[#0F2D5C]">Financial Statements</h1>
+          <p className="text-[12px] text-slate-500 mt-0.5">Real-time ledger reporting and statements</p>
+        </div>
+      </div>
+
+      <CommandBar actions={actions} rightSlot={rightSlot} />
+      <KpiStrip items={kpiItems} />
+
+      <div className="px-6 pt-4 bg-white border-b border-slate-200 shrink-0">
+        <div className="flex gap-6">
+          {([
+            { id: 'trial', label: 'Trial Balance' },
+            { id: 'pl', label: 'Income Statement' },
+            { id: 'balance', label: 'Balance Sheet' }
+          ] as { id: Tab, label: string }[]).map(t => (
+            <button 
+              key={t.id} 
+              className={`pb-3 text-[13px] font-semibold transition-colors relative ${tab === t.id ? 'text-[#0F2D5C]' : 'text-slate-500 hover:text-slate-800'}`} 
+              onClick={() => setTab(t.id)}
+            >
+              {t.label}
+              {tab === t.id && <div className="absolute bottom-0 left-0 w-full h-0.5 bg-[#0F2D5C] rounded-t-full" />}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 p-6 overflow-hidden flex flex-col">
+        {tab === 'trial' && (
+          <DataTable
+            columns={tbColumns}
+            data={tb?.accounts || []}
+            loading={tbLoading}
+            rowKey={r => r.code}
+            total={tb?.accounts?.length || 0}
+          />
         )}
-      </tbody>
-      <tfoot className="border-t">
-        <tr>
-          <td className="td font-bold" colSpan={2}>{totalKey}</td>
-          <td className={`td font-bold ${color}`}>{fmt(total)} ج</td>
-        </tr>
-      </tfoot>
-    </table>
-  )
+
+        {tab === 'pl' && (
+          <div className="flex-1 overflow-auto flex gap-6">
+            <div className="flex-1 bg-white rounded border border-slate-200 shadow-sm flex flex-col">
+              <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/50">
+                <h3 className="font-bold text-[13px] text-slate-800">Revenue</h3>
+              </div>
+              <div className="flex-1 overflow-auto p-0">
+                <table className="w-full text-[12px]">
+                  <tbody>
+                    {(pl?.revenue || []).map((r: PLRow) => (
+                      <tr key={r.code} className="border-b border-slate-50 hover:bg-slate-50">
+                        <td className="p-3 font-mono text-slate-400 w-24">{r.code}</td>
+                        <td className="p-3 text-slate-700">{r.name}</td>
+                        <td className="p-3 text-right font-medium text-[#1D9E75]">{fmt(r.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="p-3 border-t border-slate-200 bg-slate-50 flex justify-between font-bold text-[13px]">
+                <span>Total Revenue</span>
+                <span className="text-[#1D9E75]">{fmt(pl?.total_revenue || 0)}</span>
+              </div>
+            </div>
+
+            <div className="flex-1 bg-white rounded border border-slate-200 shadow-sm flex flex-col">
+              <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/50">
+                <h3 className="font-bold text-[13px] text-slate-800">Expenses</h3>
+              </div>
+              <div className="flex-1 overflow-auto p-0">
+                <table className="w-full text-[12px]">
+                  <tbody>
+                    {(pl?.expenses || []).map((r: PLRow) => (
+                      <tr key={r.code} className="border-b border-slate-50 hover:bg-slate-50">
+                        <td className="p-3 font-mono text-slate-400 w-24">{r.code}</td>
+                        <td className="p-3 text-slate-700">{r.name}</td>
+                        <td className="p-3 text-right font-medium text-red-600">{fmt(r.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="p-3 border-t border-slate-200 bg-slate-50 flex justify-between font-bold text-[13px]">
+                <span>Total Expenses</span>
+                <span className="text-red-600">{fmt(pl?.total_expenses || 0)}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === 'balance' && (
+          <div className="flex-1 overflow-auto flex gap-6">
+            <div className="flex-1 bg-white rounded border border-slate-200 shadow-sm flex flex-col">
+              <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/50">
+                <h3 className="font-bold text-[13px] text-slate-800">Assets</h3>
+              </div>
+              <div className="flex-1 overflow-auto p-0">
+                <table className="w-full text-[12px]">
+                  <tbody>
+                    {(bs?.assets || []).map((r: BSRow) => (
+                      <tr key={r.code} className={`border-b border-slate-50 ${r.is_header ? 'bg-slate-50 font-semibold' : 'hover:bg-slate-50'}`}>
+                        <td className="p-3 font-mono text-slate-400 w-24">{r.code}</td>
+                        <td className="p-3 text-slate-700">{r.is_header ? '▸ ' : ''}{r.name}</td>
+                        <td className="p-3 text-right font-medium text-[#0F2D5C]">{!r.is_header && r.balance !== 0 ? fmt(r.balance) : ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="p-3 border-t border-slate-200 bg-slate-50 flex justify-between font-bold text-[13px]">
+                <span>Total Assets</span>
+                <span className="text-[#0F2D5C]">{fmt(bs?.total_assets || 0)}</span>
+              </div>
+            </div>
+
+            <div className="flex-1 flex flex-col gap-6">
+              <div className="flex-1 bg-white rounded border border-slate-200 shadow-sm flex flex-col">
+                <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/50">
+                  <h3 className="font-bold text-[13px] text-slate-800">Liabilities</h3>
+                </div>
+                <div className="flex-1 overflow-auto p-0">
+                  <table className="w-full text-[12px]">
+                    <tbody>
+                      {(bs?.liabilities || []).map((r: BSRow) => (
+                        <tr key={r.code} className={`border-b border-slate-50 ${r.is_header ? 'bg-slate-50 font-semibold' : 'hover:bg-slate-50'}`}>
+                          <td className="p-3 font-mono text-slate-400 w-24">{r.code}</td>
+                          <td className="p-3 text-slate-700">{r.is_header ? '▸ ' : ''}{r.name}</td>
+                          <td className="p-3 text-right font-medium text-red-600">{!r.is_header && r.balance !== 0 ? fmt(r.balance) : ''}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="p-3 border-t border-slate-200 bg-slate-50 flex justify-between font-bold text-[13px]">
+                  <span>Total Liabilities</span>
+                  <span className="text-red-600">{fmt(bs?.total_liabilities || 0)}</span>
+                </div>
+              </div>
+
+              <div className="flex-1 bg-white rounded border border-slate-200 shadow-sm flex flex-col">
+                <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/50">
+                  <h3 className="font-bold text-[13px] text-slate-800">Equity</h3>
+                </div>
+                <div className="flex-1 overflow-auto p-0">
+                  <table className="w-full text-[12px]">
+                    <tbody>
+                      {(bs?.equity || []).map((r: BSRow) => (
+                        <tr key={r.code} className={`border-b border-slate-50 ${r.is_header ? 'bg-slate-50 font-semibold' : 'hover:bg-slate-50'}`}>
+                          <td className="p-3 font-mono text-slate-400 w-24">{r.code}</td>
+                          <td className="p-3 text-slate-700">{r.is_header ? '▸ ' : ''}{r.name}</td>
+                          <td className="p-3 text-right font-medium text-[#1D9E75]">{!r.is_header && r.balance !== 0 ? fmt(r.balance) : ''}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="p-3 border-t border-slate-200 bg-slate-50 flex justify-between font-bold text-[13px]">
+                  <span>Total Equity</span>
+                  <span className="text-[#1D9E75]">{fmt(bs?.total_equity || 0)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }

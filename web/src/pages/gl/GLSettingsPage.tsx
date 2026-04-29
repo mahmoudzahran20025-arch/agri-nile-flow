@@ -1,5 +1,5 @@
 import { useSearchParams } from 'react-router-dom'
-import { Settings, Link2, ShieldCheck, CalendarDays, BrainCircuit } from 'lucide-react'
+import { Settings, ShieldCheck, CalendarDays, BrainCircuit } from 'lucide-react'
 import IntegrationControlPage from './IntegrationControlPage'
 import PeriodsPage            from './PeriodsPage'
 import SmartClassifierPage    from './SmartClassifierPage'

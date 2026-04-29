@@ -3,11 +3,11 @@ import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAppStore, useIsAuth } from './store/appStore'
 import { configApi, authApi } from './api/client'
-import RootLayout    from './layouts/RootLayout'
+import { AppShell } from './components/shell/AppShell'
 import LoginPage     from './pages/LoginPage'
 import DebugPage     from './pages/DebugPage'
 import DashboardPage from './pages/DashboardPage'
-import SupplierHubPage       from './pages/suppliers/SupplierHubPage'
+import SuppliersPage         from './pages/suppliers/SuppliersPage'
 import SupplierDetailPage    from './pages/suppliers/SupplierDetailPage'
 import CashJournalPage       from './pages/treasury/CashJournalPage'
 import WarehouseBalancesPage from './pages/inventory/WarehouseBalancesPage'
@@ -30,7 +30,6 @@ import WorkOrdersPage  from './pages/operations/WorkOrdersPage'
 import WorkOrderTemplatesPage from './pages/operations/WorkOrderTemplatesPage'
 import ContractsPage   from './pages/contracts/ContractsPage'
 import ChartOfAccountsPage   from './pages/gl/ChartOfAccountsPage'
-import GLMappingsPage        from './pages/gl/GLMappingsPage'
 import JournalEntriesPage    from './pages/gl/JournalEntriesPage'
 import FinancialStatementsPage from './pages/gl/FinancialStatementsPage'
 import AccountLedgerPage     from './pages/gl/AccountLedgerPage'
@@ -63,10 +62,11 @@ import SeasonClosePage      from './pages/reports/SeasonClosePage'
 import SeasonReadinessPage  from './pages/reports/SeasonReadinessPage'
 import BudgetVsActualPage      from './pages/reports/BudgetVsActualPage'
 import SeasonReportsPage       from './pages/reports/SeasonReportsPage'
+import SeasonsPage             from './pages/fields/SeasonsPage'
 import GLSettingsPage          from './pages/gl/GLSettingsPage'
 import PostingGroupsPage       from './pages/gl/PostingGroupsPage'
 import PostingSetupPage        from './pages/gl/PostingSetupPage'
-import PostingSetupHealthPage  from './pages/gl/PostingSetupHealthPage'
+import PostingRulesPage        from './pages/gl/PostingRulesPage'
 import SetupWizardPage         from './pages/gl/SetupWizardPage'
 import AuditCenterPage         from './pages/audit/AuditCenterPage'
 
@@ -112,15 +112,15 @@ export default function App() {
         path="/"
         element={
           <RequireAuth>
-            <RootLayout />
+            <AppShell />
           </RequireAuth>
         }
       >
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard"  element={<DashboardPage />} />
 
-        {/* Suppliers — tabbed hub (list | aging | balance) */}
-        <Route path="suppliers"        element={<SupplierHubPage />} />
+        {/* Suppliers */}
+        <Route path="suppliers"        element={<SuppliersPage />} />
         <Route path="suppliers/:code"  element={<SupplierDetailPage />} />
 
         {/* Treasury */}
@@ -157,6 +157,7 @@ export default function App() {
 
         {/* Agricultural ERP */}
         <Route path="fields"          element={<FieldsPage />} />
+        <Route path="seasons"         element={<SeasonsPage />} />
         <Route path="fields/harvest"  element={<HarvestPage />} />
         <Route path="operations" element={<WorkOrdersPage />} />
         <Route path="operations/templates" element={<WorkOrderTemplatesPage />} />
@@ -171,7 +172,7 @@ export default function App() {
         <Route path="gl/settings"      element={<GLSettingsPage />} />
         <Route path="gl/posting-groups" element={<PostingGroupsPage />} />
         <Route path="gl/posting-setup"  element={<PostingSetupPage />} />
-        <Route path="gl/posting-setup/health" element={<PostingSetupHealthPage />} />
+        <Route path="gl/posting-setup/health" element={<PostingRulesPage />} />
         <Route path="gl/setup-wizard" element={<SetupWizardPage />} />
         {/* Keep direct routes alive for backward-compat / deep-linking */}
         <Route path="gl/periods"      element={<PeriodsPage />} />

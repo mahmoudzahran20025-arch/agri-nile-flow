@@ -1,0 +1,41 @@
+:root {
+  /* Brand Colors */
+  --color-navy: #0F2D5C;
+  --color-green: #1D9E75;
+
+  /* Semantic Badge Colors (Status) */
+  --badge-posted-bg: #E8F5E9;
+  --badge-posted-text: #2E7D32;
+  --badge-draft-bg: #FFF8E1;
+  --badge-draft-text: #F57F17;
+  --badge-voided-bg: #FFEBEE;
+  --badge-voided-text: #C62828;
+  --badge-reversed-bg: #F3E5F5;
+  --badge-reversed-text: #6A1B9A;
+
+  /* Semantic Badge Colors (Source) */
+  --source-manual-bg: #E3F2FD;
+  --source-manual-text: #1565C0;
+  --source-inventory-bg: #F3E5F5;
+  --source-inventory-text: #6A1B9A;
+  --source-cash-bg: #E8F5E9;
+  --source-cash-text: #2E7D32;
+  --source-payroll-bg: #FFF3E0;
+  --source-payroll-text: #EF6C00;
+  --source-harvest-bg: #F1F8E9;
+  --source-harvest-text: #558B2F;
+  --source-wip-bg: #EFEBE9;
+  --source-wip-text: #4E342E;
+  --source-fixed-asset-bg: #ECEFF1;
+  --source-fixed-asset-text: #37474F;
+  --source-contract-bg: #E0F7FA;
+  --source-contract-text: #00838F;
+
+  /* Typography Scale */
+  --text-data: 12px;
+  --text-body: 13px;
+  --text-page-title: 18px;
+
+  /* Borders */
+  --border-standard: 0.5px solid #E5E7EB;
+}
