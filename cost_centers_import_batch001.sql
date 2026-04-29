@@ -1,0 +1,1 @@
+DELETE FROM center_account_mapping WHERE company_id = 1;

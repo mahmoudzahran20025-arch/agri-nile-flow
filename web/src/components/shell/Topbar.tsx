@@ -7,11 +7,11 @@ export const Topbar = () => {
   const pathnames = location.pathname.split('/').filter((x) => x);
 
   return (
-    <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0 z-10 sticky top-0">
+    <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0 z-10 sticky top-0" dir="rtl">
       {/* Breadcrumb */}
       <nav className="flex items-center text-[13px]">
         <Link to="/" className="text-slate-500 hover:text-[#0F2D5C] font-medium transition-colors">
-          Home
+          الرئيسية
         </Link>
         {pathnames.map((name, index) => {
           const routeTo = `/${pathnames.slice(0, index + 1).join('/')}`;
@@ -37,11 +37,11 @@ export const Topbar = () => {
       {/* Right Actions */}
       <div className="flex items-center gap-4">
         <div className="relative">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input 
             type="text" 
-            placeholder="Search entries..." 
-            className="w-[200px] pl-9 pr-4 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-[13px] focus:outline-none focus:ring-2 focus:ring-[#0F2D5C]/20 focus:border-[#0F2D5C] transition-all"
+            placeholder="بحث في النظام..." 
+            className="w-[200px] pr-9 pl-4 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-[13px] focus:outline-none focus:ring-2 focus:ring-[#0F2D5C]/20 focus:border-[#0F2D5C] transition-all"
           />
         </div>
         

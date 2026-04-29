@@ -65,7 +65,11 @@ npm run build:web
 Write-Host "  → Deploying worker to Cloudflare..."
 wrangler deploy
 
-Write-Host "✓ Worker deployed successfully" -ForegroundColor Green
+# Deploy web assets to Cloudflare Pages
+Write-Host "  → Deploying web assets to Cloudflare Pages..."
+npx wrangler pages deploy web/dist --project-name=agri-nile-flow-lake
+
+Write-Host "✓ Worker and Pages deployed successfully" -ForegroundColor Green
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 5: POST-DEPLOY ENDPOINT CHECKS

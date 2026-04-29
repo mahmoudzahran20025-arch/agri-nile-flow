@@ -52,8 +52,8 @@
   }
   
   .btn-primary {
-    @apply btn bg-gradient-to-tr from-brand-600 to-brand-500 text-white shadow-lg shadow-brand-200/50 
-           hover:shadow-brand-300/60 hover:-translate-y-0.5;
+    @apply btn bg-gradient-to-tr from-brand-950 to-brand-800 text-white shadow-lg shadow-brand-900/20 
+           hover:shadow-brand-900/30 hover:-translate-y-0.5 border border-white/10;
   }
   
   .btn-secondary {
@@ -61,10 +61,15 @@
            hover:bg-slate-50 hover:border-slate-300;
   }
 
+  .btn-agri {
+    @apply btn bg-gradient-to-tr from-agri-600 to-agri-500 text-white shadow-lg shadow-agri-200/50 
+           hover:shadow-agri-300/60 hover:-translate-y-0.5;
+  }
+
   .input {
     @apply w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm
            bg-white/50 backdrop-blur-sm placeholder-slate-400
-           focus:outline-none focus:ring-4 focus:ring-brand-500/10 focus:border-brand-500
+           focus:outline-none focus:ring-4 focus:ring-brand-950/5 focus:border-brand-950
            transition-all duration-200;
   }
 
@@ -84,13 +89,13 @@
 
   /* Animated Sidebar Link */
   .nav-link {
-    @apply flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 transition-all duration-200 font-medium;
+    @apply flex items-center gap-3 px-4 py-3 rounded-xl text-slate-400 transition-all duration-200 font-medium;
   }
   .nav-link:hover {
-    @apply bg-brand-50 text-brand-600 translate-x-[-4px];
+    @apply bg-white/5 text-white;
   }
   .nav-link.active {
-    @apply bg-brand-600 text-white shadow-lg shadow-brand-200 translate-x-[-4px];
+    @apply bg-white/10 text-white shadow-sm;
   }
 }
 

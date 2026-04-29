@@ -212,7 +212,7 @@ export default function JournalEntriesPage() {
 
       {/* Main Content Area */}
       <div className="flex-1 overflow-hidden flex relative">
-        <div className={`flex-1 p-6 overflow-hidden flex flex-col transition-all duration-300 ${selectedId ? 'pr-2' : ''}`}>
+        <div className={`flex-1 p-6 overflow-hidden flex flex-col transition-all duration-300 ${selectedId ? 'pl-4' : ''}`}>
           <DataTable
             columns={columns}
             data={entries}
@@ -230,7 +230,7 @@ export default function JournalEntriesPage() {
 
         {/* Side Panel for Detail */}
         {selectedId && (
-          <div className="w-[450px] bg-white border-l border-slate-200 flex flex-col shrink-0 transition-transform shadow-xl z-20">
+          <div className="w-[450px] bg-white border-r border-slate-200 flex flex-col shrink-0 transition-transform shadow-xl z-20">
             <div className="p-4 border-b border-slate-100 flex items-start justify-between bg-slate-50">
               <div>
                 <h3 className="font-bold text-[14px] text-slate-800 flex items-center gap-2">

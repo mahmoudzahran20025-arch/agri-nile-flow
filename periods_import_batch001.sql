@@ -1,0 +1,10 @@
+DELETE FROM financial_periods WHERE company_id = 1 AND season_id = 1;
+DELETE FROM accounting_periods WHERE company_id = 1;
+INSERT INTO financial_periods (company_id, season_id, period_number, name, start_date, end_date, status, is_open, created_at) VALUES (1, 1, 1, 'الموسم الشتوي 2025-2026', '2025-10-01', '2026-03-31', 'open', 1, datetime('now'));
+INSERT INTO accounting_periods (company_id, period_code, name, start_date, end_date, fiscal_year, is_closed, created_at) VALUES (1, '202510', 'أكتوبر 2025', '2025-10-01', '2025-10-31', 2025, 0, datetime('now'));
+INSERT INTO accounting_periods (company_id, period_code, name, start_date, end_date, fiscal_year, is_closed, created_at) VALUES (1, '202511', 'نوفمبر 2025', '2025-11-01', '2025-11-31', 2025, 0, datetime('now'));
+INSERT INTO accounting_periods (company_id, period_code, name, start_date, end_date, fiscal_year, is_closed, created_at) VALUES (1, '202512', 'ديسمبر 2025', '2025-12-01', '2025-12-31', 2025, 0, datetime('now'));
+INSERT INTO accounting_periods (company_id, period_code, name, start_date, end_date, fiscal_year, is_closed, created_at) VALUES (1, '202601', 'يناير 2026', '2026-01-01', '2026-01-31', 2026, 0, datetime('now'));
+INSERT INTO accounting_periods (company_id, period_code, name, start_date, end_date, fiscal_year, is_closed, created_at) VALUES (1, '202602', 'فبراير 2026', '2026-02-01', '2026-02-31', 2026, 0, datetime('now'));
+INSERT INTO accounting_periods (company_id, period_code, name, start_date, end_date, fiscal_year, is_closed, created_at) VALUES (1, '202603', 'مارس 2026', '2026-03-01', '2026-03-31', 2026, 0, datetime('now'));
+UPDATE financial_periods SET is_open = 0, status = 'closed' WHERE company_id = 1 AND (end_date < '2025-10-01' OR start_date > '2026-03-31');

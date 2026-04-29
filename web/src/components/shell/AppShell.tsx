@@ -31,48 +31,48 @@ interface NavItem {
 
 const navSections: { title: string; items: NavItem[] }[] = [
   {
-    title: 'MAIN',
+    title: 'الرئيسية',
     items: [
-      { label: 'Dashboard', path: '/', icon: <LayoutDashboard size={18} /> }
+      { label: 'لوحة التحكم', path: '/', icon: <LayoutDashboard size={18} /> }
     ]
   },
   {
-    title: 'FINANCE',
+    title: 'المحاسبة والمالية',
     items: [
       { 
-        label: 'General Ledger', 
+        label: 'الأستاذ العام', 
         icon: <BookOpen size={18} />,
         children: [
-          { label: 'Journal Entries', path: '/gl/entries' },
-          { label: 'Chart of Accounts', path: '/gl/accounts' },
-          { label: 'Trial Balance', path: '/gl/statements' },
-          { label: 'Posting Rules', path: '/gl/posting-setup/health' },
-          { label: 'Posting Setup', path: '/gl/posting-setup' },
+          { label: 'قيود اليومية', path: '/gl/entries' },
+          { label: 'دليل الحسابات', path: '/gl/accounts' },
+          { label: 'ميزان المراجعة', path: '/gl/statements' },
+          { label: 'قواعد الترحيل', path: '/gl/posting-setup/health' },
+          { label: 'إعدادات الترحيل', path: '/gl/posting-setup' },
         ]
       }
     ]
   },
   {
-    title: 'OPERATIONS',
+    title: 'العمليات والمخازن',
     items: [
-      { label: 'Harvest', path: '/fields/harvest', icon: <Sprout size={18} /> },
-      { label: 'Inventory', path: '/inventory/movements', icon: <Box size={18} /> },
-      { label: 'Seasons', path: '/seasons', icon: <FileCheck size={18} /> },
-      { label: 'Suppliers', path: '/suppliers', icon: <Users size={18} /> },
+      { label: 'الحصاد والمحاصيل', path: '/fields/harvest', icon: <Sprout size={18} /> },
+      { label: 'حركات المخزون', path: '/inventory/movements', icon: <Box size={18} /> },
+      { label: 'المواسم الزراعية', path: '/seasons', icon: <FileCheck size={18} /> },
+      { label: 'الموردون والعملاء', path: '/suppliers', icon: <Users size={18} /> },
     ]
   },
   {
-    title: 'TREASURY',
+    title: 'الخزينة والمدفوعات',
     items: [
-      { label: 'Cash/Bank', path: '/treasury', icon: <Wallet size={18} /> },
-      { label: 'AP/AR', path: '/treasury/ap', icon: <Building2 size={18} /> },
+      { label: 'الخزينة والبنوك', path: '/treasury', icon: <Wallet size={18} /> },
+      { label: 'الذمم الدائنة/المدينة', path: '/treasury/ap', icon: <Building2 size={18} /> },
     ]
   },
   {
-    title: 'SETTINGS',
+    title: 'الإعدادات والنظام',
     items: [
-      { label: 'Admin', path: '/admin', icon: <Settings size={18} /> },
-      { label: 'Users', path: '/users', icon: <UserCog size={18} /> },
+      { label: 'مدير النظام', path: '/admin', icon: <Settings size={18} /> },
+      { label: 'المستخدمون', path: '/users', icon: <UserCog size={18} /> },
     ]
   }
 ];
@@ -139,28 +139,29 @@ const NavItemNode = ({ item, isChild = false }: { item: NavItem; isChild?: boole
 
 export const AppShell = () => {
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f8fafc]" style={{ direction: 'ltr' }}>
+    <div className="flex h-screen overflow-hidden bg-[#f3f4f6]" dir="rtl">
       <GlobalSearch />
       <OfflineBanner />
       <PeriodWarningBanner />
+      
       {/* Sidebar */}
-      <aside className="w-[220px] flex-shrink-0 bg-[#0F2D5C] text-white flex flex-col h-full shadow-xl z-20">
+      <aside className="w-[260px] flex-shrink-0 bg-[#0F2D5C] text-white flex flex-col h-full shadow-2xl z-30 transition-all duration-300">
         {/* Logo Area */}
-        <div className="h-16 flex items-center px-4 gap-3 border-b border-white/10">
-          <div className="w-8 h-8 rounded bg-[#1D9E75] text-white flex items-center justify-center font-bold text-lg shadow-inner">
-            AN
+        <div className="h-16 flex items-center px-6 gap-3 border-b border-white/5 bg-black/10">
+          <div className="w-9 h-9 rounded-xl bg-[#1D9E75] text-white flex items-center justify-center font-bold text-xl shadow-lg shadow-black/20">
+            A
           </div>
           <div className="flex flex-col">
-            <span className="font-bold text-[14px] leading-tight">Agri-Nile Flow</span>
-            <span className="text-[10px] text-brand-200 tracking-wider uppercase opacity-80">ERP System</span>
+            <span className="font-bold text-[15px] leading-tight tracking-tight">Agri-Nile Flow</span>
+            <span className="text-[10px] text-emerald-400 font-bold tracking-widest uppercase opacity-80">Enterprise ERP</span>
           </div>
         </div>
 
         {/* Navigation */}
-        <div className="flex-1 overflow-y-auto py-4 px-3 space-y-6">
+        <div className="flex-1 overflow-y-auto py-6 px-3 custom-scrollbar">
           {navSections.map((section, idx) => (
-            <div key={idx}>
-              <div className="px-3 mb-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+            <div key={idx} className="mb-8">
+              <div className="px-4 mb-3 text-[11px] font-bold text-slate-400 uppercase tracking-[0.15em] opacity-70">
                 {section.title}
               </div>
               <div className="space-y-1">
@@ -172,25 +173,28 @@ export const AppShell = () => {
           ))}
         </div>
 
-        {/* Footer */}
-        <div className="p-4 border-t border-white/10 flex items-center gap-3 bg-black/10">
-          <div className="w-8 h-8 rounded-full bg-brand-600 flex items-center justify-center text-sm font-bold border border-white/20">
-            MA
+        {/* User Footer */}
+        <div className="p-4 border-t border-white/5 flex items-center gap-4 bg-black/20 backdrop-blur-sm">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#1D9E75] to-[#0F2D5C] flex items-center justify-center text-sm font-bold border border-white/10 shadow-lg">
+            MZ
           </div>
-          <div className="flex flex-col">
-            <span className="text-[13px] font-medium leading-tight">Mahmoud</span>
-            <span className="text-[11px] text-slate-400">Finance Admin</span>
+          <div className="flex flex-col overflow-hidden">
+            <span className="text-[14px] font-bold leading-tight truncate">محمود زهران</span>
+            <span className="text-[11px] text-slate-400 truncate">مدير النظام</span>
           </div>
         </div>
       </aside>
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative bg-[#f8fafc]">
         <Topbar />
-        <div className="flex-1 overflow-y-auto overflow-x-hidden relative">
-          <Outlet />
+        <div className="flex-1 overflow-y-auto overflow-x-hidden relative flex flex-col">
+          <div className="flex-1 flex flex-col">
+            <Outlet />
+          </div>
         </div>
       </main>
+      
       <QuickEntryFAB />
       <KeyboardShortcuts />
     </div>
