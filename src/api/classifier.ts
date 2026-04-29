@@ -113,12 +113,19 @@ classifier.post('/reconcile-legacy', async (c) => {
     if (matchedRules.length === 0) continue
 
     let glAccountCode: string | null = null
-    const updates: string[] = []
-
+    
+    // SAFE: Whitelist for column names to prevent SQL injection
+    const COLUMN_WHITELIST: Record<string, string> = {
+      expense: 'expense_code',
+      supplier: 'supplier_code',
+      partner: 'partner_id',
+    }
+    
+    // Build safe parameterized updates
+    const safeUpdates: { col: string; val: number }[] = []
     for (const rule of matchedRules) {
-      if (rule.category_type === 'expense') updates.push(`expense_code = ${rule.target_id}`)
-      if (rule.category_type === 'supplier') updates.push(`supplier_code = ${rule.target_id}`)
-      if (rule.category_type === 'partner') updates.push(`partner_id = ${rule.target_id}`)
+      const col = COLUMN_WHITELIST[rule.category_type]
+      if (col) safeUpdates.push({ col, val: rule.target_id })
 
       if (rule.direct_gl_account) {
         glAccountCode = rule.direct_gl_account
@@ -128,10 +135,21 @@ classifier.post('/reconcile-legacy', async (c) => {
       }
     }
 
-    if (updates.length > 0) {
+    if (safeUpdates.length > 0) {
       // deduplicate updates just in case
-      const uniqueUpdates = [...new Set(updates)]
-      await c.env.DB.prepare(`UPDATE cash_transactions SET ${uniqueUpdates.join(', ')} WHERE id = ?`).bind(txn.id).run()
+      const seen = new Set<string>()
+      const uniqueUpdates = safeUpdates.filter(u => {
+        const key = `${u.col}=${u.val}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+      
+      // SAFE: Column names from whitelist, values parameterized
+      const setClause = uniqueUpdates.map(u => `${u.col} = ?`).join(', ')
+      const values = uniqueUpdates.map(u => u.val)
+      await c.env.DB.prepare(`UPDATE cash_transactions SET ${setClause} WHERE id = ?`)
+        .bind(...values, txn.id).run()
     }
 
     // Rewrite the Journal Entry if we have a resolved GL account OR if it's a partner/supplier

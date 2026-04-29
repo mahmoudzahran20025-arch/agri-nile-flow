@@ -4,6 +4,13 @@ import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
 import { logAudit } from '../lib/audit'
 import { FinanceCore } from '../lib/finance_core'
 import {
+  claimNextBatchPostJob,
+  enqueueBatchPostJob,
+  getBatchPostJob,
+  listBatchPostJobs,
+  updateBatchPostJobStatus,
+} from '../lib/batch_posting'
+import {
   resolveInventoryMovement as peResolveInventory,
   resolveSupplierInvoice   as peResolveSupplierInvoice,
   resolveSupplierPayment   as peResolveSupplierPayment,
@@ -788,6 +795,37 @@ gl.get('/entries/:id/trace', async (c) => {
     ).bind(entry.ref_id, company_id).first()
   }
 
+  // Fetch the source document bridge (preferred Dynamics-style abstraction)
+  let sourceDocument: unknown = await c.env.DB.prepare(
+    `SELECT sd.id,
+            sd.source_module,
+            sd.source_id,
+            sd.document_type,
+            sd.event_id,
+            sd.event_date,
+            sd.status,
+            sdl.link_type,
+            sdl.journal_entry_id
+     FROM source_document_links sdl
+     JOIN source_documents sd
+       ON sd.id = sdl.source_document_id
+      AND sd.company_id = sdl.company_id
+     WHERE sdl.company_id = ? AND sdl.journal_entry_id = ?
+     ORDER BY sdl.id DESC
+     LIMIT 1`
+  ).bind(company_id, id).first()
+
+  // Fallback lookup by business event id if link row is missing (older data)
+  if (!sourceDocument && entry.ref_type === 'business_event' && entry.ref_id) {
+    sourceDocument = await c.env.DB.prepare(
+      `SELECT id, source_module, source_id, document_type, event_id, event_date, status
+       FROM source_documents
+       WHERE company_id = ? AND event_id = ?
+       ORDER BY id DESC
+       LIMIT 1`
+    ).bind(company_id, entry.ref_id).first()
+  }
+
   return c.json({
     success: true,
     data: {
@@ -795,6 +833,7 @@ gl.get('/entries/:id/trace', async (c) => {
       lines,
       trace,
       source_event: sourceEvent,
+      source_document: sourceDocument,
       has_trace:    trace !== null,
     },
   })
@@ -1932,6 +1971,669 @@ gl.get('/audit/business-events', async (c) => {
     total: cnt?.n ?? 0,
     page,
     page_size: size,
+  })
+})
+
+// GET /api/gl/reconciliation/source-documents
+// Source Document -> Business Event -> Journal Entry traversal with mismatch detection.
+gl.get('/reconciliation/source-documents', async (c) => {
+  const { company_id } = getUser(c)
+  const page = Math.max(1, Number(c.req.query('page') ?? 1))
+  const size = Math.min(200, Math.max(1, Number(c.req.query('size') ?? 50)))
+  const offset = (page - 1) * size
+  const sourceModule = c.req.query('source_module')
+  const status = c.req.query('status')
+  const from = c.req.query('from')
+  const to = c.req.query('to')
+  const mismatchOnly = c.req.query('mismatch_only') === '1'
+
+  let where = 'WHERE sd.company_id = ?'
+  const binds: unknown[] = [company_id]
+
+  if (sourceModule) { where += ' AND sd.source_module = ?'; binds.push(sourceModule) }
+  if (status) { where += ' AND sd.status = ?'; binds.push(status) }
+  if (from) { where += ' AND sd.event_date >= ?'; binds.push(from) }
+  if (to) { where += ' AND sd.event_date <= ?'; binds.push(to) }
+
+  const mismatchClause = `(
+    be.id IS NULL OR
+    sdl.journal_entry_id IS NULL OR
+    (be.journal_entry_id IS NOT NULL AND sdl.journal_entry_id IS NOT NULL AND be.journal_entry_id != sdl.journal_entry_id) OR
+    (sd.status = 'posted' AND sdl.journal_entry_id IS NULL)
+  )`
+  if (mismatchOnly) where += ` AND ${mismatchClause}`
+
+  const [rows, countRow, summaryRow] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT sd.id,
+              sd.source_module,
+              sd.source_id,
+              sd.document_type,
+              sd.event_id,
+              sd.event_date,
+              sd.status AS source_document_status,
+              be.status AS business_event_status,
+              be.journal_entry_id AS business_event_journal_entry_id,
+              sdl.journal_entry_id AS linked_journal_entry_id,
+              je.entry_date AS linked_entry_date,
+              je.description AS linked_entry_description,
+              CASE WHEN be.id IS NULL THEN 0 ELSE 1 END AS has_business_event,
+              CASE WHEN sdl.journal_entry_id IS NULL THEN 0 ELSE 1 END AS has_journal_link,
+              CASE
+                WHEN be.id IS NULL THEN 'missing_business_event'
+                WHEN sdl.journal_entry_id IS NULL THEN 'missing_journal_link'
+                WHEN be.journal_entry_id IS NOT NULL AND sdl.journal_entry_id IS NOT NULL AND be.journal_entry_id != sdl.journal_entry_id THEN 'event_link_mismatch'
+                WHEN sd.status = 'posted' AND sdl.journal_entry_id IS NULL THEN 'posted_without_journal'
+                ELSE 'ok'
+              END AS reconciliation_status
+       FROM source_documents sd
+       LEFT JOIN business_events be
+         ON be.id = sd.event_id
+        AND be.company_id = sd.company_id
+       LEFT JOIN source_document_links sdl
+         ON sdl.source_document_id = sd.id
+        AND sdl.company_id = sd.company_id
+        AND sdl.link_type = 'primary'
+       LEFT JOIN journal_entries je
+         ON je.id = sdl.journal_entry_id
+        AND je.company_id = sd.company_id
+       ${where}
+       ORDER BY sd.event_date DESC, sd.id DESC
+       LIMIT ? OFFSET ?`
+    ).bind(...binds, size, offset).all(),
+
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM source_documents sd ${where}`)
+      .bind(...binds).first<{ n: number }>(),
+
+    c.env.DB.prepare(
+      `SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN be.id IS NULL THEN 1 ELSE 0 END) AS missing_business_event,
+         SUM(CASE WHEN sdl.journal_entry_id IS NULL THEN 1 ELSE 0 END) AS missing_journal_link,
+         SUM(CASE WHEN be.journal_entry_id IS NOT NULL AND sdl.journal_entry_id IS NOT NULL AND be.journal_entry_id != sdl.journal_entry_id THEN 1 ELSE 0 END) AS event_link_mismatch,
+         SUM(CASE WHEN sd.status = 'posted' AND sdl.journal_entry_id IS NULL THEN 1 ELSE 0 END) AS posted_without_journal,
+         SUM(CASE WHEN be.id IS NOT NULL AND sdl.journal_entry_id IS NOT NULL AND (be.journal_entry_id IS NULL OR be.journal_entry_id = sdl.journal_entry_id) THEN 1 ELSE 0 END) AS fully_linked
+       FROM source_documents sd
+       LEFT JOIN business_events be
+         ON be.id = sd.event_id
+        AND be.company_id = sd.company_id
+       LEFT JOIN source_document_links sdl
+         ON sdl.source_document_id = sd.id
+        AND sdl.company_id = sd.company_id
+        AND sdl.link_type = 'primary'
+       ${where}`
+    ).bind(...binds).first<{
+      total: number
+      missing_business_event: number
+      missing_journal_link: number
+      event_link_mismatch: number
+      posted_without_journal: number
+      fully_linked: number
+    }>(),
+  ])
+
+  return c.json({
+    success: true,
+    data: rows.results,
+    total: countRow?.n ?? 0,
+    page,
+    page_size: size,
+    summary: summaryRow ?? {
+      total: 0,
+      missing_business_event: 0,
+      missing_journal_link: 0,
+      event_link_mismatch: 0,
+      posted_without_journal: 0,
+      fully_linked: 0,
+    },
+  })
+})
+
+// =============================================================================
+// BATCH POST JOBS (scaffold)
+// =============================================================================
+
+// POST /api/gl/batch-post/jobs
+gl.post('/batch-post/jobs', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const body = await c.req.json<{
+    event_type: string
+    source_module: string
+    priority?: number
+    payload?: Record<string, unknown>
+    items: Array<{ source_id: number; payload?: Record<string, unknown> }>
+  }>()
+
+  if (!body.event_type?.trim() || !body.source_module?.trim()) {
+    return c.json({ success: false, error: 'event_type and source_module are required' }, 400)
+  }
+  if (!Array.isArray(body.items) || body.items.length === 0) {
+    return c.json({ success: false, error: 'At least one batch item is required' }, 400)
+  }
+  if (body.items.length > 2000) {
+    return c.json({ success: false, error: 'Batch size too large (max 2000 items)' }, 400)
+  }
+
+  const jobId = await enqueueBatchPostJob(c.env.DB, {
+    company_id,
+    event_type: body.event_type.trim(),
+    source_module: body.source_module.trim(),
+    priority: body.priority ?? 100,
+    payload: body.payload,
+    created_by: userId,
+    items: body.items,
+  })
+
+  void logAudit(c.env.DB, {
+    user_id: userId,
+    company_id,
+    action: 'CREATE',
+    table_name: 'batch_post_jobs',
+    record_id: jobId,
+    new_value: { event_type: body.event_type, source_module: body.source_module, items: body.items.length },
+  })
+
+  return c.json({ success: true, data: { job_id: jobId } }, 201)
+})
+
+// GET /api/gl/batch-post/jobs
+gl.get('/batch-post/jobs', async (c) => {
+  const { company_id } = getUser(c)
+  const page = Math.max(1, Number(c.req.query('page') ?? 1))
+  const size = Math.min(200, Math.max(1, Number(c.req.query('size') ?? 50)))
+  const statusQ = c.req.query('status') as 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | undefined
+
+  const data = await listBatchPostJobs(c.env.DB, company_id, page, size, statusQ)
+  return c.json({ success: true, ...data })
+})
+
+// GET /api/gl/batch-post/jobs/:id
+gl.get('/batch-post/jobs/:id', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  if (!Number.isFinite(id) || id <= 0) return c.json({ success: false, error: 'Invalid job id' }, 400)
+
+  const job = await getBatchPostJob(c.env.DB, company_id, id)
+  if (!job) return c.json({ success: false, error: 'Batch job not found' }, 404)
+  return c.json({ success: true, data: job })
+})
+
+// PATCH /api/gl/batch-post/jobs/:id/status
+gl.patch('/batch-post/jobs/:id/status', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const body = await c.req.json<{ status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'; last_error?: string | null }>()
+
+  if (!Number.isFinite(id) || id <= 0) return c.json({ success: false, error: 'Invalid job id' }, 400)
+  if (!body?.status) return c.json({ success: false, error: 'status is required' }, 400)
+
+  await updateBatchPostJobStatus(c.env.DB, company_id, id, body.status, body.last_error ?? null)
+
+  void logAudit(c.env.DB, {
+    user_id: userId,
+    company_id,
+    action: 'UPDATE',
+    table_name: 'batch_post_jobs',
+    record_id: id,
+    new_value: { status: body.status },
+  })
+
+  return c.json({ success: true, data: { id, status: body.status } })
+})
+
+// POST /api/gl/batch-post/jobs/claim-next
+// Simple worker scaffold endpoint to claim next pending job.
+gl.post('/batch-post/jobs/claim-next', async (c) => {
+  const { company_id } = getUser(c)
+  const id = await claimNextBatchPostJob(c.env.DB, company_id)
+  if (!id) return c.json({ success: true, data: null })
+
+  const job = await getBatchPostJob(c.env.DB, company_id, id)
+  return c.json({ success: true, data: job })
+})
+
+// =============================================================================
+// BATCH JOB PROCESSOR
+// Lightweight worker route: process one claimed batch job item-by-item.
+// =============================================================================
+
+// POST /api/gl/batch-post/jobs/:id/process
+// Body: { max_items?: number } (default 50 to stay within CPU limits)
+gl.post('/batch-post/jobs/:id/process', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+  if (!Number.isFinite(id) || id <= 0) return c.json({ success: false, error: 'Invalid job id' }, 400)
+
+  const body = await c.req.json<{ max_items?: number }>().catch(() => ({} as { max_items?: number }))
+  const maxItems = Math.min(50, Math.max(1, Number(body.max_items ?? 10)))
+
+  // Verify job exists and is in processing state
+  const job = await getBatchPostJob(c.env.DB, company_id, id)
+  if (!job) return c.json({ success: false, error: 'Batch job not found' }, 404)
+  if (job.status !== 'processing' && job.status !== 'pending') {
+    return c.json({ success: false, error: `Job status is ${job.status}, cannot process` }, 409)
+  }
+
+  // If pending, mark as processing
+  if (job.status === 'pending') {
+    await updateBatchPostJobStatus(c.env.DB, company_id, id, 'processing', null)
+  }
+
+  // Fetch pending items
+  const { results: pendingItems } = await c.env.DB.prepare(
+    `SELECT id, source_id, payload, status, attempts
+     FROM batch_post_job_items
+     WHERE job_id = ? AND company_id = ? AND status = 'pending'
+     ORDER BY id ASC
+     LIMIT ?`
+  ).bind(id, company_id, maxItems).all<{
+    id: number
+    source_id: number
+    payload: string | null
+    status: string
+    attempts: number
+  }>()
+
+  if (!pendingItems || pendingItems.length === 0) {
+    // All done — mark completed or failed based on counters
+    const { results: remaining } = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM batch_post_job_items
+       WHERE job_id = ? AND company_id = ? AND status IN ('pending','processing')`
+    ).bind(id, company_id).all<{ n: number }>()
+
+    if ((remaining?.[0]?.n ?? 0) === 0) {
+      const { results: failedItems } = await c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM batch_post_job_items
+         WHERE job_id = ? AND company_id = ? AND status = 'failed'`
+      ).bind(id, company_id).all<{ n: number }>()
+
+      const finalStatus = (failedItems?.[0]?.n ?? 0) > 0 ? 'failed' : 'completed'
+      await updateBatchPostJobStatus(c.env.DB, company_id, id, finalStatus, null)
+    }
+
+    return c.json({ success: true, data: { processed: 0, message: 'No pending items' } })
+  }
+
+  let processed = 0
+  let failed = 0
+  const errors: Array<{ item_id: number; error: string }> = []
+
+  for (const item of pendingItems) {
+    // Mark as processing
+    await c.env.DB.prepare(
+      `UPDATE batch_post_job_items
+       SET status = 'processing', attempts = attempts + 1
+       WHERE id = ?`
+    ).bind(item.id).run()
+
+    try {
+      const payload = item.payload ? JSON.parse(item.payload) as Record<string, unknown> : {}
+      const eventType = job.event_type as string
+
+      // Route to the correct FinanceCore resolver based on event_type
+      // Each batch item's payload must contain the required fields.
+      let journalEntryId: number | null = null
+
+      switch (eventType) {
+        case 'inventory_movement': {
+          journalEntryId = await FinanceCore.resolveInventoryMovement(c.env.DB, {
+            company_id,
+            ref_id: item.source_id,
+            item_code: Number(payload.item_code ?? 0),
+            warehouse: String(payload.warehouse ?? ''),
+            movement_type: String(payload.movement_type ?? 'اضافة'),
+            value: Number(payload.value ?? 0),
+            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            item_name: String(payload.item_name ?? ''),
+            created_by: userId,
+          })
+          break
+        }
+
+        case 'purchase_receipt': {
+          // processPOReceipt returns { success, movements, status } not a journal entry id
+          // This is a complex multi-item function; skip in batch or call resolvePurchaseReceipt for single items
+          throw new Error('Use resolvePurchaseReceipt for single-item purchase_receipt in batch')
+        }
+
+        case 'supplier_invoice': {
+          journalEntryId = await FinanceCore.resolveSupplierInvoice(c.env.DB, {
+            company_id,
+            ref_id: item.source_id,
+            supplier_code: payload.supplier_code ? Number(payload.supplier_code) : null,
+            amount: Number(payload.amount ?? 0),
+            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            description: String(payload.description ?? ''),
+            created_by: userId,
+          })
+          break
+        }
+
+        case 'supplier_payment': {
+          journalEntryId = await FinanceCore.resolveSupplierPayment(c.env.DB, {
+            company_id,
+            ref_id: item.source_id,
+            amount: Number(payload.amount ?? 0),
+            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            description: String(payload.description ?? ''),
+            created_by: userId,
+            center_code: payload.center_code ? Number(payload.center_code) : undefined,
+            supplier_code: payload.supplier_code ? Number(payload.supplier_code) : null,
+            financial_account_id: payload.financial_account_id ? Number(payload.financial_account_id) : null,
+          })
+          break
+        }
+
+        case 'expense': {
+          journalEntryId = await FinanceCore.resolveExpensePosting(c.env.DB, {
+            company_id,
+            ref_id: item.source_id,
+            amount: Number(payload.amount ?? 0),
+            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            description: String(payload.description ?? ''),
+            created_by: userId,
+            center_code: payload.center_code ? Number(payload.center_code) : undefined,
+            expense_account: payload.expense_account ? String(payload.expense_account) : undefined,
+          })
+          break
+        }
+
+        case 'revenue':
+        case 'harvest_revenue': {
+          journalEntryId = await FinanceCore.resolveSalesRevenue(c.env.DB, {
+            company_id,
+            ref_id: item.source_id,
+            amount: Number(payload.amount ?? 0),
+            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            description: String(payload.description ?? ''),
+            created_by: userId,
+            center_code: payload.center_code ? Number(payload.center_code) : undefined,
+            season_id: payload.season_id ? Number(payload.season_id) : undefined,
+            field_id: payload.field_id ? Number(payload.field_id) : undefined,
+          })
+          break
+        }
+
+        case 'payroll_run': {
+          journalEntryId = await FinanceCore.resolvePayrollPosting(c.env.DB, {
+            company_id,
+            ref_id: item.source_id,
+            amount: Number(payload.amount ?? 0),
+            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            description: String(payload.description ?? ''),
+            created_by: userId,
+            center_code: payload.center_code ? Number(payload.center_code) : undefined,
+            season_id: payload.season_id ? Number(payload.season_id) : null,
+            field_id: payload.field_id ? Number(payload.field_id) : null,
+          })
+          break
+        }
+
+        case 'payroll_payment': {
+          journalEntryId = await FinanceCore.resolvePayrollPayment(c.env.DB, {
+            company_id,
+            ref_id: item.source_id,
+            amount: Number(payload.amount ?? 0),
+            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            description: String(payload.description ?? ''),
+            created_by: userId,
+          })
+          break
+        }
+
+        case 'work_order_labor': {
+          journalEntryId = await FinanceCore.resolveWorkOrderLabor(c.env.DB, {
+            company_id,
+            ref_id: item.source_id,
+            amount: Number(payload.amount ?? 0),
+            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            description: String(payload.description ?? ''),
+            created_by: userId,
+            center_code: payload.center_code ? Number(payload.center_code) : undefined,
+            season_id: payload.season_id ? Number(payload.season_id) : null,
+            field_id: payload.field_id ? Number(payload.field_id) : null,
+          })
+          break
+        }
+
+        case 'contract_advance': {
+          journalEntryId = await FinanceCore.resolveContractAdvance(c.env.DB, {
+            company_id,
+            ref_id: item.source_id,
+            amount: Number(payload.amount ?? 0),
+            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            description: String(payload.description ?? ''),
+            created_by: userId,
+          })
+          break
+        }
+
+        default: {
+          throw new Error(`Unsupported batch event_type: ${eventType}`)
+        }
+      }
+
+      // Success
+      await c.env.DB.prepare(
+        `UPDATE batch_post_job_items
+         SET status = 'completed', journal_entry_id = ?, processed_at = datetime('now'), error_message = NULL
+         WHERE id = ?`
+      ).bind(journalEntryId, item.id).run()
+      processed++
+    } catch (err: any) {
+      const errorMsg = err?.message ?? String(err)
+      await c.env.DB.prepare(
+        `UPDATE batch_post_job_items
+         SET status = 'failed', error_message = ?, processed_at = datetime('now')
+         WHERE id = ?`
+      ).bind(errorMsg, item.id).run()
+      failed++
+      errors.push({ item_id: item.id, error: errorMsg })
+    }
+  }
+
+  // Update job counters
+  const { results: summary } = await c.env.DB.prepare(
+    `SELECT
+      COUNT(*) AS total,
+      SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
+      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+      SUM(CASE WHEN status IN ('pending','processing') THEN 1 ELSE 0 END) AS remaining
+     FROM batch_post_job_items
+     WHERE job_id = ? AND company_id = ?`
+  ).bind(id, company_id).all<{
+    total: number
+    completed: number
+    failed_count: number
+    remaining: number
+  }>()
+
+  const s = summary?.[0]
+  const totalItems = s?.total ?? 0
+  const completedItems = s?.completed ?? 0
+  const failedItems = s?.failed_count ?? 0
+  const remainingItems = s?.remaining ?? 0
+
+  let jobStatus: 'processing' | 'completed' | 'failed' = 'processing'
+  if (remainingItems === 0) {
+    jobStatus = failedItems > 0 ? 'failed' : 'completed'
+  }
+
+  const lastError = failedItems > 0 && remainingItems === 0
+    ? `${failedItems} item(s) failed: ${errors.map(e => `[${e.item_id}] ${e.error}`).join('; ').slice(0, 500)}`
+    : null
+
+  await updateBatchPostJobStatus(c.env.DB, company_id, id, jobStatus, lastError)
+
+  // Also update counters directly for consistency
+  await c.env.DB.prepare(
+    `UPDATE batch_post_jobs
+     SET processed_items = ?, failed_items = ?
+     WHERE id = ? AND company_id = ?`
+  ).bind(completedItems, failedItems, id, company_id).run()
+
+  return c.json({
+    success: true,
+    data: {
+      job_id: id,
+      processed_this_run: processed,
+      failed_this_run: failed,
+      total_items: totalItems,
+      completed_items: completedItems,
+      failed_items: failedItems,
+      remaining_items: remainingItems,
+      job_status: jobStatus,
+      errors: errors.slice(0, 5),
+    },
+  })
+})
+
+// =============================================================================
+// FAST TRIAL BALANCE (Materialized)
+// Reads account_balances first; falls back to full scan if period not materialized.
+// =============================================================================
+
+// GET /api/gl/trial-balance-fast
+// Optional query: period_id (defaults to current open period)
+gl.get('/trial-balance-fast', async (c) => {
+  const { company_id } = getUser(c)
+  const periodIdParam = c.req.query('period_id')
+  const asOfDate = c.req.query('as_of')
+
+  // Resolve period
+  let periodId: number | null = null
+  if (periodIdParam) {
+    periodId = Number(periodIdParam)
+    if (!Number.isFinite(periodId)) {
+      return c.json({ success: false, error: 'Invalid period_id' }, 400)
+    }
+  } else {
+    // Find current open period or period for as_of date
+    const periodRow = await c.env.DB.prepare(
+      `SELECT id FROM financial_periods
+       WHERE company_id = ? AND is_open = 1
+       AND (? IS NULL OR (start_date <= ? AND end_date >= ?))
+       ORDER BY start_date DESC LIMIT 1`
+    ).bind(
+      company_id,
+      asOfDate ?? null,
+      asOfDate ?? null,
+      asOfDate ?? null,
+    ).first<{ id: number }>()
+    periodId = periodRow?.id ?? null
+  }
+
+  if (!periodId) {
+    return c.json({ success: false, error: 'No open period found. Provide period_id or as_of date.' }, 400)
+  }
+
+  // Check if materialized data exists for this period
+  const matCount = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM account_balances WHERE company_id = ? AND period_id = ?`
+  ).bind(company_id, periodId).first<{ n: number }>()
+
+  const hasMaterialized = (matCount?.n ?? 0) > 0
+
+  if (hasMaterialized) {
+    // Fast path: read materialized balances + COA metadata
+    const { results } = await c.env.DB.prepare(
+      `SELECT
+         a.code,
+         a.name,
+         a.account_type,
+         a.normal_balance,
+         COALESCE(b.opening_balance, 0) AS opening_balance,
+         COALESCE(b.period_debit, 0) AS period_debit,
+         COALESCE(b.period_credit, 0) AS period_credit,
+         COALESCE(b.closing_balance, 0) AS closing_balance,
+         b.updated_at
+       FROM chart_of_accounts a
+       LEFT JOIN account_balances b
+         ON b.company_id = a.company_id
+         AND b.period_id = ?
+         AND b.account_code = a.code
+       WHERE a.company_id = ? AND a.is_active = 1
+       ORDER BY a.code`
+    ).bind(periodId, company_id).all<{
+      code: string
+      name: string
+      account_type: string
+      normal_balance: string
+      opening_balance: number
+      period_debit: number
+      period_credit: number
+      closing_balance: number
+      updated_at: string | null
+    }>()
+
+    const rows = results ?? []
+    const totalDebit = rows.reduce((s, r) => s + (r.period_debit > 0 ? r.period_debit : 0), 0)
+    const totalCredit = rows.reduce((s, r) => s + (r.period_credit > 0 ? r.period_credit : 0), 0)
+    const totalDrBalance = rows.reduce((s, r) => {
+      const bal = r.closing_balance
+      return s + (['asset', 'expense'].includes(r.account_type) ? bal : -bal)
+    }, 0)
+
+    return c.json({
+      success: true,
+      data: {
+        period_id: periodId,
+        source: 'materialized',
+        generated_at: new Date().toISOString(),
+        total_accounts: rows.length,
+        total_debit: Math.round(totalDebit * 100) / 100,
+        total_credit: Math.round(totalCredit * 100) / 100,
+        net_balance: Math.round(totalDrBalance * 100) / 100,
+        rows: rows,
+      },
+    })
+  }
+
+  // Fallback: full scan (original trial balance logic)
+  const { results } = await c.env.DB.prepare(
+    `SELECT
+       a.code,
+       a.name,
+       a.account_type,
+       a.normal_balance,
+       COALESCE(SUM(jel.debit), 0) AS period_debit,
+       COALESCE(SUM(jel.credit), 0) AS period_credit,
+       COALESCE(SUM(jel.debit - jel.credit), 0) AS closing_balance
+     FROM chart_of_accounts a
+     LEFT JOIN journal_entry_lines jel ON jel.account_code = a.code AND jel.company_id = a.company_id
+     LEFT JOIN journal_entries je ON je.id = jel.entry_id
+       AND je.company_id = a.company_id
+       AND je.is_posted = 1
+       AND je.period_id = ?
+     WHERE a.company_id = ? AND a.is_active = 1
+     GROUP BY a.code, a.name, a.account_type, a.normal_balance
+     ORDER BY a.code`
+  ).bind(periodId, company_id).all<{
+    code: string
+    name: string
+    account_type: string
+    normal_balance: string
+    period_debit: number
+    period_credit: number
+    closing_balance: number
+  }>()
+
+  const rows = results ?? []
+  const totalDebit = rows.reduce((s, r) => s + Number(r.period_debit), 0)
+  const totalCredit = rows.reduce((s, r) => s + Number(r.period_credit), 0)
+
+  return c.json({
+    success: true,
+    data: {
+      period_id: periodId,
+      source: 'full_scan',
+      generated_at: new Date().toISOString(),
+      total_accounts: rows.length,
+      total_debit: Math.round(totalDebit * 100) / 100,
+      total_credit: Math.round(totalCredit * 100) / 100,
+      net_balance: Math.round((totalDebit - totalCredit) * 100) / 100,
+      rows: rows,
+    },
   })
 })
 

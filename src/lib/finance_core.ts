@@ -163,8 +163,87 @@ async function linkJournalEntryToSource(
     )
   }
 
+  // P0-3 FIX: Add missing event types for complete subledger linkage
+  if (opts.event_type === 'work_order_labor') {
+    stmts.push(
+      db.prepare('UPDATE work_tasks SET journal_entry_id = ? WHERE work_order_id = ? AND company_id = ?')
+        .bind(entryId, opts.source_id, opts.company_id)
+    )
+  }
+
+  if (opts.event_type === 'wip_carryforward') {
+    stmts.push(
+      db.prepare('UPDATE wip_balances SET journal_entry_id = ? WHERE company_id = ? AND from_season_id = ? AND status = ?')
+        .bind(entryId, opts.company_id, opts.source_id, 'carried')
+    )
+  }
+
+  if (opts.event_type === 'depreciation') {
+    // Link to depreciation schedule using period info from payload
+    const periodYear = opts.payload?.period_year || opts.payload?.year
+    const periodMonth = opts.payload?.period_month || opts.payload?.month
+    if (periodYear && periodMonth) {
+      stmts.push(
+        db.prepare('UPDATE depreciation_schedules SET journal_entry_id = ? WHERE company_id = ? AND period_year = ? AND period_month = ?')
+          .bind(entryId, opts.company_id, periodYear, periodMonth)
+      )
+    }
+  }
+
   if (stmts.length > 0) {
     await db.batch(stmts)
+  }
+}
+
+async function syncSourceDocumentBridge(
+  db: D1Database,
+  opts: EventBackedPostOpts,
+  eventId: number,
+  journalEntryId: number | null,
+  status: 'pending' | 'posted' | 'error',
+): Promise<void> {
+  try {
+    await db.prepare(
+      `INSERT INTO source_documents
+       (company_id, source_module, source_id, document_type, event_id, event_date, status, payload_snapshot, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(company_id, source_module, source_id, document_type)
+       DO UPDATE SET
+         event_id = excluded.event_id,
+         event_date = excluded.event_date,
+         status = excluded.status,
+         payload_snapshot = excluded.payload_snapshot,
+         updated_at = datetime('now')`
+    ).bind(
+      opts.company_id,
+      opts.source_module,
+      opts.source_id,
+      opts.event_type,
+      eventId,
+      opts.event_date,
+      status,
+      JSON.stringify(opts.payload),
+      opts.created_by ?? null,
+    ).run()
+
+    const doc = await db.prepare(
+      `SELECT id FROM source_documents
+       WHERE company_id = ? AND source_module = ? AND source_id = ? AND document_type = ?
+       LIMIT 1`
+    ).bind(opts.company_id, opts.source_module, opts.source_id, opts.event_type)
+      .first<{ id: number }>()
+
+    if (doc?.id && journalEntryId) {
+      await db.prepare(
+        `INSERT INTO source_document_links
+         (company_id, source_document_id, journal_entry_id, link_type)
+         VALUES (?, ?, ?, 'primary')
+         ON CONFLICT(company_id, source_document_id, journal_entry_id, link_type)
+         DO NOTHING`
+      ).bind(opts.company_id, doc.id, journalEntryId).run()
+    }
+  } catch {
+    // Non-blocking bridge write. Posting must not fail because of bridge metadata.
   }
 }
 
@@ -177,14 +256,15 @@ async function postFromBusinessEvent(
 
   // Idempotency key: (company_id, source_module, source_id, event_type)
   let existing = await db.prepare(
-    `SELECT id, status, journal_entry_id
+    `SELECT id, status, journal_entry_id, payload
      FROM business_events
      WHERE company_id = ? AND source_module = ? AND source_id = ? AND event_type = ?
      LIMIT 1`
   ).bind(opts.company_id, opts.source_module, opts.source_id, opts.event_type)
-    .first<{ id: number; status: string; journal_entry_id: number | null }>()
+    .first<{ id: number; status: string; journal_entry_id: number | null; payload?: string }>()
 
   if (existing?.status === 'posted' && existing.journal_entry_id) {
+    await syncSourceDocumentBridge(db, opts, existing.id, existing.journal_entry_id, 'posted')
     return existing.journal_entry_id
   }
 
@@ -212,19 +292,40 @@ async function postFromBusinessEvent(
         opts.created_by ?? null,
       ).run()
       eventId = Number(eventInsert.meta.last_row_id)
-    } catch {
+    } catch (err: any) {
+      // P1-1 FIX: Hardened error handling - only retry on UNIQUE constraint violation
+      const msg = err?.message ?? String(err)
+      const isUniqueViolation = msg.includes('UNIQUE') || 
+                                msg.includes('constraint failed') || 
+                                msg.includes('2067') ||
+                                msg.includes('already exists')
+      
+      if (!isUniqueViolation) {
+        // Re-throw non-unique errors (disk full, schema issues, etc.)
+        throw new Error(`BUSINESS_EVENT_INSERT_ERROR: ${msg}`)
+      }
+      
       // Race-safe retry path: another request inserted the same event key.
       existing = await db.prepare(
-        `SELECT id, status, journal_entry_id
+        `SELECT id, status, journal_entry_id, payload
          FROM business_events
          WHERE company_id = ? AND source_module = ? AND source_id = ? AND event_type = ?
          LIMIT 1`
       ).bind(opts.company_id, opts.source_module, opts.source_id, opts.event_type)
-        .first<{ id: number; status: string; journal_entry_id: number | null }>()
+        .first<{ id: number; status: string; journal_entry_id: number | null; payload: string }>()
+      
       if (!existing) {
-        throw new Error('BUSINESS_EVENT_INSERT_FAILED: unable to create or load idempotent event row.')
+        throw new Error('BUSINESS_EVENT_RACE_LOST: concurrent insert won but row not found')
       }
+      
+      // Optional: Verify payload matches to prevent cross-request contamination
+      if (existing.payload && existing.payload !== eventPayload) {
+        // Log warning but don't fail - concurrent request with different payload
+        console.warn(`BUSINESS_EVENT_PAYLOAD_MISMATCH: event ${existing.id} has different payload`)
+      }
+      
       if (existing.status === 'posted' && existing.journal_entry_id) {
+        await syncSourceDocumentBridge(db, opts, existing.id, existing.journal_entry_id, 'posted')
         return existing.journal_entry_id
       }
       eventId = existing.id
@@ -237,6 +338,7 @@ async function postFromBusinessEvent(
          SET status = 'posted', posted_at = COALESCE(posted_at, datetime('now'))
          WHERE id = ? AND company_id = ?`
       ).bind(eventId, opts.company_id).run()
+      await syncSourceDocumentBridge(db, opts, eventId, existing.journal_entry_id, 'posted')
       return existing.journal_entry_id
     }
     await db.prepare(
@@ -249,6 +351,8 @@ async function postFromBusinessEvent(
   if (!eventId) {
     throw new Error('BUSINESS_EVENT_ID_MISSING: unable to determine event id before posting.')
   }
+
+  await syncSourceDocumentBridge(db, opts, eventId, null, 'pending')
 
   try {
     const entryId = await postAutoEntry(db, {
@@ -272,6 +376,8 @@ async function postFromBusinessEvent(
        WHERE id = ? AND company_id = ?`
     ).bind(entryId ?? null, eventId, opts.company_id).run()
 
+    await syncSourceDocumentBridge(db, opts, eventId, entryId ?? null, 'posted')
+
     await logPostingResolution(db, opts, 'resolved', eventId, entryId ?? null)
 
     return entryId
@@ -281,6 +387,7 @@ async function postFromBusinessEvent(
        SET status = 'error', error_message = ?
        WHERE id = ? AND company_id = ?`
     ).bind(error?.message ?? String(error), eventId, opts.company_id).run()
+    await syncSourceDocumentBridge(db, opts, eventId, null, 'error')
     await logPostingResolution(db, opts, 'failed', eventId, null, error?.message ?? String(error))
     throw error
   }
