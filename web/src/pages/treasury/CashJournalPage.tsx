@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Plus, Download, ShieldCheck, RefreshCcw, X,
+  Plus, Download, ShieldCheck, RefreshCw, X,
   TrendingUp, TrendingDown, Wallet, Clock, CheckCircle2, AlertTriangle, Search,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -11,6 +11,9 @@ import DataTable, { type Column, type SortState } from '../../components/ui/Data
 import AddCashTransactionModal from '../../components/forms/AddCashTransactionModal'
 import type { CashTransaction } from '../../types'
 import { useToast } from '../../contexts/ToastContext'
+import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
+import { KpiStrip, type KpiItem } from '../../components/ui/KpiStrip'
+import SectionCard from '../../components/ui/SectionCard'
 
 function egp(n: number | null | undefined) {
   if (n == null) return '—'
@@ -204,90 +207,47 @@ export default function CashJournalPage() {
   const cashOut    = allRows.filter(r => r.direction === 'م' && r.status === 'posted').reduce((s, r) => s + r.amount, 0)
   const hasFilters = !!(direction || month || year || status || search.trim())
 
+  const kpis: KpiItem[] = [
+    { id: 'balance',  label: 'الرصيد المعتمد', value: bal != null ? egp(bal) : '…',  variant: (bal ?? 0) >= 0 ? 'success' : 'warning' },
+    { id: 'in',      label: 'وارد (معروض)',    value: egp(cashIn),                   variant: 'success' },
+    { id: 'out',     label: 'منصرف (معروض)',   value: egp(cashOut),                  variant: 'warning' },
+    { id: 'drafts',  label: 'مسودات معلقة',   value: `${draftCount} حركة`,          variant: draftCount > 0 ? 'warning' : 'default' },
+  ]
+
+  const actions: CommandAction[] = [
+    {
+      id: 'refresh', label: isLoading ? 'Loading…' : 'تحديث',
+      icon: <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />,
+      onClick: () => refetch(), variant: 'secondary',
+    },
+    {
+      id: 'export', label: 'تصدير CSV',
+      icon: <Download size={14} />,
+      onClick: () => downloadCsv('/treasury', 'دفتر_اليومية', {
+        year:  year  ? Number(year)  : undefined,
+        month: month ? Number(month) : undefined,
+      }),
+      variant: 'secondary',
+    },
+    ...(selectedIds.size > 0 && (role === 'super_admin' || role === 'company_admin') ? [{
+      id: 'bulk-post', label: bulkPostMut.isPending ? 'جاري الترحيل...' : `ترحيل ${selectedIds.size} حركة`,
+      icon: <ShieldCheck size={14} />,
+      onClick: () => bulkPostMut.mutate([...selectedIds]),
+      variant: 'primary' as const,
+    }] : []),
+    ...(canWrite('treasury') ? [{
+      id: 'add', label: 'حركة جديدة',
+      icon: <Plus size={14} />,
+      onClick: () => setAddOpen(true),
+      variant: 'primary' as const,
+    }] : []),
+  ]
+
   return (
-    <div className="space-y-5 animate-fade-in">
-
-      {/* ── Page Header ───────────────────────────────── */}
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">الخزينة والسيولة</h1>
-          <p className="text-xs text-slate-400 mt-0.5">سجل الحركات النقدية المعتمدة والمسودات</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button className="btn-secondary gap-2 text-sm" onClick={() => refetch()}>
-            <RefreshCcw size={14} /> تحديث
-          </button>
-          <button
-            className="btn-secondary gap-2 text-sm"
-            onClick={() => downloadCsv('/treasury', 'دفتر_اليومية', {
-              year:  year  ? Number(year)  : undefined,
-              month: month ? Number(month) : undefined,
-            })}
-          >
-            <Download size={14} /> تصدير CSV
-          </button>
-          {selectedIds.size > 0 && (role === 'super_admin' || role === 'company_admin') && (
-            <button
-              className="btn-primary gap-2 bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-100"
-              onClick={() => bulkPostMut.mutate([...selectedIds])}
-              disabled={bulkPostMut.isPending}
-            >
-              <ShieldCheck size={15} />
-              {bulkPostMut.isPending ? 'جاري الترحيل...' : `ترحيل ${selectedIds.size} حركة`}
-            </button>
-          )}
-          {canWrite('treasury') && (
-            <button className="btn-primary gap-2 shadow-lg shadow-emerald-100" onClick={() => setAddOpen(true)}>
-              <Plus size={16} /> حركة جديدة
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* ── KPI Strip ─────────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {/* Balance */}
-        <div className={`card p-4 border-2 ${
-          (bal ?? 0) >= 0 ? 'border-emerald-200 bg-emerald-50/50' : 'border-red-200 bg-red-50/50'
-        }`}>
-          <div className="flex items-center gap-2 mb-1">
-            <Wallet size={14} className={(bal ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-600'} />
-            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">الرصيد المعتمد</p>
-          </div>
-          <p className={`text-xl font-black tabular-nums ${(bal ?? 0) >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
-            {bal != null ? egp(bal) : '…'}
-          </p>
-        </div>
-        {/* Cash In */}
-        <div className="card p-4">
-          <div className="flex items-center gap-2 mb-1">
-            <TrendingUp size={14} className="text-emerald-500" />
-            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">وارد (معروض)</p>
-          </div>
-          <p className="text-xl font-black text-emerald-700 tabular-nums">{egp(cashIn)}</p>
-        </div>
-        {/* Cash Out */}
-        <div className="card p-4">
-          <div className="flex items-center gap-2 mb-1">
-            <TrendingDown size={14} className="text-red-500" />
-            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">منصرف (معروض)</p>
-          </div>
-          <p className="text-xl font-black text-red-600 tabular-nums">{egp(cashOut)}</p>
-        </div>
-        {/* Drafts */}
-        <div className={`card p-4 ${draftCount > 0 ? 'border-amber-200 bg-amber-50/50' : ''}`}>
-          <div className="flex items-center gap-2 mb-1">
-            <Clock size={14} className={draftCount > 0 ? 'text-amber-500' : 'text-slate-400'} />
-            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">مسودات معلقة</p>
-          </div>
-          <p className={`text-xl font-black ${draftCount > 0 ? 'text-amber-700' : 'text-slate-400'}`}>
-            {draftCount} حركة
-          </p>
-          {draftCount > 0 && (
-            <p className="text-[9px] text-amber-600 mt-0.5">تحتاج ترحيل</p>
-          )}
-        </div>
-      </div>
+    <div className="flex flex-col h-full bg-[#f8fafc]">
+      <CommandBar actions={actions} />
+      <div className="flex-1 overflow-auto p-4 md:p-6 space-y-4 animate-fade-in">
+      <KpiStrip items={kpis} />
 
       {/* Draft alert banner */}
       {draftCount > 0 && (
@@ -407,7 +367,7 @@ export default function CashJournalPage() {
       </div>
 
       {/* ── Data Table ────────────────────────────────── */}
-      <div className="card overflow-hidden shadow-lg border-none">
+      <SectionCard title="سجل الحركات" icon={<Wallet size={15} />}>
         <DataTable<CashTransaction>
           columns={COLUMNS}
           data={sortedData}
@@ -421,9 +381,10 @@ export default function CashJournalPage() {
           onSort={setSort}
           emptyText="لا توجد حركات بالفلاتر المحددة"
         />
-      </div>
+      </SectionCard>
 
       <AddCashTransactionModal open={addOpen} onClose={() => setAddOpen(false)} />
+      </div>
     </div>
   )
 }

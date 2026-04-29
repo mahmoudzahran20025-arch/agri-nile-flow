@@ -276,7 +276,10 @@ treasury.patch('/partners/:id', async (c) => {
           : `تخفيض رأس مال شريك: ${partnerName}`
 
         await FinanceCore.resolvePartnerCapital(c.env.DB, {
-          company_id, ref_id: id, delta, date: today, description: desc, created_by: userId,
+          company_id, ref_id: id, partner_id: id,
+          amount: Math.abs(delta),
+          direction: delta > 0 ? 'injection' : 'withdrawal',
+          date: today, description: desc, created_by: userId,
         })
       }
     }
@@ -289,7 +292,10 @@ treasury.patch('/partners/:id', async (c) => {
           : `سحب من حساب شريك جاري: ${partnerName}`
 
         await FinanceCore.resolvePartnerCurrent(c.env.DB, {
-          company_id, ref_id: id, delta, date: today, description: desc, created_by: userId,
+          company_id, ref_id: id, partner_id: id,
+          amount: Math.abs(delta),
+          direction: delta > 0 ? 'deposit' : 'withdrawal',
+          date: today, description: desc, created_by: userId,
         })
       }
     }

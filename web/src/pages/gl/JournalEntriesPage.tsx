@@ -5,6 +5,7 @@ import { Plus, Download, GitBranch, CheckCircle2, X } from 'lucide-react';
 import { glApi } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import NewEntryForm from '../../components/gl/NewEntryForm';
+import GlEntryTraceDrawer from '../../components/gl/GlEntryTraceDrawer';
 import { KpiStrip, KpiItem } from '../../components/ui/KpiStrip';
 import { CommandBar, CommandAction } from '../../components/shell/CommandBar';
 import DataTable, { Column, SortState } from '../../components/ui/DataTable';
@@ -43,12 +44,15 @@ export default function JournalEntriesPage() {
     return idParam ? Number(idParam) : null;
   });
   const [showNew, setShowNew] = useState(false);
+  const [traceOpen, setTraceOpen] = useState(false);
+  const [traceTab, setTraceTab] = useState<'source' | 'lines' | 'trace'>('source');
 
   useEffect(() => {
     if (selectedId != null) {
       setSearchParams(p => { p.set('id', String(selectedId)); return p; }, { replace: true });
     } else {
       setSearchParams(p => { p.delete('id'); return p; }, { replace: true });
+      setTraceOpen(false);
     }
   }, [selectedId, setSearchParams]);
 
@@ -59,7 +63,7 @@ export default function JournalEntriesPage() {
       qc.invalidateQueries({ queryKey: ['gl-entries'] });
       qc.invalidateQueries({ queryKey: ['gl-entry', selectedId] });
     },
-    onError: (err: any) => toast(err.message || 'Failed to reverse entry', 'error'),
+    onError: (err: any) => toast(err?.message || err?.error || 'Failed to reverse entry', 'error'),
   });
 
   const { data: entriesData, isLoading } = useQuery({
@@ -95,6 +99,12 @@ export default function JournalEntriesPage() {
     queryFn: () => glApi.getEntry(selectedId!),
     enabled: !!selectedId,
   }) as { data?: EntryDetail };
+
+  const { data: traceData, isFetching: traceLoading } = useQuery({
+    queryKey: ['gl-entry-trace', selectedId],
+    queryFn: () => glApi.entryTrace(selectedId!),
+    enabled: !!selectedId && traceOpen,
+  });
 
   const columns: Column<JournalEntry>[] = [
     {
@@ -145,8 +155,22 @@ export default function JournalEntriesPage() {
     { id: 'new', label: 'New Entry', icon: <Plus />, variant: 'primary', onClick: () => setShowNew(true) },
     { id: 'sep1', isSeparator: true },
     { id: 'post', label: 'Post', disabled: !selectedId || detail?.is_posted === 1 },
-    { id: 'void', label: 'Void / Reverse', onClick: () => selectedId && reverseMutation.mutate(selectedId), disabled: !selectedId || !!detail?.reversal_entry_id },
-    { id: 'audit', label: 'Audit Trail', icon: <GitBranch />, disabled: !selectedId },
+    {
+      id: 'void',
+      label: 'Void / Reverse',
+      onClick: () => selectedId && reverseMutation.mutate(selectedId),
+      disabled: !selectedId || !detail?.is_posted || !!detail?.reversal_entry_id || reverseMutation.isPending,
+    },
+    {
+      id: 'audit',
+      label: 'Traceability',
+      icon: <GitBranch />,
+      onClick: () => {
+        setTraceOpen(true);
+        setTraceTab('source');
+      },
+      disabled: !selectedId,
+    },
     { id: 'sep2', isSeparator: true },
     { id: 'export', label: 'Export', icon: <Download />, variant: 'secondary' },
   ];
@@ -312,6 +336,15 @@ export default function JournalEntriesPage() {
             )}
           </div>
         )}
+
+        <GlEntryTraceDrawer
+          isOpen={traceOpen && !!selectedId}
+          loading={traceLoading}
+          tab={traceTab}
+          onTabChange={setTraceTab}
+          onClose={() => setTraceOpen(false)}
+          trace={traceData as any}
+        />
       </div>
     </div>
   );

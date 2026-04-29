@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ShoppingCart, Plus, Loader2, ChevronDown, ChevronUp,
   CheckCircle2, XCircle, Truck, Send, X, Package,
-  FileText, AlertTriangle, CheckCircle, AlertOctagon,
+  FileText, AlertTriangle, CheckCircle, AlertOctagon, RefreshCw,
 } from 'lucide-react'
 import {
   financeApi,
@@ -11,6 +11,9 @@ import {
 } from '../../api/finance'
 import { suppliersApi, configApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
+import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
+import { KpiStrip, type KpiItem } from '../../components/ui/KpiStrip'
+import SectionCard from '../../components/ui/SectionCard'
 
 // ── Helpers ───────────────────────────────────────────────────
 function fmtCurrency(n: number) {
@@ -338,7 +341,7 @@ function InvoiceModal({
 // ════════════════════════════════════════════════════════════
 export default function PurchaseOrdersPage() {
   const qc = useQueryClient()
-  const [filterStatus, setFilterStatus] = useState('')
+  const [filterStatus] = useState('')
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [showReceive, setShowReceive] = useState<PurchaseOrder | null>(null)
@@ -440,46 +443,35 @@ export default function PurchaseOrdersPage() {
   const orders: PurchaseOrder[] = poData ?? []
   const totalAmount = orders.reduce((s, o) => s + o.total_amount, 0)
 
+  const kpis: KpiItem[] = [
+    { id: 'total',    label: 'إجمالي الطلبات',  value: orders.length,                                          variant: 'default' },
+    { id: 'draft',    label: 'مسودة',             value: orders.filter(o => o.status === 'draft').length,        variant: 'warning' },
+    { id: 'sent',     label: 'مُرسل',             value: orders.filter(o => o.status === 'sent').length,         variant: 'default' },
+    { id: 'received', label: 'مُستلم',           value: orders.filter(o => o.status === 'received').length,     variant: 'success' },
+    { id: 'amount',   label: 'الإجمالي ج.م',       value: new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(totalAmount), variant: 'default' },
+  ]
+
+  const actions: CommandAction[] = [
+    {
+      id: 'refresh', label: isLoading ? 'Loading…' : 'تحديث',
+      icon: <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />,
+      onClick: () => qc.invalidateQueries({ queryKey: ['purchase-orders'] }), variant: 'secondary',
+    },
+    {
+      id: 'create', label: 'طلب شراء جديد',
+      icon: <Plus size={14} />,
+      onClick: () => setShowCreate(true),
+      variant: 'primary',
+    },
+  ]
+
   return (
-    <div className="p-4 md:p-6 space-y-5 max-w-6xl mx-auto" dir="rtl">
+    <div className="flex flex-col h-full bg-[#f8fafc]">
+      <CommandBar actions={actions} />
+      <div className="flex-1 overflow-auto p-4 md:p-6 space-y-4 animate-fade-in">
+      <KpiStrip items={kpis} />
 
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-800">طلبات الشراء</h1>
-          <p className="text-sm text-gray-500 mt-0.5">إنشاء وإدارة أوامر الشراء من الموردين</p>
-        </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-        >
-          <Plus size={16} /> طلب شراء جديد
-        </button>
-      </div>
-
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        {['', 'draft', 'sent', 'partial', 'received'].map(s => {
-          const count = s ? orders.filter(o => o.status === s).length : orders.length
-          return (
-            <button
-              key={s}
-              onClick={() => setFilterStatus(s === filterStatus ? '' : s)}
-              className={`
-                p-3 rounded-xl border text-right transition-all
-                ${filterStatus === s && s !== ''
-                  ? 'border-brand-500 bg-brand-50 shadow-sm'
-                  : 'border-gray-200 bg-white hover:border-brand-200'}
-              `}
-            >
-              <p className="text-xl font-bold text-gray-800">{count}</p>
-              <p className="text-xs text-gray-500 mt-0.5">
-                {s === '' ? 'إجمالي الطلبات' : STATUS_MAP[s]?.label ?? s}
-              </p>
-            </button>
-          )
-        })}
-      </div>
+      <SectionCard title="طلبات الشراء" icon={<ShoppingCart size={15} />}>
 
       {/* List */}
       {isLoading ? (
@@ -739,6 +731,8 @@ export default function PurchaseOrdersPage() {
           onSuccess={() => setShowInvoice(null)}
         />
       )}
+      </SectionCard>
+      </div>
     </div>
   )
 }

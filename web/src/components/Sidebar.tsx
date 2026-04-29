@@ -4,7 +4,7 @@ import {
   FileText, Settings, LogOut, Leaf, ChevronLeft,
   ClipboardList, UserCog, TrendingUp, MapPin, Wrench,
   Building2, Shield, Activity, ChevronDown, Link2,
-  ShieldCheck, Target, Lock, ShoppingCart, CalendarDays,
+  ShieldCheck, Target, Lock, ShoppingCart, CalendarDays, PlayCircle, GitMerge, Layers,
   Landmark, Database, BarChart3, FolderTree, ClipboardCheck,
   BookOpen, ShieldAlert, Scale
 } from 'lucide-react'
@@ -109,13 +109,19 @@ const NAV_SECTIONS: NavSection[] = [
   // ── General Ledger ────────────────────────────────────────────
   {
     key: 'finance', label: 'دفتر الأستاذ العام', items: [
-      { to: '/gl/accounts',       icon: <Database  size={18} />, label: 'شجرة الحسابات',      permission: { module: 'finance', action: 'read' } },
-      { to: '/gl/entries',        icon: <FileText  size={18} />, label: 'قيود اليومية',        permission: { module: 'finance', action: 'read' } },
-      { to: '/gl/statements',     icon: <BarChart3 size={18} />, label: 'القوائم المالية',      permission: { module: 'finance', action: 'read' } },
-      { to: '/gl/setup-wizard',   icon: <ClipboardCheck size={18} />, label: 'معالج الإعداد',   permission: { module: 'config',  action: 'read' } },
-      { to: '/gl/posting-groups', icon: <Settings  size={18} />, label: 'مجموعات الترحيل',     permission: { module: 'config',  action: 'read' } },
-      { to: '/gl/posting-setup',  icon: <Settings  size={18} />, label: 'إعداد الترحيل',       permission: { module: 'config',  action: 'read' } },
-      { to: '/gl/settings',       icon: <Settings  size={18} />, label: 'إعدادات المحاسبة',    permission: { module: 'config',  action: 'read' } },
+      { to: '/gl',               icon: <BarChart3 size={18} />, label: 'مركز المالية',          permission: { module: 'finance', action: 'read' } },
+      { to: '/gl/health-integrity', icon: <ShieldAlert size={18} />, label: 'الصحة والتكامل',   permission: { module: 'finance', action: 'read' } },
+      { to: '/gl/accounts',       icon: <Database  size={18} />, label: 'شجرة الحسابات',        permission: { module: 'finance', action: 'read' } },
+      { to: '/gl/entries',        icon: <FileText  size={18} />, label: 'قيود اليومية',          permission: { module: 'finance', action: 'read' } },
+      { to: '/gl/statements',     icon: <BarChart3 size={18} />, label: 'القوائم المالية',        permission: { module: 'finance', action: 'read' } },
+      { to: '/gl/setup-wizard',   icon: <ClipboardCheck size={18} />, label: 'معالج الإعداد',    permission: { module: 'config',  action: 'read' } },
+      { to: '/gl/posting-groups', icon: <Settings  size={18} />, label: 'مجموعات الترحيل',       permission: { module: 'config',  action: 'read' } },
+      { to: '/gl/posting-setup',  icon: <Settings  size={18} />, label: 'إعداد الترحيل',         permission: { module: 'config',  action: 'read' } },
+      { to: '/gl/settings',       icon: <Settings  size={18} />, label: 'إعدادات المحاسبة',      permission: { module: 'config',  action: 'read' } },
+      { to: '/gl/posting-simulator', icon: <PlayCircle size={18} />, label: 'محاكي الترحيل',      permission: { module: 'config',  action: 'read' } },
+      { to: '/gl/reconciliation',    icon: <GitMerge   size={18} />, label: 'مطابقة المصادر',     permission: { module: 'finance', action: 'read' } },
+      { to: '/gl/period-close',      icon: <Lock       size={18} />, label: 'إغلاق الفترة',        permission: { module: 'finance', action: 'read' } },
+      { to: '/gl/batch-posting',     icon: <Layers     size={18} />, label: 'مركز الترحيل الدفعي', permission: { module: 'finance', action: 'read' } },
     ],
   },
 
@@ -259,7 +265,7 @@ export default function Sidebar() {
                   <NavLink
                     key={item.to}
                     to={item.to}
-                    end={item.to === '/hr' || item.to === '/treasury' || item.to === '/inventory'}
+                    end={item.to === '/hr' || item.to === '/treasury' || item.to === '/inventory' || item.to === '/gl'}
                     className={({ isActive }) => `
                       flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium
                       transition-colors duration-150 relative

@@ -12,6 +12,9 @@ interface Props {
   trend?:   number
   /** If true, a positive trend is displayed in red (e.g. liabilities). Default: false */
   invertTrend?: boolean
+  onClick?: () => void
+  alert?: boolean
+  className?: string
 }
 
 const colorMap = {
@@ -33,7 +36,19 @@ function fmt(value: number | string, format?: Props['format']): string {
   return String(value)
 }
 
-export default function KPICard({ title, value, subtitle, icon: Icon, color, format = 'currency', trend, invertTrend = false }: Props) {
+export default function KPICard({
+  title,
+  value,
+  subtitle,
+  icon: Icon,
+  color,
+  format = 'currency',
+  trend,
+  invertTrend = false,
+  onClick,
+  alert = false,
+  className = '',
+}: Props) {
   const c = colorMap[color]
 
   const trendUp   = trend != null && trend > 0
@@ -43,8 +58,13 @@ export default function KPICard({ title, value, subtitle, icon: Icon, color, for
   const isGood = invertTrend ? trendDown : trendUp
   const isBad  = invertTrend ? trendUp   : trendDown
 
+  const Wrapper = onClick ? 'button' : 'div'
+
   return (
-    <div className={`card p-5 flex items-start gap-4 ${c.bg}`}>
+    <Wrapper
+      {...(onClick ? { onClick, type: 'button' as const } : {})}
+      className={`card p-5 flex items-start gap-4 text-right transition-all ${c.bg} ${alert ? 'ring-1 ring-amber-300 border-amber-200' : ''} ${onClick ? 'hover:shadow-md hover:-translate-y-0.5 cursor-pointer w-full' : ''} ${className}`}
+    >
       <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${c.icon}`}>
         <Icon size={22} />
       </div>
@@ -62,6 +82,6 @@ export default function KPICard({ title, value, subtitle, icon: Icon, color, for
           )}
         </div>
       </div>
-    </div>
+    </Wrapper>
   )
 }

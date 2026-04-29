@@ -7,6 +7,9 @@ import {
 } from 'lucide-react'
 import { financeApi, type BankAccount, type BankReconciliation, type BankStatement, type CashTxSearchResult } from '../../api/finance'
 import Modal from '../../components/ui/Modal'
+import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
+import { KpiStrip, type KpiItem } from '../../components/ui/KpiStrip'
+import SectionCard from '../../components/ui/SectionCard'
 
 // ── Helpers ───────────────────────────────────────────────────
 function fmtCurrency(n: number) {
@@ -97,24 +100,30 @@ export default function BankReconciliationPage() {
     },
   })
 
-  return (
-    <div className="p-4 md:p-6 space-y-6 max-w-6xl mx-auto" dir="rtl">
+  const totalBalance = accounts.reduce((s, a) => s + (a.current_balance ?? a.opening_balance), 0)
+  const kpis: KpiItem[] = [
+    { id: 'accounts', label: 'حسابات بنكية', value: accounts.length, variant: 'default' },
+    { id: 'balance',  label: 'إجمالي الأرصدة', value: new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(totalBalance) + ' ج.م', variant: totalBalance >= 0 ? 'success' : 'warning' },
+    { id: 'selected', label: 'محدد',           value: selectedAccount ? selectedAccount.bank_name : 'لا شيء', variant: 'default' },
+  ]
 
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-800">مطابقة البنك</h1>
-          <p className="text-sm text-gray-500 mt-0.5">مطابقة كشوف حساب البنك مع سجلات الخزينة</p>
-        </div>
-        <button
-          onClick={() => setShowAddAccount(true)}
-          className="flex items-center gap-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-        >
-          <Plus size={16} /> حساب بنكي جديد
-        </button>
-      </div>
+  const actions: CommandAction[] = [
+    {
+      id: 'add', label: 'حساب بنكي جديد',
+      icon: <Plus size={14} />,
+      onClick: () => setShowAddAccount(true),
+      variant: 'primary',
+    },
+  ]
+
+  return (
+    <div className="flex flex-col h-full bg-[#f8fafc]">
+      <CommandBar actions={actions} />
+      <div className="flex-1 overflow-auto p-4 md:p-6 space-y-4 animate-fade-in">
+      <KpiStrip items={kpis} />
 
       {/* Account list */}
+      <SectionCard title="الحسابات البنكية" icon={<Building2 size={15} />}>
       {acctLoading ? (
         <div className="flex justify-center py-12 text-gray-400"><Loader2 className="animate-spin" size={32} /></div>
       ) : accounts.length === 0 ? (
@@ -304,6 +313,8 @@ export default function BankReconciliationPage() {
           </div>
         </div>
       </Modal>
+      </SectionCard>
+      </div>
     </div>
   )
 }

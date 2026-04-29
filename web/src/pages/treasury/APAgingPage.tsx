@@ -2,10 +2,13 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Clock, Loader2, CheckCircle2, AlertTriangle,
-  AlertOctagon, DollarSign, X, CreditCard,
+  AlertOctagon, X, CreditCard, RefreshCw,
 } from 'lucide-react'
 import { financeApi, type APAgingRow } from '../../api/finance'
 import Modal from '../../components/ui/Modal'
+import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
+import { KpiStrip, type KpiItem } from '../../components/ui/KpiStrip'
+import SectionCard from '../../components/ui/SectionCard'
 
 // ── Helpers ───────────────────────────────────────────────────
 function egp(n: number) {
@@ -42,56 +45,38 @@ export default function APAgingPage() {
     { key: '90+',     label: '+90 يوم',   filter: (r: APAgingRow) => r.days_overdue > 90 },
   ]
 
-  const bucketColors = [
-    'border-emerald-200 bg-emerald-50 text-emerald-700',
-    'border-blue-200 bg-blue-50 text-blue-700',
-    'border-amber-200 bg-amber-50 text-amber-700',
-    'border-orange-200 bg-orange-50 text-orange-700',
-    'border-red-200 bg-red-50 text-red-700',
+  const total = rows.reduce((s, r) => s + r.outstanding, 0)
+
+  const bucketTotals = buckets.map(b => ({
+    ...b,
+    rows: rows.filter(b.filter),
+    total: rows.filter(b.filter).reduce((s, r) => s + r.outstanding, 0),
+  }))
+
+  const kpis: KpiItem[] = [
+    { id: 'total',   label: 'إجمالي المستحق',   value: egp(total),   variant: total > 0 ? 'warning' : 'success' },
+    { id: 'current', label: 'جاري',              value: egp(bucketTotals[0].total), variant: 'success' },
+    { id: '1-30',    label: '1–30 يوم',          value: egp(bucketTotals[1].total), variant: bucketTotals[1].total > 0 ? 'warning' : 'default' },
+    { id: '31-90',   label: '31–90 يوم',         value: egp(bucketTotals[2].total + bucketTotals[3].total), variant: (bucketTotals[2].total + bucketTotals[3].total) > 0 ? 'warning' : 'default' },
+    { id: '90+',     label: '+90 يوم',           value: egp(bucketTotals[4].total), variant: bucketTotals[4].total > 0 ? 'warning' : 'default' },
   ]
 
-  const total = rows.reduce((s, r) => s + r.outstanding, 0)
-  const overdue = rows.filter(r => r.days_overdue > 0).reduce((s, r) => s + r.outstanding, 0)
+  const actions: CommandAction[] = [
+    {
+      id: 'refresh', label: isLoading ? 'Loading…' : 'تحديث',
+      icon: <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />,
+      onClick: () => qc.invalidateQueries({ queryKey: ['ap-aging'] }), variant: 'secondary',
+    },
+  ]
 
   return (
-    <div className="p-4 md:p-6 space-y-6 max-w-6xl mx-auto" dir="rtl">
-
-      {/* Header */}
-      <div>
-        <div className="flex items-center gap-2.5">
-          <div className="w-10 h-10 rounded-xl bg-red-600 flex items-center justify-center shadow-sm">
-            <CreditCard size={20} className="text-white" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">تقرير تقادم الذمم الدائنة</h1>
-            <p className="text-sm text-gray-500 mt-0.5">تحليل مستحقات الموردين حسب العمر الزمني</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <div className="col-span-2 md:col-span-1 p-4 rounded-2xl bg-gray-900 text-white">
-          <p className="text-2xl font-bold">{egp(total)}</p>
-          <p className="text-xs text-gray-400 mt-1">إجمالي المستحق ج.م</p>
-          {overdue > 0 && (
-            <p className="text-xs text-red-400 mt-1">{egp(overdue)} متأخر</p>
-          )}
-        </div>
-        {buckets.map((b, i) => {
-          const bRows = rows.filter(b.filter)
-          const bTotal = bRows.reduce((s, r) => s + r.outstanding, 0)
-          return (
-            <div key={b.key} className={`p-4 rounded-2xl border ${bucketColors[i]}`}>
-              <p className="text-xl font-bold">{egp(bTotal)}</p>
-              <p className="text-xs mt-1 opacity-80">{b.label}</p>
-              <p className="text-xs opacity-60">{bRows.length} فاتورة</p>
-            </div>
-          )
-        })}
-      </div>
+    <div className="flex flex-col h-full bg-[#f8fafc]">
+      <CommandBar actions={actions} />
+      <div className="flex-1 overflow-auto p-4 md:p-6 space-y-4 animate-fade-in">
+      <KpiStrip items={kpis} />
 
       {/* Table */}
+      <SectionCard title="مستحقات الموردين" icon={<CreditCard size={15} />}>
       {isLoading ? (
         <div className="flex justify-center py-16 text-gray-400">
           <Loader2 className="animate-spin" size={36} />
@@ -153,7 +138,7 @@ export default function APAgingPage() {
                           onClick={() => setPayModal(row)}
                           className="flex items-center gap-1 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg px-2.5 py-1.5 transition-colors whitespace-nowrap"
                         >
-                          <DollarSign size={11} /> تسجيل دفعة
+                          <CreditCard size={11} /> تسجيل دفعة
                         </button>
                       </td>
                     </tr>
@@ -192,6 +177,8 @@ export default function APAgingPage() {
           }}
         />
       )}
+      </SectionCard>
+      </div>
     </div>
   )
 }

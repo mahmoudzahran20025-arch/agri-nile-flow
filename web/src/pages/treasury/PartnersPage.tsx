@@ -1,11 +1,14 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Users, Plus, Pencil, PieChart, TrendingUp } from 'lucide-react'
+import { Users, Plus, Pencil, PieChart } from 'lucide-react'
 import { treasuryApi, glApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
 import { TableSkeleton } from '../../components/ui/Skeleton'
 import type { Partner } from '../../types'
 import { usePermission } from '../../hooks/usePermission'
+import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
+import { KpiStrip, type KpiItem } from '../../components/ui/KpiStrip'
+import SectionCard from '../../components/ui/SectionCard'
 
 function startOfYear() { return `${new Date().getFullYear()}-01-01` }
 function today()       { return new Date().toISOString().slice(0, 10) }
@@ -173,60 +176,35 @@ export default function PartnersPage() {
     { capital: 0, current: 0 }
   )
 
-  return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div className="page-header">
-        <div>
-          <h1 className="page-title flex items-center gap-2">
-            <Users size={22} className="text-slate-400" />
-            حقوق الشركاء
-          </h1>
-          <p className="text-sm text-slate-400 mt-0.5">{partners?.length ?? 0} شريك</p>
-        </div>
-        <div className="flex items-center gap-2">
-          {(partners ?? []).length > 0 && (
-            <button className="btn-secondary gap-2" onClick={() => setDistributeOpen(true)}>
-              <PieChart size={16} />
-              توزيع الأرباح
-            </button>
-          )}
-          {canWrite('treasury') && (
-            <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
-              <Plus size={16} />
-              إضافة شريك
-            </button>
-          )}
-        </div>
-      </div>
+  const kpis: KpiItem[] = [
+    { id: 'capital', label: 'رأس المال',          value: egp(totals.capital),             variant: 'default' },
+    { id: 'current', label: 'الحساب الجاري',       value: egp(totals.current),             variant: totals.current >= 0 ? 'success' : 'warning' },
+    { id: 'total',   label: 'حقوق الشركاء',      value: egp(totals.capital + totals.current), variant: 'default' },
+    { id: 'income',  label: 'صافي ربح العام',    value: egp(Math.abs(netIncome)),        variant: netIncome >= 0 ? 'success' : 'warning' },
+  ]
 
-      {/* KPI row — 4 cards now (+ Net Income from GL) */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="card p-5 text-center">
-          <p className="text-xs text-slate-500 mb-1">إجمالي رأس المال</p>
-          <p className="text-xl font-semibold text-brand-700">{egp(totals.capital)}</p>
-        </div>
-        <div className="card p-5 text-center">
-          <p className="text-xs text-slate-500 mb-1">إجمالي الحساب الجاري</p>
-          <p className={`text-xl font-semibold ${totals.current >= 0 ? 'text-green-700' : 'text-red-600'}`}>
-            {egp(totals.current)}
-          </p>
-        </div>
-        <div className="card p-5 text-center">
-          <p className="text-xs text-slate-500 mb-1">إجمالي حقوق الشركاء</p>
-          <p className="text-xl font-bold text-slate-900">{egp(totals.capital + totals.current)}</p>
-        </div>
-        <div className={`card p-5 text-center ${netIncome >= 0 ? 'bg-green-50' : 'bg-red-50'}`}>
-          <div className="flex items-center justify-center gap-1 mb-1">
-            <TrendingUp size={13} className={netIncome >= 0 ? 'text-green-600' : 'text-red-500'} />
-            <p className="text-xs text-slate-500">صافي ربح العام</p>
-          </div>
-          <p className={`text-xl font-bold ${netIncome >= 0 ? 'text-green-700' : 'text-red-600'}`}>
-            {egp(Math.abs(netIncome))}
-          </p>
-          {netIncome < 0 && <p className="text-xs text-red-400 mt-0.5">خسارة</p>}
-        </div>
-      </div>
+  const actions: CommandAction[] = [
+    ...(( partners ?? []).length > 0 ? [{
+      id: 'distribute', label: 'توزيع الأرباح',
+      icon: <PieChart size={14} />,
+      onClick: () => setDistributeOpen(true),
+      variant: 'secondary' as const,
+    }] : []),
+    ...(canWrite('treasury') ? [{
+      id: 'add', label: 'إضافة شريك',
+      icon: <Plus size={14} />,
+      onClick: () => setAddOpen(true),
+      variant: 'primary' as const,
+    }] : []),
+  ]
+
+  return (
+    <div className="flex flex-col h-full bg-[#f8fafc]">
+      <CommandBar actions={actions} />
+      <div className="flex-1 overflow-auto p-4 md:p-6 space-y-4 animate-fade-in">
+      <KpiStrip items={kpis} />
+
+      <SectionCard title="الشركاء" icon={<Users size={15} />}>
 
       {/* Partners table */}
       {isLoading ? (
@@ -312,6 +290,8 @@ export default function PartnersPage() {
         netIncome={netIncome}
         partners={partners ?? []}
       />
+      </SectionCard>
+      </div>
     </div>
   )
 }

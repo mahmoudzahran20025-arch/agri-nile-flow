@@ -8,11 +8,17 @@ const entries = new Hono<{ Bindings: Env }>()
 entries.use('*', authMiddleware)
 entries.use('*', roleGuard(['super_admin', 'company_admin', 'accountant']))
 
+function parsePositiveInt(raw: string | undefined, fallback: number, min: number, max: number) {
+  const value = Number(raw)
+  if (!Number.isFinite(value)) return fallback
+  return Math.min(max, Math.max(min, Math.trunc(value)))
+}
+
 // GET /api/gl/entries
 entries.get('/', async (c) => {
   const { company_id } = getUser(c)
-  const page      = Math.max(1, Number(c.req.query('page') ?? 1))
-  const size      = Math.min(100, Number(c.req.query('size') ?? 50))
+  const page      = parsePositiveInt(c.req.query('page'), 1, 1, 100_000)
+  const size      = parsePositiveInt(c.req.query('size'), 50, 1, 100)
   const offset    = (page - 1) * size
   const start     = c.req.query('start')
   const end       = c.req.query('end')
@@ -42,13 +48,15 @@ entries.get('/', async (c) => {
       .bind(...p).first<{n:number}>(),
   ])
 
-  return c.json({ success: true, data: rows.results, total: cnt?.n ?? 0, page, page_size: size })
+  const total = cnt?.n ?? 0
+  return c.json({ success: true, data: rows.results, total, page, page_size: size, has_more: page * size < total })
 })
 
 // GET /api/gl/entries/:id
 entries.get('/:id', async (c) => {
   const { company_id } = getUser(c)
   const id = Number(c.req.param('id'))
+  if (!Number.isFinite(id) || id <= 0) return c.json({ success: false, error: 'Invalid entry id' }, 400)
   const [entry, lines] = await Promise.all([
     c.env.DB.prepare('SELECT * FROM journal_entries WHERE id = ? AND company_id = ?')
       .bind(id, company_id).first(),
@@ -77,6 +85,7 @@ entries.post('/', async (c) => {
 entries.get('/:id/trace', async (c) => {
   const { company_id } = getUser(c)
   const id = Number(c.req.param('id'))
+  if (!Number.isFinite(id) || id <= 0) return c.json({ success: false, error: 'Invalid entry id' }, 400)
   const entry = await c.env.DB.prepare(
     `SELECT id, entry_number, entry_date, description, ref_type, ref_id,
             is_posted, posting_rule_trace, created_by, created_at
@@ -157,9 +166,11 @@ entries.get('/:id/trace', async (c) => {
 entries.post('/:id/reverse', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
-  const body = await c.req.json<{ reason: string }>()
+  if (!Number.isFinite(id) || id <= 0) return c.json({ success: false, error: 'Invalid entry id' }, 400)
+  const body = await c.req.json<{ reason: string }>().catch(() => ({ reason: '' }))
 
-  if (!body.reason?.trim()) {
+  const reason = String(body.reason ?? '').trim()
+  if (!reason) {
     return c.json({ success: false, error: 'سبب العكس مطلوب (reason)' }, 400)
   }
 
@@ -226,7 +237,7 @@ entries.post('/:id/reverse', async (c) => {
       company_id,
       original_entry_id: id,
       date: today,
-      reason: body.reason,
+      reason,
       lines: revLines,
       created_by: userId
     })
@@ -234,7 +245,7 @@ entries.post('/:id/reverse', async (c) => {
     void logAudit(c.env.DB, {
       user_id: userId, company_id, action: 'REVERSE',
       table_name: 'journal_entries', record_id: id,
-      new_value: { reversal_entry_id: revEntryId, reason: body.reason },
+      new_value: { reversal_entry_id: revEntryId, reason },
     })
 
     return c.json({

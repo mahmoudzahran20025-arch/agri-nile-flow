@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Download, Printer } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Download, Printer, ArrowRight, BookOpen } from 'lucide-react';
 import { glApi, downloadCsv } from '../../api/client';
 import { GlPeriod, fiscalYearStart, fiscalYearEnd, periodLabel } from '../../lib/gl/glPeriods';
 import { KpiStrip, KpiItem } from '../../components/ui/KpiStrip';
@@ -27,11 +28,18 @@ function fmt(n: number) {
 const TODAY = new Date().toISOString().slice(0, 10);
 
 export default function FinancialStatementsPage() {
+  const navigate = useNavigate()
   const [tab, setTab] = useState<Tab>('trial');
   const [startDate, setS] = useState<string>(TODAY);
   const [endDate, setE] = useState<string>(TODAY);
   const [asOf, setAO] = useState<string>(TODAY);
   const [periodsReady, setPeriodsReady] = useState(false);
+
+  // Drill to account ledger with filter context preserved
+  function drillToLedger(code: string) {
+    const params = new URLSearchParams({ start: startDate, end: endDate })
+    navigate(`/gl/ledger/${code}?${params.toString()}`)
+  }
 
   const { data: periods = [] } = useQuery({
     queryKey: ['gl-periods'],
@@ -152,6 +160,20 @@ export default function FinancialStatementsPage() {
     { key: 'total_debit', header: 'مدين', align: 'right', render: r => <span className="text-[#0F2D5C] font-mono">{r.total_debit > 0 ? fmt(r.total_debit) : '—'}</span> },
     { key: 'total_credit', header: 'دائن', align: 'right', render: r => <span className="text-[#1D9E75] font-mono">{r.total_credit > 0 ? fmt(r.total_credit) : '—'}</span> },
     { key: 'balance', header: 'الرصيد النهائي', align: 'right', render: r => <span className={`font-mono font-bold ${r.balance < 0 ? 'text-red-600' : 'text-slate-800'}`}>{r.balance !== 0 ? fmt(Math.abs(r.balance)) : '0'}</span> },
+    {
+      key: 'code' as keyof TBRow,
+      header: '',
+      render: r => !r.is_header ? (
+        <button
+          className="flex items-center gap-1 text-[11px] text-[#0F2D5C] hover:underline opacity-0 group-hover:opacity-100 transition-opacity"
+          onClick={() => drillToLedger(r.code)}
+          title={`Open ledger for ${r.code}`}
+        >
+          <BookOpen size={11} />
+          Ledger
+        </button>
+      ) : null,
+    },
   ];
 
   return (
@@ -206,9 +228,17 @@ export default function FinancialStatementsPage() {
                 <table className="w-full text-[12px]">
                   <tbody>
                     {(pl?.revenue || []).map((r: PLRow) => (
-                      <tr key={r.code} className="border-b border-slate-50 hover:bg-slate-50">
+                      <tr
+                        key={r.code}
+                        className="border-b border-slate-50 hover:bg-blue-50/40 cursor-pointer group"
+                        onClick={() => drillToLedger(r.code)}
+                        title={`Open ledger — ${r.code}`}
+                      >
                         <td className="p-3 font-mono text-slate-400 w-24">{r.code}</td>
-                        <td className="p-3 text-slate-700">{r.name}</td>
+                        <td className="p-3 text-slate-700 flex items-center gap-2">
+                          {r.name}
+                          <ArrowRight size={11} className="text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                        </td>
                         <td className="p-3 text-right font-medium text-[#1D9E75]">{fmt(r.amount)}</td>
                       </tr>
                     ))}
@@ -229,9 +259,17 @@ export default function FinancialStatementsPage() {
                 <table className="w-full text-[12px]">
                   <tbody>
                     {(pl?.expenses || []).map((r: PLRow) => (
-                      <tr key={r.code} className="border-b border-slate-50 hover:bg-slate-50">
+                      <tr
+                        key={r.code}
+                        className="border-b border-slate-50 hover:bg-blue-50/40 cursor-pointer group"
+                        onClick={() => drillToLedger(r.code)}
+                        title={`Open ledger — ${r.code}`}
+                      >
                         <td className="p-3 font-mono text-slate-400 w-24">{r.code}</td>
-                        <td className="p-3 text-slate-700">{r.name}</td>
+                        <td className="p-3 text-slate-700 flex items-center gap-2">
+                          {r.name}
+                          <ArrowRight size={11} className="text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                        </td>
                         <td className="p-3 text-right font-medium text-red-600">{fmt(r.amount)}</td>
                       </tr>
                     ))}
@@ -255,13 +293,21 @@ export default function FinancialStatementsPage() {
               <div className="flex-1 overflow-auto p-0">
                 <table className="w-full text-[12px]">
                   <tbody>
-                    {(bs?.assets || []).map((r: BSRow) => (
-                      <tr key={r.code} className={`border-b border-slate-50 ${r.is_header ? 'bg-slate-50 font-semibold' : 'hover:bg-slate-50'}`}>
-                        <td className="p-3 font-mono text-slate-400 w-24">{r.code}</td>
-                        <td className="p-3 text-slate-700">{r.is_header ? '▸ ' : ''}{r.name}</td>
-                        <td className="p-3 text-right font-medium text-[#0F2D5C]">{!r.is_header && r.balance !== 0 ? fmt(r.balance) : ''}</td>
-                      </tr>
-                    ))}
+                      {(bs?.assets || []).map((r: BSRow) => (
+                        <tr
+                          key={r.code}
+                          className={`border-b border-slate-50 ${r.is_header ? 'bg-slate-50 font-semibold' : 'hover:bg-blue-50/40 cursor-pointer group'}`}
+                          onClick={() => !r.is_header && drillToLedger(r.code)}
+                          title={!r.is_header ? `Open ledger — ${r.code}` : undefined}
+                        >
+                          <td className="p-3 font-mono text-slate-400 w-24">{r.code}</td>
+                          <td className="p-3 text-slate-700 flex items-center gap-2">
+                            {r.is_header ? '▸ ' : ''}{r.name}
+                            {!r.is_header && <ArrowRight size={11} className="text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />}
+                          </td>
+                          <td className="p-3 text-right font-medium text-[#0F2D5C]">{!r.is_header && r.balance !== 0 ? fmt(r.balance) : ''}</td>
+                        </tr>
+                      ))}
                   </tbody>
                 </table>
               </div>
@@ -280,9 +326,17 @@ export default function FinancialStatementsPage() {
                   <table className="w-full text-[12px]">
                     <tbody>
                       {(bs?.liabilities || []).map((r: BSRow) => (
-                        <tr key={r.code} className={`border-b border-slate-50 ${r.is_header ? 'bg-slate-50 font-semibold' : 'hover:bg-slate-50'}`}>
+                        <tr
+                          key={r.code}
+                          className={`border-b border-slate-50 ${r.is_header ? 'bg-slate-50 font-semibold' : 'hover:bg-blue-50/40 cursor-pointer group'}`}
+                          onClick={() => !r.is_header && drillToLedger(r.code)}
+                          title={!r.is_header ? `Open ledger — ${r.code}` : undefined}
+                        >
                           <td className="p-3 font-mono text-slate-400 w-24">{r.code}</td>
-                          <td className="p-3 text-slate-700">{r.is_header ? '▸ ' : ''}{r.name}</td>
+                          <td className="p-3 text-slate-700 flex items-center gap-2">
+                            {r.is_header ? '▸ ' : ''}{r.name}
+                            {!r.is_header && <ArrowRight size={11} className="text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />}
+                          </td>
                           <td className="p-3 text-right font-medium text-red-600">{!r.is_header && r.balance !== 0 ? fmt(r.balance) : ''}</td>
                         </tr>
                       ))}
@@ -303,9 +357,17 @@ export default function FinancialStatementsPage() {
                   <table className="w-full text-[12px]">
                     <tbody>
                       {(bs?.equity || []).map((r: BSRow) => (
-                        <tr key={r.code} className={`border-b border-slate-50 ${r.is_header ? 'bg-slate-50 font-semibold' : 'hover:bg-slate-50'}`}>
+                        <tr
+                          key={r.code}
+                          className={`border-b border-slate-50 ${r.is_header ? 'bg-slate-50 font-semibold' : 'hover:bg-blue-50/40 cursor-pointer group'}`}
+                          onClick={() => !r.is_header && drillToLedger(r.code)}
+                          title={!r.is_header ? `Open ledger — ${r.code}` : undefined}
+                        >
                           <td className="p-3 font-mono text-slate-400 w-24">{r.code}</td>
-                          <td className="p-3 text-slate-700">{r.is_header ? '▸ ' : ''}{r.name}</td>
+                          <td className="p-3 text-slate-700 flex items-center gap-2">
+                            {r.is_header ? '▸ ' : ''}{r.name}
+                            {!r.is_header && <ArrowRight size={11} className="text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />}
+                          </td>
                           <td className="p-3 text-right font-medium text-[#1D9E75]">{!r.is_header && r.balance !== 0 ? fmt(r.balance) : ''}</td>
                         </tr>
                       ))}

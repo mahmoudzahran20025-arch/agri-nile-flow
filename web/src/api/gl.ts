@@ -17,6 +17,142 @@ export interface IntegrityCheckResult {
   score:        number
 }
 
+export interface IntegrityIssue {
+  name: string
+  severity: 'critical' | 'high' | 'medium' | 'low'
+  count: number
+  details?: unknown[]
+}
+
+export interface IntegrityCheckV2Result {
+  success: true
+  health_score: number
+  summary: {
+    total_issues: number
+    critical: number
+    high: number
+    medium: number
+  }
+  checks: IntegrityIssue[]
+}
+
+export interface SystemIntegrityScoreResult {
+  success: true
+  overall_score: number
+  score: number
+  status: 'excellent' | 'good' | 'fair' | 'poor'
+  alerts?: { message: string; severity: string }[]
+  metrics: {
+    total_entries: number
+    posted_entries: number
+    unbalanced_entries: number
+    orphan_lines: number
+    missing_periods: number
+    invalid_accounts: number
+  }
+}
+
+export interface GlAuditLogRow {
+  id: number
+  user_id: number | null
+  company_id: number
+  action: string
+  table_name: string
+  record_id: number | null
+  old_value: string | null
+  new_value: string | null
+  created_at: string
+  user_email?: string | null
+  user_name?: string | null
+}
+
+export interface GlAuditLogResult {
+  success: true
+  data: GlAuditLogRow[]
+  total: number
+  page: number
+  page_size: number
+  has_more?: boolean
+}
+
+export interface BatchPostJobRow {
+  id: number
+  company_id: number
+  event_type: string
+  source_module: string
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
+  priority: number
+  total_items: number
+  processed_items: number
+  failed_items: number
+  retry_count: number
+  last_error: string | null
+  created_by: number | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+}
+
+export interface BatchPostJobsResult {
+  success: true
+  data: BatchPostJobRow[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface EntryTraceResult {
+  success: true
+  data: {
+    entry: {
+      id: number
+      entry_number: string | null
+      entry_date: string
+      description: string
+      ref_type: string | null
+      ref_id: number | null
+      is_posted: number
+      created_by: number | null
+      created_at: string
+    }
+    lines: Array<{
+      id: number
+      account_code: string
+      account_name?: string
+      account_type?: string
+      debit: number
+      credit: number
+      description?: string
+      rule_slot?: string | null
+      center_code?: number | null
+      season_id?: number | null
+      field_id?: number | null
+    }>
+    trace: Record<string, unknown> | null
+    source_event: {
+      id: number
+      event_type: string
+      event_date: string
+      source_module: string
+      source_id: number
+      status?: string
+      payload?: string
+    } | null
+    source_document: {
+      id: number
+      source_module: string
+      source_id: number
+      document_type: string
+      event_id?: number
+      event_date?: string
+      status?: string
+      link_type?: string
+      journal_entry_id?: number
+    } | null
+    has_trace: boolean
+  }
+}
+
 export type PgType = 'business' | 'product' | 'inventory'
 
 export interface PostingGroup {
@@ -167,40 +303,38 @@ export const glApi = {
     unwrap(api.get(`/gl/balance-sheet${asOf ? `?as_of=${asOf}` : ''}`)),
 
   integrityCheck: () => unwrap(api.get<IntegrityCheckResult>('/gl/integrity-check')),
+  integrityCheckV2: (detailed = false) =>
+    unwrap(api.get<IntegrityCheckV2Result>(`/gl/integrity-check?detailed=${detailed ? '1' : '0'}`)),
+  systemIntegrityScore: () => unwrap(api.get<SystemIntegrityScoreResult>('/gl/system-integrity-score')),
+  integrityScore: () => unwrap(api.get<SystemIntegrityScoreResult>('/gl/system-integrity-score')),
+  recomputeIntegrityScore: () => unwrap(api.post<SystemIntegrityScoreResult>('/gl/system-integrity-score/recompute', {})),
 
-  integrityScore: () => unwrap(api.get<{
-    overall_score: number
-    status: 'healthy' | 'warning' | 'critical' | 'emergency'
-    components: {
-      balance_integrity:  { score: number; weight: string; detail: string }
-      posting_coverage:   { score: number; weight: string; detail: string }
-      orphan_score:       { score: number; weight: string; detail: string }
-      inv_reconciliation: { score: number; weight: string; detail: string }
-      rule_coverage:      { score: number; weight: string; detail: string }
-    }
-    alerts: Array<{ level: 'error' | 'warning' | 'info'; message: string; action: string }>
-    computed_at: string
-  }>('/gl/integrity/score')),
-  recomputeIntegrityScore: () => unwrap(api.post<{
-    overall_score: number
-    status: 'healthy' | 'warning' | 'critical' | 'emergency'
-    components: {
-      balance_integrity:  { score: number; weight: string; detail: string }
-      posting_coverage:   { score: number; weight: string; detail: string }
-      orphan_score:       { score: number; weight: string; detail: string }
-      inv_reconciliation: { score: number; weight: string; detail: string }
-      rule_coverage:      { score: number; weight: string; detail: string }
-    }
-    alerts: Array<{ level: 'error' | 'warning' | 'info'; message: string; action: string }>
-    computed_at: string
-  }>('/gl/integrity/score', {})),
+  auditLog: (p?: { page?: number; size?: number; table?: string; action?: string; from?: string; to?: string }) =>
+    unwrap(api.get<GlAuditLogResult>(paginatedUrl('/gl/audit-log', p ?? {}))),
 
-  entryTrace: (id: number) => unwrap(api.get<{
-    entry_id:     number
-    rule_trace:   Record<string, unknown> | null
-    lines:        Array<{ account_code: string; account_name?: string; debit: number; credit: number; rule_slot?: string }>
-    business_event: { id: number; event_type: string; source_module: string; source_id: number; event_date: string } | null
-  }>(`/gl/entries/${id}/trace`)),
+  batchPostJobs: (p?: {
+    page?: number
+    size?: number
+    status?: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
+  }) => unwrap(api.get<BatchPostJobsResult>(paginatedUrl('/gl/batch-post/jobs', p ?? {}))),
+
+  getBatchPostJob: (id: number) => unwrap(api.get<{ success: true; data: BatchPostJobRow & { items: unknown[] } }>(`/gl/batch-post/jobs/${id}`)),
+
+  createBatchPostJob: (body: {
+    event_type: string; source_module: string; priority?: number; payload?: unknown
+    items: Array<{ source_id: number; payload?: unknown }>
+  }) => unwrap(api.post<{ success: true; data: { job_id: number } }>('/gl/batch-post/jobs', body)),
+
+  updateBatchPostJobStatus: (id: number, body: { status: BatchPostJobRow['status']; last_error?: string }) =>
+    unwrap(api.patch(`/gl/batch-post/jobs/${id}/status`, body)),
+
+  claimNextBatchPostJob: () =>
+    unwrap(api.post<{ success: true; data: BatchPostJobRow | null }>('/gl/batch-post/jobs/claim-next', {})),
+
+  processBatchPostJob: (id: number, body?: { max_items?: number }) =>
+    unwrap(api.post<{ success: true; data: { processed: number; failed: number; errors: string[] } }>(`/gl/batch-post/jobs/${id}/process`, body ?? {})),
+
+  entryTrace: (id: number) => unwrap(api.get<EntryTraceResult>(`/gl/entries/${id}/trace`)),
 
   // Note: bankAccounts lives in finance domain but kept here for backward compat
   bankAccounts: () => unwrap(api.get<unknown[]>('/finance/bank-accounts')),
@@ -248,4 +382,47 @@ export const glApi = {
     bpg_code?: string | null; ppg_code?: string | null; ipg_code?: string | null
     ap_code?: string; cash_code?: string; receivable_code?: string; amount?: number
   }) => unwrap(api.post<ValidationBlueprint>('/gl/posting-setup/validate', body)),
+
+  // ── Reconciliation ──────────────────────────────────────────────────────────
+  reconciliationSourceDocs: (p?: {
+    page?: number; size?: number; source_module?: string; status?: string
+    from?: string; to?: string; mismatch_only?: '1'
+  }) => unwrap(api.get<ReconciliationResult>(paginatedUrl('/gl/reconciliation/source-documents', p ?? {}))),
+}
+
+// ── Reconciliation types (shared with ReconciliationPage, PeriodCloseCockpit) ─
+
+export interface SourceDocRow {
+  id: number
+  source_module: string
+  source_id: number
+  document_type: string
+  event_id: number | null
+  event_date: string
+  source_document_status: string
+  business_event_status: string | null
+  business_event_journal_entry_id: number | null
+  linked_journal_entry_id: number | null
+  linked_entry_date: string | null
+  linked_entry_description: string | null
+  has_business_event: number
+  has_journal_link: number
+  reconciliation_status: 'ok' | 'missing_business_event' | 'missing_journal_link' | 'event_link_mismatch' | 'posted_without_journal'
+}
+
+export interface ReconciliationSummary {
+  total: number
+  missing_business_event: number
+  missing_journal_link: number
+  event_link_mismatch: number
+  posted_without_journal: number
+  fully_linked: number
+}
+
+export interface ReconciliationResult {
+  data: SourceDocRow[]
+  total: number
+  page: number
+  page_size: number
+  summary: ReconciliationSummary
 }

@@ -34,8 +34,12 @@ import JournalEntriesPage    from './pages/gl/JournalEntriesPage'
 import FinancialStatementsPage from './pages/gl/FinancialStatementsPage'
 import AccountLedgerPage     from './pages/gl/AccountLedgerPage'
 import PeriodsPage           from './pages/gl/PeriodsPage'
-import IntegrationControlPage from './pages/gl/IntegrationControlPage'
-import SmartClassifierPage    from './pages/gl/SmartClassifierPage'
+import PostingSimulatorPage  from './pages/gl/PostingSimulatorPage'
+import ReconciliationPage    from './pages/gl/ReconciliationPage'
+import PeriodCloseCockpit    from './pages/gl/PeriodCloseCockpit'
+import BatchPostingCenterPage from './pages/gl/BatchPostingCenterPage'
+import FinanceHomePage       from './pages/gl/FinanceHomePage'
+import HealthIntegrityPage   from './pages/gl/HealthIntegrityPage'
 import BankReconciliationPage from './pages/treasury/BankReconciliationPage'
 import PurchaseOrdersPage    from './pages/treasury/PurchaseOrdersPage'
 import APAgingPage           from './pages/treasury/APAgingPage'
@@ -164,20 +168,28 @@ export default function App() {
         <Route path="contracts"  element={<ContractsPage />} />
 
         {/* General Ledger */}
+        <Route path="gl"             element={<FinanceHomePage />} />
         <Route path="gl/accounts"     element={<ChartOfAccountsPage />} />
         <Route path="gl/ledger/:code" element={<AccountLedgerPage />} />
         <Route path="gl/entries"      element={<JournalEntriesPage />} />
         <Route path="gl/statements"   element={<FinancialStatementsPage />} />
+        <Route path="gl/health-integrity" element={<HealthIntegrityPage />} />
         {/* GL Settings hub — tabs: mappings | integrations | periods */}
         <Route path="gl/settings"      element={<GLSettingsPage />} />
         <Route path="gl/posting-groups" element={<PostingGroupsPage />} />
         <Route path="gl/posting-setup"  element={<PostingSetupPage />} />
         <Route path="gl/posting-setup/health" element={<PostingRulesPage />} />
         <Route path="gl/setup-wizard" element={<SetupWizardPage />} />
+        {/* Sprint 2 Finance epics */}
+        <Route path="gl/posting-simulator" element={<PostingSimulatorPage />} />
+        <Route path="gl/reconciliation"    element={<ReconciliationPage />} />
+        <Route path="gl/period-close"      element={<PeriodCloseCockpit />} />
+        {/* Sprint 3 Finance epics */}
+        <Route path="gl/batch-posting"     element={<BatchPostingCenterPage />} />
         {/* Keep direct routes alive for backward-compat / deep-linking */}
         <Route path="gl/periods"      element={<PeriodsPage />} />
-        <Route path="gl/classifier"   element={<SmartClassifierPage />} />
-        <Route path="gl/integrations" element={<IntegrationControlPage />} />
+        <Route path="gl/classifier"   element={<Navigate to="/gl" replace />} />
+        <Route path="gl/integrations" element={<Navigate to="/gl" replace />} />
         <Route path="treasury/ap"     element={<APAgingPage />} />
 
         {/* Finance */}

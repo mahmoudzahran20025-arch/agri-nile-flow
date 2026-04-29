@@ -6,10 +6,20 @@ const integrity = new Hono<{ Bindings: Env }>()
 integrity.use('*', authMiddleware)
 integrity.use('*', roleGuard(['super_admin', 'company_admin', 'accountant', 'auditor']))
 
+function parsePositiveInt(raw: string | undefined, fallback: number, min: number, max: number) {
+  const value = Number(raw)
+  if (!Number.isFinite(value)) return fallback
+  return Math.min(max, Math.max(min, Math.trunc(value)))
+}
+
 // GET /api/gl/integrity-check
 integrity.get('/integrity-check', async (c) => {
   const { company_id } = getUser(c)
-  const detailed = c.req.query('detailed') === '1'
+  const detailedQ = c.req.query('detailed')
+  if (detailedQ != null && detailedQ !== '0' && detailedQ !== '1') {
+    return c.json({ success: false, error: 'Invalid detailed flag, use 0 or 1' }, 400)
+  }
+  const detailed = detailedQ === '1'
 
   const checks = []
 
@@ -132,8 +142,8 @@ integrity.get('/integrity-check', async (c) => {
 // GET /api/gl/audit-log
 integrity.get('/audit-log', async (c) => {
   const { company_id } = getUser(c)
-  const page = Math.max(1, Number(c.req.query('page') ?? 1))
-  const size = Math.min(100, Number(c.req.query('size') ?? 50))
+  const page = parsePositiveInt(c.req.query('page'), 1, 1, 100_000)
+  const size = parsePositiveInt(c.req.query('size'), 50, 1, 100)
   const offset = (page - 1) * size
   const table = c.req.query('table')
   const action = c.req.query('action')
@@ -160,12 +170,14 @@ integrity.get('/audit-log', async (c) => {
     c.env.DB.prepare(`SELECT COUNT(*) AS n FROM audit_log al ${where}`).bind(...binds).first<{ n: number }>(),
   ])
 
+  const total = totalRow?.n ?? 0
   return c.json({
     success: true,
     data: rows.results,
-    total: totalRow?.n ?? 0,
+    total,
     page,
     page_size: size,
+    has_more: page * size < total,
   })
 })
 
@@ -223,10 +235,13 @@ integrity.get('/system-integrity-score', async (c) => {
   if (metrics.missing_periods > 0) score -= Math.min(15, metrics.missing_periods)
   if (metrics.invalid_accounts > 0) score -= Math.min(15, metrics.invalid_accounts)
 
+  const normalizedScore = Math.max(0, score)
+
   return c.json({
     success: true,
-    score: Math.max(0, score),
-    status: score >= 90 ? 'excellent' : score >= 70 ? 'good' : score >= 50 ? 'fair' : 'poor',
+    overall_score: normalizedScore,
+    score: normalizedScore,
+    status: normalizedScore >= 90 ? 'excellent' : normalizedScore >= 70 ? 'good' : normalizedScore >= 50 ? 'fair' : 'poor',
     metrics,
   })
 })

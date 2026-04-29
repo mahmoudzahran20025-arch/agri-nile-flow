@@ -14,6 +14,7 @@ export {
   resolveInventoryMovement,
   resolveInventoryTransfer,
   resolvePurchaseReceipt,
+  processPOReceiptOrchestrated,
   // Suppliers
   resolveSupplierInvoice,
   resolveSupplierPayment,
