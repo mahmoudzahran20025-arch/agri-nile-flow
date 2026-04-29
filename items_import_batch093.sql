@@ -1,4 +1,0 @@
-INSERT OR REPLACE INTO items (code, company_id, name, unit, warehouse, is_active, prod_posting_group_code, updated_at) VALUES (1072342, 1, 'لمبة ليز دبابة', 'وحدة', 'متنوعات', 1, 'EQUIP', datetime('now'));
-INSERT OR REPLACE INTO items (code, company_id, name, unit, warehouse, is_active, prod_posting_group_code, updated_at) VALUES (1020393, 1, 'هاي كيو', 'وحدة', 'متنوعات', 1, 'EQUIP', datetime('now'));
-INSERT OR REPLACE INTO items (code, company_id, name, unit, warehouse, is_active, prod_posting_group_code, updated_at) VALUES (1010449, 1, 'اي جي سي بورامين 15%', 'وحدة', 'متنوعات', 1, 'EQUIP', datetime('now'));
-INSERT OR REPLACE INTO items (code, company_id, name, unit, warehouse, is_active, prod_posting_group_code, updated_at) VALUES (1020401, 1, 'لارفا مايورا', 'وحدة', 'متنوعات', 1, 'EQUIP', datetime('now'));
