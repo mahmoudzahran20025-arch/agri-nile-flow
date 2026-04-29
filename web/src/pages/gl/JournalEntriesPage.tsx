@@ -4,8 +4,6 @@ import { useSearchParams } from 'react-router-dom';
 import { Plus, Download, GitBranch, CheckCircle2, X } from 'lucide-react';
 import { glApi } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
-import { usePermission } from '../../hooks/usePermission';
-import { useAppStore } from '../../store/appStore';
 import NewEntryForm from '../../components/gl/NewEntryForm';
 import { KpiStrip, KpiItem } from '../../components/ui/KpiStrip';
 import { CommandBar, CommandAction } from '../../components/shell/CommandBar';
@@ -31,10 +29,6 @@ function fmt(n: number) { return Number(n || 0).toLocaleString('en-US'); }
 
 export default function JournalEntriesPage() {
   const { toast } = useToast();
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { canWrite } = usePermission();
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const company = useAppStore(state => state.company);
   const qc = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
 

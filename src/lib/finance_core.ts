@@ -78,33 +78,178 @@ interface EventBackedPostOpts {
   }>
 }
 
+async function logPostingResolution(
+  db: D1Database,
+  opts: EventBackedPostOpts,
+  result: 'resolved' | 'failed',
+  eventId: number | null,
+  journalEntryId: number | null,
+  errorMessage?: string,
+): Promise<void> {
+  try {
+    await db.prepare(
+      `INSERT INTO posting_rule_resolutions
+       (company_id, rule_type, input_bpg, input_ppg, input_ipg, resolution_step, matched_rule_id,
+        result, error_message, journal_entry_id, source_event_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      opts.company_id,
+      opts.trace?.rule_type ?? opts.event_type,
+      opts.trace?.input_bpg ?? null,
+      opts.trace?.input_ppg ?? null,
+      opts.trace?.input_ipg ?? null,
+      opts.trace?.resolution_step ?? null,
+      opts.trace?.matched_rule_id ?? null,
+      result,
+      errorMessage ?? null,
+      journalEntryId,
+      eventId,
+    ).run()
+  } catch {
+    // Non-blocking observability write
+  }
+}
+
+async function linkJournalEntryToSource(
+  db: D1Database,
+  opts: EventBackedPostOpts,
+  entryId: number,
+): Promise<void> {
+  const stmts: D1PreparedStatement[] = []
+
+  if (opts.event_type === 'inventory_movement' || opts.event_type === 'inventory_transfer' || opts.event_type === 'purchase_receipt') {
+    stmts.push(
+      db.prepare('UPDATE inventory_movements SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, opts.source_id, opts.company_id)
+    )
+  }
+
+  if (opts.event_type === 'cash_transaction' || opts.event_type === 'expense' || opts.event_type === 'partner_capital' || opts.event_type === 'partner_current' || opts.event_type === 'contract_advance') {
+    stmts.push(
+      db.prepare('UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, opts.source_id, opts.company_id)
+    )
+  }
+
+  if (opts.event_type === 'supplier_invoice') {
+    stmts.push(
+      db.prepare('UPDATE supplier_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, opts.source_id, opts.company_id)
+    )
+    stmts.push(
+      db.prepare('UPDATE supplier_invoices SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, opts.source_id, opts.company_id)
+    )
+  }
+
+  if (opts.event_type === 'supplier_payment') {
+    stmts.push(
+      db.prepare('UPDATE supplier_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, opts.source_id, opts.company_id)
+    )
+  }
+
+  if (opts.event_type === 'payroll_run') {
+    stmts.push(
+      db.prepare('UPDATE payroll_runs SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, opts.source_id, opts.company_id)
+    )
+  }
+
+  if (opts.event_type === 'payroll_payment') {
+    stmts.push(
+      db.prepare('UPDATE payroll_runs SET payment_gl_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, opts.source_id, opts.company_id)
+    )
+  }
+
+  if (stmts.length > 0) {
+    await db.batch(stmts)
+  }
+}
+
 async function postFromBusinessEvent(
   db: D1Database,
   opts: EventBackedPostOpts,
 ): Promise<number | null> {
-  const eventInsert = await db.prepare(
-    `INSERT INTO business_events (
-      company_id,
-      event_type,
-      event_date,
-      source_module,
-      source_id,
-      payload,
-      status,
-      posted_by,
-      posted_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, NULL)`
-  ).bind(
-    opts.company_id,
-    opts.event_type,
-    opts.event_date,
-    opts.source_module,
-    opts.source_id,
-    JSON.stringify(opts.payload),
-    opts.created_by ?? null,
-  ).run()
+  const eventPayload = JSON.stringify(opts.payload)
+  let eventId: number | null = null
 
-  const eventId = Number(eventInsert.meta.last_row_id)
+  // Idempotency key: (company_id, source_module, source_id, event_type)
+  let existing = await db.prepare(
+    `SELECT id, status, journal_entry_id
+     FROM business_events
+     WHERE company_id = ? AND source_module = ? AND source_id = ? AND event_type = ?
+     LIMIT 1`
+  ).bind(opts.company_id, opts.source_module, opts.source_id, opts.event_type)
+    .first<{ id: number; status: string; journal_entry_id: number | null }>()
+
+  if (existing?.status === 'posted' && existing.journal_entry_id) {
+    return existing.journal_entry_id
+  }
+
+  if (!existing) {
+    try {
+      const eventInsert = await db.prepare(
+        `INSERT INTO business_events (
+          company_id,
+          event_type,
+          event_date,
+          source_module,
+          source_id,
+          payload,
+          status,
+          posted_by,
+          posted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, NULL)`
+      ).bind(
+        opts.company_id,
+        opts.event_type,
+        opts.event_date,
+        opts.source_module,
+        opts.source_id,
+        eventPayload,
+        opts.created_by ?? null,
+      ).run()
+      eventId = Number(eventInsert.meta.last_row_id)
+    } catch {
+      // Race-safe retry path: another request inserted the same event key.
+      existing = await db.prepare(
+        `SELECT id, status, journal_entry_id
+         FROM business_events
+         WHERE company_id = ? AND source_module = ? AND source_id = ? AND event_type = ?
+         LIMIT 1`
+      ).bind(opts.company_id, opts.source_module, opts.source_id, opts.event_type)
+        .first<{ id: number; status: string; journal_entry_id: number | null }>()
+      if (!existing) {
+        throw new Error('BUSINESS_EVENT_INSERT_FAILED: unable to create or load idempotent event row.')
+      }
+      if (existing.status === 'posted' && existing.journal_entry_id) {
+        return existing.journal_entry_id
+      }
+      eventId = existing.id
+    }
+  } else {
+    eventId = existing.id
+    if (existing.journal_entry_id) {
+      await db.prepare(
+        `UPDATE business_events
+         SET status = 'posted', posted_at = COALESCE(posted_at, datetime('now'))
+         WHERE id = ? AND company_id = ?`
+      ).bind(eventId, opts.company_id).run()
+      return existing.journal_entry_id
+    }
+    await db.prepare(
+      `UPDATE business_events
+       SET status = 'pending', error_message = NULL, payload = ?, event_date = ?, posted_by = ?, posted_at = NULL
+       WHERE id = ? AND company_id = ?`
+    ).bind(eventPayload, opts.event_date, opts.created_by ?? null, eventId, opts.company_id).run()
+  }
+
+  if (!eventId) {
+    throw new Error('BUSINESS_EVENT_ID_MISSING: unable to determine event id before posting.')
+  }
+
   try {
     const entryId = await postAutoEntry(db, {
       company_id:         opts.company_id,
@@ -117,11 +262,17 @@ async function postFromBusinessEvent(
       lines:              opts.lines,
     })
 
+    if (entryId) {
+      await linkJournalEntryToSource(db, opts, entryId)
+    }
+
     await db.prepare(
       `UPDATE business_events
        SET status = 'posted', journal_entry_id = ?, posted_at = datetime('now')
        WHERE id = ? AND company_id = ?`
     ).bind(entryId ?? null, eventId, opts.company_id).run()
+
+    await logPostingResolution(db, opts, 'resolved', eventId, entryId ?? null)
 
     return entryId
   } catch (error: any) {
@@ -130,6 +281,7 @@ async function postFromBusinessEvent(
        SET status = 'error', error_message = ?
        WHERE id = ? AND company_id = ?`
     ).bind(error?.message ?? String(error), eventId, opts.company_id).run()
+    await logPostingResolution(db, opts, 'failed', eventId, null, error?.message ?? String(error))
     throw error
   }
 }
@@ -288,6 +440,12 @@ export const FinanceCore = {
         center_code: opts.center_code,
         created_by: opts.userId
       })
+      if (glId) {
+        await db.prepare('UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+          .bind(glId, txn.id, opts.company_id).run()
+        await db.prepare('UPDATE supplier_transactions SET journal_entry_id = ? WHERE local_id = ? AND company_id = ?')
+          .bind(glId, `st_${batchKey}`, opts.company_id).run()
+      }
     }
 
     return { txnId: txn?.id, balance: newBalance, glId }
@@ -351,6 +509,16 @@ export const FinanceCore = {
       center_code: txn.center_code,
       created_by: userId
     })
+
+    if (glId) {
+      await db.prepare('UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(glId, txnId, company_id).run()
+      await db.prepare(
+        `UPDATE supplier_transactions
+         SET journal_entry_id = ?
+         WHERE local_id = (SELECT 'st_' || local_id FROM cash_transactions WHERE id = ? AND company_id = ?)`
+      ).bind(glId, txnId, company_id).run()
+    }
 
     return glId
   },
@@ -1156,7 +1324,7 @@ export const FinanceCore = {
 
     // 2. Maintain Treasury Parity (Sync)
     try {
-      const { stmts } = await this.prepareCashMovement(db, {
+      const { stmts, batchKey } = await this.prepareCashMovement(db, {
         company_id: opts.company_id,
         userId: opts.created_by ?? 0,
         transaction_date: opts.date,
@@ -1170,6 +1338,10 @@ export const FinanceCore = {
         skipSupplierMirror: true // Already handled by the caller (suppliers module)
       })
       await db.batch(stmts)
+      if (entryId) {
+        await db.prepare('UPDATE cash_transactions SET journal_entry_id = ? WHERE local_id = ? AND company_id = ?')
+          .bind(entryId, batchKey, opts.company_id).run()
+      }
     } catch (err: any) {
       console.error('TREASURY_SYNC_FAILED in resolveSupplierPayment:', err.message)
       // We don't throw here to avoid rolling back GL if treasury sync fails, 
@@ -1585,14 +1757,20 @@ export const FinanceCore = {
         { account_code: wipContraCode, debit: 0, credit: totalWipCost, description: `حمل WIP من موسم ${opts.season_id}`, source_ledger: 'manual' as const, source_record_id: opts.season_id },
       ]
 
-      const entryId = await postAutoEntry(db, {
+      const entryId = await postFromBusinessEvent(db, {
         company_id: opts.company_id,
-        entry_date: new Date().toISOString().slice(0, 10),
+        event_type: 'wip_carryforward',
+        source_module: 'gl',
+        source_id: opts.season_id,
+        event_date: new Date().toISOString().slice(0, 10),
         description: `حمل WIP من الموسم ${opts.season_id}`,
-        ref_type: 'wip_carryforward',
-        ref_id: opts.season_id,
-        lines: glLines,
         created_by: opts.user_id,
+        payload: {
+          season_id: opts.season_id,
+          total_wip_cost: totalWipCost,
+          rows_count: wipEntries.length,
+        },
+        lines: glLines,
       })
 
       // Link WIP records to the GL entry
@@ -1733,14 +1911,22 @@ export const FinanceCore = {
         { account_code: accumulatedCode, debit: 0, credit: totalDepreciation, description: `استهلاك الفترة ${opts.period_year}/${opts.period_month}`, source_ledger: 'manual' as const, source_record_id: 0 },
       ]
 
-      const entryId = await postAutoEntry(db, {
+      const periodKey = opts.period_month * 10000 + opts.period_year
+      const entryId = await postFromBusinessEvent(db, {
         company_id: opts.company_id,
-        entry_date: `${opts.period_year}-${String(opts.period_month).padStart(2, '0')}-01`,
+        event_type: 'depreciation',
+        source_module: 'gl',
+        source_id: periodKey,
+        event_date: `${opts.period_year}-${String(opts.period_month).padStart(2, '0')}-01`,
         description: `استهلاك شهري ${opts.period_year}/${opts.period_month}`,
-        ref_type: 'depreciation',
-        ref_id: opts.period_month * 10000 + opts.period_year, // Use period as ref_id
-        lines: glLines,
         created_by: opts.user_id,
+        payload: {
+          period_year: opts.period_year,
+          period_month: opts.period_month,
+          total_depreciation: totalDepreciation,
+          assets_count: result.length,
+        },
+        lines: glLines,
       })
 
       // Link schedule entries to GL entry

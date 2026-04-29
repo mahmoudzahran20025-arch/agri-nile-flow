@@ -51,9 +51,11 @@ async function validateCoaParent(
   if (parent_code === code) return 'لا يمكن أن يكون الحساب أباً لنفسه'
 
   const parent = await db.prepare(
-    'SELECT code FROM chart_of_accounts WHERE company_id = ? AND code = ?'
-  ).bind(company_id, parent_code).first<{ code: string }>()
+    'SELECT code, is_header, is_active FROM chart_of_accounts WHERE company_id = ? AND code = ?'
+  ).bind(company_id, parent_code).first<{ code: string; is_header: number; is_active: number }>()
   if (!parent) return `الحساب الأب (${parent_code}) غير موجود`
+  if (parent.is_active !== 1) return `الحساب الأب (${parent_code}) غير نشط`
+  if (parent.is_header !== 1) return `الحساب الأب (${parent_code}) يجب أن يكون حساباً رئيسياً (header)`
 
   const all = await db.prepare(
     'SELECT code, parent_code FROM chart_of_accounts WHERE company_id = ?'
@@ -71,6 +73,29 @@ async function validateCoaParent(
   }
 
   return null
+}
+
+async function syncCoaClosure(db: Env['DB'], company_id: number): Promise<void> {
+  try {
+    await db.prepare('DELETE FROM coa_closure WHERE company_id = ?').bind(company_id).run()
+    await db.prepare(
+      `INSERT INTO coa_closure (company_id, ancestor_code, descendant_code, depth)
+       WITH RECURSIVE closure(ancestor_code, descendant_code, depth) AS (
+         SELECT code, code, 0
+         FROM chart_of_accounts
+         WHERE company_id = ?
+         UNION ALL
+         SELECT c.ancestor_code, child.code, c.depth + 1
+         FROM closure c
+         JOIN chart_of_accounts child
+           ON child.company_id = ? AND child.parent_code = c.descendant_code
+       )
+       SELECT ?, ancestor_code, descendant_code, depth
+       FROM closure`
+    ).bind(company_id, company_id, company_id).run()
+  } catch {
+    // Closure table may not exist yet in some environments; keep API backward-compatible.
+  }
 }
 
 // ── Chart of Accounts ─────────────────────────────────────────
@@ -141,6 +166,7 @@ gl.post('/accounts', async (c) => {
        VALUES (?,?,?,?,?,?,?,?,?)`
     ).bind(company_id, b.code, b.name, b.account_type, normalBalance,
            b.parent_code ?? null, b.level ?? 3, b.is_header ?? 0, b.notes ?? null).run()
+    await syncCoaClosure(c.env.DB, company_id)
     return c.json({ success: true, data: { id: r.meta.last_row_id } }, 201)
   } catch {
     return c.json({ success: false, error: 'الكود موجود مسبقاً' }, 409)
@@ -163,9 +189,27 @@ gl.patch('/accounts/:code', async (c) => {
     }
   }
 
+  if (Object.prototype.hasOwnProperty.call(b, 'is_active') && Number(b.is_active) === 0) {
+    const self = await c.env.DB.prepare(
+      'SELECT is_header FROM chart_of_accounts WHERE company_id = ? AND code = ?'
+    ).bind(company_id, code).first<{ is_header: number }>()
+    if (self?.is_header === 1) {
+      const activeChildren = await c.env.DB.prepare(
+        'SELECT COUNT(*) AS n FROM chart_of_accounts WHERE company_id = ? AND parent_code = ? AND is_active = 1'
+      ).bind(company_id, code).first<{ n: number }>()
+      if ((activeChildren?.n ?? 0) > 0) {
+        return c.json({
+          success: false,
+          error: `لا يمكن تعطيل الحساب الرئيسي ${code} لوجود ${activeChildren!.n} حسابات فرعية نشطة`,
+        }, 409)
+      }
+    }
+  }
+
   await c.env.DB.prepare(
     `UPDATE chart_of_accounts SET ${cols.map(f => `${f} = ?`).join(', ')} WHERE code = ? AND company_id = ?`
   ).bind(...cols.map(f => b[f]), code, company_id).run()
+  await syncCoaClosure(c.env.DB, company_id)
   return c.json({ success: true, data: null })
 })
 
@@ -201,8 +245,8 @@ gl.patch('/periods/:id/close', async (c) => {
   const force = c.req.query('force') === '1'
 
   const period = await c.env.DB.prepare(
-    'SELECT id, name, is_closed FROM financial_periods WHERE id = ? AND company_id = ?'
-  ).bind(id, company_id).first<{ id: number; name: string; is_closed: number }>()
+    'SELECT id, name, start_date, end_date, is_closed FROM financial_periods WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ id: number; name: string; start_date: string; end_date: string; is_closed: number }>()
   if (!period) return c.json({ success: false, error: 'الفترة غير موجودة' }, 404)
   if (period.is_closed) return c.json({ success: false, error: 'الفترة مغلقة مسبقاً' }, 409)
 
@@ -235,6 +279,62 @@ gl.patch('/periods/:id/close', async (c) => {
       hint: 'أضف force=1 للتجاهل (للمحاسبين الكبار فقط)',
     }, 409)
   }
+
+  // Build immutable period snapshot for historical reporting.
+  await c.env.DB.prepare('DELETE FROM period_account_balances WHERE company_id = ? AND period_id = ?')
+    .bind(company_id, id).run()
+
+  await c.env.DB.prepare(
+    `INSERT INTO period_account_balances
+     (company_id, period_id, account_code,
+      opening_debit, opening_credit,
+      period_debit, period_credit,
+      closing_debit, closing_credit,
+      snapshotted_at)
+     SELECT
+       ?, ?, a.code,
+       COALESCE(ob.opening_debit, 0),
+       COALESCE(ob.opening_credit, 0),
+       COALESCE(pb.period_debit, 0),
+       COALESCE(pb.period_credit, 0),
+       COALESCE(ob.opening_debit, 0) + COALESCE(pb.period_debit, 0),
+       COALESCE(ob.opening_credit, 0) + COALESCE(pb.period_credit, 0),
+       datetime('now')
+     FROM chart_of_accounts a
+     LEFT JOIN (
+       SELECT l.account_code,
+              SUM(l.debit)  AS opening_debit,
+              SUM(l.credit) AS opening_credit
+       FROM journal_entry_lines l
+       JOIN journal_entries e ON e.id = l.entry_id
+       WHERE e.company_id = ?
+         AND e.is_posted = 1
+         AND e.entry_date < ?
+       GROUP BY l.account_code
+     ) ob ON ob.account_code = a.code
+     LEFT JOIN (
+       SELECT l.account_code,
+              SUM(l.debit)  AS period_debit,
+              SUM(l.credit) AS period_credit
+       FROM journal_entry_lines l
+       JOIN journal_entries e ON e.id = l.entry_id
+       WHERE e.company_id = ?
+         AND e.is_posted = 1
+         AND e.entry_date >= ?
+         AND e.entry_date <= ?
+       GROUP BY l.account_code
+     ) pb ON pb.account_code = a.code
+     WHERE a.company_id = ?`
+  ).bind(
+    company_id,
+    id,
+    company_id,
+    period.start_date,
+    company_id,
+    period.start_date,
+    period.end_date,
+    company_id,
+  ).run()
 
   await c.env.DB.prepare(
     `UPDATE financial_periods SET is_closed = 1, closed_at = datetime('now'), closed_by = ? WHERE id = ? AND company_id = ?`
@@ -330,34 +430,78 @@ gl.get('/ledger/:code', async (c) => {
   const code  = c.req.param('code')
   const start = c.req.query('start')
   const end   = c.req.query('end')
+  const page  = Math.max(1, Number(c.req.query('page') ?? 1))
+  const size  = Math.min(500, Math.max(1, Number(c.req.query('size') ?? 100)))
+  const offset = (page - 1) * size
 
   let where = 'WHERE l.account_code = ? AND l.company_id = ?'
   const p: unknown[] = [code, company_id]
   if (start) { where += ' AND e.entry_date >= ?'; p.push(start) }
   if (end)   { where += ' AND e.entry_date <= ?'; p.push(end) }
 
-  const [account, lines] = await Promise.all([
+  let openingBalance = 0
+  if (start) {
+    const opening = await c.env.DB.prepare(
+      `SELECT COALESCE(SUM(l.debit - l.credit), 0) AS bal
+       FROM journal_entry_lines l
+       JOIN journal_entries e ON e.id = l.entry_id AND e.is_posted = 1
+       WHERE l.account_code = ? AND l.company_id = ? AND e.entry_date < ?`
+    ).bind(code, company_id, start).first<{ bal: number }>()
+    openingBalance = opening?.bal ?? 0
+  }
+
+  const [account, lines, cnt] = await Promise.all([
     c.env.DB.prepare('SELECT * FROM chart_of_accounts WHERE code = ? AND company_id = ?')
       .bind(code, company_id).first(),
     c.env.DB.prepare(
-      `SELECT l.*, e.entry_date, e.description AS entry_desc, e.ref_type, e.ref_id
+      `SELECT l.*, e.entry_date, e.description AS entry_desc, e.ref_type, e.ref_id,
+              e.posting_rule_trace,
+              CASE WHEN e.ref_type = 'business_event' THEN e.ref_id ELSE NULL END AS business_event_id,
+              be.status AS business_event_status
        FROM journal_entry_lines l
        JOIN journal_entries e ON e.id = l.entry_id AND e.is_posted = 1
+       LEFT JOIN business_events be ON be.id = e.ref_id AND e.ref_type = 'business_event' AND be.company_id = e.company_id
        ${where}
        ORDER BY e.entry_date, e.id, l.id`
-    ).bind(...p).all(),
+      + ' LIMIT ? OFFSET ?'
+    ).bind(...p, size, offset).all(),
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS n
+       FROM journal_entry_lines l
+       JOIN journal_entries e ON e.id = l.entry_id AND e.is_posted = 1
+       ${where}`
+    ).bind(...p).first<{ n: number }>(),
   ])
 
   if (!account) return c.json({ success: false, error: 'الحساب غير موجود' }, 404)
 
   // Add running balance
-  let running = 0
+  let running = openingBalance
   const linesWithBalance = (lines.results as Record<string,unknown>[]).map(l => {
     running += (l.debit as number) - (l.credit as number)
-    return { ...l, running_balance: running }
+    return {
+      ...l,
+      running_balance: running,
+      has_trace: !!l.posting_rule_trace,
+      entry_trace_path: `/api/gl/entries/${l.entry_id}/trace`,
+    }
   })
 
-  return c.json({ success: true, data: { account, lines: linesWithBalance } })
+  const total = cnt?.n ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / size))
+
+  return c.json({
+    success: true,
+    data: {
+      account,
+      lines: linesWithBalance,
+      total,
+      page,
+      size,
+      total_pages: totalPages,
+      opening_balance: openingBalance,
+    },
+  })
 })
 
 // Builds a map: account code → set of all descendant codes (including itself)
@@ -388,6 +532,36 @@ function buildDescendants(accounts: { code: string; parent_code: string | null }
   }
   for (const acc of accounts) collect(acc.code)
   return cache
+}
+
+async function getDescendantsMap(
+  db: Env['DB'],
+  company_id: number,
+  accounts: { code: string; parent_code: string | null }[],
+): Promise<Map<string, Set<string>>> {
+  try {
+    const rows = await db.prepare(
+      'SELECT ancestor_code, descendant_code FROM coa_closure WHERE company_id = ?'
+    ).bind(company_id).all<{ ancestor_code: string; descendant_code: string }>()
+
+    if (!rows.results || rows.results.length === 0) {
+      return buildDescendants(accounts)
+    }
+
+    const map = new Map<string, Set<string>>()
+    for (const acc of accounts) {
+      map.set(acc.code, new Set<string>([acc.code]))
+    }
+
+    for (const row of rows.results) {
+      if (!map.has(row.ancestor_code)) map.set(row.ancestor_code, new Set<string>())
+      map.get(row.ancestor_code)!.add(row.descendant_code)
+    }
+
+    return map
+  } catch {
+    return buildDescendants(accounts)
+  }
 }
 
 // ── Trial Balance (ميزان المراجعة) ───────────────────────────
@@ -427,7 +601,7 @@ gl.get('/trial-balance', async (c) => {
     creditMap.set(b.code, b.leaf_credit)
   }
 
-  const descendants = buildDescendants(allAccounts.results)
+  const descendants = await getDescendantsMap(c.env.DB, company_id, allAccounts.results)
   const finalAccounts = allAccounts.results.map(acc => {
     let totalD = 0; let totalC = 0
     const descSet = descendants.get(acc.code) ?? new Set([acc.code])
@@ -477,7 +651,7 @@ gl.get('/income-statement', async (c) => {
      ORDER BY account_type DESC, code`
   ).bind(company_id).all<{ code: string; name: string; account_type: string; parent_code: string | null; level: number; is_header: number }>()
 
-  const descendants = buildDescendants(allAccs.results)
+  const descendants = await getDescendantsMap(c.env.DB, company_id, allAccs.results)
   const finalRows = allAccs.results.map(acc => {
     let sum = 0
     const descSet = descendants.get(acc.code) ?? new Set([acc.code])
@@ -524,7 +698,7 @@ gl.get('/balance-sheet', async (c) => {
      ORDER BY code`
   ).bind(company_id).all<{ code: string; name: string; account_type: string; normal_balance: string; parent_code: string | null; level: number; is_header: number }>()
 
-  const descendants = buildDescendants(allAccs.results)
+  const descendants = await getDescendantsMap(c.env.DB, company_id, allAccs.results)
   const finalRows = allAccs.results.map(acc => {
     let sum = 0
     const descSet = descendants.get(acc.code) ?? new Set([acc.code])
