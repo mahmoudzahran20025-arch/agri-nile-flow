@@ -9,7 +9,7 @@ export function usePermission() {
   const { role, permissions } = useAppStore()
   
   const has = (module: string, action: string) => {
-    if (role === 'super_admin') return true
+    if (role === 'super_admin' || role === 'company_admin') return true
     return permissions.includes(`${module}.${action}`)
   }
 

@@ -2,8 +2,9 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Clock, Loader2, CheckCircle2, AlertTriangle,
-  AlertOctagon, X, CreditCard, RefreshCw,
+  AlertOctagon, X, CreditCard, RefreshCw, ExternalLink,
 } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { financeApi, type APAgingRow } from '../../api/finance'
 import Modal from '../../components/ui/Modal'
 import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
@@ -28,6 +29,7 @@ function ageBucket(days: number): {
 // ════════════════════════════════════════════════════════════
 export default function APAgingPage() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [payModal, setPayModal] = useState<APAgingRow | null>(null)
 
   const { data: rows = [], isLoading } = useQuery({
@@ -134,12 +136,21 @@ export default function APAgingPage() {
                       </td>
                       <td className="px-4 py-3 text-left font-bold text-gray-900">{egp(row.outstanding)}</td>
                       <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
                         <button
                           onClick={() => setPayModal(row)}
                           className="flex items-center gap-1 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg px-2.5 py-1.5 transition-colors whitespace-nowrap"
                         >
                           <CreditCard size={11} /> تسجيل دفعة
                         </button>
+                        <button
+                          onClick={() => navigate(`/gl/entries?ref_type=supplier_transaction&source_code=${row.supplier_code}`)}
+                          className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 border border-indigo-200 rounded-lg px-2.5 py-1.5 transition-colors whitespace-nowrap hover:bg-indigo-50"
+                          title="View related GL entries"
+                        >
+                          <ExternalLink size={11} /> GL
+                        </button>
+                        </div>
                       </td>
                     </tr>
                   )

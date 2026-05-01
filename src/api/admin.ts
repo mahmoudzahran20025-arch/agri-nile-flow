@@ -196,7 +196,7 @@ admin.get('/overview', async (c) => {
          FROM inventory_movements im
          JOIN items i ON i.code = im.item_code AND i.company_id = im.company_id
          WHERE im.company_id = ? AND im.balance_qty IS NOT NULL
-           AND im.balance_qty <= i.reorder_point AND i.reorder_point > 0
+           AND im.balance_qty <= i.reorder_threshold AND i.reorder_threshold > 0
            AND im.id = (SELECT MAX(id) FROM inventory_movements WHERE item_code = im.item_code AND company_id = im.company_id)`
       ).bind(cid).first<{ n: number }>(),
       c.env.DB.prepare(

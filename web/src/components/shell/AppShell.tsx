@@ -1,18 +1,26 @@
-import React, { useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { 
-  LayoutDashboard, 
-  BookOpen, 
-  FileCheck, 
-  Box, 
-  Sprout, 
-  Users, 
+﻿import React, { useState } from 'react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import {
+  LayoutDashboard,
+  BookOpen,
+  FileCheck,
+  Box,
+  Sprout,
+  Users,
   Wallet,
-  Building2,
   Settings,
   ChevronDown,
   ChevronRight,
-  UserCog
+  UserCog,
+  BarChart3,
+  ShieldCheck,
+  Sliders,
+  FileText,
+  LogOut,
+  Warehouse,
+  TrendingUp,
+  CalendarDays,
+  Tractor,
 } from 'lucide-react';
 import { Topbar } from './Topbar';
 import GlobalSearch from '../GlobalSearch';
@@ -20,6 +28,7 @@ import OfflineBanner from '../OfflineBanner';
 import PeriodWarningBanner from '../PeriodWarningBanner';
 import QuickEntryFAB from '../QuickEntryFAB';
 import KeyboardShortcuts from '../KeyboardShortcuts';
+import { useAppStore } from '../../store/appStore';
 
 interface NavItem {
   label: string;
@@ -31,50 +40,83 @@ interface NavItem {
 
 const navSections: { title: string; items: NavItem[] }[] = [
   {
-    title: 'الرئيسية',
+    title: 'Home',
     items: [
-      { label: 'لوحة التحكم', path: '/', icon: <LayoutDashboard size={18} /> }
-    ]
+      { label: 'Dashboard', path: '/dashboard', icon: <LayoutDashboard size={18} /> },
+    ],
   },
   {
-    title: 'المحاسبة والمالية',
+    title: 'Suppliers & AP',
     items: [
-      { 
-        label: 'الأستاذ العام', 
+      { label: 'Suppliers Hub',  path: '/suppliers',    icon: <Users    size={18} /> },
+      { label: 'Cash & Banks',   path: '/treasury',     icon: <Wallet   size={18} /> },
+    ],
+  },
+  {
+    title: 'Finance / GL',
+    items: [
+      { label: 'Finance Center', path: '/gl',                icon: <BarChart3    size={18} /> },
+      { label: 'Journal Entries',path: '/gl/entries',        icon: <BookOpen     size={18} /> },
+      { label: 'Batch Posting',  path: '/gl/batch-posting',  icon: <TrendingUp   size={18} /> },
+      { label: 'Period Close',   path: '/gl/period-close',   icon: <CalendarDays size={18} /> },
+      { label: 'Health',         path: '/gl/health-integrity', icon: <ShieldCheck size={18} /> },
+    ],
+  },
+  {
+    title: 'Reports',
+    items: [
+      { label: 'Financial Statements', path: '/gl/statements',       icon: <FileText  size={18} /> },
+      { label: 'Season Reports',       path: '/reports/season',      icon: <Sprout    size={18} /> },
+      { label: 'Cost Centers',         path: '/reports/cost-centers', icon: <BarChart3 size={18} /> },
+    ],
+  },
+  {
+    title: 'Inventory',
+    items: [
+      { label: 'Movements',        path: '/inventory/movements', icon: <Box       size={18} /> },
+      { label: 'Warehouse Stocks', path: '/inventory',           icon: <Warehouse size={18} /> },
+      { label: 'Items',            path: '/inventory/items',     icon: <FileCheck size={18} /> },
+    ],
+  },
+  {
+    title: 'Operations',
+    items: [
+      { label: 'Seasons & Fields', path: '/seasons',         icon: <Sprout     size={18} /> },
+      { label: 'HR & Payroll',     path: '/hr',              icon: <Users      size={18} /> },
+      { label: 'Equipment',        path: '/suppliers?tab=equipment', icon: <Tractor size={18} /> },
+    ],
+  },
+  {
+    title: 'GL Setup',
+    items: [
+      {
+        label: 'Chart of Accounts',
         icon: <BookOpen size={18} />,
+        path: '/gl/accounts',
+      },
+      {
+        label: 'Configuration',
+        icon: <Sliders size={18} />,
         children: [
-          { label: 'قيود اليومية', path: '/gl/entries' },
-          { label: 'دليل الحسابات', path: '/gl/accounts' },
-          { label: 'ميزان المراجعة', path: '/gl/statements' },
-          { label: 'قواعد الترحيل', path: '/gl/posting-setup/health' },
-          { label: 'إعدادات الترحيل', path: '/gl/posting-setup' },
-        ]
-      }
-    ]
+          { label: 'Posting Groups',  path: '/gl/posting-groups' },
+          { label: 'Posting Rules',   path: '/gl/posting-rules' },
+          { label: 'Posting Tables',  path: '/gl/posting-setup' },
+          { label: 'Posting Health',  path: '/gl/posting-setup/health' },
+          { label: 'Simulator',       path: '/gl/posting-simulator' },
+          { label: 'Setup Wizard',    path: '/gl/setup-wizard' },
+          { label: 'Fiscal Periods',  path: '/gl/periods' },
+          { label: 'GL Settings',     path: '/gl/settings' },
+        ],
+      },
+    ],
   },
   {
-    title: 'العمليات والمخازن',
+    title: 'System',
     items: [
-      { label: 'الحصاد والمحاصيل', path: '/fields/harvest', icon: <Sprout size={18} /> },
-      { label: 'حركات المخزون', path: '/inventory/movements', icon: <Box size={18} /> },
-      { label: 'المواسم الزراعية', path: '/seasons', icon: <FileCheck size={18} /> },
-      { label: 'الموردون والعملاء', path: '/suppliers', icon: <Users size={18} /> },
-    ]
+      { label: 'Admin', path: '/admin', icon: <Settings size={18} /> },
+      { label: 'Users', path: '/users', icon: <UserCog  size={18} /> },
+    ],
   },
-  {
-    title: 'الخزينة والمدفوعات',
-    items: [
-      { label: 'الخزينة والبنوك', path: '/treasury', icon: <Wallet size={18} /> },
-      { label: 'الذمم الدائنة/المدينة', path: '/treasury/ap', icon: <Building2 size={18} /> },
-    ]
-  },
-  {
-    title: 'الإعدادات والنظام',
-    items: [
-      { label: 'مدير النظام', path: '/admin', icon: <Settings size={18} /> },
-      { label: 'المستخدمون', path: '/users', icon: <UserCog size={18} /> },
-    ]
-  }
 ];
 
 const NavItemNode = ({ item, isChild = false }: { item: NavItem; isChild?: boolean }) => {
@@ -138,8 +180,15 @@ const NavItemNode = ({ item, isChild = false }: { item: NavItem; isChild?: boole
 };
 
 export const AppShell = () => {
+  const { user, role, logout } = useAppStore();
+  const navigate = useNavigate();
+
+  const initials = user?.full_name
+    ? user.full_name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase()
+    : 'U';
+
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f3f4f6]" dir="rtl">
+    <div className="flex h-screen overflow-hidden bg-[#f3f4f6]" dir="ltr">
       <GlobalSearch />
       <OfflineBanner />
       <PeriodWarningBanner />
@@ -174,14 +223,21 @@ export const AppShell = () => {
         </div>
 
         {/* User Footer */}
-        <div className="p-4 border-t border-white/5 flex items-center gap-4 bg-black/20 backdrop-blur-sm">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#1D9E75] to-[#0F2D5C] flex items-center justify-center text-sm font-bold border border-white/10 shadow-lg">
-            MZ
+        <div className="p-4 border-t border-white/5 flex items-center gap-3 bg-black/20 backdrop-blur-sm">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#1D9E75] to-[#0F2D5C] flex items-center justify-center text-sm font-bold border border-white/10 shadow-lg shrink-0">
+            {initials}
           </div>
-          <div className="flex flex-col overflow-hidden">
-            <span className="text-[14px] font-bold leading-tight truncate">محمود زهران</span>
-            <span className="text-[11px] text-slate-400 truncate">مدير النظام</span>
+          <div className="flex flex-col overflow-hidden flex-1 min-w-0">
+            <span className="text-[13px] font-bold leading-tight truncate">{user?.full_name ?? 'User'}</span>
+            <span className="text-[11px] text-slate-400 truncate">{role ?? 'Staff'}</span>
           </div>
+          <button
+            onClick={() => { logout(); navigate('/login'); }}
+            title="Sign out"
+            className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-white/10 rounded-lg transition-colors shrink-0"
+          >
+            <LogOut size={15} />
+          </button>
         </div>
       </aside>
 

@@ -4,6 +4,7 @@ import { authMiddleware, getUser, roleGuard } from '../../middleware/auth'
 import { logAudit } from '../../lib/audit'
 import {
   resolveInventoryMovement as peResolveInventory,
+  resolveHarvestMovement as peResolveHarvest,
   resolveSupplierInvoice   as peResolveSupplierInvoice,
   resolveSupplierPayment   as peResolveSupplierPayment,
   resolveExpensePosting    as peResolveExpense,
@@ -61,12 +62,12 @@ postingSetup.get('/posting-rules', async (c) => {
 
   const [rows, totalRow] = await Promise.all([
     c.env.DB.prepare(
-      `SELECT id, company_id, rule_type,
+            `SELECT id, company_id, rule_type,
               bus_posting_group_code, prod_posting_group_code, inv_posting_group_code,
               mapping_key, account_code,
               sales_account, purchases_account, cogs_account,
               sales_returns_account, purch_returns_account, expense_account,
-              inventory_account,
+              inventory_account, wip_account, finished_goods_account,
               priority, is_active, created_at, updated_at
        FROM posting_rules
        ${where}
@@ -273,7 +274,7 @@ postingSetup.patch('/posting-setup/general/:id', async (c) => {
 postingSetup.get('/posting-setup/inventory', async (c) => {
   const { company_id } = getUser(c)
   const { results } = await c.env.DB
-    .prepare(`SELECT id, inv_posting_group_code, prod_posting_group_code, inventory_account, is_active
+    .prepare(`SELECT id, inv_posting_group_code, prod_posting_group_code, inventory_account, wip_account, finished_goods_account, is_active
               FROM posting_rules WHERE company_id = ? AND rule_type = 'inventory'
               ORDER BY inv_posting_group_code NULLS LAST, prod_posting_group_code NULLS LAST`)
     .bind(company_id).all()
@@ -287,6 +288,8 @@ postingSetup.post('/posting-setup/inventory', async (c) => {
     inv_posting_group_code?: string | null
     prod_posting_group_code?: string | null
     inventory_account?: string | null
+    wip_account?: string | null
+    finished_goods_account?: string | null
   }>()
 
   const ipg = body.inv_posting_group_code?.toUpperCase() ?? null
@@ -301,9 +304,9 @@ postingSetup.post('/posting-setup/inventory', async (c) => {
 
   const { meta } = await c.env.DB
     .prepare(`INSERT INTO posting_rules
-              (company_id, rule_type, inv_posting_group_code, prod_posting_group_code, inventory_account, priority, is_active, created_at, updated_at)
-              VALUES (?,?,?,?,?,100,1,datetime('now'),datetime('now'))`)
-    .bind(company_id, 'inventory', ipg, ppg, body.inventory_account ?? null)
+              (company_id, rule_type, inv_posting_group_code, prod_posting_group_code, inventory_account, wip_account, finished_goods_account, priority, is_active, created_at, updated_at)
+              VALUES (?,?,?,?,?,?,?,100,1,datetime('now'),datetime('now'))`)
+    .bind(company_id, 'inventory', ipg, ppg, body.inventory_account ?? null, body.wip_account ?? null, body.finished_goods_account ?? null)
     .run()
 
   void logAudit(c.env.DB, { user_id: userId, company_id, action: 'CREATE', table_name: 'posting_rules', new_value: { rule_type: 'inventory', ipg, ppg } })
@@ -322,10 +325,12 @@ postingSetup.patch('/posting-setup/inventory/:id', async (c) => {
     .bind(rowId, company_id).first()
   if (!existing) return c.json({ success: false, error: 'Not found' }, 404)
 
-  const body = await c.req.json<{ inventory_account?: string | null; is_active?: boolean }>()
+  const body = await c.req.json<{ inventory_account?: string | null; wip_account?: string | null; finished_goods_account?: string | null; is_active?: boolean }>()
   const sets: string[] = []
   const vals: unknown[] = []
   if ('inventory_account' in body) { sets.push('inventory_account = ?'); vals.push(body.inventory_account ?? null) }
+  if ('wip_account' in body) { sets.push('wip_account = ?'); vals.push(body.wip_account ?? null) }
+  if ('finished_goods_account' in body) { sets.push('finished_goods_account = ?'); vals.push(body.finished_goods_account ?? null) }
   if (body.is_active !== undefined) { sets.push('is_active = ?');        vals.push(body.is_active ? 1 : 0) }
   if (!sets.length) return c.json({ success: false, error: 'Nothing to update' }, 422)
   vals.push(rowId, company_id)
@@ -414,7 +419,7 @@ postingSetup.get('/posting-setup/health', async (c) => {
 postingSetup.post('/posting-setup/validate', async (c) => {
   const { company_id } = getUser(c)
   const body = await c.req.json<{
-    type: 'inventory_in' | 'inventory_out' | 'supplier_invoice' | 'supplier_payment' | 'expense' | 'revenue'
+    type: 'inventory_in' | 'inventory_out' | 'harvest' | 'supplier_invoice' | 'supplier_payment' | 'expense' | 'revenue'
     bpg_code?: string | null
     ppg_code?: string | null
     ipg_code?: string | null
@@ -431,6 +436,9 @@ postingSetup.post('/posting-setup/validate', async (c) => {
     case 'inventory_in':
     case 'inventory_out':
       blueprint = await peResolveInventory(c.env.DB, company_id, body.ipg_code ?? null, body.ppg_code ?? null, amt, body.type === 'inventory_in')
+      break
+    case 'harvest':
+      blueprint = await peResolveHarvest(c.env.DB, company_id, body.ipg_code ?? null, body.ppg_code ?? null, amt)
       break
     case 'supplier_invoice':
       if (!body.ap_code) return c.json({ success: false, error: 'ap_code required for supplier_invoice' }, 422)
@@ -449,7 +457,7 @@ postingSetup.post('/posting-setup/validate', async (c) => {
       blueprint = await peResolveSalesRevenue(c.env.DB, company_id, body.bpg_code ?? null, body.ppg_code ?? null, body.receivable_code, amt)
       break
     default:
-      return c.json({ success: false, error: 'Invalid type. Use: inventory_in | inventory_out | supplier_invoice | supplier_payment | expense | revenue' }, 422)
+      return c.json({ success: false, error: 'Invalid type. Use: inventory_in | inventory_out | harvest | supplier_invoice | supplier_payment | expense | revenue' }, 422)
   }
 
   return c.json({ success: true, data: blueprint })

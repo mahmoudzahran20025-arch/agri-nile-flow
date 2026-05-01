@@ -41,14 +41,27 @@ export const reportsApi = {
       }
     }>(`/reports/cost-centers/${code}/detail${season_id ? `?season_id=${season_id}` : ''}`)),
 
-  supplierPayments: (p?: { supplier_code?: number; season_id?: number }) =>
-    unwrap(api.get<{
-      data: unknown[]
-      summary: Array<{
-        supplier_code: number; supplier_name: string
-        total_credit: number; total_debit: number; balance: number
+  supplierPayments: async (p?: { supplier_code?: number; season_id?: number }) => {
+    const raw = await api.get<unknown[]>(paginatedUrl('/reports/supplier-payments', p ?? {})) as unknown as {
+      success: boolean
+      error?: string
+      data?: unknown[]
+      summary?: Array<{
+        supplier_code: number
+        supplier_name: string
+        total_credit: number
+        total_debit: number
+        balance: number
       }>
-    }>(paginatedUrl('/reports/supplier-payments', p ?? {}))),
+    }
+
+    if (!raw.success) throw new Error(raw.error || 'API returned success=false')
+
+    return {
+      data: raw.data ?? [],
+      summary: raw.summary ?? [],
+    }
+  },
 
   suppliersBalance: (season_id?: number) =>
     unwrap(api.get<Array<{

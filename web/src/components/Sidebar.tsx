@@ -109,6 +109,7 @@ const NAV_SECTIONS: NavSection[] = [
   // ── General Ledger ────────────────────────────────────────────
   {
     key: 'finance', label: 'دفتر الأستاذ العام', items: [
+      { to: '/gl/finance-dashboard', icon: <LayoutDashboard size={18} />, label: 'لوحة المالية المتكاملة', permission: { module: 'finance', action: 'read' } },
       { to: '/gl',               icon: <BarChart3 size={18} />, label: 'مركز المالية',          permission: { module: 'finance', action: 'read' } },
       { to: '/gl/health-integrity', icon: <ShieldAlert size={18} />, label: 'الصحة والتكامل',   permission: { module: 'finance', action: 'read' } },
       { to: '/gl/accounts',       icon: <Database  size={18} />, label: 'شجرة الحسابات',        permission: { module: 'finance', action: 'read' } },
@@ -233,7 +234,7 @@ export default function Sidebar() {
         {NAV_SECTIONS.map(section => {
           const visibleItems = section.items.filter(item => {
             if (!item.permission) return true
-            if (role === 'super_admin') return true
+            if (role === 'super_admin' || role === 'company_admin') return true
             return permissions.includes(`${item.permission.module}.${item.permission.action}`)
           })
 

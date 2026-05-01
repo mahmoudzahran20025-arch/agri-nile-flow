@@ -20,4 +20,15 @@ export const treasuryApi = {
   partners:      () => unwrap(api.get('/treasury/partners')),
   createPartner: (body: unknown) => api.post('/treasury/partners', body),
   updatePartner: (id: number, body: unknown) => api.patch(`/treasury/partners/${id}`, body),
+
+  /* Cross-module finance dashboard */
+  apAging: () =>
+    unwrap(api.get<{
+      buckets: Array<{ label: string; total: number; count: number }>
+      total: number
+      overdue: number
+    }>('/treasury/ap-aging')),
+
+  bankBalances: () =>
+    unwrap(api.get<Array<{ id: number; name: string; balance: number; currency: string }>>('/treasury/bank-balances')),
 }

@@ -6,8 +6,9 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, CheckCircle2, XCircle, RefreshCw, FileSearch, ExternalLink, Filter } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, XCircle, RefreshCw, FileSearch, ExternalLink, Filter, GitBranch } from 'lucide-react'
 import { glApi, type SourceDocRow, type ReconciliationResult } from '../../api/client'
+import GlEntryTraceDrawer from '../../components/gl/GlEntryTraceDrawer'
 import { KpiStrip, type KpiItem } from '../../components/ui/KpiStrip'
 import SectionCard from '../../components/ui/SectionCard'
 import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
@@ -44,6 +45,10 @@ export default function ReconciliationPage() {
   const [from, setFrom]               = useState('')
   const [to, setTo]                   = useState('')
 
+  const [traceOpen, setTraceOpen]       = useState(false)
+  const [traceEntryId, setTraceEntryId] = useState<number | null>(null)
+  const [traceTab, setTraceTab]         = useState<'source' | 'lines' | 'trace'>('source')
+
   const params = {
     page,
     size: 50,
@@ -58,6 +63,12 @@ export default function ReconciliationPage() {
     queryKey: ['recon-source-docs', params],
     queryFn: () => glApi.reconciliationSourceDocs(params) as Promise<ReconciliationResult>,
     placeholderData: (prev) => prev,
+  })
+
+  const { data: traceData, isFetching: traceLoading } = useQuery({
+    queryKey: ['gl-entry-trace', traceEntryId],
+    queryFn:  () => glApi.entryTrace(traceEntryId!),
+    enabled:  !!traceEntryId && traceOpen,
   })
 
   const rows    = data?.data    ?? []
@@ -150,6 +161,19 @@ export default function ReconciliationPage() {
         ? <span className="text-[12px] text-slate-600 truncate max-w-[200px] block" title={r.linked_entry_description}>{r.linked_entry_description}</span>
         : <span className="text-[11px] text-slate-300">—</span>,
     },
+    {
+      key: 'trace_action',
+      header: '',
+      render: r => r.linked_journal_entry_id ? (
+        <button
+          onClick={() => { setTraceEntryId(r.linked_journal_entry_id!); setTraceOpen(true); setTraceTab('source'); }}
+          className="inline-flex items-center gap-1 text-[11px] text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded hover:bg-indigo-50 transition-colors"
+          title="Open entry trace"
+        >
+          <GitBranch size={12} /> Trace
+        </button>
+      ) : null,
+    },
   ]
 
   const rightSlot = (
@@ -178,7 +202,7 @@ export default function ReconciliationPage() {
   )
 
   return (
-    <div className="flex flex-col h-full bg-[#f8fafc]">
+    <div className="flex flex-col h-full bg-[#f8fafc] relative">
       <div className="px-6 py-5 bg-white border-b border-slate-200">
         <h1 className="text-[18px] font-bold text-[#0F2D5C]">Reconciliation Workbench</h1>
         <p className="text-[12px] text-slate-500 mt-0.5">
@@ -272,6 +296,14 @@ export default function ReconciliationPage() {
           )}
         </SectionCard>
       </div>
+      <GlEntryTraceDrawer
+        isOpen={traceOpen && !!traceEntryId}
+        loading={traceLoading}
+        tab={traceTab}
+        onTabChange={setTraceTab}
+        onClose={() => { setTraceOpen(false); setTraceEntryId(null); }}
+        trace={traceData as any}
+      />
     </div>
   )
 }

@@ -15,7 +15,8 @@ import type { ValidationBlueprint } from '../../api/gl'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type TxType = 'inventory_in' | 'inventory_out' | 'supplier_invoice' | 'supplier_payment' | 'expense' | 'revenue'
+type TxType = 'inventory_in' | 'inventory_out' | 'harvest' | 'supplier_invoice' | 'supplier_payment' | 'expense' | 'revenue'
+const EXPECTED_PRODUCT_GROUPS = ['SEED', 'CHEM', 'HARVEST', 'EQUIP_CAP', 'EQUIP_CONS']
 
 interface SimForm {
   type: TxType
@@ -31,6 +32,7 @@ interface SimForm {
 const TX_TYPES: { value: TxType; label: string; needsBpg?: boolean; needsPpg?: boolean; needsIpg?: boolean; needsAp?: boolean; needsCash?: boolean; needsReceivable?: boolean }[] = [
   { value: 'inventory_in',       label: 'Inventory In (Purchase / Receive)',        needsIpg: true,  needsPpg: true  },
   { value: 'inventory_out',      label: 'Inventory Out (Issue / COGS)',              needsIpg: true,  needsPpg: true  },
+  { value: 'harvest',            label: 'Harvest (WIP → Finished)',                  needsIpg: true,  needsPpg: true  },
   { value: 'supplier_invoice',   label: 'Supplier Invoice (AP creation)',            needsBpg: true,  needsPpg: true,  needsAp: true  },
   { value: 'supplier_payment',   label: 'Supplier Payment (AP settlement)',          needsAp: true,   needsCash: true  },
   { value: 'expense',            label: 'Operational Expense (Cash out)',            needsBpg: true,  needsPpg: true,  needsCash: true  },
@@ -179,6 +181,8 @@ export default function PostingSimulatorPage() {
   }
 
   const blueprint = result as ValidationBlueprint | undefined
+  const activePpgCodes = new Set((groups?.ppg ?? []).filter((g: { is_active?: number }) => g.is_active === 1).map((g: { code: string }) => g.code))
+  const missingExpectedPpgs = EXPECTED_PRODUCT_GROUPS.filter(code => !activePpgCodes.has(code))
 
   const kpis: KpiItem[] = [
     { id: 'type', label: 'SELECTED TYPE', value: txMeta.label.split('(')[0].trim() },
@@ -267,8 +271,11 @@ export default function PostingSimulatorPage() {
                       <label className="block text-[11px] text-slate-500 mb-1">Product Posting Group (PPG)</label>
                       <select className="input text-[12px]" value={form.ppg_code} onChange={e => set('ppg_code', e.target.value)}>
                         <option value="">— Default (NULL) —</option>
-                        {(groups?.ppg ?? []).map((g: { code: string; name: string }) => <option key={g.code} value={g.code}>{g.code} — {g.name}</option>)}
+                        {(groups?.ppg ?? []).filter((g: { is_active?: number }) => g.is_active === 1).map((g: { code: string; name: string }) => <option key={g.code} value={g.code}>{g.code} — {g.name}</option>)}
                       </select>
+                      {missingExpectedPpgs.length > 0 && (
+                        <p className="text-[11px] text-amber-700 mt-1">Missing active PPGs: <span className="font-mono">{missingExpectedPpgs.join(', ')}</span></p>
+                      )}
                     </div>
                   )}
                   {txMeta.needsIpg && (

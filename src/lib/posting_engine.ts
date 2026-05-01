@@ -64,6 +64,8 @@ interface InventoryPostingRuleRow {
   inv_posting_group_code:  string | null
   prod_posting_group_code: string | null
   inventory_account:       string | null
+  wip_account:             string | null
+  finished_goods_account:  string | null
 }
 
 type DimOpts = { center_code?: number; season_id?: number; field_id?: number }
@@ -202,7 +204,7 @@ async function resolveInventorySetup(
   ]
   for (const [i, p, step] of candidates) {
     const row = await db
-      .prepare(`SELECT id, inv_posting_group_code, prod_posting_group_code, inventory_account
+      .prepare(`SELECT id, inv_posting_group_code, prod_posting_group_code, inventory_account, wip_account, finished_goods_account
                 FROM posting_rules
                 WHERE company_id = ?
                   AND rule_type = 'inventory'
@@ -399,6 +401,63 @@ export async function resolveInventoryMovement(
 
   const errors = await validateAccounts(db, company_id, [inventoryAcc, offsetAcc])
   return { lines, validationErrors: errors, warnings, isBlocked: errors.length > 0, trace }
+}
+
+// ── Public: resolveHarvestMovement ───────────────────────────────────────────
+
+export async function resolveHarvestMovement(
+  db: D1Database,
+  company_id: number,
+  ipg_code: string | null,
+  ppg_code: string | null,
+  amount: number,
+  description?: string,
+  dimensions?: DimOpts,
+): Promise<JournalBlueprint> {
+  const warnings: string[] = []
+  if (!ipg_code) warnings.push('Warehouse has no Inventory Posting Group assigned. Using default setup.')
+  if (!ppg_code) warnings.push('Item has no Product Posting Group assigned. Using default setup.')
+  if (ipg_code) { const w = await checkPostingGroupExists(db, 'inventory_posting_groups', ipg_code, company_id); if (w) warnings.push(w) }
+  if (ppg_code) { const w = await checkPostingGroupExists(db, 'product_posting_groups', ppg_code, company_id); if (w) warnings.push(w) }
+
+  const invResult = await resolveInventorySetup(db, company_id, ipg_code, ppg_code)
+  if (!invResult) return blocked(
+    [noInvSetupError(ipg_code, ppg_code)], warnings,
+    { rule_type: 'harvest', input_ipg: ipg_code, input_ppg: ppg_code },
+  )
+
+  const finishedGoodsAcc = invResult.row.finished_goods_account ?? await resolveControlAccount(db, company_id, 'FINISHED_GOODS')
+  const wipAcc = invResult.row.wip_account ?? await resolveControlAccount(db, company_id, 'WIP_ACCOUNT')
+
+  const errors: string[] = []
+  if (!finishedGoodsAcc) {
+    errors.push(`PG-HRV-001: finished_goods_account is NULL for IPG="${invResult.row.inv_posting_group_code ?? 'DEFAULT'}" x PPG="${invResult.row.prod_posting_group_code ?? 'DEFAULT'}" and no FINISHED_GOODS control rule is active.`)
+  }
+  if (!wipAcc) {
+    errors.push(`PG-HRV-002: wip_account is NULL for IPG="${invResult.row.inv_posting_group_code ?? 'DEFAULT'}" x PPG="${invResult.row.prod_posting_group_code ?? 'DEFAULT'}" and no WIP_ACCOUNT control rule is active.`)
+  }
+  if (errors.length > 0) return blocked(errors, warnings)
+
+  const trace = buildTrace(
+    'harvest',
+    null,
+    ppg_code,
+    ipg_code,
+    invResult.step,
+    invResult.row.id,
+    {
+      finished_goods_account: finishedGoodsAcc!,
+      wip_account: wipAcc!,
+    },
+  )
+
+  const lines: JournalLine[] = [
+    { account_code: finishedGoodsAcc!, debit: amount, credit: 0, description, ...dimensions, rule_slot: 'finished_goods_account' },
+    { account_code: wipAcc!, debit: 0, credit: amount, description, ...dimensions, rule_slot: 'wip_account' },
+  ]
+
+  const validationErrors = await validateAccounts(db, company_id, [finishedGoodsAcc!, wipAcc!])
+  return { lines, validationErrors, warnings, isBlocked: validationErrors.length > 0, trace }
 }
 
 // ── Public: resolveInventoryTransfer ──────────────────────────────────────────

@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
 import { FinanceCore } from '../lib/finance_core'
+import { logAudit } from '../lib/audit'
 
 const config = new Hono<{ Bindings: Env }>()
 config.use('*', authMiddleware)
@@ -322,16 +323,100 @@ config.get('/gl-integrations', async (c) => {
   return c.json({ success: true, data: results })
 })
 
+const ALLOWED_GL_INTEGRATION_KEYS = new Set(['inventory', 'operations', 'hr_payroll', 'harvest'])
+
+async function moduleReadinessBlockers(db: Env['DB'], companyId: number, moduleKey: string): Promise<string[]> {
+  const [
+    catchAllGeneral,
+    catchAllInventory,
+    suppliersMissing,
+    itemsMissing,
+    warehousesMissing,
+  ] = await Promise.all([
+    db.prepare(
+      'SELECT COUNT(*) AS n FROM posting_rules WHERE company_id = ? AND bus_posting_group_code IS NULL AND prod_posting_group_code IS NULL AND is_active = 1'
+    ).bind(companyId).first<{ n: number }>(),
+    db.prepare(
+      'SELECT COUNT(*) AS n FROM inventory_posting_setup WHERE company_id = ? AND inv_posting_group_code IS NULL AND prod_posting_group_code IS NULL AND is_active = 1'
+    ).bind(companyId).first<{ n: number }>(),
+    db.prepare('SELECT COUNT(*) AS n FROM suppliers WHERE company_id = ? AND bus_posting_group_code IS NULL').bind(companyId).first<{ n: number }>(),
+    db.prepare('SELECT COUNT(*) AS n FROM items WHERE company_id = ? AND prod_posting_group_code IS NULL').bind(companyId).first<{ n: number }>(),
+    db.prepare('SELECT COUNT(*) AS n FROM warehouses WHERE company_id = ? AND inv_posting_group_code IS NULL').bind(companyId).first<{ n: number }>(),
+  ])
+
+  const hasGeneral = (catchAllGeneral?.n ?? 0) > 0
+  const hasInventory = (catchAllInventory?.n ?? 0) > 0
+  const suppliersMissingCount = suppliersMissing?.n ?? 0
+  const itemsMissingCount = itemsMissing?.n ?? 0
+  const warehousesMissingCount = warehousesMissing?.n ?? 0
+
+  const blockers: string[] = []
+  if (moduleKey === 'inventory') {
+    if (!hasInventory) blockers.push('قاعدة المخزون الافتراضية (NULL×NULL) غير موجودة')
+    if (itemsMissingCount > 0) blockers.push(`يوجد ${itemsMissingCount} صنف بدون Product Posting Group`)
+    if (warehousesMissingCount > 0) blockers.push(`يوجد ${warehousesMissingCount} مستودع بدون Inventory Posting Group`)
+    return blockers
+  }
+
+  if (!hasGeneral) blockers.push('قاعدة الترحيل العامة الافتراضية (NULL×NULL) غير موجودة')
+  if (suppliersMissingCount > 0) blockers.push(`يوجد ${suppliersMissingCount} مورد بدون Business Posting Group`)
+  return blockers
+}
+
 config.patch('/gl-integrations/:key', async (c) => {
-  const { company_id } = getUser(c)
+  const { company_id, sub: userId, role } = getUser(c)
   const key = c.req.param('key')
-  const { is_enabled } = await c.req.json<{ is_enabled: boolean }>()
+  const force = c.req.query('force') === '1'
+  const { is_enabled, reason } = await c.req.json<{ is_enabled: boolean; reason?: string }>()
+
+  if (!ALLOWED_GL_INTEGRATION_KEYS.has(key)) {
+    return c.json({ success: false, error: 'الموديول غير معروف في حوكمة الربط' }, 400)
+  }
+
+  if (typeof is_enabled !== 'boolean') {
+    return c.json({ success: false, error: 'is_enabled يجب أن تكون true أو false' }, 400)
+  }
+
+  const blockers = is_enabled ? await moduleReadinessBlockers(c.env.DB, company_id, key) : []
+
+  if (blockers.length > 0 && !force) {
+    return c.json({
+      success: false,
+      error: 'لا يمكن تفعيل الموديول قبل اكتمال جاهزية الترحيل',
+      blockers,
+      hint: 'أكمل التهيئة من /gl/posting-setup أو استخدم force=1 بصلاحية super_admin مع سبب واضح',
+    }, 409)
+  }
+
+  if (blockers.length > 0 && force) {
+    if (role !== 'super_admin') {
+      return c.json({ success: false, error: 'تفعيل force متاح فقط لصلاحية super_admin' }, 403)
+    }
+    if (!reason || reason.trim().length < 8) {
+      return c.json({ success: false, error: 'عند force يجب إدخال سبب واضح لا يقل عن 8 أحرف' }, 400)
+    }
+  }
 
   await c.env.DB
     .prepare(`INSERT INTO gl_integration_settings (company_id, module_key, is_enabled) 
               VALUES (?, ?, ?) 
               ON CONFLICT(company_id, module_key) DO UPDATE SET is_enabled = EXCLUDED.is_enabled`)
     .bind(company_id, key, is_enabled ? 1 : 0).run()
+
+  void logAudit(c.env.DB, {
+    user_id: userId,
+    company_id,
+    action: is_enabled ? 'ENABLE_GL_INTEGRATION' : 'DISABLE_GL_INTEGRATION',
+    table_name: 'gl_integration_settings',
+    record_id: key,
+    new_value: {
+      module_key: key,
+      is_enabled,
+      forced: force,
+      reason: reason ?? null,
+      blockers,
+    },
+  })
 
   return c.json({ success: true, data: null })
 })

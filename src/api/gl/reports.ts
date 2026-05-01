@@ -36,10 +36,10 @@ function buildDescendants(accounts: { code: string; parent_code: string | null }
 // GENERAL LEDGER
 // =============================================================================
 
-// GET /api/gl/ledger
-reports.get('/ledger', async (c) => {
+// GET /api/gl/ledger/:account?
+reports.get('/ledger/:account?', async (c) => {
   const { company_id } = getUser(c)
-  const account = c.req.query('account')
+  const account = c.req.param('account') ?? c.req.query('account')
   const start = c.req.query('start')
   const end = c.req.query('end')
   const center = c.req.query('center')

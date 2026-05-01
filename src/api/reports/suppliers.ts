@@ -25,7 +25,7 @@ suppliers.get('/supplier-payments', async (c) => {
         st.balance_no_checks, st.balance_with_checks,
         st.due_date, st.check_clearance_date,
         st.year, st.month, st.notes,
-        st.center_code, cc.name AS center_name,
+        st.center_code, COALESCE(cc.name_ar, cc.name_en) AS center_name,
         s.name AS supplier_name
       FROM supplier_transactions st
       LEFT JOIN cost_centers cc ON cc.code = st.center_code AND cc.company_id = st.company_id

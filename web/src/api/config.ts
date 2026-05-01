@@ -22,6 +22,15 @@ export const configApi = {
 
   integrations:      () =>
     unwrap(api.get<{ module_key: string; is_enabled: number }[]>('/config/gl-integrations')),
-  updateIntegration: (key: string, is_enabled: boolean) =>
-    api.patch(`/config/gl-integrations/${key}`, { is_enabled }),
+  updateIntegration: (
+    key: string,
+    is_enabled: boolean,
+    options?: { force?: boolean; reason?: string }
+  ) => {
+    const qs = options?.force ? '?force=1' : ''
+    return api.patch(`/config/gl-integrations/${key}${qs}`, {
+      is_enabled,
+      reason: options?.reason,
+    })
+  },
 }

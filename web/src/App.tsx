@@ -7,7 +7,7 @@ import { AppShell } from './components/shell/AppShell'
 import LoginPage     from './pages/LoginPage'
 import DebugPage     from './pages/DebugPage'
 import DashboardPage from './pages/DashboardPage'
-import SuppliersPage         from './pages/suppliers/SuppliersPage'
+import SupplierHubPage       from './pages/suppliers/SupplierHubPage'
 import SupplierDetailPage    from './pages/suppliers/SupplierDetailPage'
 import CashJournalPage       from './pages/treasury/CashJournalPage'
 import WarehouseBalancesPage from './pages/inventory/WarehouseBalancesPage'
@@ -71,6 +71,7 @@ import GLSettingsPage          from './pages/gl/GLSettingsPage'
 import PostingGroupsPage       from './pages/gl/PostingGroupsPage'
 import PostingSetupPage        from './pages/gl/PostingSetupPage'
 import PostingRulesPage        from './pages/gl/PostingRulesPage'
+import PostingSetupHealthPage  from './pages/gl/PostingSetupHealthPage'
 import SetupWizardPage         from './pages/gl/SetupWizardPage'
 import AuditCenterPage         from './pages/audit/AuditCenterPage'
 
@@ -124,7 +125,7 @@ export default function App() {
         <Route path="dashboard"  element={<DashboardPage />} />
 
         {/* Suppliers */}
-        <Route path="suppliers"        element={<SuppliersPage />} />
+        <Route path="suppliers"        element={<SupplierHubPage />} />
         <Route path="suppliers/:code"  element={<SupplierDetailPage />} />
 
         {/* Treasury */}
@@ -178,7 +179,8 @@ export default function App() {
         <Route path="gl/settings"      element={<GLSettingsPage />} />
         <Route path="gl/posting-groups" element={<PostingGroupsPage />} />
         <Route path="gl/posting-setup"  element={<PostingSetupPage />} />
-        <Route path="gl/posting-setup/health" element={<PostingRulesPage />} />
+        <Route path="gl/posting-setup/health" element={<PostingSetupHealthPage />} />
+        <Route path="gl/posting-rules"        element={<PostingRulesPage />} />
         <Route path="gl/setup-wizard" element={<SetupWizardPage />} />
         {/* Sprint 2 Finance epics */}
         <Route path="gl/posting-simulator" element={<PostingSimulatorPage />} />

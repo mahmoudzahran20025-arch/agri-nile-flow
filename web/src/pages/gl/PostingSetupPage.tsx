@@ -15,6 +15,17 @@ import { Plus, Pencil } from 'lucide-react';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 const NULL_LABEL = '— DEFAULT (all groups) —'
+const EXPECTED_PRODUCT_GROUPS = ['SEED', 'CHEM', 'HARVEST', 'EQUIP_CAP', 'EQUIP_CONS']
+const PPG_COGS_SUGGESTIONS: Record<string, string> = {
+  HARVEST: '55010001',
+  SEEDS: '55010002',
+  SEED: '55010002',
+  CHEM: '55010003',
+  FERT: '55010003',
+  EQUIP_CAP: '55010004',
+  EQUIP_CONS: '55010005',
+  FUEL: '55010005',
+}
 
 function groupLabel(code: string | null) {
   return code ?? NULL_LABEL
@@ -25,7 +36,7 @@ function hasGeneralCoreGaps(row: GeneralSetupRow) {
 }
 
 function hasInventoryCoreGaps(row: InventorySetupRow) {
-  return !row.inventory_account
+  return !row.inventory_account || !row.wip_account || !row.finished_goods_account
 }
 
 // ─── General setup add/edit modal ────────────────────────────────────────────
@@ -73,6 +84,7 @@ function GeneralSetupModal({
 
   const formBpg = toNullable(form.bus_posting_group_code)
   const formPpg = toNullable(form.prod_posting_group_code)
+  const suggestedCogs = PPG_COGS_SUGGESTIONS[form.prod_posting_group_code.trim().toUpperCase()]
 
   const inlineValidation = useMemo(() => {
     const issues: string[] = []
@@ -180,8 +192,17 @@ function GeneralSetupModal({
             <PostingGroupSelector
               type="product"
               value={form.prod_posting_group_code || null}
-              onChange={value => setForm(prev => ({ ...prev, prod_posting_group_code: value ?? '' }))}
+              onChange={value => setForm(prev => {
+                const nextPpg = value ?? ''
+                const suggestion = PPG_COGS_SUGGESTIONS[nextPpg.toUpperCase()]
+                return {
+                  ...prev,
+                  prod_posting_group_code: nextPpg,
+                  cogs_account: prev.cogs_account || !suggestion ? prev.cogs_account : suggestion,
+                }
+              })}
               label="Product Posting Group (PPG)"
+              expectedCodes={EXPECTED_PRODUCT_GROUPS}
               showRecent
             />
           </div>
@@ -213,6 +234,11 @@ function GeneralSetupModal({
           {acctField('Purchase Returns Account', 'purch_returns_account', 'asset')}
           {acctField('Expense Account', 'expense_account', 'expense')}
         </div>
+        {suggestedCogs && (
+          <div className={`rounded border px-3 py-2 text-[12px] ${toNullable(form.cogs_account) === suggestedCogs ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+            Suggested COGS for PPG <span className="font-mono">{form.prod_posting_group_code || '—'}</span>: <span className="font-mono font-semibold">{suggestedCogs}</span>
+          </div>
+        )}
 
         {isEdit && (
           <div className="flex items-center gap-2">
@@ -329,6 +355,8 @@ function InventorySetupModal({
   const [ipg,   setIpg]   = useState(existing?.inv_posting_group_code  ?? '')
   const [ppg,   setPpg]   = useState(existing?.prod_posting_group_code ?? '')
   const [acct,  setAcct]  = useState(existing?.inventory_account       ?? '')
+  const [wipAcct, setWipAcct] = useState(existing?.wip_account ?? '')
+  const [finishedGoodsAcct, setFinishedGoodsAcct] = useState(existing?.finished_goods_account ?? '')
   const [active, setActive] = useState(existing ? existing.is_active === 1 : true)
   const [err,   setErr]   = useState('')
 
@@ -339,6 +367,8 @@ function InventorySetupModal({
     const hints: string[] = []
 
     if (!toNullable(acct)) issues.push('Inventory account is required');
+    if (!toNullable(wipAcct)) issues.push('WIP account is required for harvest posting');
+    if (!toNullable(finishedGoodsAcct)) issues.push('Finished goods account is required for harvest posting');
 
     const exactConflict = existingRows.some((row) =>
       row.id !== existing?.id
@@ -362,12 +392,23 @@ function InventorySetupModal({
     }
 
     return { issues, hints }
-  }, [acct, existingRows, existing?.id, formIpg, formPpg])
+  }, [acct, wipAcct, finishedGoodsAcct, existingRows, existing?.id, formIpg, formPpg])
 
   const mut = useMutation({
     mutationFn: () => isEdit
-      ? glApi.updateInventorySetup(existing!.id, { inventory_account: toNullable(acct), is_active: active ? 1 : 0 })
-      : glApi.createInventorySetup({ inv_posting_group_code: toNullable(ipg), prod_posting_group_code: toNullable(ppg), inventory_account: toNullable(acct) }),
+      ? glApi.updateInventorySetup(existing!.id, {
+          inventory_account: toNullable(acct),
+          wip_account: toNullable(wipAcct),
+          finished_goods_account: toNullable(finishedGoodsAcct),
+          is_active: active ? 1 : 0,
+        })
+      : glApi.createInventorySetup({
+          inv_posting_group_code: toNullable(ipg),
+          prod_posting_group_code: toNullable(ppg),
+          inventory_account: toNullable(acct),
+          wip_account: toNullable(wipAcct),
+          finished_goods_account: toNullable(finishedGoodsAcct),
+        }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['inventory-posting-setup'] }); onClose() },
     onError: async (e: unknown) => setErr((e as { message?: string })?.message ?? 'حدث خطأ'),
   })
@@ -395,6 +436,8 @@ function InventorySetupModal({
         )}
 
         <AccountPicker value={acct || null} onChange={value => setAcct(value ?? '')} accountType="asset" label="Inventory Account" required />
+        <AccountPicker value={wipAcct || null} onChange={value => setWipAcct(value ?? '')} accountType="asset" label="WIP Account" required />
+        <AccountPicker value={finishedGoodsAcct || null} onChange={value => setFinishedGoodsAcct(value ?? '')} accountType="asset" label="Finished Goods Account" required />
         {isEdit && (
           <div className="flex items-center gap-2">
             <input type="checkbox" id="ips-active" checked={active} onChange={e => setActive(e.target.checked)} className="rounded" />
@@ -436,7 +479,7 @@ function InventorySetupTab() {
             {hasCatchAll ? '✓ Default rule (NULL × NULL) exists' : '✗ No default rule (NULL × NULL)'}
           </span>
           <span className={`text-[11px] px-2 py-1 rounded border ${rowsWithGaps.length === 0 ? 'border-[#1D9E75]/30 bg-[#1D9E75]/10 text-[#1D9E75]' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
-            {rowsWithGaps.length === 0 ? '✓ No rows with missing inventory account' : `⚠ ${rowsWithGaps.length} rows missing inventory account`}
+            {rowsWithGaps.length === 0 ? '✓ No rows with missing inventory/WIP/finished accounts' : `⚠ ${rowsWithGaps.length} rows missing harvest-related accounts`}
           </span>
         </div>
         <button className="btn-primary text-[12px] flex items-center gap-1" onClick={() => setAdding(true)}>
@@ -458,6 +501,8 @@ function InventorySetupTab() {
                 <th className="text-left font-semibold text-slate-500 uppercase tracking-wide text-[10px] px-4 py-2">IPG</th>
                 <th className="text-left font-semibold text-slate-500 uppercase tracking-wide text-[10px] px-4 py-2">PPG</th>
                 <th className="text-left font-semibold text-slate-500 uppercase tracking-wide text-[10px] px-4 py-2">Inventory Account</th>
+                <th className="text-left font-semibold text-slate-500 uppercase tracking-wide text-[10px] px-4 py-2">WIP Account</th>
+                <th className="text-left font-semibold text-slate-500 uppercase tracking-wide text-[10px] px-4 py-2">Finished Goods</th>
                 <th className="text-left font-semibold text-slate-500 uppercase tracking-wide text-[10px] px-4 py-2">Status</th>
                 <th className="px-4 py-2"></th>
               </tr>
@@ -468,6 +513,8 @@ function InventorySetupTab() {
                   <td className="px-4 py-3 font-mono text-[11px] text-slate-700">{groupLabel(r.inv_posting_group_code)}</td>
                   <td className="px-4 py-3 font-mono text-[11px] text-slate-700">{groupLabel(r.prod_posting_group_code)}</td>
                   <td className="px-4 py-3 font-mono text-[11px]">{r.inventory_account ?? <span className="text-red-400">—</span>}</td>
+                  <td className="px-4 py-3 font-mono text-[11px]">{r.wip_account ?? <span className="text-red-400">—</span>}</td>
+                  <td className="px-4 py-3 font-mono text-[11px]">{r.finished_goods_account ?? <span className="text-red-400">—</span>}</td>
                   <td className="px-4 py-3">
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${r.is_active === 1 ? 'bg-[#1D9E75]/15 text-[#1D9E75]' : 'bg-slate-100 text-slate-400'}`}>
                       {r.is_active === 1 ? 'ACTIVE' : 'INACTIVE'}

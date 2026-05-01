@@ -23,31 +23,21 @@ gl.route('/periods', periods)
 
 // Entries: Journal entries, reversals, manual entries
 gl.route('/entries', entries)
-gl.route('/manual-entries', entries)
 
 // Posting Setup: Posting groups, posting rules, validation
-gl.route('/posting-groups', postingSetup)
-gl.route('/posting-rules', postingSetup)
-gl.route('/posting-setup', postingSetup)
+gl.route('/', postingSetup)
 
 // Batch Jobs: Batch posting and processing
-gl.route('/batch-post', batchJobs)
+gl.route('/', batchJobs)
 
 // Reconciliation: Source documents reconciliation
 gl.route('/reconciliation', reconciliation)
 
 // Reports: Ledger, Trial Balance, Income Statement, Balance Sheet
-gl.route('/ledger', reports)
-gl.route('/trial-balance', reports)
-gl.route('/trial-balance-fast', reports)
-gl.route('/income-statement', reports)
-gl.route('/balance-sheet', reports)
+gl.route('/', reports)
 
 // Integrity: System integrity checks, audit logs, health score
-gl.route('/integrity-check', integrity)
-gl.route('/audit-log', integrity)
-gl.route('/system-integrity-score', integrity)
-gl.route('/orphans', integrity)
+gl.route('/', integrity)
 
 // Health check endpoint for the GL module
 gl.get('/health', (c) => {

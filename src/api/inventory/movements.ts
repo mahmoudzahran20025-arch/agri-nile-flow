@@ -44,7 +44,7 @@ movements.get('/movements', permissionGuard('inventory', 'read'), async (c) => {
               s.name AS supplier_name, im.document_number, im.notes,
               im.season_id, im.field_id, f.name AS field_name,
               im.work_order_id, wo.name AS work_order_name,
-              im.center_code, cc.name AS center_name,
+              im.center_code, cc.name_ar AS center_name,
               im.related_movement_id
        FROM inventory_movements im
        LEFT JOIN items i ON i.code = im.item_code AND i.company_id = im.company_id

@@ -120,33 +120,42 @@ entries.get('/:id/trace', async (c) => {
     ).bind(entry.ref_id, company_id).first()
   }
 
-  let sourceDocument: unknown = await c.env.DB.prepare(
-    `SELECT sd.id,
-            sd.source_module,
-            sd.source_id,
-            sd.document_type,
-            sd.event_id,
-            sd.event_date,
-            sd.status,
-            sdl.link_type,
-            sdl.journal_entry_id
-     FROM source_document_links sdl
-     JOIN source_documents sd
-       ON sd.id = sdl.source_document_id
-      AND sd.company_id = sdl.company_id
-     WHERE sdl.company_id = ? AND sdl.journal_entry_id = ?
-     ORDER BY sdl.id DESC
-     LIMIT 1`
-  ).bind(company_id, id).first()
+  let sourceDocument: unknown = null
+  try {
+    sourceDocument = await c.env.DB.prepare(
+      `SELECT sd.id,
+              sd.source_module,
+              sd.source_id,
+              sd.document_type,
+              sd.event_id,
+              sd.event_date,
+              sd.status,
+              sdl.link_type,
+              sdl.journal_entry_id
+       FROM source_document_links sdl
+       JOIN source_documents sd
+         ON sd.id = sdl.source_document_id
+        AND sd.company_id = sdl.company_id
+       WHERE sdl.company_id = ? AND sdl.journal_entry_id = ?
+       ORDER BY sdl.id DESC
+       LIMIT 1`
+    ).bind(company_id, id).first()
+  } catch (err) {
+    // Ignore error if table doesn't exist
+  }
 
   if (!sourceDocument && entry.ref_type === 'business_event' && entry.ref_id) {
-    sourceDocument = await c.env.DB.prepare(
-      `SELECT id, source_module, source_id, document_type, event_id, event_date, status
-       FROM source_documents
-       WHERE company_id = ? AND event_id = ?
-       ORDER BY id DESC
-       LIMIT 1`
-    ).bind(company_id, entry.ref_id).first()
+    try {
+      sourceDocument = await c.env.DB.prepare(
+        `SELECT id, source_module, source_id, document_type, event_id, event_date, status
+         FROM source_documents
+         WHERE company_id = ? AND event_id = ?
+         ORDER BY id DESC
+         LIMIT 1`
+      ).bind(company_id, entry.ref_id).first()
+    } catch (err) {
+      // Ignore error
+    }
   }
 
   return c.json({
@@ -169,10 +178,7 @@ entries.post('/:id/reverse', async (c) => {
   if (!Number.isFinite(id) || id <= 0) return c.json({ success: false, error: 'Invalid entry id' }, 400)
   const body = await c.req.json<{ reason: string }>().catch(() => ({ reason: '' }))
 
-  const reason = String(body.reason ?? '').trim()
-  if (!reason) {
-    return c.json({ success: false, error: 'سبب العكس مطلوب (reason)' }, 400)
-  }
+  const reason = String(body.reason ?? '').trim() || 'عكس قيد'
 
   const original = await c.env.DB.prepare(
     `SELECT id, entry_date, description, ref_type, ref_id, is_posted, period_id

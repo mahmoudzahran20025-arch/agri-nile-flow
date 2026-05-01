@@ -63,6 +63,7 @@ const MORE_SECTIONS: MoreSection[] = [
     label: 'المحاسبة',
     color: 'bg-violet-50 border-violet-100',
     items: [
+      { to: '/gl/finance-dashboard', icon: LayoutDashboard, label: 'لوحة المالية المتكاملة' },
       { to: '/gl/accounts',   icon: BookOpen,     label: 'دليل الحسابات'    },
       { to: '/gl/entries',    icon: BookMarked,   label: 'قيود اليومية'     },
       { to: '/gl/statements', icon: BarChart3,    label: 'القوائم المالية'  },

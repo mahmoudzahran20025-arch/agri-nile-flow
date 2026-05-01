@@ -181,6 +181,8 @@ export interface InventorySetupRow {
   inv_posting_group_code:  string | null
   prod_posting_group_code: string | null
   inventory_account:       string | null
+  wip_account:             string | null
+  finished_goods_account:  string | null
   is_active:               number
 }
 
@@ -245,6 +247,8 @@ export interface PostingRule {
   purch_returns_account:    string | null
   expense_account:          string | null
   inventory_account:        string | null
+  wip_account:              string | null
+  finished_goods_account:   string | null
   priority:                 number
   is_active:                number
   created_at:               string
@@ -282,7 +286,7 @@ export const glApi = {
   entries:     (p?: { page?: number; size?: number; start?: string; end?: string; ref_type?: string }) =>
     unwrapPaginated<unknown>(api.get(paginatedUrl('/gl/entries', p ?? {}))),
   getEntry:    (id: number) => unwrap(api.get(`/gl/entries/${id}`)),
-  createEntry: (body: unknown) => api.post('/gl/manual-entries', body),
+  createEntry: (body: unknown) => api.post('/gl/entries/manual-entries', body),
   reverseEntry: (id: number) =>
     unwrap(api.post<{ reversal_entry_id: number }>(`/gl/entries/${id}/reverse`, {})),
 
@@ -378,7 +382,7 @@ export const glApi = {
   // ── Health & Validate ───────────────────────────────────────────────────────
   postingHealth:    () => unwrap(api.get<PostingHealthResult>('/gl/posting-setup/health')),
   validatePosting:  (body: {
-    type: 'inventory_in' | 'inventory_out' | 'supplier_invoice' | 'supplier_payment' | 'expense' | 'revenue'
+    type: 'inventory_in' | 'inventory_out' | 'harvest' | 'supplier_invoice' | 'supplier_payment' | 'expense' | 'revenue'
     bpg_code?: string | null; ppg_code?: string | null; ipg_code?: string | null
     ap_code?: string; cash_code?: string; receivable_code?: string; amount?: number
   }) => unwrap(api.post<ValidationBlueprint>('/gl/posting-setup/validate', body)),
@@ -387,7 +391,34 @@ export const glApi = {
   reconciliationSourceDocs: (p?: {
     page?: number; size?: number; source_module?: string; status?: string
     from?: string; to?: string; mismatch_only?: '1'
-  }) => unwrap(api.get<ReconciliationResult>(paginatedUrl('/gl/reconciliation/source-documents', p ?? {}))),
+  }) => api.get<SourceDocRow[]>(paginatedUrl('/gl/reconciliation/source-documents', p ?? {})).then((raw) => {
+    const response = raw as unknown as {
+      success: boolean
+      error?: string
+      data?: SourceDocRow[]
+      total?: number
+      page?: number
+      page_size?: number
+      summary?: ReconciliationSummary
+    }
+
+    if (!response.success) throw new Error(response.error || 'API returned success=false')
+
+    return {
+      data: response.data ?? [],
+      total: response.total ?? 0,
+      page: response.page ?? 1,
+      page_size: response.page_size ?? 50,
+      summary: response.summary ?? {
+        total: 0,
+        missing_business_event: 0,
+        missing_journal_link: 0,
+        event_link_mismatch: 0,
+        posted_without_journal: 0,
+        fully_linked: 0,
+      },
+    } satisfies ReconciliationResult
+  }),
 }
 
 // ── Reconciliation types (shared with ReconciliationPage, PeriodCloseCockpit) ─

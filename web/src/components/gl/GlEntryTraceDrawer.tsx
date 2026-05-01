@@ -1,5 +1,23 @@
 import { ExternalLink, GitBranch, Link2, X } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import type { EntryTraceResult } from '../../api/gl'
+
+// Maps source_module + optional document_type to a UI route.
+// Returns null when the module has no dedicated screen to navigate to.
+function resolveSourceRoute(
+  sourceModule: string | undefined,
+  sourceId: number | string | undefined,
+): string | null {
+  if (!sourceModule || !sourceId) return null
+  switch (sourceModule) {
+    case 'treasury':   return `/treasury?highlight=${sourceId}`
+    case 'suppliers':  return `/suppliers/${sourceId}`
+    case 'inventory':  return `/inventory/movements?highlight=${sourceId}`
+    case 'hr':         return `/hr/payroll`
+    case 'fields':     return `/fields/harvest`
+    default:           return null
+  }
+}
 
 type TraceTab = 'source' | 'lines' | 'trace'
 
@@ -24,6 +42,7 @@ export default function GlEntryTraceDrawer({
   onClose,
   trace,
 }: GlEntryTraceDrawerProps) {
+  const navigate = useNavigate()
   const payload = trace?.data
 
   return (
@@ -148,16 +167,33 @@ export default function GlEntryTraceDrawer({
                   <div className="text-slate-500">No rule trace metadata recorded for this entry.</div>
                 )}
 
-                <div className="border border-slate-200 rounded p-3 flex items-center justify-between">
-                  <div className="text-slate-600 flex items-center gap-2">
-                    <Link2 size={14} />
-                    <span>View entry details and source references</span>
-                  </div>
-                  <button className="btn-secondary h-8 px-3 text-[12px] inline-flex items-center gap-1" disabled>
-                    Open Source
-                    <ExternalLink size={13} />
-                  </button>
-                </div>
+                {(() => {
+                  const src = payload.source_event ?? payload.source_document
+                  const module = src && 'source_module' in src ? src.source_module : undefined
+                  const id     = src && 'source_id'     in src ? src.source_id     : undefined
+                  const route  = resolveSourceRoute(module, id)
+                  return (
+                    <div className="border border-slate-200 rounded p-3 flex items-center justify-between">
+                      <div className="text-slate-600 flex items-center gap-2">
+                        <Link2 size={14} />
+                        <span>{route ? `Open ${module ?? 'source'} screen` : 'Source document reference'}</span>
+                      </div>
+                      {route ? (
+                        <button
+                          className="btn-secondary h-8 px-3 text-[12px] inline-flex items-center gap-1"
+                          onClick={() => { onClose(); navigate(route) }}
+                        >
+                          Open Source
+                          <ExternalLink size={13} />
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-slate-400 italic">
+                          {module ? `No screen mapped for '${module}'` : 'No source linked'}
+                        </span>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
             )}
           </>

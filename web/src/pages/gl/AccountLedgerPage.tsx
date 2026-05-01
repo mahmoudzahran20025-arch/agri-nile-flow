@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Download, Workflow, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Download, GitBranch, ChevronLeft, ChevronRight } from 'lucide-react';
 import { glApi, downloadCsv } from '../../api/client';
+import GlEntryTraceDrawer from '../../components/gl/GlEntryTraceDrawer';
 import { KpiStrip, KpiItem } from '../../components/ui/KpiStrip';
 import { CommandBar, CommandAction } from '../../components/shell/CommandBar';
 import StatusBadge from '../../components/ui/StatusBadge';
@@ -69,6 +70,10 @@ export default function AccountLedgerPage() {
   const [pageSize, setPageSize] = useState(100);
   const [jumpInput, setJumpInput] = useState('');
 
+  const [traceOpen, setTraceOpen] = useState(false);
+  const [traceEntryId, setTraceEntryId] = useState<number | null>(null);
+  const [traceTab, setTraceTab] = useState<'source' | 'lines' | 'trace'>('source');
+
   const { data, isLoading } = useQuery({
     queryKey: ['gl-ledger', code, start, end, page, pageSize],
     queryFn:  () => glApi.ledger(code!, start || undefined, end || undefined, page, pageSize) as Promise<{
@@ -81,6 +86,12 @@ export default function AccountLedgerPage() {
       opening_balance: number;
     }>,
     enabled: !!code,
+  });
+
+  const { data: traceData, isFetching: traceLoading } = useQuery({
+    queryKey: ['gl-entry-trace', traceEntryId],
+    queryFn:  () => glApi.entryTrace(traceEntryId!),
+    enabled:  !!traceEntryId && traceOpen,
   });
 
   const account        = data?.account;
@@ -137,7 +148,7 @@ export default function AccountLedgerPage() {
   );
 
   return (
-    <div className="flex flex-col h-full bg-[#f8fafc]">
+    <div className="flex flex-col h-full bg-[#f8fafc] relative">
       {/* Page Header */}
       <div className="px-6 py-5 flex items-center justify-between shrink-0 bg-white border-b border-slate-200">
         <div>
@@ -225,13 +236,13 @@ export default function AccountLedgerPage() {
                               #{l.entry_id}
                             </Link>
                             {l.has_trace && (
-                              <Link
-                                to={l.entry_trace_path ?? `/api/gl/entries/${l.entry_id}/trace`}
-                                className="inline-flex items-center gap-0.5 text-[10px] text-indigo-500 hover:text-indigo-700"
-                                title="Open posting trace"
+                              <button
+                                onClick={() => { setTraceEntryId(l.entry_id); setTraceOpen(true); setTraceTab('source'); }}
+                                className="inline-flex items-center gap-0.5 text-[10px] text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 px-1 py-0.5 rounded"
+                                title="Open entry trace"
                               >
-                                <Workflow size={11} /> Trace
-                              </Link>
+                                <GitBranch size={11} /> Trace
+                              </button>
                             )}
                           </div>
                         </td>
@@ -324,6 +335,14 @@ export default function AccountLedgerPage() {
           )}
         </div>
       </div>
+      <GlEntryTraceDrawer
+        isOpen={traceOpen && !!traceEntryId}
+        loading={traceLoading}
+        tab={traceTab}
+        onTabChange={setTraceTab}
+        onClose={() => { setTraceOpen(false); setTraceEntryId(null); }}
+        trace={traceData as any}
+      />
     </div>
   );
 }

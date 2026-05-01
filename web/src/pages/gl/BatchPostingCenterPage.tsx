@@ -4,10 +4,11 @@
  * P0 sprint 3 delivery.
  */
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Play, StopCircle, RefreshCw, Plus, Loader2, CheckCircle2, XCircle,
-  Clock, ChevronRight, X, RotateCcw, Layers, Info,
+  Clock, ChevronRight, X, RotateCcw, Layers, Info, GitBranch, ExternalLink,
 } from 'lucide-react'
 import { glApi } from '../../api/client'
 import type { BatchPostJobRow } from '../../api/gl'
@@ -67,6 +68,7 @@ function JobDetailDrawer({
   onProcess: (id: number) => void; onCancel: (id: number) => void; onRetry: (id: number) => void
   processing: boolean; cancelling: boolean
 }) {
+  const navigate = useNavigate()
   const { data } = useQuery({
     queryKey: ['gl-batch-job', jobId],
     queryFn:  () => glApi.getBatchPostJob(jobId),
@@ -180,10 +182,11 @@ function JobDetailDrawer({
           ? <p className="text-[12px] text-slate-400">No item detail available</p>
           : (
             <div className="space-y-1.5">
-              {items.slice(0, 100).map((item, i) => {
+                {items.slice(0, 100).map((item, i) => {
                 const itemStatus = String(item.status ?? '—')
                 const isOk = itemStatus === 'completed'
                 const isFail = itemStatus === 'failed'
+                const entryId = item.journal_entry_id as number | undefined
                 return (
                   <div key={i} className={`rounded px-2 py-1.5 flex items-center gap-2 text-[11px] ${isFail ? 'bg-red-50' : isOk ? 'bg-emerald-50/50' : 'bg-slate-50'}`}>
                     {isFail  ? <XCircle size={11} className="text-red-400 shrink-0" />
@@ -191,6 +194,24 @@ function JobDetailDrawer({
                      :         <Clock size={11} className="text-slate-400 shrink-0" />
                     }
                     <span className="font-mono text-slate-500">#{String(item.source_id ?? i)}</span>
+                    {isOk && entryId && (
+                      <>
+                        <button
+                          onClick={() => { onClose(); navigate(`/gl/entries?id=${entryId}`) }}
+                          className="flex items-center gap-0.5 text-[10px] text-[#0F2D5C] hover:underline ml-1"
+                          title="Open GL entry"
+                        >
+                          <ExternalLink size={10} /> #{entryId}
+                        </button>
+                        <button
+                          onClick={() => { onClose(); navigate(`/gl/entries?id=${entryId}&trace=1`) }}
+                          className="flex items-center gap-0.5 text-[10px] text-indigo-500 hover:text-indigo-700"
+                          title="Open entry trace"
+                        >
+                          <GitBranch size={10} /> Trace
+                        </button>
+                      </>
+                    )}
                     <span className={`ml-auto ${isFail ? 'text-red-600' : isOk ? 'text-[#1D9E75]' : 'text-slate-400'}`}>{itemStatus}</span>
                   </div>
                 )

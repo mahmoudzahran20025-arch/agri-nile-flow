@@ -70,15 +70,9 @@ export default function IntegrationControlPage() {
     toggleMut.mutate({ key, enabled: enabling })
   }
 
-  const confirmEnable = () => {
-    if (!confirmKey) return
-    setUpdating(confirmKey)
-    setConfirmKey(null)
-    toggleMut.mutate({ key: confirmKey, enabled: true })
-  }
-
   const isLoading = intLoading || healthLoading
   const activeCount = integrations.filter(i => i.is_enabled === 1).length
+  const moduleCount = integrations.length
   const readinessChecks = [
     postingHealth?.setup?.has_catch_all_general === true,
     postingHealth?.setup?.has_catch_all_inventory === true,
@@ -108,7 +102,7 @@ export default function IntegrationControlPage() {
           <div className="flex gap-4">
               <div className="bg-indigo-50 px-5 py-3 rounded-2xl border border-indigo-100 text-center">
                   <p className="text-[10px] uppercase tracking-wider text-indigo-400 font-bold mb-1">الموديولات النشطة</p>
-                  <p className="text-2xl font-black text-indigo-700">{activeCount} / 4</p>
+                    <p className="text-2xl font-black text-indigo-700">{activeCount} / {moduleCount || 0}</p>
               </div>
               <div className="bg-teal-50 px-5 py-3 rounded-2xl border border-teal-100 text-center">
                   <p className="text-[10px] uppercase tracking-wider text-teal-400 font-bold mb-1">جاهزية التهيئة</p>
@@ -149,7 +143,7 @@ export default function IntegrationControlPage() {
               <div className="bg-amber-50 rounded-2xl p-4 border border-amber-100 flex gap-3">
                   <AlertCircle size={20} className="text-amber-600 shrink-0" />
                   <p className="text-amber-800 text-[11px] leading-relaxed">
-                      تحذير: تعطيل أي موديول يعني توقف النظام عن إنشاء قيود اليومية له. يجب التأكد من عمل تسويات يدوية لاحقاً.
+                    تحذير: التعطيل يوقف الترحيل التلقائي. كما أن التفعيل يخضع لسياسة جاهزية إلزامية من الباك إند لحماية دفتر الأستاذ.
                   </p>
               </div>
                 <Link to="/gl/posting-setup" className="w-full btn-secondary text-center py-3 rounded-2xl text-sm font-bold flex items-center justify-center gap-2">
@@ -277,6 +271,18 @@ export default function IntegrationControlPage() {
               })}
             </div>
           )}
+
+          {!!postingHealth?.issues?.length && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-[12px] text-amber-800">
+              <p className="font-bold mb-2">ملاحظة حوكمة:</p>
+              <p>بعض الوحدات غير قابلة للتفعيل حتى اكتمال شروط الجاهزية التالية:</p>
+              <ul className="mt-2 space-y-1 pr-4 list-disc">
+                {postingHealth.issues.slice(0, 3).map((issue, idx) => (
+                  <li key={idx}>{issue}</li>
+                ))}
+              </ul>
+            </div>
+          )}
       </div>
 
       {/* ── Footer Info ──────────────────────────────────────────── */}
@@ -344,14 +350,8 @@ export default function IntegrationControlPage() {
                   onClick={() => setConfirmKey(null)}
                   className="flex-1 py-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-bold text-center transition-colors"
                 >
-                  اكتمال التهيئة أولاً
+                  الذهاب لإكمال التهيئة
                 </Link>
-                <button
-                  onClick={confirmEnable}
-                  className="flex-1 py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-sm font-bold transition-colors"
-                >
-                  تفعيل على كل حال
-                </button>
               </div>
             </div>
           </div>

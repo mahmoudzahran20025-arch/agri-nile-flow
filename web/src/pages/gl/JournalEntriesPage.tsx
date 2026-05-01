@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Download, GitBranch, CheckCircle2, X } from 'lucide-react';
+import { Plus, Download, GitBranch, CheckCircle2, X, CornerDownRight } from 'lucide-react';
 import { glApi } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import NewEntryForm from '../../components/gl/NewEntryForm';
@@ -44,7 +44,7 @@ export default function JournalEntriesPage() {
     return idParam ? Number(idParam) : null;
   });
   const [showNew, setShowNew] = useState(false);
-  const [traceOpen, setTraceOpen] = useState(false);
+  const [traceOpen, setTraceOpen] = useState(() => searchParams.get('trace') === '1');
   const [traceTab, setTraceTab] = useState<'source' | 'lines' | 'trace'>('source');
 
   useEffect(() => {
@@ -263,9 +263,18 @@ export default function JournalEntriesPage() {
                 </h3>
                 <p className="text-[12px] text-slate-500 mt-1">{detail?.description}</p>
               </div>
-              <button onClick={() => setSelectedId(null)} className="p-1.5 hover:bg-slate-200 rounded-full text-slate-400 hover:text-slate-700 transition-colors">
-                <X size={16} />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => { setTraceOpen(true); setTraceTab('source'); }}
+                  className="p-1.5 hover:bg-indigo-100 rounded-full text-indigo-400 hover:text-indigo-700 transition-colors"
+                  title="Open traceability"
+                >
+                  <GitBranch size={15} />
+                </button>
+                <button onClick={() => setSelectedId(null)} className="p-1.5 hover:bg-slate-200 rounded-full text-slate-400 hover:text-slate-700 transition-colors">
+                  <X size={16} />
+                </button>
+              </div>
             </div>
 
             {detail ? (
@@ -288,6 +297,25 @@ export default function JournalEntriesPage() {
                     <span className="font-medium">{detail.period_name || '—'}</span>
                   </div>
                 </div>
+
+                {/* Reversal Chain */}
+                {detail.reversal_entry_id && (
+                  <div className="rounded border border-amber-200 bg-amber-50 p-3">
+                    <h4 className="text-[11px] font-bold text-amber-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                      <CornerDownRight size={12} /> Reversal Chain
+                    </h4>
+                    <div className="flex items-center gap-2 text-[12px] text-slate-700">
+                      <span>Reversed by entry</span>
+                      <button
+                        onClick={() => setSelectedId(detail.reversal_entry_id!)}
+                        className="font-mono font-semibold text-[#0F2D5C] hover:underline"
+                      >
+                        #{detail.reversal_entry_id}
+                      </button>
+                      <span className="text-slate-400 text-[11px]">— click to view</span>
+                    </div>
+                  </div>
+                )}
 
                 <div>
                   <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">Ledger Lines</h4>

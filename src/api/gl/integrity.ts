@@ -160,7 +160,7 @@ integrity.get('/audit-log', async (c) => {
 
   const [rows, totalRow] = await Promise.all([
     c.env.DB.prepare(
-      `SELECT al.*, u.email AS user_email, u.name AS user_name
+      `SELECT al.*, u.email AS user_email, u.full_name AS user_name
        FROM audit_log al
        LEFT JOIN users u ON u.id = al.user_id
        ${where}
