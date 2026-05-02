@@ -224,11 +224,14 @@ export interface EventType {
   code: string
   name: string
   description?: string
+  module_name?: string
   affects_inventory: number
   affects_wip: number
   affects_cogs: number
   affects_revenue: number
   affects_expense: number
+  debit_role?: string | null
+  credit_role?: string | null
   is_active: number
 }
 

@@ -270,6 +270,10 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
 
   const status = b.status ?? 'posted'
 
+  if (status === 'posted' && (b.season_id == null || b.center_code == null)) {
+    return c.json({ success: false, error: 'الموسم ومركز التكلفة مطلوبان عند الترحيل' }, 422)
+  }
+
   const periodId = await getOpenPeriod(c.env.DB, company_id, b.transaction_date)
   if (!periodId) {
     return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.transaction_date}` }, 400)

@@ -114,6 +114,10 @@ treasury.post('/transactions', zValidator('json', transactionSchema), async (c) 
   const { company_id, sub: userId } = getUser(c)
   const b = c.req.valid('json')
 
+  if (b.status === 'posted' && (b.season_id == null || b.center_code == null)) {
+    return c.json({ success: false, error: 'الموسم ومركز التكلفة مطلوبان عند الترحيل' }, 422)
+  }
+
   try {
     const { txnId, balance } = await FinanceCore.recordCashMovement(c.env.DB, {
       company_id, userId,

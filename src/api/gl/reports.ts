@@ -79,7 +79,7 @@ reports.get('/ledger/:account?', async (c) => {
       l.credit,
       l.description AS line_description,
       l.center_code,
-      cc.name AS center_name,
+      COALESCE(cc.name_ar, cc.name_en) AS center_name,
       l.season_id,
       s.name AS season_name,
       l.field_id,

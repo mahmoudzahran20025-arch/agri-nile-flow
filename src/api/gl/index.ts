@@ -11,6 +11,9 @@ import reconciliation from './reconciliation'
 import reports from './reports'
 import integrity from './integrity'
 import masterData from './master-data'
+import exchangeRates from './exchange-rates'
+import eventTypes from './event-types'
+import accountRolePolicy from './account-role-policy'
 
 // Main GL router - aggregator for all GL sub-modules
 const gl = new Hono<{ Bindings: Env }>()
@@ -27,6 +30,15 @@ gl.route('/entries', entries)
 
 // Master Data: Material Groups, Business Units, Currencies, Roles (Phase 1)
 gl.route('/master-data', masterData)
+
+// Exchange Rates: FX rates for multi-currency support (Phase 2)
+gl.route('/exchange-rates', exchangeRates)
+
+// Event Types: Business event type catalogue (Phase 2 Task 2)
+gl.route('/event-types', eventTypes)
+
+// Account Role Policy: Role → Account mapping engine (Phase 3)
+gl.route('/account-role-policy', accountRolePolicy)
 
 // Posting Setup: Posting groups, posting rules, validation
 gl.route('/', postingSetup)

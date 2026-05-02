@@ -406,9 +406,9 @@ config.patch('/gl-integrations/:key', async (c) => {
   void logAudit(c.env.DB, {
     user_id: userId,
     company_id,
-    action: is_enabled ? 'ENABLE_GL_INTEGRATION' : 'DISABLE_GL_INTEGRATION',
+    action: 'UPSERT',
     table_name: 'gl_integration_settings',
-    record_id: key,
+    record_id: null,
     new_value: {
       module_key: key,
       is_enabled,

@@ -44,7 +44,7 @@ costCenters.get('/cost-centers', async (c) => {
   const { results } = await c.env.DB.prepare(`
     SELECT
       jl.center_code,
-      cc.name                          AS center_name,
+      COALESCE(cc.name_ar, cc.name_en) AS center_name,
       a.account_type,
       SUM(jl.debit)                    AS total_debit,
       SUM(jl.credit)                   AS total_credit,
@@ -299,7 +299,7 @@ costCenters.get('/cost-centers/compare', async (c) => {
   const queryForSeason = (seasonId: number) => c.env.DB.prepare(`
     SELECT
       jl.center_code,
-      cc.name AS center_name,
+      COALESCE(cc.name_ar, cc.name_en) AS center_name,
       SUM(CASE WHEN a.account_type = 'expense' THEN jl.debit - jl.credit ELSE 0 END) AS expense_total,
       SUM(CASE WHEN a.account_type = 'revenue' THEN jl.credit - jl.debit ELSE 0 END) AS revenue_total
     FROM journal_entry_lines jl

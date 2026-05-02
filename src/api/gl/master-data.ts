@@ -47,7 +47,7 @@ masterData.get('/material-groups', async (c) => {
   
   return c.json({
     success: true,
-    data: results as MaterialGroup[],
+    data: results as unknown as MaterialGroup[],
     count: results?.length ?? 0,
   })
 })
@@ -99,14 +99,13 @@ masterData.post('/material-groups', async (c) => {
   `).bind(company_id, body.code, body.name, body.description ?? null).run()
   
   // Audit log
-  await logAudit({
-    db: c.env.DB,
-    company_id,
+  await logAudit(c.env.DB, {
     user_id: userId,
+    company_id,
+    action: 'CREATE',
     table_name: 'md_material_groups',
-    action: 'INSERT',
-    affected_record: body.code,
-    change_summary: `إنشاء مجموعة مواد: ${body.name}`,
+    record_id: result.meta.last_row_id as number,
+    new_value: body,
   })
   
   return c.json({
@@ -162,22 +161,20 @@ masterData.patch('/material-groups/:id', async (c) => {
   `).bind(...params).run()
   
   // Audit log
-  await logAudit({
-    db: c.env.DB,
-    company_id,
+  await logAudit(c.env.DB, {
     user_id: userId,
-    table_name: 'md_material_groups',
+    company_id,
     action: 'UPDATE',
-    affected_record: existing.code,
-    change_summary: `تحديث مجموعة المواد: ${Object.keys(body).join(', ')}`,
+    table_name: 'md_material_groups',
+    record_id: id,
+    new_value: body,
   })
   
-  return c.json({ success: true, data: { id, ...existing, ...body } })
+  return c.json({ success: true, data: { ...existing, ...body, id } as MaterialGroup })
 })
 
 // ============================================================================
 // BUSINESS UNITS
-// ============================================================================
 
 // GET /api/gl/master-data/business-units
 masterData.get('/business-units', async (c) => {
@@ -197,7 +194,7 @@ masterData.get('/business-units', async (c) => {
   
   return c.json({
     success: true,
-    data: results as BusinessUnit[],
+    data: results as unknown as BusinessUnit[],
     count: results?.length ?? 0,
   })
 })
@@ -249,14 +246,13 @@ masterData.post('/business-units', async (c) => {
   `).bind(company_id, body.code, body.name, body.description ?? null).run()
   
   // Audit log
-  await logAudit({
-    db: c.env.DB,
-    company_id,
+  await logAudit(c.env.DB, {
     user_id: userId,
+    company_id,
+    action: 'CREATE',
     table_name: 'md_business_units',
-    action: 'INSERT',
-    affected_record: body.code,
-    change_summary: `إنشاء وحدة تنظيمية: ${body.name}`,
+    record_id: result.meta.last_row_id as number,
+    new_value: body,
   })
   
   return c.json({
@@ -312,17 +308,16 @@ masterData.patch('/business-units/:id', async (c) => {
   `).bind(...params).run()
   
   // Audit log
-  await logAudit({
-    db: c.env.DB,
-    company_id,
+  await logAudit(c.env.DB, {
     user_id: userId,
-    table_name: 'md_business_units',
+    company_id,
     action: 'UPDATE',
-    affected_record: existing.code,
-    change_summary: `تحديث الوحدة التنظيمية: ${Object.keys(body).join(', ')}`,
+    table_name: 'md_business_units',
+    record_id: id,
+    new_value: body,
   })
   
-  return c.json({ success: true, data: { id, ...existing, ...body } })
+  return c.json({ success: true, data: { ...existing, ...body, id } as BusinessUnit })
 })
 
 // ============================================================================
@@ -347,7 +342,7 @@ masterData.get('/account-roles', async (c) => {
   
   return c.json({
     success: true,
-    data: results as AccountRole[],
+    data: results as unknown as AccountRole[],
     count: results?.length ?? 0,
   })
 })
@@ -364,7 +359,7 @@ masterData.get('/currencies', async (c) => {
   
   return c.json({
     success: true,
-    data: results as Currency[],
+    data: results as unknown as Currency[],
     count: results?.length ?? 0,
   })
 })
@@ -381,7 +376,7 @@ masterData.get('/costing-methods', async (c) => {
   
   return c.json({
     success: true,
-    data: results as CostingMethod[],
+    data: results as unknown as CostingMethod[],
     count: results?.length ?? 0,
   })
 })

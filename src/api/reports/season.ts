@@ -33,7 +33,7 @@ season.get('/season-summary', async (c) => {
     c.env.DB.prepare(`
       SELECT
         cc.code                        AS center_code,
-        cc.name                        AS center_name,
+        COALESCE(cc.name_ar, cc.name_en) AS center_name,
         COALESCE(cash.cash_total, 0)   AS cash_total,
         COALESCE(sup.sup_total, 0)     AS supplier_total,
         COALESCE(inv.inv_total, 0)     AS inventory_total,
