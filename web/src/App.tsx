@@ -1,80 +1,101 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { useEffect } from 'react'
+import { useEffect, Suspense, lazy } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAppStore, useIsAuth } from './store/appStore'
 import { configApi, authApi } from './api/client'
 import { AppShell } from './components/shell/AppShell'
+
+// ── Always-eager (critical path) ───────────────────────────────────────────
 import LoginPage     from './pages/LoginPage'
 import DebugPage     from './pages/DebugPage'
 import DashboardPage from './pages/DashboardPage'
-import SupplierHubPage       from './pages/suppliers/SupplierHubPage'
-import SupplierDetailPage    from './pages/suppliers/SupplierDetailPage'
-import CashJournalPage       from './pages/treasury/CashJournalPage'
-import WarehouseBalancesPage from './pages/inventory/WarehouseBalancesPage'
-import WarehousesPage        from './pages/inventory/WarehousesPage'
-import InventoryMovementsPage from './pages/inventory/InventoryMovementsPage'
-import ItemCardPage from './pages/inventory/ItemCardPage'
-import CostByFieldPage from './pages/inventory/CostByFieldPage'
-import ItemCategoriesPage from './pages/inventory/ItemCategoriesPage'
-import InventoryAdjustmentsPage from './pages/inventory/InventoryAdjustmentsPage'
-import AdjustmentDetailPage from './pages/inventory/AdjustmentDetailPage'
-import ItemMasterPage from './pages/inventory/ItemMasterPage'
-import InventoryPostingHealthPage from './pages/inventory/InventoryPostingHealthPage'
-import UsersPage       from './pages/users/UsersPage'
-import PartnersPage    from './pages/treasury/PartnersPage'
-import ReportsPage     from './pages/ReportsPage'
-import ChartsPage      from './pages/reports/ChartsPage'
-import ConfigPage      from './pages/config/ConfigPage'
-import FieldsPage      from './pages/fields/FieldsPage'
-import WorkOrdersPage  from './pages/operations/WorkOrdersPage'
-import WorkOrderTemplatesPage from './pages/operations/WorkOrderTemplatesPage'
-import ContractsPage   from './pages/contracts/ContractsPage'
-import ChartOfAccountsPage   from './pages/gl/ChartOfAccountsPage'
-import JournalEntriesPage    from './pages/gl/JournalEntriesPage'
-import FinancialStatementsPage from './pages/gl/FinancialStatementsPage'
-import AccountLedgerPage     from './pages/gl/AccountLedgerPage'
-import PeriodsPage           from './pages/gl/PeriodsPage'
-import PostingSimulatorPage  from './pages/gl/PostingSimulatorPage'
-import ReconciliationPage    from './pages/gl/ReconciliationPage'
-import PeriodCloseCockpit    from './pages/gl/PeriodCloseCockpit'
-import BatchPostingCenterPage from './pages/gl/BatchPostingCenterPage'
-import FinanceHomePage       from './pages/gl/FinanceHomePage'
-import HealthIntegrityPage   from './pages/gl/HealthIntegrityPage'
-import BankReconciliationPage from './pages/treasury/BankReconciliationPage'
-import PurchaseOrdersPage    from './pages/treasury/PurchaseOrdersPage'
-import APAgingPage           from './pages/treasury/APAgingPage'
-import SuperAdminPage        from './pages/admin/SuperAdminPage'
-import AuditLogPage          from './pages/audit/AuditLogPage'
-import ErrorLogPage          from './pages/audit/ErrorLogPage'
-import IntegrityPage         from './pages/audit/IntegrityPage'
-import EmployeeListPage      from './pages/hr/EmployeeListPage'
-import EmployeeProfilePage   from './pages/hr/EmployeeProfilePage'
-import AttendancePage        from './pages/hr/AttendancePage'
-import LeavesAdvancesPage    from './pages/hr/LeavesAdvancesPage'
-import PayrollPage           from './pages/hr/PayrollPage'
-import OrgChartPage          from './pages/hr/OrgChartPage'
-import DocumentsPage         from './pages/documents/DocumentsPage'
-import HarvestPage           from './pages/fields/HarvestPage'
-import LocationTasksPage     from './pages/hr/LocationTasksPage'
-import HrDashboardPage       from './pages/hr/HrDashboardPage'
-import CalendarPage          from './pages/calendar/CalendarPage'
-import CostCenterReportPage  from './pages/reports/CostCenterReportPage'
-import SuppliersBalancePage  from './pages/reports/SuppliersBalancePage'
-import SeasonSummaryPage     from './pages/reports/SeasonSummaryPage'
-import SeasonPnLPage        from './pages/reports/SeasonPnLPage'
-import SeasonClosePage      from './pages/reports/SeasonClosePage'
-import SeasonReadinessPage  from './pages/reports/SeasonReadinessPage'
-import BudgetVsActualPage      from './pages/reports/BudgetVsActualPage'
-import SeasonReportsPage       from './pages/reports/SeasonReportsPage'
-import SeasonsPage             from './pages/fields/SeasonsPage'
-import GLSettingsPage          from './pages/gl/GLSettingsPage'
-import PostingGroupsPage       from './pages/gl/PostingGroupsPage'
-import PostingSetupPage        from './pages/gl/PostingSetupPage'
-import PostingRulesPage        from './pages/gl/PostingRulesPage'
-import PostingSetupHealthPage  from './pages/gl/PostingSetupHealthPage'
-import SetupWizardPage         from './pages/gl/SetupWizardPage'
-import MasterDataPage          from './pages/gl/MasterDataPage'
-import AuditCenterPage         from './pages/audit/AuditCenterPage'
+
+// ── Lazy chunks: GL / Finance ───────────────────────────────────────────────
+const FinanceHomePage          = lazy(() => import('./pages/gl/FinanceHomePage'))
+const ChartOfAccountsPage      = lazy(() => import('./pages/gl/ChartOfAccountsPage'))
+const JournalEntriesPage       = lazy(() => import('./pages/gl/JournalEntriesPage'))
+const FinancialStatementsPage  = lazy(() => import('./pages/gl/FinancialStatementsPage'))
+const AccountLedgerPage        = lazy(() => import('./pages/gl/AccountLedgerPage'))
+const PeriodsPage              = lazy(() => import('./pages/gl/PeriodsPage'))
+const PostingSimulatorPage     = lazy(() => import('./pages/gl/PostingSimulatorPage'))
+const ReconciliationPage       = lazy(() => import('./pages/gl/ReconciliationPage'))
+const PeriodCloseCockpit       = lazy(() => import('./pages/gl/PeriodCloseCockpit'))
+const BatchPostingCenterPage   = lazy(() => import('./pages/gl/BatchPostingCenterPage'))
+const HealthIntegrityPage      = lazy(() => import('./pages/gl/HealthIntegrityPage'))
+const GLSettingsPage           = lazy(() => import('./pages/gl/GLSettingsPage'))
+const PostingGroupsPage        = lazy(() => import('./pages/gl/PostingGroupsPage'))
+const PostingSetupPage         = lazy(() => import('./pages/gl/PostingSetupPage'))
+const PostingRulesPage         = lazy(() => import('./pages/gl/PostingRulesPage'))
+const PostingSetupHealthPage   = lazy(() => import('./pages/gl/PostingSetupHealthPage'))
+const SetupWizardPage          = lazy(() => import('./pages/gl/SetupWizardPage'))
+const MasterDataPage           = lazy(() => import('./pages/gl/MasterDataPage'))
+const ExchangeRatesPage        = lazy(() => import('./pages/gl/ExchangeRatesPage'))
+const AccountRolePolicyPage    = lazy(() => import('./pages/gl/AccountRolePolicyPage'))
+
+// ── Lazy chunks: HR ─────────────────────────────────────────────────────────
+const EmployeeListPage    = lazy(() => import('./pages/hr/EmployeeListPage'))
+const EmployeeProfilePage = lazy(() => import('./pages/hr/EmployeeProfilePage'))
+const AttendancePage      = lazy(() => import('./pages/hr/AttendancePage'))
+const LeavesAdvancesPage  = lazy(() => import('./pages/hr/LeavesAdvancesPage'))
+const PayrollPage         = lazy(() => import('./pages/hr/PayrollPage'))
+const OrgChartPage        = lazy(() => import('./pages/hr/OrgChartPage'))
+const LocationTasksPage   = lazy(() => import('./pages/hr/LocationTasksPage'))
+const HrDashboardPage     = lazy(() => import('./pages/hr/HrDashboardPage'))
+
+// ── Lazy chunks: Reports ─────────────────────────────────────────────────────
+const ReportsPage           = lazy(() => import('./pages/ReportsPage'))
+const ChartsPage            = lazy(() => import('./pages/reports/ChartsPage'))
+const CostCenterReportPage  = lazy(() => import('./pages/reports/CostCenterReportPage'))
+const SuppliersBalancePage  = lazy(() => import('./pages/reports/SuppliersBalancePage'))
+const SeasonSummaryPage     = lazy(() => import('./pages/reports/SeasonSummaryPage'))
+const SeasonPnLPage         = lazy(() => import('./pages/reports/SeasonPnLPage'))
+const SeasonClosePage       = lazy(() => import('./pages/reports/SeasonClosePage'))
+const SeasonReadinessPage   = lazy(() => import('./pages/reports/SeasonReadinessPage'))
+const BudgetVsActualPage    = lazy(() => import('./pages/reports/BudgetVsActualPage'))
+const SeasonReportsPage     = lazy(() => import('./pages/reports/SeasonReportsPage'))
+
+// ── Lazy chunks: Operations / misc ──────────────────────────────────────────
+const SupplierHubPage          = lazy(() => import('./pages/suppliers/SupplierHubPage'))
+const SupplierDetailPage       = lazy(() => import('./pages/suppliers/SupplierDetailPage'))
+const CashJournalPage          = lazy(() => import('./pages/treasury/CashJournalPage'))
+const PartnersPage             = lazy(() => import('./pages/treasury/PartnersPage'))
+const BankReconciliationPage   = lazy(() => import('./pages/treasury/BankReconciliationPage'))
+const PurchaseOrdersPage       = lazy(() => import('./pages/treasury/PurchaseOrdersPage'))
+const APAgingPage              = lazy(() => import('./pages/treasury/APAgingPage'))
+const WarehouseBalancesPage    = lazy(() => import('./pages/inventory/WarehouseBalancesPage'))
+const WarehousesPage           = lazy(() => import('./pages/inventory/WarehousesPage'))
+const InventoryMovementsPage   = lazy(() => import('./pages/inventory/InventoryMovementsPage'))
+const ItemCardPage             = lazy(() => import('./pages/inventory/ItemCardPage'))
+const CostByFieldPage          = lazy(() => import('./pages/inventory/CostByFieldPage'))
+const ItemCategoriesPage       = lazy(() => import('./pages/inventory/ItemCategoriesPage'))
+const InventoryAdjustmentsPage = lazy(() => import('./pages/inventory/InventoryAdjustmentsPage'))
+const AdjustmentDetailPage     = lazy(() => import('./pages/inventory/AdjustmentDetailPage'))
+const ItemMasterPage           = lazy(() => import('./pages/inventory/ItemMasterPage'))
+const InventoryPostingHealthPage = lazy(() => import('./pages/inventory/InventoryPostingHealthPage'))
+const UsersPage                = lazy(() => import('./pages/users/UsersPage'))
+const ConfigPage               = lazy(() => import('./pages/config/ConfigPage'))
+const FieldsPage               = lazy(() => import('./pages/fields/FieldsPage'))
+const SeasonsPage              = lazy(() => import('./pages/fields/SeasonsPage'))
+const HarvestPage              = lazy(() => import('./pages/fields/HarvestPage'))
+const WorkOrdersPage           = lazy(() => import('./pages/operations/WorkOrdersPage'))
+const WorkOrderTemplatesPage   = lazy(() => import('./pages/operations/WorkOrderTemplatesPage'))
+const ContractsPage            = lazy(() => import('./pages/contracts/ContractsPage'))
+const SuperAdminPage           = lazy(() => import('./pages/admin/SuperAdminPage'))
+const AuditLogPage             = lazy(() => import('./pages/audit/AuditLogPage'))
+const ErrorLogPage             = lazy(() => import('./pages/audit/ErrorLogPage'))
+const IntegrityPage            = lazy(() => import('./pages/audit/IntegrityPage'))
+const AuditCenterPage          = lazy(() => import('./pages/audit/AuditCenterPage'))
+const DocumentsPage            = lazy(() => import('./pages/documents/DocumentsPage'))
+const CalendarPage             = lazy(() => import('./pages/calendar/CalendarPage'))
+
+// ── Fallback while lazy chunks load ─────────────────────────────────────────
+function PageLoader() {
+  return (
+    <div className="flex items-center justify-center h-full min-h-[200px]">
+      <div className="w-6 h-6 border-2 border-[#0F2D5C] border-t-transparent rounded-full animate-spin" />
+    </div>
+  )
+}
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuth = useIsAuth()
@@ -110,9 +131,10 @@ export default function App() {
   }, [meData, setPermissions])
 
   return (
+    <Suspense fallback={<PageLoader />}>
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route path="/debug" element={<DebugPage />} />
+      <Route path="/debug" element={<RequireAuth><DebugPage /></RequireAuth>} />
 
       <Route
         path="/"
@@ -184,6 +206,8 @@ export default function App() {
         <Route path="gl/posting-rules"        element={<PostingRulesPage />} />
         <Route path="gl/setup-wizard" element={<SetupWizardPage />} />
         <Route path="gl/master-data"  element={<MasterDataPage />} />
+        <Route path="gl/exchange-rates" element={<ExchangeRatesPage />} />
+        <Route path="gl/account-role-policy" element={<AccountRolePolicyPage />} />
         {/* Sprint 2 Finance epics */}
         <Route path="gl/posting-simulator" element={<PostingSimulatorPage />} />
         <Route path="gl/reconciliation"    element={<ReconciliationPage />} />
@@ -235,5 +259,6 @@ export default function App() {
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>
+    </Suspense>
   )
 }
