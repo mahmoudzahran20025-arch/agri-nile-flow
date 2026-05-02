@@ -73,6 +73,7 @@ import PostingSetupPage        from './pages/gl/PostingSetupPage'
 import PostingRulesPage        from './pages/gl/PostingRulesPage'
 import PostingSetupHealthPage  from './pages/gl/PostingSetupHealthPage'
 import SetupWizardPage         from './pages/gl/SetupWizardPage'
+import MasterDataPage          from './pages/gl/MasterDataPage'
 import AuditCenterPage         from './pages/audit/AuditCenterPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -182,6 +183,7 @@ export default function App() {
         <Route path="gl/posting-setup/health" element={<PostingSetupHealthPage />} />
         <Route path="gl/posting-rules"        element={<PostingRulesPage />} />
         <Route path="gl/setup-wizard" element={<SetupWizardPage />} />
+        <Route path="gl/master-data"  element={<MasterDataPage />} />
         {/* Sprint 2 Finance epics */}
         <Route path="gl/posting-simulator" element={<PostingSimulatorPage />} />
         <Route path="gl/reconciliation"    element={<ReconciliationPage />} />

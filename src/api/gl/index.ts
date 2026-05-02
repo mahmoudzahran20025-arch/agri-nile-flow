@@ -10,6 +10,7 @@ import batchJobs from './batch-jobs'
 import reconciliation from './reconciliation'
 import reports from './reports'
 import integrity from './integrity'
+import masterData from './master-data'
 
 // Main GL router - aggregator for all GL sub-modules
 const gl = new Hono<{ Bindings: Env }>()
@@ -23,6 +24,9 @@ gl.route('/periods', periods)
 
 // Entries: Journal entries, reversals, manual entries
 gl.route('/entries', entries)
+
+// Master Data: Material Groups, Business Units, Currencies, Roles (Phase 1)
+gl.route('/master-data', masterData)
 
 // Posting Setup: Posting groups, posting rules, validation
 gl.route('/', postingSetup)
@@ -49,6 +53,7 @@ gl.get('/health', (c) => {
       'accounts',
       'periods',
       'entries',
+      'master-data',
       'posting-setup',
       'batch-jobs',
       'reconciliation',

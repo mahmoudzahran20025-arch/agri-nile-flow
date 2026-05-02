@@ -419,6 +419,39 @@ export const glApi = {
       },
     } satisfies ReconciliationResult
   }),
+
+  // ── Master Data (Phase 1) ───────────────────────────────────────────────────
+  // Material Groups
+  materialGroups: (active?: boolean) =>
+    unwrap(api.get<{ success: boolean; data: unknown[]; count: number }>(`/gl/master-data/material-groups${active ? '?active=1' : ''}`)),
+  getMaterialGroup: (id: number) =>
+    unwrap(api.get<{ success: boolean; data: unknown }>(`/gl/master-data/material-groups/${id}`)),
+  createMaterialGroup: (body: { code: string; name: string; description?: string }) =>
+    unwrap(api.post<{ success: boolean; data: unknown }>('/gl/master-data/material-groups', body)),
+  updateMaterialGroup: (id: number, body: Partial<{ code: string; name: string; description: string }>) =>
+    unwrap(api.patch<{ success: boolean; data: unknown }>(`/gl/master-data/material-groups/${id}`, body)),
+
+  // Business Units
+  businessUnits: (active?: boolean) =>
+    unwrap(api.get<{ success: boolean; data: unknown[]; count: number }>(`/gl/master-data/business-units${active ? '?active=1' : ''}`)),
+  getBusinessUnit: (id: number) =>
+    unwrap(api.get<{ success: boolean; data: unknown }>(`/gl/master-data/business-units/${id}`)),
+  createBusinessUnit: (body: { code: string; name: string; description?: string }) =>
+    unwrap(api.post<{ success: boolean; data: unknown }>('/gl/master-data/business-units', body)),
+  updateBusinessUnit: (id: number, body: Partial<{ code: string; name: string; description: string }>) =>
+    unwrap(api.patch<{ success: boolean; data: unknown }>(`/gl/master-data/business-units/${id}`, body)),
+
+  // Account Roles (read-only reference data)
+  accountRoles: (category?: string) =>
+    unwrap(api.get<{ success: boolean; data: unknown[]; count: number }>(`/gl/master-data/account-roles${category ? `?category=${category}` : ''}`)),
+
+  // Currencies (read-only reference data)
+  currencies: () =>
+    unwrap(api.get<{ success: boolean; data: unknown[]; count: number }>('/gl/master-data/currencies')),
+
+  // Costing Methods (read-only reference data)
+  costingMethods: () =>
+    unwrap(api.get<{ success: boolean; data: unknown[]; count: number }>('/gl/master-data/costing-methods')),
 }
 
 // ── Reconciliation types (shared with ReconciliationPage, PeriodCloseCockpit) ─
