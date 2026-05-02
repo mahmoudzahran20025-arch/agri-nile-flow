@@ -3,8 +3,8 @@
  * Shows which combinations have movements but lack posting setup entries.
  */
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
-import { ShieldCheck, AlertTriangle, CheckCircle, Package, ExternalLink } from 'lucide-react'
+import { useNavigate, Link } from 'react-router-dom'
+import { ShieldCheck, AlertTriangle, CheckCircle, Package, ExternalLink, Link2Off, Tag } from 'lucide-react'
 import { inventoryApi } from '../../api/inventory'
 
 const EGP = (n: number) =>
@@ -18,6 +18,16 @@ export default function InventoryPostingHealthPage() {
     queryFn:  inventoryApi.postingHealth,
     staleTime: 60_000,
   })
+
+  // Unlinked movements breakdown
+  const { data: movData } = useQuery({
+    queryKey: ['inventory', 'movements', { page: 1, size: 200 }],
+    queryFn:  () => inventoryApi.list({ page: 1, size: 200 }),
+    staleTime: 60_000,
+  })
+  const movRows = (movData as any)?.data ?? []
+  const unlinkedZeroValue   = movRows.filter((r: any) => !r.journal_entry_id && (r.value_in + r.value_out) === 0)
+  const unlinkedWithValue   = movRows.filter((r: any) => !r.journal_entry_id && (r.value_in + r.value_out) > 0)
 
   const health  = data?.data    ?? []
   const summary = data?.summary ?? { total_combos: 0, covered: 0, exact_setup: 0, missing_setup: 0, health_pct: 100 }
@@ -87,6 +97,68 @@ export default function InventoryPostingHealthPage() {
           </div>
         </div>
       </div>
+
+      {/* GL Linkage panel */}
+      {(unlinkedZeroValue.length > 0 || unlinkedWithValue.length > 0) && (
+        <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
+          <div className="px-5 py-3.5 border-b border-slate-100 flex items-center gap-2">
+            <Link2Off size={16} className="text-slate-400" />
+            <h3 className="font-semibold text-slate-700">حركات بدون قيد محاسبي</h3>
+          </div>
+          <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Zero-value — informational */}
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+              <div className="flex items-start gap-3">
+                <Tag size={16} className="text-amber-600 mt-0.5 shrink-0" />
+                <div className="flex-1">
+                  <p className="font-semibold text-amber-800 text-sm">
+                    {unlinkedZeroValue.length} حركة بسعر صفر
+                  </p>
+                  <p className="text-xs text-amber-700 mt-1">
+                    القيمة المالية = 0 ← لا قيد مطلوب. يُنصح بمراجعة أسعار هذه الأصناف وتحديثها.
+                  </p>
+                  <Link
+                    to="/inventory/movements?unlinked=1"
+                    className="inline-flex items-center gap-1 mt-2 text-xs font-medium text-amber-700 hover:text-amber-900 underline"
+                  >
+                    عرض الحركات ←
+                  </Link>
+                </div>
+              </div>
+            </div>
+
+            {/* With value — real gap */}
+            {unlinkedWithValue.length > 0 ? (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle size={16} className="text-red-600 mt-0.5 shrink-0" />
+                  <div className="flex-1">
+                    <p className="font-semibold text-red-800 text-sm">
+                      {unlinkedWithValue.length} حركة بقيمة بدون قيد — فجوة محاسبية
+                    </p>
+                    <p className="text-xs text-red-700 mt-1">
+                      هذه الحركات لها قيمة مالية لكن لم يُنشأ لها قيد GL. يحتاج تدخلاً.
+                    </p>
+                    <Link
+                      to="/inventory/movements"
+                      className="inline-flex items-center gap-1 mt-2 text-xs font-medium text-red-700 hover:text-red-900 underline"
+                    >
+                      عرض في حركات المخزون ←
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-green-200 bg-green-50 p-4 flex items-center gap-3">
+                <CheckCircle size={16} className="text-green-600 shrink-0" />
+                <p className="text-sm text-green-700 font-medium">
+                  كل الحركات ذات قيمة مالية مرتبطة بقيود GL ✓
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Missing combos alert */}
       {missing.length > 0 && (
