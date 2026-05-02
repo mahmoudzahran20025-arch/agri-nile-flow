@@ -266,6 +266,74 @@ export interface PostingRuleFilters {
   size?:                     number
 }
 
+// ── Phase 2+3 Types ──────────────────────────────────────────────────────────
+
+export interface ExchangeRateRow {
+  id: number
+  from_currency: string
+  to_currency:   string
+  rate:          number
+  effective_date: string
+  source:        string
+  is_active:     number
+  created_at?:   string
+}
+
+export interface EventTypeRow {
+  id:               number
+  code:             string
+  name:             string
+  description?:     string
+  module_name?:     string
+  affects_inventory: number
+  affects_wip:      number
+  affects_cogs:     number
+  affects_revenue:  number
+  affects_expense:  number
+  debit_role?:      string | null
+  credit_role?:     string | null
+  is_active:        number
+}
+
+export interface RolePolicyRow {
+  id:           number
+  role_code:    string
+  account_code: string
+  priority:     number
+  notes?:       string | null
+  is_active:    number
+  role_name?:   string
+  role_category?: string
+  account_name?:  string
+  account_type?:  string
+}
+
+export interface RoleCoverageRow {
+  role_code:  string
+  role_name:  string
+  category:   string
+  is_mapped:  boolean
+}
+
+export interface RoleCoverageMeta {
+  total_roles:    number
+  mapped_roles:   number
+  unmapped_roles: number
+  coverage_pct:   number
+  gaps:           string[]
+}
+
+export interface RoleResolutionRow {
+  role_code:      string
+  role_name:      string
+  category:       string
+  account_code:   string
+  account_name:   string
+  account_type:   string
+  normal_balance: string
+  notes?:         string | null
+}
+
 export const glApi = {
   /**
    * Fetch chart-of-accounts entries.
@@ -452,6 +520,47 @@ export const glApi = {
   // Costing Methods (read-only reference data)
   costingMethods: () =>
     unwrap(api.get<{ success: boolean; data: unknown[]; count: number }>('/gl/master-data/costing-methods')),
+
+  // ── Exchange Rates (Phase 2) ─────────────────────────────────────────────────
+  exchangeRates: (p?: { from?: string; to?: string; date?: string }) => {
+    const params = new URLSearchParams()
+    if (p?.from)  params.set('from',  p.from)
+    if (p?.to)    params.set('to',    p.to)
+    if (p?.date)  params.set('date',  p.date)
+    const qs = params.toString()
+    return unwrap(api.get<{ success: boolean; data: ExchangeRateRow[]; meta: { count: number } }>(
+      `/gl/exchange-rates${qs ? `?${qs}` : ''}`
+    ))
+  },
+  convertCurrency: (from: string, to: string, amount: number, date?: string) => {
+    const params = new URLSearchParams({ from, to, amount: String(amount) })
+    if (date) params.set('date', date)
+    return unwrap(api.get<{ success: boolean; data: { from: string; to: string; amount: number; converted: number; rate: number } }>(
+      `/gl/exchange-rates/convert?${params.toString()}`
+    ))
+  },
+  createExchangeRate: (body: { from_currency: string; to_currency: string; rate: number; effective_date: string; source?: string }) =>
+    unwrap(api.post<{ success: boolean; data: ExchangeRateRow }>('/gl/exchange-rates', body)),
+
+  // ── Event Types (Phase 2) ────────────────────────────────────────────────────
+  eventTypes: () =>
+    unwrap(api.get<{ success: boolean; data: EventTypeRow[]; meta: { count: number } }>('/gl/event-types')),
+  eventTypeModules: () =>
+    unwrap(api.get<{ success: boolean; data: string[] }>('/gl/event-types/modules')),
+
+  // ── Account Role Policy (Phase 3) ────────────────────────────────────────────
+  accountRolePolicy: (active = true) =>
+    unwrap(api.get<{ success: boolean; data: RolePolicyRow[]; meta: { count: number } }>(
+      `/gl/account-role-policy${active ? '?active=1' : ''}`
+    )),
+  accountRolePolicyCoverage: () =>
+    unwrap(api.get<{ success: boolean; data: RoleCoverageRow[]; meta: RoleCoverageMeta }>('/gl/account-role-policy/coverage')),
+  resolveAccountByRole: (role: string) =>
+    unwrap(api.get<{ success: boolean; data: RoleResolutionRow }>(`/gl/account-role-policy/resolve/${role}`)),
+  createRoleMapping: (body: { role_code: string; account_code: string; priority?: number; notes?: string }) =>
+    unwrap(api.post<{ success: boolean; data: RolePolicyRow }>('/gl/account-role-policy', body)),
+  deleteRoleMapping: (id: number) =>
+    unwrap(api.delete<{ success: boolean; data: { id: number; deactivated: boolean } }>(`/gl/account-role-policy/${id}`)),
 }
 
 // ── Reconciliation types (shared with ReconciliationPage, PeriodCloseCockpit) ─
