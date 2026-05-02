@@ -21,6 +21,11 @@ import {
   TrendingUp,
   CalendarDays,
   Tractor,
+  GitBranch,
+  ArrowLeftRight,
+  Clock,
+  ClipboardList,
+  X as XIcon,
 } from 'lucide-react';
 import { Topbar } from './Topbar';
 import GlobalSearch from '../GlobalSearch';
@@ -46,28 +51,33 @@ const navSections: { title: string; items: NavItem[] }[] = [
     ],
   },
   {
-    title: 'Suppliers & AP',
+    title: 'Finance',
     items: [
-      { label: 'Suppliers Hub',  path: '/suppliers',    icon: <Users    size={18} /> },
-      { label: 'Cash & Banks',   path: '/treasury',     icon: <Wallet   size={18} /> },
-    ],
-  },
-  {
-    title: 'Finance / GL',
-    items: [
-      { label: 'Finance Center', path: '/gl',                icon: <BarChart3    size={18} /> },
-      { label: 'Journal Entries',path: '/gl/entries',        icon: <BookOpen     size={18} /> },
-      { label: 'Batch Posting',  path: '/gl/batch-posting',  icon: <TrendingUp   size={18} /> },
-      { label: 'Period Close',   path: '/gl/period-close',   icon: <CalendarDays size={18} /> },
-      { label: 'Health',         path: '/gl/health-integrity', icon: <ShieldCheck size={18} /> },
+      { label: 'Finance Center',     path: '/gl',                  icon: <BarChart3      size={18} /> },
+      { label: 'Journal Entries',    path: '/gl/entries',          icon: <BookOpen       size={18} /> },
+      { label: 'Batch Posting',      path: '/gl/batch-posting',    icon: <TrendingUp     size={18} /> },
+      { label: 'Reconciliation',     path: '/gl/reconciliation',   icon: <ArrowLeftRight size={18} /> },
+      { label: 'Period Close',       path: '/gl/period-close',     icon: <CalendarDays   size={18} /> },
+      { label: 'Health & Integrity', path: '/gl/health-integrity', icon: <ShieldCheck    size={18} /> },
     ],
   },
   {
     title: 'Reports',
     items: [
-      { label: 'Financial Statements', path: '/gl/statements',       icon: <FileText  size={18} /> },
-      { label: 'Season Reports',       path: '/reports/season',      icon: <Sprout    size={18} /> },
-      { label: 'Cost Centers',         path: '/reports/cost-centers', icon: <BarChart3 size={18} /> },
+      { label: 'Financial Statements', path: '/gl/statements',          icon: <FileText  size={18} /> },
+      { label: 'Season Reports',       path: '/reports/season',         icon: <Sprout    size={18} /> },
+      { label: 'Cost Centers',         path: '/reports/cost-centers',   icon: <BarChart3 size={18} /> },
+      { label: 'Suppliers Balance',    path: '/reports/suppliers-balance', icon: <Users  size={18} /> },
+    ],
+  },
+  {
+    title: 'Suppliers & AP',
+    items: [
+      { label: 'Suppliers Hub',   path: '/suppliers',     icon: <Users         size={18} /> },
+      { label: 'AP Aging',        path: '/treasury/ap',   icon: <Clock         size={18} /> },
+      { label: 'Purchase Orders', path: '/treasury/po',   icon: <ClipboardList size={18} /> },
+      { label: 'Cash & Banks',    path: '/treasury',      icon: <Wallet        size={18} /> },
+      { label: 'Bank Reconcile',  path: '/treasury/bank', icon: <ArrowLeftRight size={18} /> },
     ],
   },
   {
@@ -81,9 +91,12 @@ const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: 'Operations',
     items: [
-      { label: 'Seasons & Fields', path: '/seasons',         icon: <Sprout     size={18} /> },
-      { label: 'HR & Payroll',     path: '/hr',              icon: <Users      size={18} /> },
-      { label: 'Equipment',        path: '/suppliers?tab=equipment', icon: <Tractor size={18} /> },
+      { label: 'Seasons & Fields', path: '/seasons',                   icon: <Sprout        size={18} /> },
+      { label: 'Work Orders',      path: '/operations',                icon: <ClipboardList size={18} /> },
+      { label: 'HR & Payroll',     path: '/hr',                        icon: <Users         size={18} /> },
+      { label: 'Calendar',         path: '/calendar',                  icon: <CalendarDays  size={18} /> },
+      { label: 'Documents',        path: '/documents',                 icon: <FileText      size={18} /> },
+      { label: 'Equipment',        path: '/suppliers?tab=equipment',   icon: <Tractor       size={18} /> },
     ],
   },
   {
@@ -106,6 +119,9 @@ const navSections: { title: string; items: NavItem[] }[] = [
           { label: 'Setup Wizard',    path: '/gl/setup-wizard' },
           { label: 'Fiscal Periods',  path: '/gl/periods' },
           { label: 'GL Settings',     path: '/gl/settings' },
+          { label: 'Master Data',     path: '/gl/master-data' },
+          { label: 'Exchange Rates',  path: '/gl/exchange-rates' },
+          { label: 'Role Policy',     path: '/gl/account-role-policy' },
         ],
       },
     ],
@@ -113,8 +129,10 @@ const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: 'System',
     items: [
-      { label: 'Admin', path: '/admin', icon: <Settings size={18} /> },
-      { label: 'Users', path: '/users', icon: <UserCog  size={18} /> },
+      { label: 'Audit Center', path: '/audit',  icon: <GitBranch size={18} /> },
+      { label: 'Config',       path: '/config', icon: <Sliders   size={18} /> },
+      { label: 'Admin',        path: '/admin',  icon: <Settings  size={18} /> },
+      { label: 'Users',        path: '/users',  icon: <UserCog   size={18} /> },
     ],
   },
 ];
@@ -179,7 +197,8 @@ const NavItemNode = ({ item, isChild = false }: { item: NavItem; isChild?: boole
   );
 };
 
-export const AppShell = () => {
+// Extracted sidebar content so it can be used in both desktop and mobile overlays
+const SidebarContent = ({ onNavClick }: { onNavClick?: () => void }) => {
   const { user, role, logout } = useAppStore();
   const navigate = useNavigate();
 
@@ -188,71 +207,104 @@ export const AppShell = () => {
     : 'U';
 
   return (
+    <div className="flex flex-col h-full">
+      {/* Logo Area */}
+      <div className="h-16 flex items-center px-6 gap-3 border-b border-white/5 bg-black/10 shrink-0">
+        <div className="w-9 h-9 rounded-xl bg-[#1D9E75] text-white flex items-center justify-center font-bold text-xl shadow-lg shadow-black/20">
+          A
+        </div>
+        <div className="flex flex-col">
+          <span className="font-bold text-[15px] leading-tight tracking-tight">Agri-Nile Flow</span>
+          <span className="text-[10px] text-emerald-400 font-bold tracking-widest uppercase opacity-80">Enterprise ERP</span>
+        </div>
+      </div>
+
+      {/* Navigation */}
+      <div className="flex-1 overflow-y-auto py-6 px-3 custom-scrollbar" onClick={onNavClick}>
+        {navSections.map((section, idx) => (
+          <div key={idx} className="mb-8">
+            <div className="px-4 mb-3 text-[11px] font-bold text-slate-400 uppercase tracking-[0.15em] opacity-70">
+              {section.title}
+            </div>
+            <div className="space-y-1">
+              {section.items.map((item, itemIdx) => (
+                <NavItemNode key={itemIdx} item={item} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* User Footer */}
+      <div className="p-4 border-t border-white/5 flex items-center gap-3 bg-black/20 backdrop-blur-sm shrink-0">
+        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#1D9E75] to-[#0F2D5C] flex items-center justify-center text-sm font-bold border border-white/10 shadow-lg shrink-0">
+          {initials}
+        </div>
+        <div className="flex flex-col overflow-hidden flex-1 min-w-0">
+          <span className="text-[13px] font-bold leading-tight truncate">{user?.full_name ?? 'User'}</span>
+          <span className="text-[11px] text-slate-400 truncate">{role ?? 'Staff'}</span>
+        </div>
+        <button
+          onClick={() => { logout(); navigate('/login'); }}
+          title="Sign out"
+          className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-white/10 rounded-lg transition-colors shrink-0"
+        >
+          <LogOut size={15} />
+        </button>
+      </div>
+    </div>
+  );
+};
+
+export const AppShell = () => {
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  return (
     <div className="flex h-screen overflow-hidden bg-[#f3f4f6]" dir="ltr">
       <GlobalSearch />
       <OfflineBanner />
       <PeriodWarningBanner />
-      
-      {/* Sidebar */}
-      <aside className="w-[260px] flex-shrink-0 bg-[#0F2D5C] text-white flex flex-col h-full shadow-2xl z-30 transition-all duration-300">
-        {/* Logo Area */}
-        <div className="h-16 flex items-center px-6 gap-3 border-b border-white/5 bg-black/10">
-          <div className="w-9 h-9 rounded-xl bg-[#1D9E75] text-white flex items-center justify-center font-bold text-xl shadow-lg shadow-black/20">
-            A
-          </div>
-          <div className="flex flex-col">
-            <span className="font-bold text-[15px] leading-tight tracking-tight">Agri-Nile Flow</span>
-            <span className="text-[10px] text-emerald-400 font-bold tracking-widest uppercase opacity-80">Enterprise ERP</span>
-          </div>
-        </div>
 
-        {/* Navigation */}
-        <div className="flex-1 overflow-y-auto py-6 px-3 custom-scrollbar">
-          {navSections.map((section, idx) => (
-            <div key={idx} className="mb-8">
-              <div className="px-4 mb-3 text-[11px] font-bold text-slate-400 uppercase tracking-[0.15em] opacity-70">
-                {section.title}
-              </div>
-              <div className="space-y-1">
-                {section.items.map((item, itemIdx) => (
-                  <NavItemNode key={itemIdx} item={item} />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* User Footer */}
-        <div className="p-4 border-t border-white/5 flex items-center gap-3 bg-black/20 backdrop-blur-sm">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#1D9E75] to-[#0F2D5C] flex items-center justify-center text-sm font-bold border border-white/10 shadow-lg shrink-0">
-            {initials}
-          </div>
-          <div className="flex flex-col overflow-hidden flex-1 min-w-0">
-            <span className="text-[13px] font-bold leading-tight truncate">{user?.full_name ?? 'User'}</span>
-            <span className="text-[11px] text-slate-400 truncate">{role ?? 'Staff'}</span>
-          </div>
-          <button
-            onClick={() => { logout(); navigate('/login'); }}
-            title="Sign out"
-            className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-white/10 rounded-lg transition-colors shrink-0"
-          >
-            <LogOut size={15} />
-          </button>
-        </div>
+      {/* Desktop sidebar — hidden below lg */}
+      <aside className="hidden lg:flex w-[260px] flex-shrink-0 bg-[#0F2D5C] text-white flex-col h-full shadow-2xl z-30">
+        <SidebarContent />
       </aside>
+
+      {/* Mobile overlay sidebar */}
+      {mobileOpen && (
+        <div className="fixed inset-0 z-50 flex lg:hidden">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => setMobileOpen(false)}
+          />
+          {/* Drawer */}
+          <aside className="relative w-[280px] bg-[#0F2D5C] text-white flex flex-col h-full shadow-2xl z-10">
+            <button
+              onClick={() => setMobileOpen(false)}
+              className="absolute top-4 right-3 p-1.5 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg z-20"
+              aria-label="Close menu"
+            >
+              <XIcon size={18} />
+            </button>
+            <SidebarContent onNavClick={() => setMobileOpen(false)} />
+          </aside>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative bg-[#f8fafc]">
-        <Topbar />
+        <Topbar onMenuClick={() => setMobileOpen(true)} />
         <div className="flex-1 overflow-y-auto overflow-x-hidden relative flex flex-col">
           <div className="flex-1 flex flex-col">
             <Outlet />
           </div>
         </div>
       </main>
-      
+
       <QuickEntryFAB />
       <KeyboardShortcuts />
     </div>
   );
 };
+

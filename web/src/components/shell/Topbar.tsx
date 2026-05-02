@@ -1,6 +1,6 @@
 import React from 'react';
 import { useLocation, Link, useNavigate } from 'react-router-dom';
-import { Search, Bell, Settings, ChevronRight } from 'lucide-react';
+import { Search, Bell, Settings, ChevronRight, Menu } from 'lucide-react';
 
 // Map route segments to human-readable English labels
 const ROUTE_LABELS: Record<string, string> = {
@@ -37,15 +37,23 @@ const ROUTE_LABELS: Record<string, string> = {
   users:        'Users',
 };
 
-export const Topbar = () => {
+export const Topbar = ({ onMenuClick }: { onMenuClick?: () => void }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const pathnames = location.pathname.split('/').filter((x) => x);
 
   return (
-    <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0 z-10 sticky top-0">
+    <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-4 lg:px-6 shrink-0 z-10 sticky top-0">
+      {/* Mobile hamburger */}
+      <button
+        onClick={onMenuClick}
+        className="lg:hidden p-2 -ml-1 text-slate-600 hover:text-[#0F2D5C] hover:bg-slate-100 rounded-lg transition-colors mr-2"
+        aria-label="Open menu"
+      >
+        <Menu size={20} />
+      </button>
       {/* Breadcrumb */}
-      <nav className="flex items-center text-[13px]">
+      <nav className="flex items-center text-[13px] flex-1 min-w-0 overflow-hidden">
         <Link to="/" className="text-slate-500 hover:text-[#0F2D5C] font-medium transition-colors">
           Home
         </Link>

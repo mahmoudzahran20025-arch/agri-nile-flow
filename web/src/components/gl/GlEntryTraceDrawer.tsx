@@ -126,6 +126,35 @@ export default function GlEntryTraceDrawer({
                     <div className="text-slate-500">No source document link available.</div>
                   )}
                 </div>
+
+                {/* Open Source action — lives here on the Source tab */}
+                {(() => {
+                  const src = payload.source_event ?? payload.source_document
+                  const module = src && 'source_module' in src ? src.source_module : undefined
+                  const id     = src && 'source_id'     in src ? src.source_id     : undefined
+                  const route  = resolveSourceRoute(module, id)
+                  return (
+                    <div className="border border-slate-200 rounded p-3 flex items-center justify-between bg-slate-50">
+                      <div className="text-slate-600 flex items-center gap-2">
+                        <Link2 size={14} />
+                        <span>{route ? `Navigate to ${module ?? 'source'} screen` : 'Source document reference'}</span>
+                      </div>
+                      {route ? (
+                        <button
+                          className="btn-secondary h-8 px-3 text-[12px] inline-flex items-center gap-1"
+                          onClick={() => { onClose(); navigate(route) }}
+                        >
+                          Open Source
+                          <ExternalLink size={13} />
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-slate-400 italic">
+                          {module ? `No screen mapped for '${module}'` : 'No source linked'}
+                        </span>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
             )}
 
@@ -160,40 +189,25 @@ export default function GlEntryTraceDrawer({
             {tab === 'trace' && (
               <div className="space-y-3 text-[12px]">
                 {payload.trace ? (
-                  <pre className="bg-slate-900 text-slate-100 rounded p-3 overflow-auto text-[11px] leading-relaxed">
-                    {JSON.stringify(payload.trace, null, 2)}
-                  </pre>
-                ) : (
-                  <div className="text-slate-500">No rule trace metadata recorded for this entry.</div>
-                )}
-
-                {(() => {
-                  const src = payload.source_event ?? payload.source_document
-                  const module = src && 'source_module' in src ? src.source_module : undefined
-                  const id     = src && 'source_id'     in src ? src.source_id     : undefined
-                  const route  = resolveSourceRoute(module, id)
-                  return (
-                    <div className="border border-slate-200 rounded p-3 flex items-center justify-between">
-                      <div className="text-slate-600 flex items-center gap-2">
-                        <Link2 size={14} />
-                        <span>{route ? `Open ${module ?? 'source'} screen` : 'Source document reference'}</span>
-                      </div>
-                      {route ? (
-                        <button
-                          className="btn-secondary h-8 px-3 text-[12px] inline-flex items-center gap-1"
-                          onClick={() => { onClose(); navigate(route) }}
-                        >
-                          Open Source
-                          <ExternalLink size={13} />
-                        </button>
-                      ) : (
-                        <span className="text-[11px] text-slate-400 italic">
-                          {module ? `No screen mapped for '${module}'` : 'No source linked'}
+                  <div className="space-y-2">
+                    {Object.entries(payload.trace as Record<string, unknown>).map(([key, val]) => (
+                      <div key={key} className="border border-slate-200 rounded p-2.5 flex gap-3">
+                        <span className="text-[11px] font-mono font-bold text-slate-500 min-w-[140px] shrink-0 pt-0.5">
+                          {key}
                         </span>
-                      )}
-                    </div>
-                  )
-                })()}
+                        <span className="text-slate-700 break-all">
+                          {typeof val === 'object' ? (
+                            <pre className="bg-slate-50 rounded px-2 py-1 text-[10px] overflow-auto whitespace-pre-wrap">
+                              {JSON.stringify(val, null, 2)}
+                            </pre>
+                          ) : String(val)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-slate-500 italic text-center py-6">No rule trace metadata recorded for this entry.</div>
+                )}
               </div>
             )}
           </>

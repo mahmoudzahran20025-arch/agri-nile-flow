@@ -86,6 +86,8 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
     e.preventDefault()
     setError('')
     if (!form.amount || Number(form.amount) <= 0) { setError('المبلغ مطلوب وأكبر من صفر'); return }
+    if (form.status === 'posted' && !form.season_id) { setError('الموسم مطلوب عند الترحيل'); return }
+    if (form.status === 'posted' && !form.center_code) { setError('مركز التكلفة مطلوب عند الترحيل'); return }
 
     setSaving(true)
     try {
@@ -162,7 +164,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
         {/* ── Row 2: Season + Cost Center ─────────────────── */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="label">الموسم الزراعي</label>
+            <label className="label">الموسم الزراعي {form.status === 'posted' && <span className="text-red-500">*</span>}</label>
             <select className="input" value={form.season_id}
               onChange={e => set('season_id', e.target.value)}>
               <option value="">— بدون موسم —</option>
@@ -174,7 +176,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
             </select>
           </div>
           <div>
-            <label className="label">مركز التكلفة</label>
+            <label className="label">مركز التكلفة {form.status === 'posted' && <span className="text-red-500">*</span>}</label>
             <select className="input" value={form.center_code}
               onChange={e => set('center_code', e.target.value)}>
               <option value="">— بدون مركز —</option>

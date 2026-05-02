@@ -158,6 +158,8 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
     e.preventDefault()
     setError('')
     if (!form.narration.trim() || !form.amount) { setError('البيان والمبلغ مطلوبان'); return }
+    if (form.status === 'posted' && !form.season_id) { setError('الموسم مطلوب عند الترحيل'); return }
+    if (form.status === 'posted' && !form.center_code) { setError('مركز التكلفة مطلوب عند الترحيل'); return }
     if (form.narration.trim().length < 3) { setError('البيان يجب أن يكون 3 أحرف على الأقل'); return }
     if (Number(form.amount) <= 0) { setError('المبلغ يجب أن يكون أكبر من صفر'); return }
 
@@ -357,7 +359,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
         {/* ── Season + Field + Cost Center + Expense Type ── */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="label">الموسم الزراعي</label>
+            <label className="label">الموسم الزراعي {form.status === 'posted' && <span className="text-red-500">*</span>}</label>
             <select className="input" value={form.season_id}
               onChange={e => { set('season_id', e.target.value); set('field_id', '') }}>
               <option value="">— بدون موسم —</option>
@@ -383,7 +385,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="label">مركز التكلفة</label>
+            <label className="label">مركز التكلفة {form.status === 'posted' && <span className="text-red-500">*</span>}</label>
             <select className="input" value={form.center_code}
               onChange={e => set('center_code', e.target.value)}>
               <option value="">— بدون مركز —</option>
