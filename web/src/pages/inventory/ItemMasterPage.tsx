@@ -6,7 +6,7 @@
  *   1. الأصناف — searchable table with PPG/IPG badges, balances
  *   2. الإعداد المحاسبي — per-item accounting field editor
  */
-import { useState, useMemo } from 'react'
+import { useState, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
@@ -207,25 +207,45 @@ function AccountingEditModal({
   )
 }
 
+const PAGE_SIZE = 50
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function ItemMasterPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { canWrite } = usePermission()
-  const [search, setSearch] = useState('')
-  const [filterPpg, setFilterPpg] = useState('')
-  const [filterStatus, setFilterStatus] = useState<'all' | 'missing' | 'ok'>(() => {
-    const risk = searchParams.get('risk')
-    return risk === 'no_ppg' || risk === 'no_ipg' ? 'missing' : 'all'
-  })
-  const [editItem, setEditItem] = useState<ItemMaster | null>(null)
-  const [expandedCode, setExpandedCode] = useState<number | null>(null)
-  const riskFilter = searchParams.get('risk')
 
-  const { data: items = [], isLoading } = useQuery({
-    queryKey: ['inventory', 'items-master'],
-    queryFn:  inventoryApi.itemsMaster,
-    staleTime: 60_000,
+  // Server-side filter state
+  const [search,       setSearch]       = useState('')
+  const [searchInput,  setSearchInput]  = useState('')
+  const [filterStatus, setFilterStatus] = useState<'all' | 'missing_ppg' | 'missing_ipg' | 'below_reorder'>(() => {
+    const risk = searchParams.get('risk')
+    if (risk === 'no_ppg')        return 'missing_ppg'
+    if (risk === 'no_ipg')        return 'missing_ipg'
+    if (risk === 'below_reorder') return 'below_reorder'
+    return 'all'
+  })
+  const [page, setPage] = useState(1)
+
+  const [editItem,      setEditItem]      = useState<ItemMaster | null>(null)
+  const [expandedCode,  setExpandedCode]  = useState<number | null>(null)
+
+  // Debounce search input → server query
+  const applySearch = useCallback((val: string) => {
+    setSearch(val)
+    setPage(1)
+  }, [])
+
+  const { data, isLoading, isFetching } = useQuery({
+    queryKey: ['inventory', 'items-master', page, search, filterStatus],
+    queryFn:  () => inventoryApi.itemsMaster({
+      page,
+      size: PAGE_SIZE,
+      search:        search || undefined,
+      filter_status: filterStatus === 'all' ? undefined : filterStatus,
+    }),
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
   })
 
   const { data: healthData } = useQuery({
@@ -234,29 +254,15 @@ export default function ItemMasterPage() {
     staleTime: 60_000,
   })
 
-  const allPpg = useMemo(() => {
-    const set = new Set<string>()
-    items.forEach(i => { if (i.prod_posting_group_code) set.add(i.prod_posting_group_code) })
-    return Array.from(set).sort()
-  }, [items])
+  const items      = data?.data      ?? []
+  const total      = data?.total     ?? 0
+  const pageCount  = data?.page_count ?? 1
+  const health     = healthData?.summary
 
-  const filtered = useMemo(() => {
-    return items.filter(i => {
-      if (search && !i.name.toLowerCase().includes(search.toLowerCase()) &&
-          !String(i.code).includes(search)) return false
-      if (filterPpg && i.prod_posting_group_code !== filterPpg) return false
-      if (filterStatus === 'missing' && i.prod_posting_group_code && i.inv_posting_group_code) return false
-      if (filterStatus === 'ok' && (!i.prod_posting_group_code || !i.inv_posting_group_code)) return false
-      if (riskFilter === 'no_standard_cost' && (i.standard_cost ?? 0) > 0) return false
-      if (riskFilter === 'no_ppg' && !!i.prod_posting_group_code) return false
-      if (riskFilter === 'no_ipg' && !!i.inv_posting_group_code) return false
-      if (riskFilter === 'below_reorder' && ((i.reorder_threshold ?? 0) <= 0 || (i.total_qty ?? 0) > (i.reorder_threshold ?? 0))) return false
-      return true
-    })
-  }, [items, search, filterPpg, filterStatus, riskFilter])
-
-  const missingCount = items.filter(i => !i.prod_posting_group_code || !i.inv_posting_group_code).length
-  const health = healthData?.summary
+  const changeFilter = (f: typeof filterStatus) => {
+    setFilterStatus(f)
+    setPage(1)
+  }
 
   return (
     <div className="space-y-5 pb-10">
@@ -280,16 +286,7 @@ export default function ItemMasterPage() {
           </div>
           <div>
             <p className="text-xs text-slate-400">إجمالي الأصناف</p>
-            <p className="text-xl font-bold text-slate-800">{items.length}</p>
-          </div>
-        </div>
-        <div className={`card p-4 flex items-center gap-3 ${missingCount > 0 ? 'border-amber-200 bg-amber-50' : ''}`}>
-          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${missingCount > 0 ? 'bg-amber-100 text-amber-600' : 'bg-green-100 text-green-600'}`}>
-            {missingCount > 0 ? <AlertTriangle size={18} /> : <CheckCircle size={18} />}
-          </div>
-          <div>
-            <p className="text-xs text-slate-400">أصناف بدون مجموعة ترحيل</p>
-            <p className={`text-xl font-bold ${missingCount > 0 ? 'text-amber-700' : 'text-green-700'}`}>{missingCount}</p>
+            <p className="text-xl font-bold text-slate-800">{total}</p>
           </div>
         </div>
         <div className="card p-4 flex items-center gap-3">
@@ -314,6 +311,20 @@ export default function ItemMasterPage() {
             </p>
           </div>
         </div>
+        <div className="card p-4 flex items-center gap-3">
+          <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center text-amber-600">
+            <AlertTriangle size={18} />
+          </div>
+          <div>
+            <p className="text-xs text-slate-400">بدون مجموعة ترحيل</p>
+            <button
+              className="text-xl font-bold text-amber-700 hover:underline"
+              onClick={() => changeFilter('missing_ppg')}
+            >
+              {health?.missing_ppg ?? '—'}
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Filters */}
@@ -324,40 +335,43 @@ export default function ItemMasterPage() {
             type="text"
             className="input pr-9 w-full"
             placeholder="بحث بالاسم أو الكود..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && applySearch(searchInput)}
           />
-          {search && (
+          {searchInput && (
             <button className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-              onClick={() => setSearch('')}>
+              onClick={() => { setSearchInput(''); applySearch('') }}>
               <X size={14} />
             </button>
           )}
         </div>
 
-        <select className="input w-40" value={filterPpg} onChange={e => setFilterPpg(e.target.value)}>
-          <option value="">كل مجموعات PPG</option>
-          {allPpg.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
-
-        <div className="flex gap-1">
-          {(['all', 'ok', 'missing'] as const).map(s => (
-            <button key={s}
-              onClick={() => setFilterStatus(s)}
-              className={`btn text-xs px-3 ${filterStatus === s ? 'btn-primary' : 'btn-secondary'}`}>
-              {s === 'all' ? 'الكل' : s === 'ok' ? '✓ مكتملة' : '⚠ ناقصة'}
+        <div className="flex gap-1 flex-wrap">
+          {([
+            ['all',          'الكل'],
+            ['missing_ppg',  '⚠ بدون PPG'],
+            ['missing_ipg',  '⚠ بدون IPG'],
+            ['below_reorder','↓ تحت الحد'],
+          ] as const).map(([val, label]) => (
+            <button key={val}
+              onClick={() => changeFilter(val)}
+              className={`btn text-xs px-3 ${filterStatus === val ? 'btn-primary' : 'btn-secondary'}`}>
+              {label}
             </button>
           ))}
         </div>
 
-        <span className="text-sm text-slate-400 ml-auto">{filtered.length} صنف</span>
+        <span className="text-sm text-slate-400 ml-auto">
+          {total} صنف {isFetching && !isLoading ? '·  جاري التحديث...' : ''}
+        </span>
       </div>
 
       {/* Table */}
       <div className="card overflow-hidden">
         {isLoading ? (
           <div className="p-16 text-center text-slate-400 animate-pulse">جاري التحميل...</div>
-        ) : filtered.length === 0 ? (
+        ) : items.length === 0 ? (
           <div className="p-16 text-center text-slate-400">
             <Package size={40} className="mx-auto mb-3 opacity-20" />
             لا توجد نتائج
@@ -373,22 +387,19 @@ export default function ItemMasterPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filtered.map(item => {
-                  const hasIssue = !item.prod_posting_group_code || !item.inv_posting_group_code
+                {items.map(item => {
+                  const hasIssue  = !item.prod_posting_group_code || !item.inv_posting_group_code
                   const isExpanded = expandedCode === item.code
                   return (
                     <>
-                      <tr
-                        key={item.code}
-                        className={`hover:bg-slate-50 transition-colors ${hasIssue ? 'bg-amber-50/50' : ''}`}
-                      >
+                      <tr key={item.code}
+                        className={`hover:bg-slate-50 transition-colors ${hasIssue ? 'bg-amber-50/50' : ''}`}>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             {hasIssue && <AlertTriangle size={13} className="text-amber-500 shrink-0" />}
                             <button
                               className="font-medium text-brand-700 hover:underline flex items-center gap-1"
-                              onClick={() => navigate(`/inventory/item/${item.code}`)}
-                            >
+                              onClick={() => navigate(`/inventory/item/${item.code}`)}>
                               {item.name}
                               <ExternalLink size={11} className="opacity-40" />
                             </button>
@@ -396,15 +407,9 @@ export default function ItemMasterPage() {
                           <p className="text-xs text-slate-400 mt-0.5">كود: {item.code} · {item.category_name ?? '—'}</p>
                         </td>
                         <td className="px-4 py-3 text-slate-500">{item.unit ?? '—'}</td>
-                        <td className="px-4 py-3">
-                          <GroupBadge code={item.prod_posting_group_code} type="PPG" />
-                        </td>
-                        <td className="px-4 py-3">
-                          <GroupBadge code={item.inv_posting_group_code} type="IPG" />
-                        </td>
-                        <td className="px-4 py-3 font-medium text-slate-700">
-                          {NUM(item.total_qty)} {item.unit ?? ''}
-                        </td>
+                        <td className="px-4 py-3"><GroupBadge code={item.prod_posting_group_code} type="PPG" /></td>
+                        <td className="px-4 py-3"><GroupBadge code={item.inv_posting_group_code} type="IPG" /></td>
+                        <td className="px-4 py-3 font-medium text-slate-700">{NUM(item.total_qty)} {item.unit ?? ''}</td>
                         <td className="px-4 py-3 font-semibold text-brand-700">{EGP(item.total_value)}</td>
                         <td className="px-4 py-3 text-slate-500">
                           {item.standard_cost != null ? EGP(item.standard_cost) : <span className="text-slate-300">—</span>}
@@ -415,16 +420,14 @@ export default function ItemMasterPage() {
                               <button
                                 className="p-1.5 text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg transition-colors"
                                 title="تعديل الإعداد المحاسبي"
-                                onClick={() => setEditItem(item)}
-                              >
+                                onClick={() => setEditItem(item)}>
                                 <Edit2 size={14} />
                               </button>
                             )}
                             <button
                               className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
                               title="تفاصيل"
-                              onClick={() => setExpandedCode(isExpanded ? null : item.code)}
-                            >
+                              onClick={() => setExpandedCode(isExpanded ? null : item.code)}>
                               {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                             </button>
                           </div>
@@ -455,6 +458,27 @@ export default function ItemMasterPage() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* Pagination */}
+        {pageCount > 1 && (
+          <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between text-sm">
+            <button
+              disabled={page <= 1}
+              onClick={() => setPage(p => p - 1)}
+              className="btn btn-secondary px-3 disabled:opacity-40">
+              السابق
+            </button>
+            <span className="text-slate-500">
+              صفحة {page} من {pageCount} · {total} صنف
+            </span>
+            <button
+              disabled={page >= pageCount}
+              onClick={() => setPage(p => p + 1)}
+              className="btn btn-secondary px-3 disabled:opacity-40">
+              التالي
+            </button>
           </div>
         )}
       </div>

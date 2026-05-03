@@ -2,16 +2,51 @@ import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { getUser, permissionGuard } from '../../middleware/auth'
 import { getOpenPeriod } from '../../lib/gl'
+import { resolveMovementDirection } from '../../lib/posting_engine'
 import { FinanceCore } from '../../lib/finance_core'
 import { logAudit } from '../../lib/audit'
 import {
   enforceInventoryLockDate,
   enqueueInventoryPostingOutbox,
   getInventoryPostingControls,
+  readInventoryBalance,
+  upsertInventoryBalance,
   validateZeroValuePolicy,
 } from '../../lib/inventory_posting'
 
 const movements = new Hono<{ Bindings: Env }>()
+
+const SUPPORTED_MOVEMENT_TYPES = new Set([
+  'اضافة', 'صرف',
+  'GRN', 'ISSUE',
+  'TRANSFER_IN', 'TRANSFER_OUT',
+  'RETURN_SUPPLIER', 'RETURN_CUSTOMER',
+  'ADJUSTMENT_PROFIT', 'ADJUSTMENT_LOSS',
+  'PRODUCTION_INPUT', 'PRODUCTION_OUTPUT',
+])
+
+function isSupportedMovementType(movementType: string): boolean {
+  return SUPPORTED_MOVEMENT_TYPES.has(movementType)
+}
+
+// ── Helper: map legacy Arabic / typed movement_type to transaction_type ───────
+function mapToTransactionType(movementType: string): string {
+  const MAP: Record<string, string> = {
+    'اضافة':             'GRN',
+    'صرف':               'ISSUE',
+    'GRN':               'GRN',
+    'ISSUE':             'ISSUE',
+    'TRANSFER_IN':       'TRANSFER_IN',
+    'TRANSFER_OUT':      'TRANSFER_OUT',
+    'RETURN_SUPPLIER':   'RETURN_SUPPLIER',
+    'RETURN_CUSTOMER':   'RETURN_CUSTOMER',
+    'ADJUSTMENT_PROFIT': 'ADJUSTMENT_PROFIT',
+    'ADJUSTMENT_LOSS':   'ADJUSTMENT_LOSS',
+    'PRODUCTION_INPUT':  'PRODUCTION_INPUT',
+    'PRODUCTION_OUTPUT': 'PRODUCTION_OUTPUT',
+  }
+  return MAP[movementType] ?? movementType
+}
 
 // ── GET /movements ────────────────────────────────────────────
 
@@ -97,9 +132,12 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
   if (!b.movement_date || !b.warehouse || !b.movement_type || !b.item_code || !b.quantity) {
     return c.json({ success: false, error: 'بيانات الحركة ناقصة' }, 400)
   }
-  if (b.movement_type !== 'اضافة' && b.movement_type !== 'صرف') {
-    return c.json({ success: false, error: "النوع يجب أن يكون 'اضافة' أو 'صرف'" }, 400)
+  if (!isSupportedMovementType(b.movement_type)) {
+    return c.json({ success: false, error: 'نوع حركة غير مدعوم' }, 400)
   }
+
+  const direction = resolveMovementDirection(b.movement_type)
+  const isInbound = direction === 'IN'
 
   const controls = await getInventoryPostingControls(c.env.DB, company_id)
   try {
@@ -120,25 +158,24 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     if (field?.center_code) centerCode = field.center_code
   }
 
-  const lastRow = await c.env.DB.prepare(
-    `SELECT balance_qty, balance_value FROM inventory_movements
-     WHERE company_id = ? AND item_code = ? AND warehouse = ? AND (movement_date < ? OR (movement_date = ? AND id < (SELECT MAX(id)+1 FROM inventory_movements)))
-     ORDER BY movement_date DESC, id DESC LIMIT 1`
-  ).bind(company_id, b.item_code, b.warehouse, b.movement_date, b.movement_date)
-    .first<{ balance_qty: number; balance_value: number }>()
+  // Use readInventoryBalance — heals stale snapshots automatically before returning.
+  const prev    = await readInventoryBalance(c.env.DB, company_id, b.item_code, b.warehouse)
+  const prevQty = prev.balance_qty
+  const prevVal = prev.balance_value
 
-  const prevQty = lastRow?.balance_qty ?? 0
-  const prevVal = lastRow?.balance_value ?? 0
-
-  if (b.movement_type === 'صرف') {
+  if (!isInbound) {
     if (b.quantity > prevQty) {
       return c.json({ success: false, error: `الكمية المتاحة بتاريخ ${b.movement_date} هي (${prevQty})، والمطلوب (${b.quantity})`, code: 'INSUFFICIENT_STOCK' }, 409)
     }
     const minFutureBal = await c.env.DB.prepare(
       `SELECT MIN(balance_qty) as min_bal FROM inventory_movements
        WHERE company_id = ? AND item_code = ? AND warehouse = ?
-         AND (movement_date > ? OR (movement_date = ? AND id > (SELECT MAX(id) FROM inventory_movements WHERE movement_date = ?)))`
-    ).bind(company_id, b.item_code, b.warehouse, b.movement_date, b.movement_date, b.movement_date)
+         AND (movement_date > ? OR (movement_date = ? AND id > (
+           SELECT MAX(id) FROM inventory_movements
+           WHERE company_id = ? AND item_code = ? AND warehouse = ? AND movement_date = ?
+         )))`
+    ).bind(company_id, b.item_code, b.warehouse, b.movement_date, b.movement_date,
+           company_id, b.item_code, b.warehouse, b.movement_date)
       .first<{ min_bal: number | null }>()
 
     if (minFutureBal && minFutureBal.min_bal !== null && minFutureBal.min_bal < b.quantity) {
@@ -147,13 +184,13 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
   }
 
   const unitPrice = b.unit_price ?? (prevQty > 0 ? prevVal / prevQty : 0)
-  const qtyIn     = b.movement_type === 'اضافة' ? b.quantity : 0
-  const qtyOut    = b.movement_type === 'صرف'   ? b.quantity : 0
-  const valueIn   = b.movement_type === 'اضافة' ? b.quantity * unitPrice : 0
-  const valueOut  = b.movement_type === 'صرف'   ? b.quantity * unitPrice : 0
+  const qtyIn     = isInbound ? b.quantity : 0
+  const qtyOut    = isInbound ? 0 : b.quantity
+  const valueIn   = isInbound ? b.quantity * unitPrice : 0
+  const valueOut  = isInbound ? 0 : b.quantity * unitPrice
   const balQty    = prevQty + qtyIn - qtyOut
   const balVal    = prevVal + valueIn - valueOut
-  const movementValue = b.movement_type === 'اضافة' ? valueIn : valueOut
+  const movementValue = isInbound ? valueIn : valueOut
   const zeroValueReason = b.zero_value_reason?.trim()
 
   try {
@@ -173,6 +210,19 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
   const dVal = valueIn - valueOut
   const date = new Date(b.movement_date)
 
+  // Create the transaction header (groups this movement under a logical document).
+  const txRes = await c.env.DB.prepare(
+    `INSERT INTO inventory_transactions
+     (company_id, transaction_type, document_number, movement_date, warehouse, notes,
+      line_count, total_qty, total_value, status, created_by_user_id)
+     VALUES (?,?,?,?,?,?,1,?,?,'confirmed',?)`
+  ).bind(
+    company_id, mapToTransactionType(b.movement_type),
+    b.document_number ?? null, b.movement_date, b.warehouse, b.notes ?? null,
+    b.quantity, movementValue, userId,
+  ).run()
+  const transactionId = txRes.meta.last_row_id as number
+
   await c.env.DB.batch([
     c.env.DB.prepare(
       `INSERT INTO inventory_movements
@@ -180,8 +230,8 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
         movement_date, warehouse, movement_type, document_number, pack_capacity, pack_count,
         quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
         notes, year, month, created_by_user_id, local_id,
-        zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
       company_id, b.season_id ?? null, b.field_id ?? null, b.work_order_id ?? null,
       b.supplier_code ?? null, b.item_code, centerCode ?? null,
@@ -192,7 +242,8 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
       movementValue === 0 ? (zeroValueReason ?? null) : null,
       movementValue === 0 ? role : null,
       controls.posting_mode,
-      movementValue === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled'))
+      movementValue === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled')),
+      transactionId,
     ),
     c.env.DB.prepare(
       `UPDATE inventory_movements
@@ -204,6 +255,9 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
 
   const movRow = await c.env.DB.prepare('SELECT id FROM inventory_movements WHERE local_id = ?').bind(localId).first<{id:number}>()
   const movId = movRow!.id
+
+  // Keep inventory_balances snapshot in sync with the movement just inserted.
+  await upsertInventoryBalance(c.env.DB, company_id, b.item_code, b.warehouse, balQty, balVal, movId)
 
   const itemRow = await c.env.DB
     .prepare('SELECT name FROM items WHERE code = ? AND company_id = ?')
@@ -233,14 +287,20 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
           'UPDATE inventory_movements SET gl_posting_status = ?, gl_posted_at = datetime(\'now\') WHERE id = ? AND company_id = ?'
         ).bind('posted', movId, company_id).run()
       } catch (err: any) {
-        await c.env.DB.prepare('DELETE FROM inventory_movements WHERE id = ?').bind(movId).run()
+        // Never DELETE a committed movement — mark failed and enqueue for async retry.
+        // The movement ledger is the source of truth; GL failure is recoverable.
         await c.env.DB.prepare(
-          `UPDATE inventory_movements
-           SET balance_qty = balance_qty - ?, balance_value = balance_value - ?
-           WHERE company_id = ? AND item_code = ? AND warehouse = ?
-             AND (movement_date > ? OR (movement_date = ? AND id > ?))`
-        ).bind(dQty, dVal, company_id, b.item_code, b.warehouse, b.movement_date, b.movement_date, movId).run()
-        throw new Error(`فشل إنشاء القيد المحاسبي وتم إلغاء الحركة المخزنية: ${err.message}`)
+          `UPDATE inventory_movements SET gl_posting_status = 'failed', gl_posting_error = ?
+           WHERE id = ? AND company_id = ?`
+        ).bind(String(err.message), movId, company_id).run()
+        await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', movId, {
+          company_id, ref_id: movId, item_code: b.item_code, warehouse: b.warehouse,
+          movement_type: b.movement_type, value: glValue, date: b.movement_date,
+          item_name: itemRow?.name ?? String(b.item_code), created_by: userId,
+          center_code: centerCode ?? null, payment_method: b.payment_method ?? null,
+          supplier_code: b.supplier_code ?? null, work_order_id: b.work_order_id ?? null,
+        })
+        glEntryId = null
       }
     } else if (controls.posting_mode === 'async_reliable') {
       await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', movId, {
@@ -268,7 +328,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     }
   }
 
-  if (b.movement_type === 'اضافة' && b.payment_method === 'cash') {
+  if ((b.movement_type === 'اضافة' || b.movement_type === 'GRN') && b.payment_method === 'cash') {
     await FinanceCore.recordCashMovement(c.env.DB, {
       company_id, userId,
       transaction_date: b.movement_date,
@@ -317,9 +377,12 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
   if (!Array.isArray(b.items) || b.items.length === 0) {
     return c.json({ success: false, error: 'يجب إضافة صنف واحد على الأقل' }, 400)
   }
-  if (b.movement_type !== 'اضافة' && b.movement_type !== 'صرف') {
-    return c.json({ success: false, error: "النوع يجب أن يكون 'اضافة' أو 'صرف'" }, 400)
+  if (!isSupportedMovementType(b.movement_type)) {
+    return c.json({ success: false, error: 'نوع حركة غير مدعوم' }, 400)
   }
+
+  const batchDirection = resolveMovementDirection(b.movement_type)
+  const batchIsInbound = batchDirection === 'IN'
 
   const controls = await getInventoryPostingControls(c.env.DB, company_id)
   try {
@@ -357,17 +420,12 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
       return c.json({ success: false, error: `السطر ${i + 1}: كود الصنف والكمية مطلوبان` }, 400)
     }
 
-    const lastRow = await c.env.DB.prepare(
-      `SELECT balance_qty, balance_value FROM inventory_movements
-       WHERE company_id = ? AND item_code = ? AND warehouse = ? AND (movement_date < ? OR (movement_date = ? AND id < (SELECT MAX(id)+1 FROM inventory_movements)))
-       ORDER BY movement_date DESC, id DESC LIMIT 1`
-    ).bind(company_id, li.item_code, b.warehouse, b.movement_date, b.movement_date)
-      .first<{ balance_qty: number; balance_value: number }>()
-
+    // Heal stale snapshots before reading — mirrors single-POST behaviour.
+    const lastRow = await readInventoryBalance(c.env.DB, company_id, li.item_code, b.warehouse)
     const prevQty = lastRow?.balance_qty ?? 0
     const prevVal = lastRow?.balance_value ?? 0
 
-    if (b.movement_type === 'صرف' && li.quantity > prevQty) {
+    if (!batchIsInbound && li.quantity > prevQty) {
       const itemRow = await c.env.DB
         .prepare('SELECT name FROM items WHERE code = ? AND company_id = ?')
         .bind(li.item_code, company_id).first<{ name: string }>()
@@ -379,11 +437,11 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     }
 
     const unitPrice = li.unit_price ?? (prevQty > 0 ? prevVal / prevQty : 0)
-    const qtyIn     = b.movement_type === 'اضافة' ? li.quantity : 0
-    const qtyOut    = b.movement_type === 'صرف'   ? li.quantity : 0
-    const valueIn   = b.movement_type === 'اضافة' ? li.quantity * unitPrice : 0
-    const valueOut  = b.movement_type === 'صرف'   ? li.quantity * unitPrice : 0
-    const movementValue = b.movement_type === 'اضافة' ? valueIn : valueOut
+    const qtyIn     = batchIsInbound ? li.quantity : 0
+    const qtyOut    = batchIsInbound ? 0 : li.quantity
+    const valueIn   = batchIsInbound ? li.quantity * unitPrice : 0
+    const valueOut  = batchIsInbound ? 0 : li.quantity * unitPrice
+    const movementValue = batchIsInbound ? valueIn : valueOut
 
     try {
       validateZeroValuePolicy(controls, role, movementValue, b.zero_value_reason?.trim())
@@ -407,6 +465,21 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     })
   }
 
+  // Create ONE transaction header for the entire batch.
+  const totalBatchQty = lineResults.reduce((s, lr) => s + lr.quantity, 0)
+  const totalBatchVal = lineResults.reduce((s, lr) => s + lr.valueIn + lr.valueOut, 0)
+  const batchTxRes = await c.env.DB.prepare(
+    `INSERT INTO inventory_transactions
+     (company_id, transaction_type, document_number, movement_date, warehouse, notes,
+      line_count, total_qty, total_value, status, created_by_user_id)
+     VALUES (?,?,?,?,?,?,?,?,?,'confirmed',?)`
+  ).bind(
+    company_id, mapToTransactionType(b.movement_type),
+    b.document_number ?? null, b.movement_date, b.warehouse, b.notes ?? null,
+    lineResults.length, totalBatchQty, totalBatchVal, userId,
+  ).run()
+  const batchTransactionId = batchTxRes.meta.last_row_id as number
+
   const insertStmts = lineResults.map(lr =>
     c.env.DB.prepare(
       `INSERT INTO inventory_movements
@@ -414,8 +487,8 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
         movement_type, document_number, quantity, unit_price,
         qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
         notes, year, month, created_by_user_id, local_id, center_code,
-        zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
       company_id, b.season_id ?? null, b.field_id ?? null, b.work_order_id ?? null,
       b.supplier_code ?? null, lr.item_code,
@@ -426,7 +499,8 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
       (lr.valueIn + lr.valueOut) === 0 ? (b.zero_value_reason?.trim() ?? null) : null,
       (lr.valueIn + lr.valueOut) === 0 ? role : null,
       controls.posting_mode,
-      (lr.valueIn + lr.valueOut) === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled'))
+      (lr.valueIn + lr.valueOut) === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled')),
+      batchTransactionId,
     )
   )
   await c.env.DB.batch(insertStmts)
@@ -456,7 +530,11 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
   for (const ins of inserted) {
     const lr = lineResults.find(r => r.localId === ins.local_id)
     if (!lr) continue
-    const glValue = b.movement_type === 'اضافة' ? lr.valueIn : lr.valueOut
+
+    // Keep inventory_balances snapshot in sync.
+    await upsertInventoryBalance(c.env.DB, company_id, lr.item_code, b.warehouse, lr.balQty, lr.balVal, ins.id)
+
+    const glValue = batchIsInbound ? lr.valueIn : lr.valueOut
     totalValue += glValue
 
     const itemRow = await c.env.DB
@@ -482,25 +560,31 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
           supplier_code: b.supplier_code,
           work_order_id: b.work_order_id,
         })
-        await c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ?, gl_posted_at = datetime(\'now\') WHERE id = ? AND company_id = ?')
-          .bind('posted', ins.id, company_id).run()
+        await c.env.DB.prepare(
+          `UPDATE inventory_movements SET gl_posting_status = 'posted', gl_posted_at = datetime('now') WHERE id = ? AND company_id = ?`
+        ).bind(ins.id, company_id).run()
       } catch (err: any) {
-        await c.env.DB.prepare('DELETE FROM inventory_movements WHERE company_id = ? AND local_id LIKE ?')
-          .bind(company_id, `${batchKey}_%`).run()
-
-        const rollbackStmts = inserted.map(i => {
-          const line = lineResults.find(r => r.localId === i.local_id)
-          if (!line) return null
-          return c.env.DB.prepare(
-            `UPDATE inventory_movements
-             SET balance_qty = balance_qty - ?, balance_value = balance_value - ?
-             WHERE company_id = ? AND item_code = ? AND warehouse = ?
-               AND (movement_date > ? OR (movement_date = ? AND id > ?))`
-          ).bind(line.qtyIn - line.qtyOut, line.valueIn - line.valueOut, company_id, line.item_code, b.warehouse, b.movement_date, b.movement_date, i.id)
-        }).filter(Boolean) as any[]
-        if (rollbackStmts.length > 0) await c.env.DB.batch(rollbackStmts)
-
-        throw new Error(`فشل إنشاء القيد المحاسبي وتم إلغاء حركة المخزن: ${err.message}`)
+        // Keep the movement — it is the source of truth. Enqueue for retry.
+        // Deleting committed movements corrupts the inventory ledger.
+        const errMsg = String(err?.message ?? err)
+        await c.env.DB.prepare(
+          `UPDATE inventory_movements SET gl_posting_status = 'failed', gl_posting_error = ? WHERE id = ? AND company_id = ?`
+        ).bind(errMsg, ins.id, company_id).run()
+        await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', ins.id, {
+          company_id,
+          ref_id: ins.id,
+          item_code: lr.item_code,
+          warehouse: b.warehouse,
+          movement_type: b.movement_type,
+          value: glValue,
+          date: b.movement_date,
+          item_name: itemRow?.name ?? String(lr.item_code),
+          created_by: userId,
+          center_code: centerCode ?? null,
+          payment_method: b.payment_method ?? null,
+          supplier_code: b.supplier_code ?? null,
+          work_order_id: b.work_order_id ?? null,
+        })
       }
     } else if (controls.posting_mode === 'async_reliable') {
       await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', ins.id, {
@@ -526,7 +610,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     }
   }
 
-  if (b.movement_type === 'اضافة' && b.payment_method === 'cash' && totalValue > 0) {
+  if ((b.movement_type === 'اضافة' || b.movement_type === 'GRN') && b.payment_method === 'cash' && totalValue > 0) {
     await FinanceCore.recordCashMovement(c.env.DB, {
       company_id, userId,
       transaction_date: b.movement_date,
@@ -579,11 +663,10 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
   const periodId = await getOpenPeriod(c.env.DB, company_id, b.movement_date)
   if (!periodId) return c.json({ success: false, error: 'الفترة المالية مغلقة' }, 400)
 
-  // Atomic check and move
+  // O(1) balance read from snapshot table for source warehouse.
   const srcBal = await c.env.DB.prepare(
-    `SELECT balance_qty, balance_value FROM inventory_movements
-     WHERE company_id = ? AND item_code = ? AND warehouse = ?
-     ORDER BY movement_date DESC, id DESC LIMIT 1`
+    `SELECT balance_qty, balance_value FROM inventory_balances
+     WHERE company_id = ? AND item_code = ? AND warehouse = ?`
   ).bind(company_id, b.item_code, b.from_warehouse)
     .first<{ balance_qty: number; balance_value: number }>()
 
@@ -606,10 +689,10 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
     throw e
   }
 
+  // O(1) balance read for destination warehouse.
   const dstBal = await c.env.DB.prepare(
-    `SELECT balance_qty, balance_value FROM inventory_movements
-     WHERE company_id = ? AND item_code = ? AND warehouse = ?
-     ORDER BY movement_date DESC, id DESC LIMIT 1`
+    `SELECT balance_qty, balance_value FROM inventory_balances
+     WHERE company_id = ? AND item_code = ? AND warehouse = ?`
   ).bind(company_id, b.item_code, b.to_warehouse)
     .first<{ balance_qty: number; balance_value: number }>()
 
@@ -624,32 +707,46 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
   const outLocalId = `${batchKey}_out`
   const inLocalId  = `${batchKey}_in`
 
+  // Create ONE transaction header for the transfer (both OUT + IN rows share it).
+  const trfTxRes = await c.env.DB.prepare(
+    `INSERT INTO inventory_transactions
+     (company_id, transaction_type, document_number, movement_date, warehouse, to_warehouse, notes,
+      line_count, total_qty, total_value, status, created_by_user_id)
+     VALUES (?,?,?,?,?,?,?,2,?,?,'confirmed',?)`
+  ).bind(
+    company_id, 'TRANSFER', null, b.movement_date, b.from_warehouse, b.to_warehouse, b.notes ?? null,
+    b.quantity, totalValue, userId,
+  ).run()
+  const trfTransactionId = trfTxRes.meta.last_row_id as number
+
   await c.env.DB.batch([
     c.env.DB.prepare(
       `INSERT INTO inventory_movements (company_id, item_code, movement_date, warehouse, movement_type,
        quantity, unit_price, qty_out, balance_qty, value_out, balance_value, notes, year, month, created_by_user_id, local_id,
-       zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(company_id, b.item_code, b.movement_date, b.from_warehouse, 'صرف',
+       zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(company_id, b.item_code, b.movement_date, b.from_warehouse, 'TRANSFER_OUT',
       b.quantity, avgPrice, b.quantity, srcBal.balance_qty - b.quantity, totalValue, srcBal.balance_value - totalValue,
       `تحويل إلى ${b.to_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, outLocalId,
       totalValue === 0 ? (b.notes?.trim() ?? null) : null,
       totalValue === 0 ? role : null,
       controls.posting_mode,
-      totalValue === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled'))),
+      totalValue === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled')),
+      trfTransactionId),
 
     c.env.DB.prepare(
       `INSERT INTO inventory_movements (company_id, item_code, movement_date, warehouse, movement_type,
        quantity, unit_price, qty_in, balance_qty, value_in, balance_value, notes, year, month, created_by_user_id, local_id,
-       zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(company_id, b.item_code, b.movement_date, b.to_warehouse, 'اضافة',
+       zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(company_id, b.item_code, b.movement_date, b.to_warehouse, 'TRANSFER_IN',
       b.quantity, avgPrice, b.quantity, dstPrevQty + b.quantity, totalValue, dstPrevVal + totalValue,
       `تحويل من ${b.from_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, inLocalId,
       totalValue === 0 ? (b.notes?.trim() ?? null) : null,
       totalValue === 0 ? role : null,
       controls.posting_mode,
-      totalValue === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled')))
+      totalValue === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled')),
+      trfTransactionId)
   ])
 
   // Get the created IDs for reference
@@ -657,8 +754,18 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
     `SELECT id, movement_type FROM inventory_movements WHERE local_id IN (?, ?)`
   ).bind(outLocalId, inLocalId).all<{ id: number; movement_type: string }>()
 
-  const outId = rows.results.find(r => r.movement_type === 'صرف')?.id
-  const inId  = rows.results.find(r => r.movement_type === 'اضافة')?.id
+  const outId = rows.results.find(r => r.movement_type === 'TRANSFER_OUT')?.id
+  const inId  = rows.results.find(r => r.movement_type === 'TRANSFER_IN')?.id
+
+  // Keep inventory_balances snapshot in sync for both warehouses.
+  if (outId) {
+    await upsertInventoryBalance(c.env.DB, company_id, b.item_code, b.from_warehouse,
+      srcBal.balance_qty - b.quantity, srcBal.balance_value - totalValue, outId)
+  }
+  if (inId) {
+    await upsertInventoryBalance(c.env.DB, company_id, b.item_code, b.to_warehouse,
+      dstPrevQty + b.quantity, dstPrevVal + totalValue, inId)
+  }
 
   // 3. GL Posting
   const itemRow = await c.env.DB.prepare("SELECT name FROM items WHERE code = ? AND company_id = ?")
@@ -685,10 +792,21 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
             .bind('posted', jeId, inId, company_id),
         ])
       } catch (err: any) {
-        await c.env.DB.prepare(
-          'DELETE FROM inventory_movements WHERE company_id = ? AND id IN (?, ?)'
-        ).bind(company_id, outId, inId).run()
-        return c.json({ success: false, error: `فشل إنشاء القيد المحاسبي للتحويل: ${err.message}` }, 500)
+        // Never DELETE committed movements — mark both failed and enqueue for async retry.
+        const errMsg = String(err.message)
+        await c.env.DB.batch([
+          c.env.DB.prepare(`UPDATE inventory_movements SET gl_posting_status = 'failed', gl_posting_error = ? WHERE id = ? AND company_id = ?`).bind(errMsg, outId, company_id),
+          c.env.DB.prepare(`UPDATE inventory_movements SET gl_posting_status = 'failed', gl_posting_error = ? WHERE id = ? AND company_id = ?`).bind(errMsg, inId, company_id),
+        ])
+        if (outId) {
+          await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_transfer', outId, {
+            company_id, ref_id: outId, item_code: b.item_code,
+            from_warehouse: b.from_warehouse, to_warehouse: b.to_warehouse,
+            value: totalValue, date: b.movement_date,
+            item_name: itemRow?.name ?? String(b.item_code), created_by: userId,
+            target_movement_id: inId,
+          })
+        }
       }
     } else if (controls.posting_mode === 'async_reliable') {
       await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_transfer', outId, {
@@ -759,15 +877,24 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
   const mo = new Date(b.movement_date).getMonth() + 1
   const stmts: any[] = []
 
+  // Create ONE transaction header for the entire transfer-batch.
+  const trfBatchTxRes = await c.env.DB.prepare(
+    `INSERT INTO inventory_transactions
+     (company_id, transaction_type, movement_date, warehouse, to_warehouse, notes,
+      line_count, total_qty, total_value, status, created_by_user_id)
+     VALUES (?,'TRANSFER',?,?,?,?,?,0,0,'confirmed',?)`
+  ).bind(
+    company_id, b.movement_date, b.from_warehouse, b.to_warehouse,
+    b.notes ?? null, b.items.length * 2, userId,
+  ).run()
+  const trfBatchTransactionId = trfBatchTxRes.meta.last_row_id as number
+
   for (let i = 0; i < b.items.length; i++) {
     const it = b.items[i]
-    const srcBal = await c.env.DB.prepare(
-      `SELECT balance_qty, balance_value FROM inventory_movements
-       WHERE company_id = ? AND item_code = ? AND warehouse = ?
-       ORDER BY movement_date DESC, id DESC LIMIT 1`
-    ).bind(company_id, it.item_code, b.from_warehouse).first<{ balance_qty: number; balance_value: number }>()
+    // Staleness-aware balance read for source warehouse.
+    const srcBal = await readInventoryBalance(c.env.DB, company_id, it.item_code, b.from_warehouse)
 
-    if (!srcBal || srcBal.balance_qty < it.quantity) {
+    if (srcBal.balance_qty < it.quantity) {
       return c.json({ success: false, error: `الرصيد غير كافٍ للصنف #${it.item_code} في مخزن المصدر` }, 409)
     }
 
@@ -786,42 +913,41 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
       throw e
     }
 
-    const dstBal = await c.env.DB.prepare(
-      `SELECT balance_qty, balance_value FROM inventory_movements
-       WHERE company_id = ? AND item_code = ? AND warehouse = ?
-       ORDER BY movement_date DESC, id DESC LIMIT 1`
-    ).bind(company_id, it.item_code, b.to_warehouse).first<{ balance_qty: number; balance_value: number }>()
+    // Staleness-aware balance read for destination warehouse.
+    const dstBal = await readInventoryBalance(c.env.DB, company_id, it.item_code, b.to_warehouse)
 
-    const dPQ = dstBal?.balance_qty ?? 0
-    const dPV = dstBal?.balance_value ?? 0
+    const dPQ = dstBal.balance_qty
+    const dPV = dstBal.balance_value
     const outLoc = `${batchKey}_${i}_out`
     const inLoc  = `${batchKey}_${i}_in`
 
     stmts.push(c.env.DB.prepare(
       `INSERT INTO inventory_movements (company_id, item_code, movement_date, warehouse, movement_type,
        quantity, unit_price, qty_out, balance_qty, value_out, balance_value, notes, year, month, created_by_user_id, local_id,
-       zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(company_id, it.item_code, b.movement_date, b.from_warehouse, 'صرف',
+       zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(company_id, it.item_code, b.movement_date, b.from_warehouse, 'TRANSFER_OUT',
       it.quantity, avgPrice, it.quantity, srcBal.balance_qty - it.quantity, totVal, srcBal.balance_value - totVal,
       `تحويل Batch إلى ${b.to_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, outLoc,
       totVal === 0 ? (b.notes?.trim() ?? null) : null,
       totVal === 0 ? role : null,
       controls.posting_mode,
-      totVal === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled'))))
+      totVal === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled')),
+      trfBatchTransactionId))
 
     stmts.push(c.env.DB.prepare(
       `INSERT INTO inventory_movements (company_id, item_code, movement_date, warehouse, movement_type,
        quantity, unit_price, qty_in, balance_qty, value_in, balance_value, notes, year, month, created_by_user_id, local_id,
-       zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(company_id, it.item_code, b.movement_date, b.to_warehouse, 'اضافة',
+       zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(company_id, it.item_code, b.movement_date, b.to_warehouse, 'TRANSFER_IN',
       it.quantity, avgPrice, it.quantity, dPQ + it.quantity, totVal, dPV + totVal,
       `تحويل Batch من ${b.from_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, inLoc,
       totVal === 0 ? (b.notes?.trim() ?? null) : null,
       totVal === 0 ? role : null,
       controls.posting_mode,
-      totVal === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled'))))
+      totVal === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled')),
+      trfBatchTransactionId))
   }
 
   await c.env.DB.batch(stmts)
@@ -829,7 +955,7 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
   // 3. GL Posting for Batch
   const { results: inserted } = await c.env.DB.prepare(
     `SELECT id, item_code, movement_type, local_id, value_out FROM inventory_movements
-     WHERE company_id = ? AND local_id LIKE ? AND movement_type = 'صرف'`
+     WHERE company_id = ? AND local_id LIKE ? AND movement_type = 'TRANSFER_OUT'`
   ).bind(company_id, `${batchKey}_%_out`).all<{ id: number; item_code: number; local_id: string; value_out: number }>()
 
   for (const ins of inserted) {
@@ -869,10 +995,19 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
             .bind('posted', jeId, inId, company_id),
         ])
       } catch (err: any) {
+        // Never DELETE committed movements — mark failed and enqueue for retry.
+        const errMsg = String(err.message)
         await c.env.DB.prepare(
-          'DELETE FROM inventory_movements WHERE company_id = ? AND local_id LIKE ?'
-        ).bind(company_id, `${batchKey}_%`).run()
-        return c.json({ success: false, error: `فشل إنشاء القيد المحاسبي لتحويل الدفعة: ${err.message}` }, 500)
+          `UPDATE inventory_movements SET gl_posting_status = 'failed', gl_posting_error = ?
+           WHERE company_id = ? AND local_id LIKE ?`
+        ).bind(errMsg, company_id, `${batchKey}_%`).run()
+        await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_transfer', ins.id, {
+          company_id, ref_id: ins.id, item_code: ins.item_code,
+          from_warehouse: b.from_warehouse, to_warehouse: b.to_warehouse,
+          value: totVal, date: b.movement_date,
+          item_name: itemRow?.name ?? String(ins.item_code), created_by: userId,
+          target_movement_id: inId,
+        })
       }
     } else if (controls.posting_mode === 'async_reliable') {
       await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_transfer', ins.id, {

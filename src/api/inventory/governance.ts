@@ -8,8 +8,8 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { getUser, permissionGuard } from '../../middleware/auth'
-import { FinanceCore } from '../../lib/finance_core'
 import { getInventoryPostingControls } from '../../lib/inventory_posting'
+import { processInventoryPostingOutbox } from '../../lib/process_outbox'
 
 const governance = new Hono<{ Bindings: Env }>()
 
@@ -136,43 +136,82 @@ governance.post('/gl-preview', permissionGuard('inventory', 'read'), async (c) =
 })
 
 // ── GET /items-master ────────────────────────────────────────────────────────
-// Returns items with all accounting fields + current balance totals
+// Paginated items list with accounting fields + balance totals from snapshot.
+// Query params: page (default 1), size (default 50, max 200), search, filter_status
 
 governance.get('/items-master', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
+  const page   = Math.max(1, Number(c.req.query('page') ?? 1))
+  const size   = Math.min(200, Math.max(1, Number(c.req.query('size') ?? 50)))
+  const search = (c.req.query('search') ?? '').trim()
+  // filter_status: 'all' | 'missing_ppg' | 'missing_ipg' | 'below_reorder'
+  const filterStatus = c.req.query('filter_status') ?? 'all'
+  const offset = (page - 1) * size
 
+  const conditions: string[] = ['i.company_id = ?']
+  const binds: unknown[] = [company_id]
+
+  if (search) {
+    conditions.push(`(i.name LIKE ? OR CAST(i.code AS TEXT) LIKE ?)`)
+    binds.push(`%${search}%`, `%${search}%`)
+  }
+  if (filterStatus === 'missing_ppg') {
+    conditions.push(`i.prod_posting_group_code IS NULL`)
+  } else if (filterStatus === 'missing_ipg') {
+    conditions.push(`i.inv_posting_group_code IS NULL`)
+  } else if (filterStatus === 'below_reorder') {
+    conditions.push(`i.reorder_threshold > 0 AND COALESCE(ib_agg.total_qty, 0) < i.reorder_threshold`)
+  }
+
+  const where = conditions.join(' AND ')
+
+  // Count total for pagination metadata
+  const countRow = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS total
+     FROM items i
+     LEFT JOIN (
+       SELECT item_code, SUM(balance_qty) AS total_qty
+       FROM inventory_balances WHERE company_id = ?
+       GROUP BY item_code
+     ) ib_agg ON ib_agg.item_code = i.code
+     WHERE ${where}`
+  ).bind(company_id, ...binds).first<{ total: number }>()
+
+  const total = countRow?.total ?? 0
+
+  // Use inventory_balances snapshot (O(1) per item, no full movement scan)
   const { results } = await c.env.DB.prepare(
     `SELECT
        i.code, i.name, i.unit, i.category_id,
        i.prod_posting_group_code, i.inv_posting_group_code,
        i.standard_cost, i.reorder_threshold,
        cat.name AS category_name,
-       COALESCE(bal.total_qty,   0) AS total_qty,
-       COALESCE(bal.total_value, 0) AS total_value,
-       bal.warehouse_count
+       COALESCE(ib_agg.total_qty,   0) AS total_qty,
+       COALESCE(ib_agg.total_value, 0) AS total_value,
+       COALESCE(ib_agg.wh_count,    0) AS warehouse_count
      FROM items i
      LEFT JOIN item_categories cat ON cat.id = i.category_id
      LEFT JOIN (
        SELECT item_code,
-              SUM(balance_qty)   AS total_qty,
-              SUM(balance_value) AS total_value,
-              COUNT(DISTINCT warehouse) AS warehouse_count
-       FROM (
-         SELECT item_code, warehouse, balance_qty, balance_value
-         FROM inventory_movements im2
-         WHERE company_id = ? AND id IN (
-           SELECT MAX(id) FROM inventory_movements
-           WHERE company_id = ?
-           GROUP BY item_code, warehouse
-         )
-       )
+              SUM(balance_qty)        AS total_qty,
+              SUM(balance_value)      AS total_value,
+              COUNT(DISTINCT warehouse) AS wh_count
+       FROM inventory_balances WHERE company_id = ?
        GROUP BY item_code
-     ) bal ON bal.item_code = i.code
-     WHERE i.company_id = ?
-     ORDER BY i.name`
-  ).bind(company_id, company_id, company_id).all()
+     ) ib_agg ON ib_agg.item_code = i.code
+     WHERE ${where}
+     ORDER BY i.name
+     LIMIT ? OFFSET ?`
+  ).bind(company_id, ...binds, size, offset).all()
 
-  return c.json({ success: true, data: results })
+  return c.json({
+    success: true,
+    data:       results,
+    total,
+    page,
+    page_size:  size,
+    page_count: Math.ceil(total / size),
+  })
 })
 
 // ── PATCH /items-master/:code ────────────────────────────────────────────────
@@ -522,90 +561,177 @@ governance.post('/posting-outbox/process', permissionGuard('inventory', 'create'
   const b: { limit?: number } = await c.req.json<{ limit?: number }>().catch(() => ({}))
   const limit = Math.min(Math.max(Number(b.limit ?? 50), 1), 200)
 
-  const { results: jobs } = await c.env.DB.prepare(
-    `SELECT id, event_type, movement_id, payload_json, attempts
-     FROM inventory_posting_outbox
-     WHERE company_id = ? AND status IN ('pending', 'processing')
-     ORDER BY id ASC
-     LIMIT ?`
-  ).bind(company_id, limit).all<{
-    id: number
-    event_type: string
-    movement_id: number
-    payload_json: string
-    attempts: number
+  const result = await processInventoryPostingOutbox(c.env.DB, company_id, limit)
+
+  return c.json({ success: true, data: result })
+})
+
+// ── GET /gl-trace ───────────────────────────────────────────────────────────
+// Returns movements with GL traceability gaps:
+//   - ghost_posted : gl_posting_status = 'posted' but journal_entry_id IS NULL
+//   - pending      : not yet posted (normal for async_reliable mode)
+//   - failed       : posting failed and is awaiting retry
+//   - exempt       : zero-value movements that are intentionally not posted
+//
+// Also returns a summary count per status for dashboard use.
+// Accepts ?status= filter (ghost_posted | pending | failed | exempt | all)
+// and ?limit= (default 100, max 500).
+
+governance.get('/gl-trace', permissionGuard('inventory', 'read'), async (c) => {
+  const { company_id } = getUser(c)
+  const statusFilter = (c.req.query('status') ?? 'all') as string
+  const limit = Math.min(Math.max(Number(c.req.query('limit') ?? 100), 1), 500)
+
+  // Summary counts across all statuses
+  const { results: counts } = await c.env.DB.prepare(
+    `SELECT
+       SUM(CASE WHEN gl_posting_status = 'posted'            AND journal_entry_id IS NULL THEN 1 ELSE 0 END) AS ghost_posted,
+       SUM(CASE WHEN gl_posting_status = 'pending'                                        THEN 1 ELSE 0 END) AS pending,
+       SUM(CASE WHEN gl_posting_status = 'failed'                                         THEN 1 ELSE 0 END) AS failed,
+       SUM(CASE WHEN gl_posting_status = 'exempt_zero_value'                              THEN 1 ELSE 0 END) AS exempt,
+       SUM(CASE WHEN gl_posting_status = 'posted'            AND journal_entry_id IS NOT NULL THEN 1 ELSE 0 END) AS clean_posted,
+       COUNT(*) AS total
+     FROM inventory_movements
+     WHERE company_id = ?`
+  ).bind(company_id).all<{
+    ghost_posted: number; pending: number; failed: number
+    exempt: number; clean_posted: number; total: number
   }>()
 
-  let posted = 0
-  let failed = 0
+  const summary = counts[0] ?? { ghost_posted: 0, pending: 0, failed: 0, exempt: 0, clean_posted: 0, total: 0 }
 
-  for (const job of jobs) {
-    await c.env.DB.prepare(
-      `UPDATE inventory_posting_outbox SET status = 'processing', updated_at = datetime('now') WHERE id = ? AND company_id = ?`
-    ).bind(job.id, company_id).run()
-
-    try {
-      const payload = JSON.parse(job.payload_json || '{}')
-      let jeId: number | null = null
-
-      if (job.event_type === 'inventory_movement') {
-        jeId = await FinanceCore.resolveInventoryMovement(c.env.DB, payload)
-      } else if (job.event_type === 'inventory_transfer') {
-        jeId = await FinanceCore.resolveInventoryTransfer(c.env.DB, payload)
-      } else {
-        throw new Error(`Unsupported event_type: ${job.event_type}`)
-      }
-
-      await c.env.DB.prepare(
-        `UPDATE inventory_posting_outbox
-         SET status = 'done', processed_at = datetime('now'), last_error = NULL, updated_at = datetime('now')
-         WHERE id = ? AND company_id = ?`
-      ).bind(job.id, company_id).run()
-
-      await c.env.DB.prepare(
-        `UPDATE inventory_movements
-         SET gl_posting_status = 'posted', gl_posted_at = datetime('now'), gl_posting_error = NULL, journal_entry_id = COALESCE(?, journal_entry_id)
-         WHERE id = ? AND company_id = ?`
-      ).bind(jeId, job.movement_id, company_id).run()
-
-      const targetMovementId = Number(payload?.target_movement_id ?? 0)
-      if (targetMovementId > 0) {
-        await c.env.DB.prepare(
-          `UPDATE inventory_movements
-           SET gl_posting_status = 'posted', gl_posted_at = datetime('now'), gl_posting_error = NULL, journal_entry_id = COALESCE(?, journal_entry_id)
-           WHERE id = ? AND company_id = ?`
-        ).bind(jeId, targetMovementId, company_id).run()
-      }
-
-      posted++
-    } catch (err: any) {
-      failed++
-      const nextRetry = (job.attempts ?? 0) + 1
-      const nextStatus = nextRetry >= 10 ? 'failed' : 'pending'
-      const errMsg = String(err?.message ?? err)
-
-      await c.env.DB.prepare(
-        `UPDATE inventory_posting_outbox
-        SET status = ?, attempts = ?, last_error = ?, updated_at = datetime('now')
-         WHERE id = ? AND company_id = ?`
-      ).bind(nextStatus, nextRetry, errMsg, job.id, company_id).run()
-
-      await c.env.DB.prepare(
-        `UPDATE inventory_movements
-         SET gl_posting_status = ?, gl_posting_error = ?
-         WHERE id = ? AND company_id = ?`
-      ).bind(nextStatus === 'failed' ? 'failed' : 'pending', errMsg, job.movement_id, company_id).run()
-    }
+  // Build WHERE clause for the detail rows
+  let whereClause: string
+  switch (statusFilter) {
+    case 'ghost_posted': whereClause = `gl_posting_status = 'posted' AND journal_entry_id IS NULL`; break
+    case 'pending':      whereClause = `gl_posting_status = 'pending'`; break
+    case 'failed':       whereClause = `gl_posting_status = 'failed'`; break
+    case 'exempt':       whereClause = `gl_posting_status = 'exempt_zero_value'`; break
+    default:             whereClause = `gl_posting_status != 'posted' OR journal_entry_id IS NULL`
   }
+
+  const { results: rows } = await c.env.DB.prepare(
+    `SELECT
+       m.id,
+       m.movement_date,
+       m.warehouse,
+       m.movement_type,
+       m.item_code,
+       i.name                AS item_name,
+       m.quantity,
+       m.unit_price,
+       m.value_in,
+       m.value_out,
+       m.gl_posting_status,
+       m.journal_entry_id,
+       m.gl_posting_error,
+       m.gl_posted_at,
+       m.transaction_id,
+       m.document_number,
+       m.supplier_code,
+       m.zero_value_reason,
+       -- outbox status if queued
+       ob.status             AS outbox_status,
+       ob.attempts           AS outbox_attempts,
+       ob.last_error         AS outbox_last_error,
+       ob.updated_at         AS outbox_updated_at,
+       -- GL entry details if linked
+       je.entry_number       AS je_number,
+       je.entry_date         AS je_date,
+       je.description        AS je_description
+     FROM inventory_movements m
+     LEFT JOIN items i  ON i.company_id = m.company_id AND i.code = m.item_code
+     LEFT JOIN inventory_posting_outbox ob
+       ON ob.movement_id = m.id AND ob.company_id = m.company_id
+          AND ob.status NOT IN ('done')
+     LEFT JOIN journal_entries je ON je.id = m.journal_entry_id AND je.company_id = m.company_id
+     WHERE m.company_id = ? AND (${whereClause})
+     ORDER BY m.movement_date DESC, m.id DESC
+     LIMIT ?`
+  ).bind(company_id, limit).all<{
+    id: number; movement_date: string; warehouse: string; movement_type: string
+    item_code: number; item_name: string | null; quantity: number; unit_price: number
+    value_in: number; value_out: number; gl_posting_status: string
+    journal_entry_id: number | null; gl_posting_error: string | null; gl_posted_at: string | null
+    transaction_id: number | null; document_number: string | null; supplier_code: number | null
+    zero_value_reason: string | null; outbox_status: string | null; outbox_attempts: number | null
+    outbox_last_error: string | null; outbox_updated_at: string | null
+    je_number: string | null; je_date: string | null; je_description: string | null
+  }>()
 
   return c.json({
     success: true,
     data: {
-      scanned: jobs.length,
-      posted,
-      failed,
+      summary: {
+        ghost_posted:  summary.ghost_posted,
+        pending:       summary.pending,
+        failed:        summary.failed,
+        exempt:        summary.exempt,
+        clean_posted:  summary.clean_posted,
+        total:         summary.total,
+        traceability_pct: summary.total > 0
+          ? Math.round(100 * summary.clean_posted / summary.total)
+          : 100,
+      },
+      filter: statusFilter,
+      rows,
     },
   })
+})
+
+// ── POST /gl-trace/:id/resolve ───────────────────────────────────────────────
+// Resolve a single GL trace anomaly:
+//   action='exempt'  → mark as exempt_zero_value (zero-value ghost movements)
+//   action='retry'   → force-enqueue in outbox for re-posting (non-zero ghosts/failed)
+
+governance.post('/gl-trace/:id/resolve', permissionGuard('inventory', 'create'), async (c) => {
+  const { company_id } = getUser(c)
+  const movId  = Number(c.req.param('id'))
+  const body   = await c.req.json<{ action: 'exempt' | 'retry'; reason?: string }>().catch(() => ({ action: 'retry' as const }))
+
+  if (!movId) return c.json({ success: false, error: 'movement id required' }, 400)
+
+  const mov = await c.env.DB.prepare(
+    `SELECT id, gl_posting_status, value_in, value_out, journal_entry_id
+     FROM inventory_movements WHERE company_id = ? AND id = ?`
+  ).bind(company_id, movId).first<{
+    id: number; gl_posting_status: string
+    value_in: number; value_out: number; journal_entry_id: number | null
+  }>()
+
+  if (!mov) return c.json({ success: false, error: 'movement not found' }, 404)
+
+  const totalValue = (mov.value_in ?? 0) + (mov.value_out ?? 0)
+
+  if (body.action === 'exempt') {
+    if (totalValue > 0) {
+      return c.json({ success: false, error: 'cannot exempt a non-zero-value movement' }, 400)
+    }
+    await c.env.DB.prepare(
+      `UPDATE inventory_movements
+       SET gl_posting_status = 'exempt_zero_value',
+           zero_value_reason  = COALESCE(?, zero_value_reason),
+           gl_posting_error   = NULL
+       WHERE company_id = ? AND id = ?
+         AND (gl_posting_status = 'posted' OR gl_posting_status = 'pending')`
+    ).bind(body.reason ?? 'zero_value_auto_exempt', company_id, movId).run()
+
+    return c.json({ success: true, action: 'exempt', movement_id: movId })
+  }
+
+  // action='retry' — enqueue in outbox
+  await c.env.DB.prepare(
+    `INSERT INTO inventory_posting_outbox
+       (company_id, movement_id, status, attempts, created_at, updated_at)
+     VALUES (?, ?, 'pending', 0, datetime('now'), datetime('now'))
+     ON CONFLICT(company_id, movement_id) DO UPDATE SET
+       status     = 'pending',
+       attempts   = 0,
+       last_error = NULL,
+       updated_at = datetime('now')`
+  ).bind(company_id, movId).run()
+
+  return c.json({ success: true, action: 'retry', movement_id: movId, outbox: 'enqueued' })
 })
 
 export default governance
