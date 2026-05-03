@@ -28,7 +28,7 @@ export default function InventoryAdjustmentsPage() {
   })
 
   const createMutation = useMutation({
-    mutationFn: (body: any) => inventoryApi.createAdjustment({ ...body, lines: [] }), // Initial empty adjustment
+    mutationFn: (body: any) => inventoryApi.createAdjustment(body),
     onSuccess: (res: any) => {
       if (res.success === false) { toast(res.error || 'خطأ', 'error'); return }
       toast('تم إنشاء مسودة التسوية الجردية', 'success')

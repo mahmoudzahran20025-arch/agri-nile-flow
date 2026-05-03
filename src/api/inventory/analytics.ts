@@ -1,10 +1,10 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
-import { getUser } from '../../middleware/auth'
+import { getUser, permissionGuard } from '../../middleware/auth'
 
 const analytics = new Hono<{ Bindings: Env }>()
 
-analytics.get('/cost-by-field', async (c) => {
+analytics.get('/cost-by-field', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const seasonId = c.req.query('season_id')
 
@@ -56,7 +56,7 @@ analytics.get('/cost-by-field', async (c) => {
   return c.json({ success: true, data: results })
 })
 
-analytics.get('/reorder-alerts', async (c) => {
+analytics.get('/reorder-alerts', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
 
   const { results } = await c.env.DB.prepare(`

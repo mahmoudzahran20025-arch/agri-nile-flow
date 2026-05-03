@@ -4,6 +4,12 @@ import { getUser, permissionGuard } from '../../middleware/auth'
 import { getOpenPeriod } from '../../lib/gl'
 import { FinanceCore } from '../../lib/finance_core'
 import { logAudit } from '../../lib/audit'
+import {
+  enforceInventoryLockDate,
+  enqueueInventoryPostingOutbox,
+  getInventoryPostingControls,
+  validateZeroValuePolicy,
+} from '../../lib/inventory_posting'
 
 const movements = new Hono<{ Bindings: Env }>()
 
@@ -45,7 +51,14 @@ movements.get('/movements', permissionGuard('inventory', 'read'), async (c) => {
               im.season_id, im.field_id, f.name AS field_name,
               im.work_order_id, wo.name AS work_order_name,
               im.center_code, cc.name_ar AS center_name,
-              im.related_movement_id
+              im.related_movement_id,
+              im.journal_entry_id,
+              im.zero_value_reason,
+              im.zero_value_approved_by_role,
+              im.posting_mode,
+              im.gl_posting_status,
+              im.gl_posting_error,
+              im.gl_posted_at
        FROM inventory_movements im
        LEFT JOIN items i ON i.code = im.item_code AND i.company_id = im.company_id
        LEFT JOIN suppliers s ON s.code = im.supplier_code AND s.company_id = im.company_id
@@ -70,7 +83,7 @@ movements.get('/movements', permissionGuard('inventory', 'read'), async (c) => {
 // ── POST /movements (single) ──────────────────────────────────
 
 movements.post('/movements', permissionGuard('inventory', 'create'), async (c) => {
-  const { company_id, sub: userId } = getUser(c)
+  const { company_id, sub: userId, role } = getUser(c)
   const b = await c.req.json<{
     movement_date: string; warehouse: string; movement_type: string
     item_code: number; quantity: number; unit_price?: number
@@ -78,6 +91,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     season_id?: number; field_id?: number; work_order_id?: number
     center_code?: number; pack_capacity?: number; pack_count?: number
     payment_method?: 'cash' | 'credit'
+    zero_value_reason?: string
   }>()
 
   if (!b.movement_date || !b.warehouse || !b.movement_type || !b.item_code || !b.quantity) {
@@ -85,6 +99,13 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
   }
   if (b.movement_type !== 'اضافة' && b.movement_type !== 'صرف') {
     return c.json({ success: false, error: "النوع يجب أن يكون 'اضافة' أو 'صرف'" }, 400)
+  }
+
+  const controls = await getInventoryPostingControls(c.env.DB, company_id)
+  try {
+    enforceInventoryLockDate(controls, b.movement_date)
+  } catch (e: any) {
+    return c.json({ success: false, error: `الفترة المخزنية مغلقة حتى ${controls.locked_through_date}`, code: 'INVENTORY_PERIOD_LOCKED' }, 422)
   }
 
   const periodId = await getOpenPeriod(c.env.DB, company_id, b.movement_date)
@@ -132,6 +153,20 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
   const valueOut  = b.movement_type === 'صرف'   ? b.quantity * unitPrice : 0
   const balQty    = prevQty + qtyIn - qtyOut
   const balVal    = prevVal + valueIn - valueOut
+  const movementValue = b.movement_type === 'اضافة' ? valueIn : valueOut
+  const zeroValueReason = b.zero_value_reason?.trim()
+
+  try {
+    validateZeroValuePolicy(controls, role, movementValue, zeroValueReason)
+  } catch (e: any) {
+    if (e.message === 'ZERO_VALUE_REASON_REQUIRED') {
+      return c.json({ success: false, error: 'الحركة الصفرية تتطلب سببًا واضحًا', code: 'ZERO_VALUE_REASON_REQUIRED' }, 422)
+    }
+    if (e.message === 'ZERO_VALUE_APPROVAL_ROLE_REQUIRED') {
+      return c.json({ success: false, error: 'ليس لديك صلاحية اعتماد حركة صفرية القيمة', code: 'ZERO_VALUE_APPROVAL_ROLE_REQUIRED' }, 403)
+    }
+    throw e
+  }
 
   const localId = `inv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
   const dQty = qtyIn - qtyOut
@@ -144,15 +179,20 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
        (company_id, season_id, field_id, work_order_id, supplier_code, item_code, center_code,
         movement_date, warehouse, movement_type, document_number, pack_capacity, pack_count,
         quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
-        notes, year, month, created_by_user_id, local_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        notes, year, month, created_by_user_id, local_id,
+        zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
       company_id, b.season_id ?? null, b.field_id ?? null, b.work_order_id ?? null,
       b.supplier_code ?? null, b.item_code, centerCode ?? null,
       b.movement_date, b.warehouse, b.movement_type, b.document_number ?? null,
       b.pack_capacity ?? null, b.pack_count ?? null, b.quantity, unitPrice,
       qtyIn, qtyOut, balQty, valueIn, valueOut, balVal,
-      b.notes ?? null, date.getFullYear(), date.getMonth() + 1, userId, localId
+      b.notes ?? null, date.getFullYear(), date.getMonth() + 1, userId, localId,
+      movementValue === 0 ? (zeroValueReason ?? null) : null,
+      movementValue === 0 ? role : null,
+      controls.posting_mode,
+      movementValue === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled'))
     ),
     c.env.DB.prepare(
       `UPDATE inventory_movements
@@ -169,33 +209,63 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     .prepare('SELECT name FROM items WHERE code = ? AND company_id = ?')
     .bind(b.item_code, company_id).first<{name:string}>()
 
-  const glValue = b.movement_type === 'اضافة' ? valueIn : valueOut
+  const glValue = movementValue
   let glEntryId: number | null = null
-  try {
-    glEntryId = await FinanceCore.resolveInventoryMovement(c.env.DB, {
-      company_id,
-      ref_id: movId,
-      item_code: b.item_code,
-      warehouse: b.warehouse,
-      movement_type: b.movement_type,
-      value: glValue,
-      date: b.movement_date,
-      item_name: itemRow?.name ?? String(b.item_code),
-      created_by: userId,
-      center_code: centerCode ?? undefined,
-      payment_method: b.payment_method,
-      supplier_code: b.supplier_code,
-      work_order_id: b.work_order_id,
-    })
-  } catch (err: any) {
-    await c.env.DB.prepare('DELETE FROM inventory_movements WHERE id = ?').bind(movId).run()
-    await c.env.DB.prepare(
-      `UPDATE inventory_movements
-       SET balance_qty = balance_qty - ?, balance_value = balance_value - ?
-       WHERE company_id = ? AND item_code = ? AND warehouse = ?
-         AND (movement_date > ? OR (movement_date = ? AND id > ?))`
-    ).bind(dQty, dVal, company_id, b.item_code, b.warehouse, b.movement_date, b.movement_date, movId).run()
-    throw new Error(`فشل إنشاء القيد المحاسبي وتم إلغاء الحركة المخزنية: ${err.message}`)
+  if (glValue > 0) {
+    if (controls.posting_mode === 'strict_sync') {
+      try {
+        glEntryId = await FinanceCore.resolveInventoryMovement(c.env.DB, {
+          company_id,
+          ref_id: movId,
+          item_code: b.item_code,
+          warehouse: b.warehouse,
+          movement_type: b.movement_type,
+          value: glValue,
+          date: b.movement_date,
+          item_name: itemRow?.name ?? String(b.item_code),
+          created_by: userId,
+          center_code: centerCode ?? undefined,
+          payment_method: b.payment_method,
+          supplier_code: b.supplier_code,
+          work_order_id: b.work_order_id,
+        })
+        await c.env.DB.prepare(
+          'UPDATE inventory_movements SET gl_posting_status = ?, gl_posted_at = datetime(\'now\') WHERE id = ? AND company_id = ?'
+        ).bind('posted', movId, company_id).run()
+      } catch (err: any) {
+        await c.env.DB.prepare('DELETE FROM inventory_movements WHERE id = ?').bind(movId).run()
+        await c.env.DB.prepare(
+          `UPDATE inventory_movements
+           SET balance_qty = balance_qty - ?, balance_value = balance_value - ?
+           WHERE company_id = ? AND item_code = ? AND warehouse = ?
+             AND (movement_date > ? OR (movement_date = ? AND id > ?))`
+        ).bind(dQty, dVal, company_id, b.item_code, b.warehouse, b.movement_date, b.movement_date, movId).run()
+        throw new Error(`فشل إنشاء القيد المحاسبي وتم إلغاء الحركة المخزنية: ${err.message}`)
+      }
+    } else if (controls.posting_mode === 'async_reliable') {
+      await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', movId, {
+        company_id,
+        ref_id: movId,
+        item_code: b.item_code,
+        warehouse: b.warehouse,
+        movement_type: b.movement_type,
+        value: glValue,
+        date: b.movement_date,
+        item_name: itemRow?.name ?? String(b.item_code),
+        created_by: userId,
+        center_code: centerCode ?? null,
+        payment_method: b.payment_method ?? null,
+        supplier_code: b.supplier_code ?? null,
+        work_order_id: b.work_order_id ?? null,
+      })
+      await c.env.DB.prepare(
+        'UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?'
+      ).bind('pending', movId, company_id).run()
+    } else {
+      await c.env.DB.prepare(
+        'UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?'
+      ).bind('decoupled', movId, company_id).run()
+    }
   }
 
   if (b.movement_type === 'اضافة' && b.payment_method === 'cash') {
@@ -223,8 +293,8 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
 
 // ── POST /movements/batch ─────────────────────────────────────
 
-movements.post('/movements/batch', async (c) => {
-  const { company_id, sub: userId } = getUser(c)
+movements.post('/movements/batch', permissionGuard('inventory', 'create'), async (c) => {
+  const { company_id, sub: userId, role } = getUser(c)
   const b = await c.req.json<{
     movement_date:    string
     warehouse:        string
@@ -237,6 +307,7 @@ movements.post('/movements/batch', async (c) => {
     notes?:           string
     center_code?:     number
     payment_method?:  'cash' | 'credit'
+    zero_value_reason?: string
     items: Array<{ item_code: number; quantity: number; unit_price?: number; notes?: string }>
   }>()
 
@@ -248,6 +319,13 @@ movements.post('/movements/batch', async (c) => {
   }
   if (b.movement_type !== 'اضافة' && b.movement_type !== 'صرف') {
     return c.json({ success: false, error: "النوع يجب أن يكون 'اضافة' أو 'صرف'" }, 400)
+  }
+
+  const controls = await getInventoryPostingControls(c.env.DB, company_id)
+  try {
+    enforceInventoryLockDate(controls, b.movement_date)
+  } catch {
+    return c.json({ success: false, error: `الفترة المخزنية مغلقة حتى ${controls.locked_through_date}`, code: 'INVENTORY_PERIOD_LOCKED' }, 422)
   }
 
   const periodId = await getOpenPeriod(c.env.DB, company_id, b.movement_date)
@@ -305,6 +383,19 @@ movements.post('/movements/batch', async (c) => {
     const qtyOut    = b.movement_type === 'صرف'   ? li.quantity : 0
     const valueIn   = b.movement_type === 'اضافة' ? li.quantity * unitPrice : 0
     const valueOut  = b.movement_type === 'صرف'   ? li.quantity * unitPrice : 0
+    const movementValue = b.movement_type === 'اضافة' ? valueIn : valueOut
+
+    try {
+      validateZeroValuePolicy(controls, role, movementValue, b.zero_value_reason?.trim())
+    } catch (e: any) {
+      if (e.message === 'ZERO_VALUE_REASON_REQUIRED') {
+        return c.json({ success: false, error: `السطر ${i + 1}: الحركة الصفرية تتطلب سببًا واضحًا`, code: 'ZERO_VALUE_REASON_REQUIRED' }, 422)
+      }
+      if (e.message === 'ZERO_VALUE_APPROVAL_ROLE_REQUIRED') {
+        return c.json({ success: false, error: `السطر ${i + 1}: ليس لديك صلاحية اعتماد حركة صفرية القيمة`, code: 'ZERO_VALUE_APPROVAL_ROLE_REQUIRED' }, 403)
+      }
+      throw e
+    }
 
     lineResults.push({
       item_code: li.item_code, quantity: li.quantity, unit_price: unitPrice,
@@ -322,15 +413,20 @@ movements.post('/movements/batch', async (c) => {
        (company_id, season_id, field_id, work_order_id, supplier_code, item_code, movement_date, warehouse,
         movement_type, document_number, quantity, unit_price,
         qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
-        notes, year, month, created_by_user_id, local_id, center_code)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        notes, year, month, created_by_user_id, local_id, center_code,
+        zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
       company_id, b.season_id ?? null, b.field_id ?? null, b.work_order_id ?? null,
       b.supplier_code ?? null, lr.item_code,
       b.movement_date, b.warehouse, b.movement_type, b.document_number ?? null,
       lr.quantity, lr.unit_price,
       lr.qtyIn, lr.qtyOut, lr.balQty, lr.valueIn, lr.valueOut, lr.balVal,
-      lr.lineNotes ?? b.notes ?? null, year, month, userId, lr.localId, centerCode ?? null
+      lr.lineNotes ?? b.notes ?? null, year, month, userId, lr.localId, centerCode ?? null,
+      (lr.valueIn + lr.valueOut) === 0 ? (b.zero_value_reason?.trim() ?? null) : null,
+      (lr.valueIn + lr.valueOut) === 0 ? role : null,
+      controls.posting_mode,
+      (lr.valueIn + lr.valueOut) === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled'))
     )
   )
   await c.env.DB.batch(insertStmts)
@@ -367,8 +463,47 @@ movements.post('/movements/batch', async (c) => {
       .prepare('SELECT name FROM items WHERE code = ? AND company_id = ?')
       .bind(lr.item_code, company_id).first<{ name: string }>()
 
-    try {
-      await FinanceCore.resolveInventoryMovement(c.env.DB, {
+    if (glValue <= 0) continue
+
+    if (controls.posting_mode === 'strict_sync') {
+      try {
+        await FinanceCore.resolveInventoryMovement(c.env.DB, {
+          company_id,
+          ref_id: ins.id,
+          item_code: lr.item_code,
+          warehouse: b.warehouse,
+          movement_type: b.movement_type,
+          value: glValue,
+          date: b.movement_date,
+          item_name: itemRow?.name ?? String(lr.item_code),
+          created_by: userId,
+          center_code: centerCode ?? undefined,
+          payment_method: b.payment_method,
+          supplier_code: b.supplier_code,
+          work_order_id: b.work_order_id,
+        })
+        await c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ?, gl_posted_at = datetime(\'now\') WHERE id = ? AND company_id = ?')
+          .bind('posted', ins.id, company_id).run()
+      } catch (err: any) {
+        await c.env.DB.prepare('DELETE FROM inventory_movements WHERE company_id = ? AND local_id LIKE ?')
+          .bind(company_id, `${batchKey}_%`).run()
+
+        const rollbackStmts = inserted.map(i => {
+          const line = lineResults.find(r => r.localId === i.local_id)
+          if (!line) return null
+          return c.env.DB.prepare(
+            `UPDATE inventory_movements
+             SET balance_qty = balance_qty - ?, balance_value = balance_value - ?
+             WHERE company_id = ? AND item_code = ? AND warehouse = ?
+               AND (movement_date > ? OR (movement_date = ? AND id > ?))`
+          ).bind(line.qtyIn - line.qtyOut, line.valueIn - line.valueOut, company_id, line.item_code, b.warehouse, b.movement_date, b.movement_date, i.id)
+        }).filter(Boolean) as any[]
+        if (rollbackStmts.length > 0) await c.env.DB.batch(rollbackStmts)
+
+        throw new Error(`فشل إنشاء القيد المحاسبي وتم إلغاء حركة المخزن: ${err.message}`)
+      }
+    } else if (controls.posting_mode === 'async_reliable') {
+      await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', ins.id, {
         company_id,
         ref_id: ins.id,
         item_code: lr.item_code,
@@ -378,28 +513,16 @@ movements.post('/movements/batch', async (c) => {
         date: b.movement_date,
         item_name: itemRow?.name ?? String(lr.item_code),
         created_by: userId,
-        center_code: centerCode ?? undefined,
-        payment_method: b.payment_method,
-        supplier_code: b.supplier_code,
-        work_order_id: b.work_order_id,
+        center_code: centerCode ?? null,
+        payment_method: b.payment_method ?? null,
+        supplier_code: b.supplier_code ?? null,
+        work_order_id: b.work_order_id ?? null,
       })
-    } catch (err: any) {
-      await c.env.DB.prepare('DELETE FROM inventory_movements WHERE company_id = ? AND local_id LIKE ?')
-        .bind(company_id, `${batchKey}_%`).run()
-
-      const rollbackStmts = inserted.map(i => {
-        const line = lineResults.find(r => r.localId === i.local_id)
-        if (!line) return null
-        return c.env.DB.prepare(
-          `UPDATE inventory_movements
-           SET balance_qty = balance_qty - ?, balance_value = balance_value - ?
-           WHERE company_id = ? AND item_code = ? AND warehouse = ?
-             AND (movement_date > ? OR (movement_date = ? AND id > ?))`
-        ).bind(line.qtyIn - line.qtyOut, line.valueIn - line.valueOut, company_id, line.item_code, b.warehouse, b.movement_date, b.movement_date, i.id)
-      }).filter(Boolean) as any[]
-      if (rollbackStmts.length > 0) await c.env.DB.batch(rollbackStmts)
-
-      throw new Error(`فشل إنشاء القيد المحاسبي وتم إلغاء حركة المخزن: ${err.message}`)
+      await c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?')
+        .bind('pending', ins.id, company_id).run()
+    } else {
+      await c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?')
+        .bind('decoupled', ins.id, company_id).run()
     }
   }
 
@@ -432,7 +555,7 @@ movements.post('/movements/batch', async (c) => {
 // ── POST /movements/transfer ─────────────────────────────────────
 
 movements.post('/movements/transfer', permissionGuard('inventory', 'create'), async (c) => {
-  const { company_id, sub: userId } = getUser(c)
+  const { company_id, sub: userId, role } = getUser(c)
   const b = await c.req.json<{
     movement_date: string; item_code: number; quantity: number
     from_warehouse: string; to_warehouse: string; notes?: string
@@ -444,6 +567,13 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
 
   if (b.from_warehouse === b.to_warehouse) {
     return c.json({ success: false, error: 'لا يمكن التحويل لنفس المخزن' }, 400)
+  }
+
+  const controls = await getInventoryPostingControls(c.env.DB, company_id)
+  try {
+    enforceInventoryLockDate(controls, b.movement_date)
+  } catch {
+    return c.json({ success: false, error: `الفترة المخزنية مغلقة حتى ${controls.locked_through_date}`, code: 'INVENTORY_PERIOD_LOCKED' }, 422)
   }
 
   const periodId = await getOpenPeriod(c.env.DB, company_id, b.movement_date)
@@ -463,6 +593,18 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
 
   const avgPrice   = srcBal.balance_value / srcBal.balance_qty
   const totalValue = b.quantity * avgPrice
+
+  try {
+    validateZeroValuePolicy(controls, role, totalValue, b.notes?.trim())
+  } catch (e: any) {
+    if (e.message === 'ZERO_VALUE_REASON_REQUIRED') {
+      return c.json({ success: false, error: 'التحويل الصفري يتطلب سببًا في الملاحظات', code: 'ZERO_VALUE_REASON_REQUIRED' }, 422)
+    }
+    if (e.message === 'ZERO_VALUE_APPROVAL_ROLE_REQUIRED') {
+      return c.json({ success: false, error: 'ليس لديك صلاحية اعتماد تحويل صفري القيمة', code: 'ZERO_VALUE_APPROVAL_ROLE_REQUIRED' }, 403)
+    }
+    throw e
+  }
 
   const dstBal = await c.env.DB.prepare(
     `SELECT balance_qty, balance_value FROM inventory_movements
@@ -485,19 +627,29 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
   await c.env.DB.batch([
     c.env.DB.prepare(
       `INSERT INTO inventory_movements (company_id, item_code, movement_date, warehouse, movement_type,
-       quantity, unit_price, qty_out, balance_qty, value_out, balance_value, notes, year, month, created_by_user_id, local_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       quantity, unit_price, qty_out, balance_qty, value_out, balance_value, notes, year, month, created_by_user_id, local_id,
+       zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(company_id, b.item_code, b.movement_date, b.from_warehouse, 'صرف',
       b.quantity, avgPrice, b.quantity, srcBal.balance_qty - b.quantity, totalValue, srcBal.balance_value - totalValue,
-      `تحويل إلى ${b.to_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, outLocalId),
+      `تحويل إلى ${b.to_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, outLocalId,
+      totalValue === 0 ? (b.notes?.trim() ?? null) : null,
+      totalValue === 0 ? role : null,
+      controls.posting_mode,
+      totalValue === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled'))),
 
     c.env.DB.prepare(
       `INSERT INTO inventory_movements (company_id, item_code, movement_date, warehouse, movement_type,
-       quantity, unit_price, qty_in, balance_qty, value_in, balance_value, notes, year, month, created_by_user_id, local_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       quantity, unit_price, qty_in, balance_qty, value_in, balance_value, notes, year, month, created_by_user_id, local_id,
+       zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(company_id, b.item_code, b.movement_date, b.to_warehouse, 'اضافة',
       b.quantity, avgPrice, b.quantity, dstPrevQty + b.quantity, totalValue, dstPrevVal + totalValue,
-      `تحويل من ${b.from_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, inLocalId)
+      `تحويل من ${b.from_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, inLocalId,
+      totalValue === 0 ? (b.notes?.trim() ?? null) : null,
+      totalValue === 0 ? role : null,
+      controls.posting_mode,
+      totalValue === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled')))
   ])
 
   // Get the created IDs for reference
@@ -512,22 +664,55 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
   const itemRow = await c.env.DB.prepare("SELECT name FROM items WHERE code = ? AND company_id = ?")
     .bind(b.item_code, company_id).first<{ name: string }>()
 
-  try {
-    await FinanceCore.resolveInventoryTransfer(c.env.DB, {
-      company_id,
-      ref_id: outId!,
-      item_code: b.item_code,
-      from_warehouse: b.from_warehouse,
-      to_warehouse: b.to_warehouse,
-      value: totalValue,
-      date: b.movement_date,
-      item_name: itemRow?.name ?? String(b.item_code),
-      created_by: userId,
-    })
-  } catch (err: any) {
-    // If GL fails, we keep the movement but log it as a sync issue for reconciliation.
-    // In a stricter system, we might rollback, but inventory takes physical precedence here.
-    console.error(`GL_TRANSFER_POSTING_FAILED: ${err.message}`)
+  if (totalValue > 0 && outId && inId) {
+    if (controls.posting_mode === 'strict_sync') {
+      try {
+        const jeId = await FinanceCore.resolveInventoryTransfer(c.env.DB, {
+          company_id,
+          ref_id: outId,
+          item_code: b.item_code,
+          from_warehouse: b.from_warehouse,
+          to_warehouse: b.to_warehouse,
+          value: totalValue,
+          date: b.movement_date,
+          item_name: itemRow?.name ?? String(b.item_code),
+          created_by: userId,
+        })
+        await c.env.DB.batch([
+          c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ?, gl_posted_at = datetime(\'now\'), journal_entry_id = ? WHERE id = ? AND company_id = ?')
+            .bind('posted', jeId, outId, company_id),
+          c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ?, gl_posted_at = datetime(\'now\'), journal_entry_id = ? WHERE id = ? AND company_id = ?')
+            .bind('posted', jeId, inId, company_id),
+        ])
+      } catch (err: any) {
+        await c.env.DB.prepare(
+          'DELETE FROM inventory_movements WHERE company_id = ? AND id IN (?, ?)'
+        ).bind(company_id, outId, inId).run()
+        return c.json({ success: false, error: `فشل إنشاء القيد المحاسبي للتحويل: ${err.message}` }, 500)
+      }
+    } else if (controls.posting_mode === 'async_reliable') {
+      await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_transfer', outId, {
+        company_id,
+        ref_id: outId,
+        item_code: b.item_code,
+        from_warehouse: b.from_warehouse,
+        to_warehouse: b.to_warehouse,
+        value: totalValue,
+        date: b.movement_date,
+        item_name: itemRow?.name ?? String(b.item_code),
+        created_by: userId,
+        target_movement_id: inId,
+      })
+      await c.env.DB.batch([
+        c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('pending', outId, company_id),
+        c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('pending', inId, company_id),
+      ])
+    } else {
+      await c.env.DB.batch([
+        c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('decoupled', outId, company_id),
+        c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('decoupled', inId, company_id),
+      ])
+    }
   }
 
   return c.json({ 
@@ -545,7 +730,7 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
 // ── POST /movements/transfer-batch ───────────────────────────────
 
 movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create'), async (c) => {
-  const { company_id, sub: userId } = getUser(c)
+  const { company_id, sub: userId, role } = getUser(c)
   const b = await c.req.json<{
     movement_date: string; from_warehouse: string; to_warehouse: string; notes?: string
     items: Array<{ item_code: number; quantity: number }>
@@ -557,6 +742,13 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
 
   if (b.from_warehouse === b.to_warehouse) {
     return c.json({ success: false, error: 'لا يمكن التحويل لنفس المخزن' }, 400)
+  }
+
+  const controls = await getInventoryPostingControls(c.env.DB, company_id)
+  try {
+    enforceInventoryLockDate(controls, b.movement_date)
+  } catch {
+    return c.json({ success: false, error: `الفترة المخزنية مغلقة حتى ${controls.locked_through_date}`, code: 'INVENTORY_PERIOD_LOCKED' }, 422)
   }
 
   const periodId = await getOpenPeriod(c.env.DB, company_id, b.movement_date)
@@ -581,6 +773,19 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
 
     const avgPrice  = srcBal.balance_value / srcBal.balance_qty
     const totVal    = it.quantity * avgPrice
+
+    try {
+      validateZeroValuePolicy(controls, role, totVal, b.notes?.trim())
+    } catch (e: any) {
+      if (e.message === 'ZERO_VALUE_REASON_REQUIRED') {
+        return c.json({ success: false, error: `الصنف #${it.item_code}: التحويل الصفري يتطلب سببًا في الملاحظات`, code: 'ZERO_VALUE_REASON_REQUIRED' }, 422)
+      }
+      if (e.message === 'ZERO_VALUE_APPROVAL_ROLE_REQUIRED') {
+        return c.json({ success: false, error: `الصنف #${it.item_code}: ليس لديك صلاحية اعتماد تحويل صفري القيمة`, code: 'ZERO_VALUE_APPROVAL_ROLE_REQUIRED' }, 403)
+      }
+      throw e
+    }
+
     const dstBal = await c.env.DB.prepare(
       `SELECT balance_qty, balance_value FROM inventory_movements
        WHERE company_id = ? AND item_code = ? AND warehouse = ?
@@ -594,49 +799,83 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
 
     stmts.push(c.env.DB.prepare(
       `INSERT INTO inventory_movements (company_id, item_code, movement_date, warehouse, movement_type,
-       quantity, unit_price, qty_out, balance_qty, value_out, balance_value, notes, year, month, created_by_user_id, local_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       quantity, unit_price, qty_out, balance_qty, value_out, balance_value, notes, year, month, created_by_user_id, local_id,
+       zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(company_id, it.item_code, b.movement_date, b.from_warehouse, 'صرف',
       it.quantity, avgPrice, it.quantity, srcBal.balance_qty - it.quantity, totVal, srcBal.balance_value - totVal,
-      `تحويل Batch إلى ${b.to_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, outLoc))
+      `تحويل Batch إلى ${b.to_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, outLoc,
+      totVal === 0 ? (b.notes?.trim() ?? null) : null,
+      totVal === 0 ? role : null,
+      controls.posting_mode,
+      totVal === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled'))))
 
     stmts.push(c.env.DB.prepare(
       `INSERT INTO inventory_movements (company_id, item_code, movement_date, warehouse, movement_type,
-       quantity, unit_price, qty_in, balance_qty, value_in, balance_value, notes, year, month, created_by_user_id, local_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       quantity, unit_price, qty_in, balance_qty, value_in, balance_value, notes, year, month, created_by_user_id, local_id,
+       zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(company_id, it.item_code, b.movement_date, b.to_warehouse, 'اضافة',
       it.quantity, avgPrice, it.quantity, dPQ + it.quantity, totVal, dPV + totVal,
-      `تحويل Batch من ${b.from_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, inLoc))
+      `تحويل Batch من ${b.from_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, inLoc,
+      totVal === 0 ? (b.notes?.trim() ?? null) : null,
+      totVal === 0 ? role : null,
+      controls.posting_mode,
+      totVal === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled'))))
   }
 
   await c.env.DB.batch(stmts)
 
   // 3. GL Posting for Batch
   const { results: inserted } = await c.env.DB.prepare(
-    `SELECT id, item_code, movement_type, local_id FROM inventory_movements
+    `SELECT id, item_code, movement_type, local_id, value_out FROM inventory_movements
      WHERE company_id = ? AND local_id LIKE ? AND movement_type = 'صرف'`
-  ).bind(company_id, `${batchKey}_%_out`).all<{ id: number; item_code: number; local_id: string }>()
+  ).bind(company_id, `${batchKey}_%_out`).all<{ id: number; item_code: number; local_id: string; value_out: number }>()
 
   for (const ins of inserted) {
     const idx = Number(ins.local_id.split('_')[2])
     const item = b.items[idx]
-    
-    // We need the value. We recalculate it or fetch it.
-    // Re-fetching price for accuracy.
-    const srcBal = await c.env.DB.prepare(
-      `SELECT balance_qty, balance_value FROM inventory_movements
-       WHERE company_id = ? AND item_code = ? AND warehouse = ? AND id < ?
-       ORDER BY id DESC LIMIT 1`
-    ).bind(company_id, ins.item_code, b.from_warehouse, ins.id).first<{ balance_qty: number; balance_value: number }>()
-    
-    const avgPrice  = (srcBal?.balance_value ?? 0) / (srcBal?.balance_qty ?? 1)
-    const totVal    = item.quantity * avgPrice
+    if (!item) continue
+    const totVal = ins.value_out ?? 0
+
+    const inLocalId = ins.local_id.replace('_out', '_in')
+    const inRow = await c.env.DB.prepare(
+      `SELECT id FROM inventory_movements WHERE company_id = ? AND local_id = ? LIMIT 1`
+    ).bind(company_id, inLocalId).first<{ id: number }>()
+    const inId = inRow?.id
 
     const itemRow = await c.env.DB.prepare("SELECT name FROM items WHERE code = ? AND company_id = ?")
       .bind(ins.item_code, company_id).first<{ name: string }>()
 
-    try {
-      await FinanceCore.resolveInventoryTransfer(c.env.DB, {
+    if (totVal <= 0 || !inId) continue
+
+    if (controls.posting_mode === 'strict_sync') {
+      try {
+        const jeId = await FinanceCore.resolveInventoryTransfer(c.env.DB, {
+          company_id,
+          ref_id: ins.id,
+          item_code: ins.item_code,
+          from_warehouse: b.from_warehouse,
+          to_warehouse: b.to_warehouse,
+          value: totVal,
+          date: b.movement_date,
+          item_name: itemRow?.name ?? String(ins.item_code),
+          created_by: userId,
+        })
+        await c.env.DB.batch([
+          c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ?, gl_posted_at = datetime(\'now\'), journal_entry_id = ? WHERE id = ? AND company_id = ?')
+            .bind('posted', jeId, ins.id, company_id),
+          c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ?, gl_posted_at = datetime(\'now\'), journal_entry_id = ? WHERE id = ? AND company_id = ?')
+            .bind('posted', jeId, inId, company_id),
+        ])
+      } catch (err: any) {
+        await c.env.DB.prepare(
+          'DELETE FROM inventory_movements WHERE company_id = ? AND local_id LIKE ?'
+        ).bind(company_id, `${batchKey}_%`).run()
+        return c.json({ success: false, error: `فشل إنشاء القيد المحاسبي لتحويل الدفعة: ${err.message}` }, 500)
+      }
+    } else if (controls.posting_mode === 'async_reliable') {
+      await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_transfer', ins.id, {
         company_id,
         ref_id: ins.id,
         item_code: ins.item_code,
@@ -646,9 +885,17 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
         date: b.movement_date,
         item_name: itemRow?.name ?? String(ins.item_code),
         created_by: userId,
+        target_movement_id: inId,
       })
-    } catch (err: any) {
-      console.error(`GL_BATCH_TRANSFER_POSTING_FAILED: Item ${ins.item_code}, Error: ${err.message}`)
+      await c.env.DB.batch([
+        c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('pending', ins.id, company_id),
+        c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('pending', inId, company_id),
+      ])
+    } else {
+      await c.env.DB.batch([
+        c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('decoupled', ins.id, company_id),
+        c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('decoupled', inId, company_id),
+      ])
     }
   }
 

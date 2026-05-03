@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight, FileText, Plus, Filter, BarChart3, ShieldCheck,
@@ -77,6 +77,7 @@ export default function SupplierDetailPage() {
   const { canWrite, role } = usePermission()
   const { code }         = useParams<{ code: string }>()
   const navigate         = useNavigate()
+  const [searchParams]   = useSearchParams()
   const { toast }        = useToast()
   const queryClient      = useQueryClient()
   const [page,        setPage]       = useState(1)
@@ -84,6 +85,17 @@ export default function SupplierDetailPage() {
   const [tab,         setTab]        = useState<TabId>('statement')
   const [seasonId,    setSeasonId]   = useState<number | undefined>(undefined)
   const [filterMonth, setFilterMonth]= useState<number | undefined>(undefined)
+  const highlightId = searchParams.get('highlight') ? Number(searchParams.get('highlight')) : null
+  const tableRef    = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!highlightId) return
+    const timer = setTimeout(() => {
+      const el = tableRef.current?.querySelector(`[data-row-key="${highlightId}"]`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [highlightId])
 
   const { data: seasons } = useQuery({
     queryKey: ['seasons'],
@@ -386,17 +398,22 @@ export default function SupplierDetailPage() {
                 يوجد {summary?.draft_count} قيد/فاتورة في حالة المسودة — يلزم الترحيل لتحديث الرصيد
               </div>
             )}
-            <DataTable<SupplierTransaction>
-              columns={TXNS_COLS}
-              data={allTxns}
-              loading={isLoading}
-              total={txns?.total ?? 0}
-              page={page}
-              pageSize={100}
-              onPage={setPage}
-              rowKey={r => r.id}
-              emptyText="لا توجد معاملات لهذا المورد"
-            />
+            <div ref={tableRef}>
+              <DataTable<SupplierTransaction>
+                columns={TXNS_COLS}
+                data={allTxns}
+                loading={isLoading}
+                total={txns?.total ?? 0}
+                page={page}
+                pageSize={100}
+                onPage={setPage}
+                rowKey={r => r.id}
+                rowClassName={r => highlightId === r.id
+                  ? 'bg-amber-50 ring-1 ring-inset ring-amber-300'
+                  : (allTxns.indexOf(r) % 2 === 0 ? 'bg-white' : 'bg-slate-50/50')}
+                emptyText="لا توجد معاملات لهذا المورد"
+              />
+            </div>
           </div>
         )}
 

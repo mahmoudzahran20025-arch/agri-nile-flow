@@ -12,6 +12,7 @@ export default function AdjustmentDetailPage() {
   const { toast } = useToast()
   
   const [lines, setLines] = useState<any[]>([])
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [addingLine, setAddingLine] = useState({ item_code: '', theoretical_qty: 0, counted_qty: 0 })
 
   const { data: adjustment } = useQuery({
@@ -33,8 +34,28 @@ export default function AdjustmentDetailPage() {
   useEffect(() => {
     if (adjustment?.data?.lines) {
       setLines(adjustment.data.lines)
+      setHasUnsavedChanges(false)
     }
   }, [adjustment])
+
+  const saveLinesMutation = useMutation({
+    mutationFn: () => inventoryApi.saveAdjustmentLines(Number(id), lines.map((line: any) => ({
+      item_code: Number(line.item_code),
+      theoretical_qty: Number(line.theoretical_qty ?? 0),
+      counted_qty: Number(line.counted_qty ?? 0),
+      notes: line.notes ?? null,
+    }))),
+    onSuccess: (res: any) => {
+      if (res.success === false) {
+        toast(res.error || 'فشل حفظ البنود', 'error')
+        return
+      }
+      setHasUnsavedChanges(false)
+      toast('تم حفظ بنود التسوية بنجاح', 'success')
+      qc.invalidateQueries({ queryKey: ['inventory-adjustment', id] })
+    },
+    onError: () => toast('فشل الاتصال أثناء حفظ البنود', 'error')
+  })
 
   const postMutation = useMutation({
     mutationFn: () => inventoryApi.postAdjustment(Number(id)),
@@ -62,12 +83,22 @@ export default function AdjustmentDetailPage() {
       difference: addingLine.counted_qty - (balance?.balance_qty || 0)
     }
 
-    setLines([...lines, newLine])
+    setLines(prev => {
+      const idx = prev.findIndex((l) => Number(l.item_code) === Number(newLine.item_code))
+      if (idx >= 0) {
+        const next = [...prev]
+        next[idx] = newLine
+        return next
+      }
+      return [...prev, newLine]
+    })
+    setHasUnsavedChanges(true)
     setAddingLine({ item_code: '', theoretical_qty: 0, counted_qty: 0 })
   }
 
   const removeLine = (idx: number) => {
     setLines(lines.filter((_, i) => i !== idx))
+    setHasUnsavedChanges(true)
   }
 
   const isPosted = adjustment?.data?.status === 'posted'
@@ -93,14 +124,25 @@ export default function AdjustmentDetailPage() {
         
         {!isPosted && (
           <div className="flex gap-3">
+            <button
+              className="btn-secondary gap-2"
+              onClick={() => saveLinesMutation.mutate()}
+              disabled={saveLinesMutation.isPending || lines.length === 0}
+            >
+              {saveLinesMutation.isPending ? 'جاري حفظ البنود...' : 'حفظ البنود'}
+            </button>
             <button 
               className="btn-primary gap-2 bg-emerald-600 hover:bg-emerald-700 shadow-emerald-200" 
               onClick={() => {
+                if (hasUnsavedChanges) {
+                  toast('احفظ البنود أولاً قبل الترحيل', 'error')
+                  return
+                }
                 if (window.confirm('هل أنت متأكد من ترحيل التسوية؟ سيتم تحديث أرصدة المخازن فوراً وتوليد قيود محاسبية.')) {
                   postMutation.mutate()
                 }
               }}
-              disabled={postMutation.isPending || lines.length === 0}
+              disabled={postMutation.isPending || saveLinesMutation.isPending || lines.length === 0 || hasUnsavedChanges}
             >
               <Send size={16} /> ترحيل واعتماد الأرصدة
             </button>
@@ -118,6 +160,11 @@ export default function AdjustmentDetailPage() {
               </h3>
               <span className="text-xs font-medium text-slate-400">إجمالي البنود: {lines.length}</span>
             </div>
+            {!isPosted && hasUnsavedChanges && (
+              <div className="px-4 py-2 text-xs text-amber-700 bg-amber-50 border-b border-amber-100">
+                لديك تعديلات غير محفوظة. اضغط "حفظ البنود" قبل الترحيل.
+              </div>
+            )}
             
             <div className="overflow-x-auto">
               <table className="w-full text-right border-collapse">

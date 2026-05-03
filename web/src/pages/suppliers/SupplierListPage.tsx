@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Search, Plus, ExternalLink, FileText, X } from 'lucide-react'
@@ -143,10 +143,22 @@ export default function SupplierListPage() {
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['suppliers', page, q],
-    queryFn:  () => suppliersApi.list({ page, size: 200, q: q || undefined }) as Promise<{
+    queryFn:  () => suppliersApi.list({ page, size: 100, q: q || undefined }) as Promise<{
       data: Supplier[]; total: number; page: number; page_size: number; has_more: boolean
     }>,
+    staleTime: 30_000,
   })
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const nextQ = qInput.trim()
+      if (nextQ !== q) {
+        setQ(nextQ)
+        setPage(1)
+      }
+    }, 350)
+    return () => clearTimeout(timer)
+  }, [qInput, q])
 
   if (error) console.error('❌ Suppliers query error:', error)
 
@@ -176,7 +188,7 @@ export default function SupplierListPage() {
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
-    setQ(qInput)
+    setQ(qInput.trim())
     setPage(1)
   }
 

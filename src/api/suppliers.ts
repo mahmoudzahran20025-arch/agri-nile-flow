@@ -39,7 +39,7 @@ suppliers.get('/', permissionGuard('suppliers', 'read'), async (c) => {
     ).bind(...params, size, offset).all(),
 
     c.env.DB.prepare(
-      `SELECT COUNT(*) AS total FROM suppliers WHERE company_id = ? ${where}`
+      `SELECT COUNT(*) AS total FROM suppliers s WHERE s.company_id = ? ${where}`
     ).bind(...params).first<{ total: number }>(),
   ])
 

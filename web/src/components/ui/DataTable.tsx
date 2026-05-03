@@ -26,6 +26,7 @@ interface Props<T> {
   onPage?: (page: number) => void;
   rowKey: (row: T) => string | number;
   onRowClick?: (row: T) => void;
+  rowClassName?: (row: T) => string;
   emptyText?: string;
   emptyIcon?: React.ReactNode;
   sort?: SortState;
@@ -64,7 +65,7 @@ function SkeletonRows({ cols, rows = 7 }: { cols: number; rows?: number }) {
 
 export default function DataTable<T>({
   columns, data, loading, total = 0, page = 1, pageSize = 50,
-  onPage, rowKey, onRowClick, emptyText = 'No data available', emptyIcon,
+  onPage, rowKey, onRowClick, rowClassName, emptyText = 'No data available', emptyIcon,
   sort, onSort,
 }: Props<T>) {
   const totalPages = Math.ceil(total / pageSize);
@@ -133,8 +134,9 @@ export default function DataTable<T>({
               data.map((row, index) => (
                 <tr
                   key={rowKey(row)}
+                  data-row-key={rowKey(row)}
                   onClick={() => onRowClick?.(row)}
-                  className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'} hover:bg-slate-100 transition-colors ${onRowClick ? 'cursor-pointer' : ''}`}
+                  className={`${rowClassName ? rowClassName(row) : (index % 2 === 0 ? 'bg-white' : 'bg-slate-50/50')} hover:bg-slate-100 transition-colors ${onRowClick ? 'cursor-pointer' : ''}`}
                 >
                   {columns.map(col => (
                     <td

@@ -6,7 +6,7 @@
     "dev:web": "cd web && npm run dev",
     "db:init": "wrangler d1 execute agri-nile-flow-data-lake --remote --file=./schema.sql",
     "build:web": "cd web && npm install && npm run build",
-    "deploy": "npm run build:web && npx wrangler pages deploy web/dist --project-name=agri-nile-flow-lake && wrangler deploy",
+    "deploy": "npm run build:web && npx wrangler pages deploy web/dist --project-name=agri-nile-flow-lake --commit-dirty=true && wrangler deploy",
     "type-check": "tsc --noEmit",
     "verify:p0:event-linkage": "node p0_event_linkage_verification.js",
     "import:pipeline:prepare": "node prepare_import_pipeline.js",

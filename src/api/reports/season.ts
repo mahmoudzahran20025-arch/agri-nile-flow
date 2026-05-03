@@ -199,6 +199,7 @@ season.get('/season-pnl', async (c) => {
     wipCostRow,
     areaRow,
     byField,
+    glActualsRow,
   ] = await Promise.all([
 
     c.env.DB.prepare(
@@ -329,6 +330,18 @@ season.get('/season-pnl', async (c) => {
       field_revenue: number; inv_cost: number; labor_cost: number
       field_cost: number; field_margin: number; margin_per_feddan: number | null
     }>(),
+
+    // GL actuals by account_type — source of truth from posted journal lines
+    c.env.DB.prepare(`
+      SELECT
+        coa.account_type,
+        COALESCE(SUM(jl.credit - jl.debit), 0) AS net_credit
+      FROM journal_entry_lines jl
+      JOIN journal_entries je ON je.id = jl.entry_id AND je.company_id = jl.company_id
+      JOIN chart_of_accounts coa ON coa.code = jl.account_code AND coa.company_id = jl.company_id
+      WHERE jl.company_id = ? AND jl.season_id = ? AND je.is_posted = 1
+      GROUP BY coa.account_type
+    `).bind(company_id, seasonId).all<{ account_type: string; net_credit: number }>(),
   ])
 
   const revenue      = revenueRow?.contracts_value ?? 0
@@ -344,6 +357,14 @@ season.get('/season-pnl', async (c) => {
   const netMargin    = revenue - totalCosts
   const totalArea    = areaRow?.total ?? 0
   const marginPF     = totalArea > 0 ? netMargin / totalArea : null
+
+  const glActualMap: Record<string, number> = {}
+  for (const row of (glActualsRow?.results ?? [])) {
+    glActualMap[row.account_type] = row.net_credit
+  }
+  const glRevenue   = glActualMap['revenue']  ?? 0
+  const glExpense   = -(glActualMap['expense'] ?? 0)
+  const glNetIncome = glRevenue - glExpense
 
   return c.json({
     success: true,
@@ -370,6 +391,12 @@ season.get('/season-pnl', async (c) => {
       margin_per_feddan:   marginPF,
       margin_pct:          revenue > 0 ? Math.round((netMargin / revenue) * 1000) / 10 : null,
       by_field:            byField.results,
+      gl_actuals: {
+        revenue:    glRevenue,
+        expenses:   glExpense,
+        net_income: glNetIncome,
+        by_type:    glActualsRow?.results ?? [],
+      },
     },
   })
 })

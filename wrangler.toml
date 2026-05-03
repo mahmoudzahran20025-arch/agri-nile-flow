@@ -10,9 +10,8 @@ database_id   = "2dd5cfe6-b694-46bd-9cb8-adf1bc7c27af"
 
 [vars]
 APP_ENV    = "production"
-# Feature flag: set to "true" to activate posting_engine.ts dual-path logic.
-# Runtime toggle: UPDATE gl_integration_settings SET is_enabled=1 WHERE module_key='posting_engine';
-# NEVER set to "true" in production until posting-group setup tables are populated.
+# Dead env var — not consumed by any source code. Retained for reference only.
+# Runtime toggle for GL posting engine: UPDATE gl_integration_settings SET is_enabled=1 WHERE module_key='posting_engine';
 ENABLE_POSTING_ENGINE = "true"
 
 # ── Cron Triggers ─────────────────────────────────────────────

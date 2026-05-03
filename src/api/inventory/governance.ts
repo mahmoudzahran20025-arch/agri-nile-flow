@@ -8,6 +8,8 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { getUser, permissionGuard } from '../../middleware/auth'
+import { FinanceCore } from '../../lib/finance_core'
+import { getInventoryPostingControls } from '../../lib/inventory_posting'
 
 const governance = new Hono<{ Bindings: Env }>()
 
@@ -298,6 +300,310 @@ governance.get('/posting-health', permissionGuard('inventory', 'read'), async (c
       exact_setup:    exactCount,
       missing_setup:  gapCount,
       health_pct:     totalCombos > 0 ? Math.round((coveredCount / totalCombos) * 100) : 100,
+    },
+  })
+})
+
+// ── GET /health-summary ─────────────────────────────────────────────────────
+// ERP cockpit summary for inventory+finance linkage and inventory data risks.
+
+governance.get('/health-summary', permissionGuard('inventory', 'read'), async (c) => {
+  const { company_id } = getUser(c)
+
+  const [
+    movementRow,
+    combosRow,
+    setupRows,
+    itemRiskRow,
+    reorderRow,
+    negativeRow,
+  ] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT
+         COUNT(*) AS total_movements,
+         SUM(CASE WHEN journal_entry_id IS NULL THEN 1 ELSE 0 END) AS unlinked_total,
+         SUM(CASE WHEN journal_entry_id IS NULL AND (COALESCE(value_in, 0) + COALESCE(value_out, 0)) > 0 THEN 1 ELSE 0 END) AS unlinked_non_zero,
+         SUM(CASE WHEN journal_entry_id IS NULL AND (COALESCE(value_in, 0) + COALESCE(value_out, 0)) = 0 THEN 1 ELSE 0 END) AS unlinked_zero
+       FROM inventory_movements
+       WHERE company_id = ?`
+    ).bind(company_id).first<{
+      total_movements: number
+      unlinked_total: number
+      unlinked_non_zero: number
+      unlinked_zero: number
+    }>(),
+
+    c.env.DB.prepare(
+      `SELECT
+         im.warehouse,
+         w.inv_posting_group_code AS ipg,
+         i.prod_posting_group_code AS ppg
+       FROM inventory_movements im
+       LEFT JOIN warehouses w ON w.company_id = im.company_id AND w.name = im.warehouse AND w.is_active = 1
+       LEFT JOIN items i ON i.company_id = im.company_id AND i.code = im.item_code
+       WHERE im.company_id = ?
+       GROUP BY im.warehouse, w.inv_posting_group_code, i.prod_posting_group_code`
+    ).bind(company_id).all<{
+      warehouse: string
+      ipg: string | null
+      ppg: string | null
+    }>(),
+
+    c.env.DB.prepare(
+      `SELECT inv_posting_group_code, prod_posting_group_code
+       FROM posting_rules
+       WHERE company_id = ? AND rule_type = 'inventory' AND is_active = 1`
+    ).bind(company_id).all<{
+      inv_posting_group_code: string | null
+      prod_posting_group_code: string | null
+    }>(),
+
+    c.env.DB.prepare(
+      `SELECT
+         COUNT(*) AS active_items,
+         SUM(CASE WHEN COALESCE(standard_cost, 0) <= 0 THEN 1 ELSE 0 END) AS items_without_standard_cost,
+         SUM(CASE WHEN prod_posting_group_code IS NULL OR TRIM(prod_posting_group_code) = '' THEN 1 ELSE 0 END) AS items_without_ppg,
+         SUM(CASE WHEN inv_posting_group_code IS NULL OR TRIM(inv_posting_group_code) = '' THEN 1 ELSE 0 END) AS items_without_ipg,
+         SUM(CASE WHEN reorder_threshold IS NULL OR reorder_threshold <= 0 THEN 1 ELSE 0 END) AS items_without_reorder_threshold
+       FROM items
+       WHERE company_id = ? AND is_active = 1`
+    ).bind(company_id).first<{
+      active_items: number
+      items_without_standard_cost: number
+      items_without_ppg: number
+      items_without_ipg: number
+      items_without_reorder_threshold: number
+    }>(),
+
+    c.env.DB.prepare(
+      `WITH latest_wh AS (
+         SELECT item_code, warehouse, balance_qty
+         FROM inventory_movements
+         WHERE company_id = ?
+           AND id IN (
+             SELECT MAX(id)
+             FROM inventory_movements
+             WHERE company_id = ?
+             GROUP BY item_code, warehouse
+           )
+       ), agg AS (
+         SELECT item_code, SUM(balance_qty) AS total_qty
+         FROM latest_wh
+         GROUP BY item_code
+       )
+       SELECT COUNT(*) AS below_reorder_count
+       FROM items i
+       LEFT JOIN agg a ON a.item_code = i.code
+       WHERE i.company_id = ?
+         AND i.is_active = 1
+         AND COALESCE(i.reorder_threshold, 0) > 0
+         AND COALESCE(a.total_qty, 0) <= i.reorder_threshold`
+    ).bind(company_id, company_id, company_id).first<{ below_reorder_count: number }>(),
+
+    c.env.DB.prepare(
+      `WITH latest_wh AS (
+         SELECT item_code, warehouse, balance_qty
+         FROM inventory_movements
+         WHERE company_id = ?
+           AND id IN (
+             SELECT MAX(id)
+             FROM inventory_movements
+             WHERE company_id = ?
+             GROUP BY item_code, warehouse
+           )
+       )
+       SELECT
+         COUNT(*) AS negative_balance_rows,
+         COUNT(DISTINCT item_code) AS negative_balance_items
+       FROM latest_wh
+       WHERE balance_qty < 0`
+    ).bind(company_id, company_id).first<{ negative_balance_rows: number; negative_balance_items: number }>(),
+  ])
+
+  const combos = combosRow.results
+  const setups = setupRows.results
+  const coveredCount = combos.filter(combo =>
+    setups.some(s => {
+      const ipgMatch = s.inv_posting_group_code === null || s.inv_posting_group_code === combo.ipg
+      const ppgMatch = s.prod_posting_group_code === null || s.prod_posting_group_code === combo.ppg
+      return ipgMatch && ppgMatch
+    })
+  ).length
+
+  const totalCombos = combos.length
+  const missingSetup = totalCombos - coveredCount
+  const healthPct = totalCombos > 0 ? Math.round((coveredCount / totalCombos) * 100) : 100
+
+  return c.json({
+    success: true,
+    data: {
+      movement: {
+        total: movementRow?.total_movements ?? 0,
+        unlinked_total: movementRow?.unlinked_total ?? 0,
+        unlinked_non_zero: movementRow?.unlinked_non_zero ?? 0,
+        unlinked_zero: movementRow?.unlinked_zero ?? 0,
+      },
+      posting: {
+        total_combos: totalCombos,
+        covered: coveredCount,
+        missing_setup: missingSetup,
+        health_pct: healthPct,
+      },
+      item_risk: {
+        active_items: itemRiskRow?.active_items ?? 0,
+        items_without_standard_cost: itemRiskRow?.items_without_standard_cost ?? 0,
+        items_without_ppg: itemRiskRow?.items_without_ppg ?? 0,
+        items_without_ipg: itemRiskRow?.items_without_ipg ?? 0,
+        items_without_reorder_threshold: itemRiskRow?.items_without_reorder_threshold ?? 0,
+        below_reorder_count: reorderRow?.below_reorder_count ?? 0,
+      },
+      stock_risk: {
+        negative_balance_rows: negativeRow?.negative_balance_rows ?? 0,
+        negative_balance_items: negativeRow?.negative_balance_items ?? 0,
+      },
+      generated_at: new Date().toISOString(),
+    },
+  })
+})
+
+// ── GET /posting-controls ──────────────────────────────────────────────────
+
+governance.get('/posting-controls', permissionGuard('inventory', 'read'), async (c) => {
+  const { company_id } = getUser(c)
+  const controls = await getInventoryPostingControls(c.env.DB, company_id)
+  return c.json({ success: true, data: controls })
+})
+
+// ── PATCH /posting-controls ────────────────────────────────────────────────
+
+governance.patch('/posting-controls', permissionGuard('inventory', 'create'), async (c) => {
+  const { company_id } = getUser(c)
+  const b = await c.req.json<{
+    posting_mode?: 'strict_sync' | 'async_reliable' | 'decoupled'
+    zero_value_reason_required?: boolean
+    zero_value_approval_roles?: string[]
+    locked_through_date?: string | null
+  }>()
+
+  const current = await getInventoryPostingControls(c.env.DB, company_id)
+  const postingMode = b.posting_mode ?? current.posting_mode
+  const zeroReasonRequired = b.zero_value_reason_required ?? Boolean(current.zero_value_require_reason)
+  const approvalRoles = b.zero_value_approval_roles ?? String(current.zero_value_approval_roles || '').split(',').map(s => s.trim()).filter(Boolean)
+  const lockedThroughDate = Object.prototype.hasOwnProperty.call(b, 'locked_through_date')
+    ? b.locked_through_date
+    : current.locked_through_date
+
+  await c.env.DB.prepare(
+    `INSERT INTO inventory_posting_controls (
+       company_id, posting_mode, zero_value_require_reason, zero_value_approval_roles, locked_through_date, updated_at
+     ) VALUES (?, ?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(company_id) DO UPDATE SET
+       posting_mode = excluded.posting_mode,
+       zero_value_require_reason = excluded.zero_value_require_reason,
+       zero_value_approval_roles = excluded.zero_value_approval_roles,
+       locked_through_date = excluded.locked_through_date,
+       updated_at = datetime('now')`
+  ).bind(
+    company_id,
+    postingMode,
+    zeroReasonRequired ? 1 : 0,
+    approvalRoles.join(','),
+    lockedThroughDate ?? null,
+  ).run()
+
+  const updated = await getInventoryPostingControls(c.env.DB, company_id)
+  return c.json({ success: true, data: updated })
+})
+
+// ── POST /posting-outbox/process ───────────────────────────────────────────
+
+governance.post('/posting-outbox/process', permissionGuard('inventory', 'create'), async (c) => {
+  const { company_id } = getUser(c)
+  const b: { limit?: number } = await c.req.json<{ limit?: number }>().catch(() => ({}))
+  const limit = Math.min(Math.max(Number(b.limit ?? 50), 1), 200)
+
+  const { results: jobs } = await c.env.DB.prepare(
+    `SELECT id, event_type, movement_id, payload_json, attempts
+     FROM inventory_posting_outbox
+     WHERE company_id = ? AND status IN ('pending', 'processing')
+     ORDER BY id ASC
+     LIMIT ?`
+  ).bind(company_id, limit).all<{
+    id: number
+    event_type: string
+    movement_id: number
+    payload_json: string
+    attempts: number
+  }>()
+
+  let posted = 0
+  let failed = 0
+
+  for (const job of jobs) {
+    await c.env.DB.prepare(
+      `UPDATE inventory_posting_outbox SET status = 'processing', updated_at = datetime('now') WHERE id = ? AND company_id = ?`
+    ).bind(job.id, company_id).run()
+
+    try {
+      const payload = JSON.parse(job.payload_json || '{}')
+      let jeId: number | null = null
+
+      if (job.event_type === 'inventory_movement') {
+        jeId = await FinanceCore.resolveInventoryMovement(c.env.DB, payload)
+      } else if (job.event_type === 'inventory_transfer') {
+        jeId = await FinanceCore.resolveInventoryTransfer(c.env.DB, payload)
+      } else {
+        throw new Error(`Unsupported event_type: ${job.event_type}`)
+      }
+
+      await c.env.DB.prepare(
+        `UPDATE inventory_posting_outbox
+         SET status = 'done', processed_at = datetime('now'), last_error = NULL, updated_at = datetime('now')
+         WHERE id = ? AND company_id = ?`
+      ).bind(job.id, company_id).run()
+
+      await c.env.DB.prepare(
+        `UPDATE inventory_movements
+         SET gl_posting_status = 'posted', gl_posted_at = datetime('now'), gl_posting_error = NULL, journal_entry_id = COALESCE(?, journal_entry_id)
+         WHERE id = ? AND company_id = ?`
+      ).bind(jeId, job.movement_id, company_id).run()
+
+      const targetMovementId = Number(payload?.target_movement_id ?? 0)
+      if (targetMovementId > 0) {
+        await c.env.DB.prepare(
+          `UPDATE inventory_movements
+           SET gl_posting_status = 'posted', gl_posted_at = datetime('now'), gl_posting_error = NULL, journal_entry_id = COALESCE(?, journal_entry_id)
+           WHERE id = ? AND company_id = ?`
+        ).bind(jeId, targetMovementId, company_id).run()
+      }
+
+      posted++
+    } catch (err: any) {
+      failed++
+      const nextRetry = (job.attempts ?? 0) + 1
+      const nextStatus = nextRetry >= 10 ? 'failed' : 'pending'
+      const errMsg = String(err?.message ?? err)
+
+      await c.env.DB.prepare(
+        `UPDATE inventory_posting_outbox
+        SET status = ?, attempts = ?, last_error = ?, updated_at = datetime('now')
+         WHERE id = ? AND company_id = ?`
+      ).bind(nextStatus, nextRetry, errMsg, job.id, company_id).run()
+
+      await c.env.DB.prepare(
+        `UPDATE inventory_movements
+         SET gl_posting_status = ?, gl_posting_error = ?
+         WHERE id = ? AND company_id = ?`
+      ).bind(nextStatus === 'failed' ? 'failed' : 'pending', errMsg, job.movement_id, company_id).run()
+    }
+  }
+
+  return c.json({
+    success: true,
+    data: {
+      scanned: jobs.length,
+      posted,
+      failed,
     },
   })
 })

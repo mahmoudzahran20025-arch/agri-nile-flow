@@ -76,6 +76,8 @@ export const inventoryApi = {
   adjustmentDetail: (id: number) => unwrap(api.get<any>(`/inventory/adjustments/${id}`)),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   createAdjustment: (body: any) => api.post('/inventory/adjustments', body),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  saveAdjustmentLines: (id: number, lines: any[]) => api.put(`/inventory/adjustments/${id}/lines`, { lines }),
   postAdjustment:   (id: number) => api.post(`/inventory/adjustments/${id}/post`, {}),
 
   // ── Governance / Financial Integrity ────────────────────────────────────
@@ -150,4 +152,32 @@ export const inventoryApi = {
       health_pct:    number
     }
   }>('/inventory/posting-health')),
+
+  healthSummary: () => unwrap(api.get<{
+    movement: {
+      total: number
+      unlinked_total: number
+      unlinked_non_zero: number
+      unlinked_zero: number
+    }
+    posting: {
+      total_combos: number
+      covered: number
+      missing_setup: number
+      health_pct: number
+    }
+    item_risk: {
+      active_items: number
+      items_without_standard_cost: number
+      items_without_ppg: number
+      items_without_ipg: number
+      items_without_reorder_threshold: number
+      below_reorder_count: number
+    }
+    stock_risk: {
+      negative_balance_rows: number
+      negative_balance_items: number
+    }
+    generated_at: string
+  }>('/inventory/health-summary')),
 }

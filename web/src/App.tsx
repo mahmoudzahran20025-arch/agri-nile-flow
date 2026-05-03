@@ -22,6 +22,7 @@ const ReconciliationPage       = lazy(() => import('./pages/gl/ReconciliationPag
 const PeriodCloseCockpit       = lazy(() => import('./pages/gl/PeriodCloseCockpit'))
 const BatchPostingCenterPage   = lazy(() => import('./pages/gl/BatchPostingCenterPage'))
 const HealthIntegrityPage      = lazy(() => import('./pages/gl/HealthIntegrityPage'))
+const GlIntegrityAuditPage     = lazy(() => import('./pages/gl/GlIntegrityAuditPage'))
 const GLSettingsPage           = lazy(() => import('./pages/gl/GLSettingsPage'))
 const PostingGroupsPage        = lazy(() => import('./pages/gl/PostingGroupsPage'))
 const PostingSetupPage         = lazy(() => import('./pages/gl/PostingSetupPage'))
@@ -65,6 +66,7 @@ const APAgingPage              = lazy(() => import('./pages/treasury/APAgingPage
 const WarehouseBalancesPage    = lazy(() => import('./pages/inventory/WarehouseBalancesPage'))
 const WarehousesPage           = lazy(() => import('./pages/inventory/WarehousesPage'))
 const InventoryMovementsPage   = lazy(() => import('./pages/inventory/InventoryMovementsPage'))
+const TransactionHistoryPage   = lazy(() => import('./pages/inventory/TransactionHistoryPage'))
 const ItemCardPage             = lazy(() => import('./pages/inventory/ItemCardPage'))
 const CostByFieldPage          = lazy(() => import('./pages/inventory/CostByFieldPage'))
 const ItemCategoriesPage       = lazy(() => import('./pages/inventory/ItemCategoriesPage'))
@@ -72,6 +74,9 @@ const InventoryAdjustmentsPage = lazy(() => import('./pages/inventory/InventoryA
 const AdjustmentDetailPage     = lazy(() => import('./pages/inventory/AdjustmentDetailPage'))
 const ItemMasterPage           = lazy(() => import('./pages/inventory/ItemMasterPage'))
 const InventoryPostingHealthPage = lazy(() => import('./pages/inventory/InventoryPostingHealthPage'))
+const InventoryBalancesPage      = lazy(() => import('./pages/inventory/InventoryBalancesPage'))
+const FixedAssetsPage            = lazy(() => import('./pages/inventory/FixedAssetsPage'))
+const WipBalancesPage            = lazy(() => import('./pages/inventory/WipBalancesPage'))
 const UsersPage                = lazy(() => import('./pages/users/UsersPage'))
 const ConfigPage               = lazy(() => import('./pages/config/ConfigPage'))
 const FieldsPage               = lazy(() => import('./pages/fields/FieldsPage'))
@@ -104,6 +109,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   const isAuth        = useIsAuth()
+  const isDebugEnabled = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
   const setSeasons     = useAppStore(s => s.setSeasons)
   const setPermissions = useAppStore(s => s.setPermissions)
 
@@ -134,7 +140,9 @@ export default function App() {
     <Suspense fallback={<PageLoader />}>
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route path="/debug" element={<RequireAuth><DebugPage /></RequireAuth>} />
+      {isDebugEnabled && (
+        <Route path="/debug" element={<RequireAuth><DebugPage /></RequireAuth>} />
+      )}
 
       <Route
         path="/"
@@ -163,9 +171,13 @@ export default function App() {
         <Route path="inventory/adjustments/:id"  element={<AdjustmentDetailPage />} />
         <Route path="inventory/setup"            element={<WarehousesPage />} />
         <Route path="inventory/movements"        element={<InventoryMovementsPage />} />
+        <Route path="inventory/transactions"     element={<TransactionHistoryPage />} />
         <Route path="inventory/item/:code"       element={<ItemCardPage />} />
         <Route path="inventory/cost-by-field"    element={<CostByFieldPage />} />
         <Route path="inventory/posting-health"   element={<InventoryPostingHealthPage />} />
+        <Route path="inventory/balances-detail"  element={<InventoryBalancesPage />} />
+        <Route path="inventory/fixed-assets"     element={<FixedAssetsPage />} />
+        <Route path="inventory/wip"              element={<WipBalancesPage />} />
 
         {/* HR Module */}
         <Route path="hr/dashboard"            element={<HrDashboardPage />} />
@@ -198,6 +210,7 @@ export default function App() {
         <Route path="gl/entries"      element={<JournalEntriesPage />} />
         <Route path="gl/statements"   element={<FinancialStatementsPage />} />
         <Route path="gl/health-integrity" element={<HealthIntegrityPage />} />
+        <Route path="gl/integrity-audit"  element={<GlIntegrityAuditPage />} />
         {/* GL Settings hub — tabs: mappings | integrations | periods */}
         <Route path="gl/settings"      element={<GLSettingsPage />} />
         <Route path="gl/posting-groups" element={<PostingGroupsPage />} />

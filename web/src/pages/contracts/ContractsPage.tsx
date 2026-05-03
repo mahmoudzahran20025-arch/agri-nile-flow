@@ -26,11 +26,6 @@ interface ContractAdvance {
 const STATUS_LABELS: Record<string, string> = {
   draft: 'مسودة', active: 'نشط', partial: 'جزئي', completed: 'مكتمل', cancelled: 'ملغى',
 }
-// @ts-ignore
-const STATUS_BADGE: Record<string, string> = {
-  draft: 'badge-yellow', active: 'badge-blue', partial: 'badge-yellow',
-  completed: 'badge-green', cancelled: 'badge-red',
-}
 const CONTRACT_STATUSES = ['draft','active','partial','completed','cancelled']
 
 function fmt(n: number) { return Number(n).toLocaleString('en-US') }

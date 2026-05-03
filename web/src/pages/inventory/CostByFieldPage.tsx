@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Leaf, TrendingUp, Package, Wheat, AlertTriangle, CheckCircle,
   Target, Edit3, X, ChevronDown, ChevronUp, Minus,
@@ -198,7 +198,18 @@ function AlertStrip({ overBudget }: { overBudget: FieldCost[] }) {
 export default function CostByFieldPage() {
   const qc = useQueryClient()
   const navigate = useNavigate()
-  const [seasonId, setSeasonId] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const seasonId = searchParams.get('season_id') ?? ''
+
+  const setSeasonFilter = (nextSeasonId: string) => {
+    const next = new URLSearchParams(searchParams)
+    if (nextSeasonId) {
+      next.set('season_id', nextSeasonId)
+    } else {
+      next.delete('season_id')
+    }
+    setSearchParams(next, { replace: true })
+  }
 
   // ── Data ──────────────────────────────────────────────────────
   const { data: seasons = [] } = useQuery({
@@ -206,6 +217,9 @@ export default function CostByFieldPage() {
     queryFn:  configApi.seasons as () => Promise<{ id: number; name: string; status: string }[]>,
     staleTime: 120_000,
   })
+
+  const seasonOptions = (seasons as { id: number; name: string; status: string }[])
+  const activeSeason = seasonOptions.find(s => s.status === 'active')
 
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ['inventory', 'cost-by-field', seasonId],
@@ -254,15 +268,39 @@ export default function CostByFieldPage() {
           <select
             className="input w-52 text-sm"
             value={seasonId}
-            onChange={e => setSeasonId(e.target.value)}
+            onChange={e => setSeasonFilter(e.target.value)}
           >
             <option value="">كل المواسم</option>
-            {(seasons as { id: number; name: string; status: string }[]).map(s => (
+            {seasonOptions.map(s => (
               <option key={s.id} value={s.id}>
                 {s.name}{s.status === 'active' ? ' ✓' : ''}
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+              seasonId === ''
+                ? 'bg-slate-100 border-slate-300 text-slate-700'
+                : 'bg-white border-slate-200 text-slate-500 hover:text-slate-700'
+            }`}
+            onClick={() => setSeasonFilter('')}
+          >
+            الكل
+          </button>
+          {activeSeason && (
+            <button
+              type="button"
+              className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+                seasonId === String(activeSeason.id)
+                  ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                  : 'bg-white border-emerald-200 text-emerald-600 hover:bg-emerald-50'
+              }`}
+              onClick={() => setSeasonFilter(String(activeSeason.id))}
+            >
+              الموسم النشط
+            </button>
+          )}
         </div>
       </div>
 
@@ -359,7 +397,11 @@ export default function CostByFieldPage() {
 
                 return (
                   <tr key={row.id}
-                    onClick={() => navigate(`/inventory/movements?field_id=${row.id}`)}
+                    onClick={() => {
+                      const qs = new URLSearchParams({ field_id: String(row.id) })
+                      if (seasonId) qs.set('season_id', seasonId)
+                      navigate(`/inventory/movements?${qs.toString()}`)
+                    }}
                     className={`cursor-pointer transition-colors ${rowAlert ? 'bg-red-50/50 hover:bg-red-50' : 'hover:bg-slate-50'}`}
                   >
                     {/* Field */}

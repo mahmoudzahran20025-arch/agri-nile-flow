@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import {
   ArrowDownCircle, ArrowUpCircle, Download, Filter, X,
   Link2, AlertTriangle, ChevronLeft, ChevronRight,
@@ -92,18 +92,29 @@ interface Filters {
   start: string
   end: string
   unlinked_only: boolean
+  negative_only: boolean
 }
 
 const EMPTY_FILTERS: Filters = {
-  type: '', warehouse: '', season_id: '', start: '', end: '', unlinked_only: false,
+  type: '', warehouse: '', season_id: '', start: '', end: '', unlinked_only: false, negative_only: false,
 }
 
 export default function InventoryMovementsPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [page, setPage] = useState(1)
   const [addOpen, setAddOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [filtersOpen, setFiltersOpen] = useState(false)
-  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS)
+  const [filters, setFilters] = useState<Filters>(() => ({
+    type: searchParams.get('type') ?? '',
+    warehouse: searchParams.get('warehouse') ?? '',
+    season_id: searchParams.get('season_id') ?? '',
+    start: searchParams.get('start') ?? '',
+    end: searchParams.get('end') ?? '',
+    unlinked_only: searchParams.get('unlinked') === '1' || searchParams.get('unlinked_only') === '1',
+    negative_only: searchParams.get('negative') === '1' || searchParams.get('negative_only') === '1',
+  }))
   const PAGE_SIZE = 100
 
   // ── Server query (all non-unlinked filters go server-side) ───────────────
@@ -136,10 +147,12 @@ export default function InventoryMovementsPage() {
   // ── Client-side unlinked filter (only non-zero value = real GL gap) ──────
   const rows: Movement[] = useMemo(() => {
     const all = (data?.data ?? []) as Movement[]
-    return filters.unlinked_only
-      ? all.filter(r => !r.journal_entry_id && (r.value_in + r.value_out) > 0)
-      : all
-  }, [data, filters.unlinked_only])
+    return all.filter(r => {
+      if (filters.unlinked_only && (r.journal_entry_id || (r.value_in + r.value_out) <= 0)) return false
+      if (filters.negative_only && r.balance_qty >= 0) return false
+      return true
+    })
+  }, [data, filters.unlinked_only, filters.negative_only])
 
   const total      = data?.total ?? 0
   const totalPages = Math.ceil(total / PAGE_SIZE)
@@ -147,6 +160,14 @@ export default function InventoryMovementsPage() {
   const activeFiltersCount = Object.entries(filters).filter(([k, v]) =>
     k !== 'unlinked_only' ? Boolean(v) : v === true
   ).length
+
+  const exportParams = useMemo(() => ({
+    ...(filters.type ? { type: filters.type } : {}),
+    ...(filters.warehouse ? { warehouse: filters.warehouse } : {}),
+    ...(filters.season_id ? { season_id: Number(filters.season_id) } : {}),
+    ...(filters.start ? { start: filters.start } : {}),
+    ...(filters.end ? { end: filters.end } : {}),
+  }), [filters.type, filters.warehouse, filters.season_id, filters.start, filters.end])
 
   // ── Commands ──────────────────────────────────────────────────────────────
   const actions: CommandAction[] = [
@@ -167,10 +188,18 @@ export default function InventoryMovementsPage() {
     { id: 'sep1', isSeparator: true, label: '' },
     {
       id: 'export',
-      label: 'تصدير CSV',
+      label: exporting ? 'جاري التصدير...' : 'تصدير CSV',
       icon: <Download size={15} />,
       variant: 'secondary',
-      onClick: () => downloadCsv('/inventory/movements?size=2000', 'inventory_movements.csv'),
+      disabled: exporting,
+      onClick: async () => {
+        try {
+          setExporting(true)
+          await downloadCsv('/inventory/movements', 'inventory_movements', exportParams)
+        } finally {
+          setExporting(false)
+        }
+      },
     },
   ]
 
@@ -284,6 +313,15 @@ export default function InventoryMovementsPage() {
                 className="rounded border-slate-300 text-amber-600 focus:ring-amber-500"
               />
               <span className="text-[12px] text-slate-600 font-medium">بدون قيد فقط</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={filters.negative_only}
+                onChange={e => applyFilter({ negative_only: e.target.checked })}
+                className="rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+              />
+              <span className="text-[12px] text-slate-600 font-medium">أرصدة سالبة فقط</span>
             </label>
             {activeFiltersCount > 0 && (
               <button

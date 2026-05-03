@@ -2,20 +2,26 @@ import { ExternalLink, GitBranch, Link2, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import type { EntryTraceResult } from '../../api/gl'
 
-// Maps source_module + optional document_type to a UI route.
-// Returns null when the module has no dedicated screen to navigate to.
+// Maps source_module + event_type + payload to a navigable UI route.
+// Returns null when no dedicated screen exists for this module.
 function resolveSourceRoute(
   sourceModule: string | undefined,
   sourceId: number | string | undefined,
+  payload: Record<string, unknown> | null,
 ): string | null {
   if (!sourceModule || !sourceId) return null
   switch (sourceModule) {
-    case 'treasury':   return `/treasury?highlight=${sourceId}`
-    case 'suppliers':  return `/suppliers/${sourceId}`
-    case 'inventory':  return `/inventory/movements?highlight=${sourceId}`
-    case 'hr':         return `/hr/payroll`
-    case 'fields':     return `/fields/harvest`
-    default:           return null
+    case 'suppliers': {
+      const supplierCode = payload?.supplier_code
+      if (supplierCode) return `/suppliers/${supplierCode}?highlight=${sourceId}`
+      return `/suppliers?tab=list`
+    }
+    case 'inventory': return `/inventory/movements?highlight=${sourceId}`
+    case 'gl':        return `/gl/entries?id=${sourceId}`
+    case 'treasury':  return `/treasury?highlight=${sourceId}`
+    case 'hr':        return `/hr/payroll`
+    case 'fields':    return `/fields/harvest`
+    default:          return null
   }
 }
 
@@ -130,26 +136,34 @@ export default function GlEntryTraceDrawer({
                 {/* Open Source action — lives here on the Source tab */}
                 {(() => {
                   const src = payload.source_event ?? payload.source_document
-                  const module = src && 'source_module' in src ? src.source_module : undefined
-                  const id     = src && 'source_id'     in src ? src.source_id     : undefined
-                  const route  = resolveSourceRoute(module, id)
+                  const module    = src && 'source_module' in src ? src.source_module as string : undefined
+                  const eventType = payload.source_event && 'event_type' in payload.source_event ? payload.source_event.event_type as string : undefined
+                  const id        = src && 'source_id' in src ? src.source_id : undefined
+                  const evPayload = payload.source_event && 'payload' in payload.source_event
+                    ? (() => { try { return typeof payload.source_event.payload === 'string' ? JSON.parse(payload.source_event.payload) : payload.source_event.payload } catch { return null } })()
+                    : null
+                  const route  = resolveSourceRoute(module, id, evPayload)
                   return (
                     <div className="border border-slate-200 rounded p-3 flex items-center justify-between bg-slate-50">
                       <div className="text-slate-600 flex items-center gap-2">
                         <Link2 size={14} />
-                        <span>{route ? `Navigate to ${module ?? 'source'} screen` : 'Source document reference'}</span>
+                        <span className="text-[12px]">
+                          {route
+                            ? `${module ?? 'source'}${eventType ? ` · ${eventType.replace(/_/g, ' ')}` : ''} #${id}`
+                            : 'Source document reference'}
+                        </span>
                       </div>
                       {route ? (
                         <button
                           className="btn-secondary h-8 px-3 text-[12px] inline-flex items-center gap-1"
                           onClick={() => { onClose(); navigate(route) }}
                         >
-                          Open Source
+                          فتح المستند
                           <ExternalLink size={13} />
                         </button>
                       ) : (
                         <span className="text-[11px] text-slate-400 italic">
-                          {module ? `No screen mapped for '${module}'` : 'No source linked'}
+                          {module ? `لا توجد شاشة مرتبطة بـ '${module}'` : 'لا يوجد مستند مصدر'}
                         </span>
                       )}
                     </div>

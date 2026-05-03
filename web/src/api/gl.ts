@@ -52,6 +52,52 @@ export interface SystemIntegrityScoreResult {
   }
 }
 
+export interface FinancialPeriod {
+  id: number
+  company_id: number
+  name: string
+  period_type: string
+  start_date: string
+  end_date: string
+  is_closed: number
+  status?: 'open' | 'closed' | 'locked'
+  closed_at?: string | null
+  closed_by?: number | null
+  created_at?: string
+}
+
+export interface PeriodCloseChecklistStep {
+  step_key: string
+  step_order: number
+  step_label: string
+  is_critical: boolean
+  status: 'pending' | 'running' | 'passed' | 'failed' | 'warning'
+  count_blocked: number
+  details: string
+  completed_at?: string | null
+}
+
+export interface PeriodCloseChecklistResult {
+  period: FinancialPeriod
+  checks: PeriodCloseChecklistStep[]
+  all_critical_passed: boolean
+}
+
+export interface PeriodCloseRunResult {
+  checks: Array<{
+    step_key: string
+    step_order: number
+    step_label: string
+    is_critical: boolean
+    status: 'pending' | 'running' | 'passed' | 'failed' | 'warning'
+    count_blocked: number
+    details: string
+    action_url?: string
+  }>
+  all_critical_passed: boolean
+  blockers: string[]
+}
+
 export interface GlAuditLogRow {
   id: number
   user_id: number | null
@@ -346,10 +392,15 @@ export const glApi = {
   createAccount: (body: unknown) => api.post('/gl/accounts', body),
   updateAccount: (code: string, body: unknown) => api.patch(`/gl/accounts/${code}`, body),
 
-  periods:      () => unwrap(api.get<unknown[]>('/gl/periods')),
+  periods:      () => unwrap(api.get<FinancialPeriod[]>('/gl/periods')),
   createPeriod: (body: unknown) => api.post('/gl/periods', body),
   closePeriod:  (id: number) => api.patch(`/gl/periods/${id}/close`, {}),
+  closePeriodForce: (id: number) => api.patch(`/gl/periods/${id}/close?force=1`, {}),
   reopenPeriod: (id: number) => api.patch(`/gl/periods/${id}/reopen`, {}),
+  periodChecklist: (id: number) => unwrap(api.get<PeriodCloseChecklistResult>(`/gl/periods/${id}/checklist`)),
+  runPeriodChecklist: (id: number) => unwrap(api.post<PeriodCloseRunResult>(`/gl/periods/${id}/checklist/run`, {})),
+  runPeriodChecklistStep: (id: number, stepKey: string) =>
+    unwrap(api.post<PeriodCloseChecklistStep>(`/gl/periods/${id}/checklist/run/${stepKey}`, {})),
 
   entries:     (p?: { page?: number; size?: number; start?: string; end?: string; ref_type?: string }) =>
     unwrapPaginated<unknown>(api.get(paginatedUrl('/gl/entries', p ?? {}))),
@@ -561,6 +612,63 @@ export const glApi = {
     unwrap(api.post<{ success: boolean; data: RolePolicyRow }>('/gl/account-role-policy', body)),
   deleteRoleMapping: (id: number) =>
     unwrap(api.delete<{ success: boolean; data: { id: number; deactivated: boolean } }>(`/gl/account-role-policy/${id}`)),
+
+  // ── GL Integrity Audit ───────────────────────────────────────────────────────
+  glIntegrity: () => unwrap(api.get<{
+    health: 'clean' | 'warning' | 'critical'
+    critical_issues: number
+    generated_at: string
+    unbalanced_entries: {
+      count: number
+      rows: Array<{ id: number; entry_number: string | null; entry_date: string; description: string | null; source_module: string | null; total_dr: number; total_cr: number; imbalance: number }>
+    }
+    phantom_accounts: {
+      count: number
+      rows: Array<{ account_code: string; line_count: number; net_impact: number; first_seen: string; last_seen: string }>
+      note: string | null
+    }
+    ops_vs_gl: {
+      cash:      { ops_total: number; gl_total: number; gap: number; ok: boolean }
+      suppliers: { ops_total: number; gl_total: number; gap: number; ok: boolean }
+      inventory: { ops_total: number; gl_total: number; gap: number; ok: boolean }
+      note: string
+    }
+    missing_period: { entry_count: number; total_debit: number; note: string | null }
+    duplicate_events: {
+      count: number
+      rows: Array<{ event_type: string; source_module: string; source_id: number; entry_count: number }>
+      note: string | null
+    }
+  }>('/gl/reconciliation/integrity')),
+
+  glTrialBalance: (p?: { from?: string; to?: string }) => {
+    const params = new URLSearchParams()
+    if (p?.from) params.set('from', p.from)
+    if (p?.to)   params.set('to',   p.to)
+    const qs = params.toString()
+    return unwrap(api.get<{
+      rows: Array<{
+        account_code: string; account_name: string | null
+        account_type: string | null; normal_balance: string | null
+        total_debit: number; total_credit: number
+        net_balance: number; entry_count: number
+      }>
+      totals: { total_debit: number; total_credit: number }
+      is_balanced: boolean
+      phantom_count: number
+      date_range: { from: string | null; to: string | null }
+    }>(`/gl/reconciliation/trial-balance${qs ? '?' + qs : ''}`))
+  },
+
+  repairPhantomAccounts: () => unwrap(api.post<{
+    inserted: number; codes: string[]; message: string
+  }>('/gl/reconciliation/repair-phantom-accounts', {})),
+
+  backfillAccountCodes: () => unwrap(api.post<{
+    total_lines_updated: number
+    detail: Array<{ from: string; to: string; label: string; rows_updated: number; skipped: boolean }>
+    message: string
+  }>('/gl/reconciliation/backfill-account-codes', {})),
 }
 
 // ── Reconciliation types (shared with ReconciliationPage, PeriodCloseCockpit) ─

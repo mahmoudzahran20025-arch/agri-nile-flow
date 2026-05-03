@@ -28,16 +28,31 @@ export async function resolveCashLedger(
     ? (await db.prepare('SELECT gl_account_code FROM bank_accounts WHERE id = ?').bind(opts.financial_account_id).first<{ gl_account_code: string }>())?.gl_account_code || ''
     : (await resolveControlAccount(db, opts.company_id, 'cash')) || ''
 
-  // Determine contra account
+  // Determine contra account — explicit resolution chain with audit trail
   let contraAcc = ''
+  let contraResolution = ''  // tracks how contra was resolved, stored in payload
+
   if (opts.expense_code) {
-    const et = await db.prepare('SELECT gl_account_code FROM expense_types WHERE code = ? AND company_id = ?')
-      .bind(opts.expense_code, opts.company_id).first<{ gl_account_code: string }>()
-    if (et?.gl_account_code) contraAcc = et.gl_account_code
+    const et = await db.prepare('SELECT gl_account_code, name FROM expense_types WHERE code = ? AND company_id = ?')
+      .bind(opts.expense_code, opts.company_id).first<{ gl_account_code: string; name: string }>()
+    if (et?.gl_account_code) {
+      contraAcc = et.gl_account_code
+      contraResolution = `expense_code:${opts.expense_code}(${et.name})`
+    } else {
+      // expense_code exists in request but not found in expense_types — warn, don't silently skip
+      console.warn(`[cash.ts] expense_code=${opts.expense_code} not found in expense_types for company_id=${opts.company_id} — falling to control account`)
+      contraResolution = `expense_code:${opts.expense_code}:MISSING→fallback`
+    }
   }
+
   if (!contraAcc) {
-    const key = opts.partner_id ? 'partner_current_account' : opts.supplier_code ? 'accounts_payable' : (opts.direction === 'د' ? 'revenue_default' : 'expense_default')
+    const key = opts.partner_id
+      ? 'partner_current_account'
+      : opts.supplier_code
+        ? 'accounts_payable'
+        : opts.direction === 'د' ? 'revenue_default' : 'expense_default'
     contraAcc = (await resolveControlAccount(db, opts.company_id, key)) || ''
+    contraResolution = contraResolution || `control:${key}`
   }
 
   const blueprint = await peResolveCash(
@@ -62,7 +77,7 @@ export async function resolveCashLedger(
     event_date:    opts.date,
     description:   `${opts.direction === 'د' ? 'قبض' : 'صرف'} | ${opts.description}`,
     created_by:    opts.created_by,
-    payload:       { direction: opts.direction, amount: opts.amount, financial_account_id: opts.financial_account_id },
+    payload:       { direction: opts.direction, amount: opts.amount, financial_account_id: opts.financial_account_id, contra_resolution: contraResolution },
     trace:         blueprint.trace ?? null,
     lines:         lines.map((l) => ({
       account_code:  l.account_code!,

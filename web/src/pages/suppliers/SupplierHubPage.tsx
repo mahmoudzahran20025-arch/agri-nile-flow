@@ -1,6 +1,6 @@
 import { useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Users, Clock, Scale, Tractor } from 'lucide-react'
+import { Users, Clock, Scale, Tractor, CheckCircle2, AlertCircle, Link2 } from 'lucide-react'
 import SupplierListPage   from './SupplierListPage'
 import APAgingPage        from '../treasury/APAgingPage'
 import SuppliersBalancePage from '../reports/SuppliersBalancePage'
@@ -18,6 +18,7 @@ function EquipmentTab() {
     document_type: string | null; equipment: string | null; unit: string | null
     quantity: number | null; unit_price: number | null; amount: number
     expense_category: string | null; notes: string | null
+    journal_entry_id: number | null; gl_posted: number | null
   }> ?? []).filter(r => r.equipment)
 
   function egp(n: number | null) {
@@ -69,6 +70,7 @@ function EquipmentTab() {
                 <th className="px-3 py-2.5 text-right">الوحدة</th>
                 <th className="px-3 py-2.5 text-right">الكمية</th>
                 <th className="px-3 py-2.5 text-right">سعر الوحدة</th>
+                <th className="px-3 py-2.5 text-center">القيد</th>
                 <th className="px-3 py-2.5 text-left">الإجمالي</th>
               </tr>
             </thead>
@@ -88,12 +90,34 @@ function EquipmentTab() {
                   <td className="px-3 py-2 text-slate-500">{r.unit?.trim() ?? '—'}</td>
                   <td className="px-3 py-2 tabular-nums text-right text-slate-700">{r.quantity ?? '—'}</td>
                   <td className="px-3 py-2 tabular-nums text-right text-slate-600">{r.unit_price != null ? egp(r.unit_price) : '—'}</td>
+                  <td className="px-3 py-2 text-center">
+                    {r.journal_entry_id ? (
+                      r.gl_posted === 1 ? (
+                        <a
+                          href={`/gl/entries/${r.journal_entry_id}`}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-semibold hover:bg-emerald-100 transition-colors"
+                          title={`قيد #${r.journal_entry_id}`}
+                        >
+                          <CheckCircle2 size={10} />
+                          <span className="font-mono">{r.journal_entry_id}</span>
+                          <Link2 size={9} className="opacity-60" />
+                        </a>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[11px] font-semibold">
+                          <AlertCircle size={10} />
+                          مسودة
+                        </span>
+                      )
+                    ) : (
+                      <span className="text-slate-300 text-[11px]">—</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2 tabular-nums text-left font-bold text-brand-700">{egp(r.amount)}</td>
                 </tr>
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-3 py-8 text-center text-slate-400">لا توجد بيانات معدات</td>
+                  <td colSpan={10} className="px-3 py-8 text-center text-slate-400">لا توجد بيانات معدات</td>
                 </tr>
               )}
             </tbody>

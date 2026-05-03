@@ -58,7 +58,7 @@ items.post('/warehouses', permissionGuard('inventory', 'create'), async (c) => {
 
 // ── Item Stock & Card ─────────────────────────────────────────
 
-items.get('/item/:code/stock', async (c) => {
+items.get('/item/:code/stock', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const code      = Number(c.req.param('code'))
   const warehouse = c.req.query('warehouse')
@@ -94,7 +94,7 @@ items.get('/item/:code/stock', async (c) => {
   })
 })
 
-items.get('/item/:code/card', async (c) => {
+items.get('/item/:code/card', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const code      = Number(c.req.param('code'))
   const warehouse = c.req.query('warehouse')
@@ -115,7 +115,7 @@ items.get('/item/:code/card', async (c) => {
 
 // ── Categories ────────────────────────────────────────────────
 
-items.get('/categories', async (c) => {
+items.get('/categories', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const { results } = await c.env.DB.prepare(
     'SELECT * FROM item_categories WHERE company_id = ? ORDER BY name'
@@ -123,7 +123,7 @@ items.get('/categories', async (c) => {
   return c.json({ success: true, data: results })
 })
 
-items.post('/categories', async (c) => {
+items.post('/categories', permissionGuard('inventory', 'create'), async (c) => {
   const { company_id } = getUser(c)
   const b = await c.req.json<{ name: string; parent_id?: number; expense_account_code?: string; inventory_account_code?: string }>()
   if (!b.name) return c.json({ success: false, error: 'الاسم مطلوب' }, 400)

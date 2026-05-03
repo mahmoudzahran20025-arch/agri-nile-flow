@@ -200,6 +200,21 @@ export async function postFromBusinessEvent(
   const eventPayload = JSON.stringify(opts.payload)
   let eventId: number | null = null
 
+  // Reject posting into a locked GL period
+  const lockedPeriod = await db.prepare(
+    `SELECT id, name FROM gl_periods
+     WHERE company_id = ? AND is_closed = 1
+       AND period_start <= ? AND period_end >= ?
+     LIMIT 1`
+  ).bind(opts.company_id, opts.event_date, opts.event_date)
+    .first<{ id: number; name: string }>()
+
+  if (lockedPeriod) {
+    throw new Error(
+      `GL_PERIOD_LOCKED: الفترة المحاسبية "${lockedPeriod.name}" مغلقة. لا يمكن الترحيل في تاريخ ${opts.event_date}.`
+    )
+  }
+
   // Idempotency key: (company_id, source_module, source_id, event_type)
   let existing = await db.prepare(
     `SELECT id, status, journal_entry_id, payload

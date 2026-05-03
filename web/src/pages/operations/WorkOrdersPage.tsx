@@ -322,6 +322,51 @@ export default function WorkOrdersPage() {
     },
   })
 
+  const seedOrders = useMutation({
+    mutationFn: async () => {
+      const fieldList = (fields as Array<{ id: number; name: string; area_feddan?: number }>)
+      if (fieldList.length === 0) {
+        throw new Error('لا يمكن إنشاء بيانات تجريبية بدون حقول')
+      }
+
+      const seasonList = (seasons as Array<{ id: number; name: string; status?: string }>)
+      const activeSeason = seasonList.find(s => s.status === 'active') ?? seasonList[0]
+      const today = new Date().toISOString().slice(0, 10)
+
+      const sampleDefs = [
+        { name: 'برنامج ري تجريبي', operation_type: 'ري' },
+        { name: 'تسميد مبدئي تجريبي', operation_type: 'تسميد' },
+        { name: 'رش وقائي تجريبي', operation_type: 'رش' },
+      ] as const
+
+      for (let i = 0; i < sampleDefs.length; i++) {
+        const def = sampleDefs[i]
+        const f = fieldList[i % fieldList.length]
+        const res = await operationsApi.createOrder({
+          name: `${def.name} - ${f.name}`,
+          operation_type: def.operation_type,
+          planned_date: today,
+          field_id: f.id,
+          season_id: activeSeason?.id,
+          area_feddan: f.area_feddan,
+          notes: 'Seeded sample order for Sprint 3 validation',
+        }) as { success?: boolean; error?: string }
+
+        if (!res.success) {
+          throw new Error(res.error ?? 'تعذر إنشاء بيانات تجريبية')
+        }
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['work-orders'] })
+      setErr('')
+    },
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : 'فشل إنشاء بيانات تجريبية'
+      setErr(message)
+    },
+  })
+
   const changeStatus = useMutation({
     mutationFn: ({ id, status, actual_date }: { id: number; status: string; actual_date?: string }) =>
       operationsApi.updateStatus(id, status, actual_date),
@@ -429,6 +474,22 @@ export default function WorkOrdersPage() {
         <div className="card p-16 text-center">
           <Wrench size={40} className="mx-auto mb-3 text-slate-200" />
           <p className="text-slate-500 font-medium">لا توجد أوامر عمل</p>
+          <p className="text-slate-400 text-sm mt-1">ابدأ بأمر جديد أو أنشئ بيانات تجريبية سريعة</p>
+          {canWrite('operations') && (
+            <div className="mt-5 flex items-center justify-center gap-2 flex-wrap">
+              <button className="btn-secondary" onClick={() => { setOpenNew(true); setErr('') }}>
+                إنشاء يدوي
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => seedOrders.mutate()}
+                disabled={seedOrders.isPending}
+              >
+                {seedOrders.isPending ? 'جاري إنشاء بيانات تجريبية...' : 'إنشاء 3 أوامر تجريبية'}
+              </button>
+            </div>
+          )}
+          {err && <p className="text-red-600 text-sm mt-3">{err}</p>}
         </div>
       ) : (
         <div className="grid gap-3">

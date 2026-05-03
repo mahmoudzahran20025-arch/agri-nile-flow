@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
-import { getUser } from '../../middleware/auth'
+import { getUser, permissionGuard } from '../../middleware/auth'
 import { getOpenPeriod } from '../../lib/gl'
 import { FinanceCore } from '../../lib/finance_core'
 import { logAudit } from '../../lib/audit'
@@ -8,7 +8,7 @@ import { resolveControlAccount } from '../../lib/posting_engine'
 
 const receipts = new Hono<{ Bindings: Env }>()
 
-receipts.post('/receive-po/:po_id', async (c) => {
+receipts.post('/receive-po/:po_id', permissionGuard('inventory', 'create'), async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const poId = Number(c.req.param('po_id'))
 

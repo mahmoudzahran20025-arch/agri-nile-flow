@@ -8,7 +8,7 @@
  */
 import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Package, ShieldCheck, AlertTriangle, CheckCircle,
   Search, Edit2, ExternalLink, X, Save, ChevronDown, ChevronUp,
@@ -210,12 +210,17 @@ function AccountingEditModal({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function ItemMasterPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { canWrite } = usePermission()
   const [search, setSearch] = useState('')
   const [filterPpg, setFilterPpg] = useState('')
-  const [filterStatus, setFilterStatus] = useState<'all' | 'missing' | 'ok'>('all')
+  const [filterStatus, setFilterStatus] = useState<'all' | 'missing' | 'ok'>(() => {
+    const risk = searchParams.get('risk')
+    return risk === 'no_ppg' || risk === 'no_ipg' ? 'missing' : 'all'
+  })
   const [editItem, setEditItem] = useState<ItemMaster | null>(null)
   const [expandedCode, setExpandedCode] = useState<number | null>(null)
+  const riskFilter = searchParams.get('risk')
 
   const { data: items = [], isLoading } = useQuery({
     queryKey: ['inventory', 'items-master'],
@@ -242,9 +247,13 @@ export default function ItemMasterPage() {
       if (filterPpg && i.prod_posting_group_code !== filterPpg) return false
       if (filterStatus === 'missing' && i.prod_posting_group_code && i.inv_posting_group_code) return false
       if (filterStatus === 'ok' && (!i.prod_posting_group_code || !i.inv_posting_group_code)) return false
+      if (riskFilter === 'no_standard_cost' && (i.standard_cost ?? 0) > 0) return false
+      if (riskFilter === 'no_ppg' && !!i.prod_posting_group_code) return false
+      if (riskFilter === 'no_ipg' && !!i.inv_posting_group_code) return false
+      if (riskFilter === 'below_reorder' && ((i.reorder_threshold ?? 0) <= 0 || (i.total_qty ?? 0) > (i.reorder_threshold ?? 0))) return false
       return true
     })
-  }, [items, search, filterPpg, filterStatus])
+  }, [items, search, filterPpg, filterStatus, riskFilter])
 
   const missingCount = items.filter(i => !i.prod_posting_group_code || !i.inv_posting_group_code).length
   const health = healthData?.summary

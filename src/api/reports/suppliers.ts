@@ -26,10 +26,13 @@ suppliers.get('/supplier-payments', async (c) => {
         st.due_date, st.check_clearance_date,
         st.year, st.month, st.notes,
         st.center_code, COALESCE(cc.name_ar, cc.name_en) AS center_name,
-        s.name AS supplier_name
+        s.name AS supplier_name,
+        st.journal_entry_id,
+        je.is_posted AS gl_posted
       FROM supplier_transactions st
       LEFT JOIN cost_centers cc ON cc.code = st.center_code AND cc.company_id = st.company_id
       LEFT JOIN suppliers s     ON s.code  = st.supplier_code AND s.company_id = st.company_id
+      LEFT JOIN journal_entries je ON je.id = st.journal_entry_id AND je.company_id = st.company_id
       ${where}
       ORDER BY st.transaction_date ASC, st.id ASC
     `).bind(...binds).all(),
