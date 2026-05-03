@@ -83,18 +83,23 @@ assets.post('/', permissionGuard('admin', 'write'), async (c) => {
   // Generate depreciation schedules from acquisition month to now
   const acqDate = new Date(body.acquisition_date)
   const now = new Date()
+  const usefulLife = body.useful_life_months ?? 60
+  const salvage    = body.salvage_value ?? 0
+  const monthlyDep = usefulLife > 0
+    ? Math.round(((body.cost - salvage) / usefulLife) * 100) / 100
+    : 0
   const scheduleStmts: ReturnType<typeof c.env.DB.prepare>[] = []
 
   for (let y = acqDate.getFullYear(); y <= now.getFullYear(); y++) {
     const startMonth = y === acqDate.getFullYear() ? acqDate.getMonth() + 1 : 1
-    const endMonth = y === now.getFullYear() ? now.getMonth() + 1 : 12
+    const endMonth   = y === now.getFullYear() ? now.getMonth() + 1 : 12
 
     for (let m = startMonth; m <= endMonth; m++) {
       scheduleStmts.push(
-        c.env.DB.prepare(`
-          INSERT INTO depreciation_schedules (company_id, asset_id, period_year, period_month, status)
-          VALUES (?, ?, ?, ?, 'pending')
-        `).bind(company_id, assetId, y, m)
+        c.env.DB.prepare(
+          `INSERT INTO depreciation_schedules (company_id, asset_id, period_year, period_month, amount, status)
+           VALUES (?, ?, ?, ?, ?, 'pending')`
+        ).bind(company_id, assetId, y, m, monthlyDep)
       )
     }
   }

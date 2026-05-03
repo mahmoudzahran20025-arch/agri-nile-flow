@@ -1,17 +1,37 @@
 /**
- * InventoryPostingHealthPage — Visual matrix of warehouse×PPG posting coverage.
- * Shows which combinations have movements but lack posting setup entries.
+ * InventoryPostingHealthPage — Visual matrix of warehouse×PPG posting coverage
+ * + GL Traceability view (ghost-posted, pending, failed movements).
  */
-import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, Link } from 'react-router-dom'
-import { ShieldCheck, AlertTriangle, CheckCircle, Package, ExternalLink, Link2Off, Tag } from 'lucide-react'
+import { ShieldCheck, AlertTriangle, CheckCircle, Package, ExternalLink, Link2Off, Tag, Activity, RefreshCw, Ban } from 'lucide-react'
 import { inventoryApi } from '../../api/inventory'
 
 const EGP = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 
+type TraceFilter = 'all' | 'ghost_posted' | 'pending' | 'failed' | 'exempt'
+
+const GL_STATUS_LABELS: Record<string, { label: string; cls: string }> = {
+  posted:            { label: 'مرحّل',          cls: 'bg-green-100 text-green-700 border-green-200' },
+  pending:           { label: 'قيد الانتظار',   cls: 'bg-blue-100 text-blue-700 border-blue-200' },
+  failed:            { label: 'فشل',             cls: 'bg-red-100 text-red-700 border-red-200' },
+  exempt_zero_value: { label: 'معفى (صفر)',      cls: 'bg-slate-100 text-slate-500 border-slate-200' },
+  decoupled:         { label: 'منفصل',           cls: 'bg-purple-100 text-purple-700 border-purple-200' },
+}
+
+const FILTER_OPTS: { key: TraceFilter; label: string; color: string }[] = [
+  { key: 'all',          label: 'الكل',              color: 'slate'  },
+  { key: 'ghost_posted', label: 'مرحّل بدون قيد',    color: 'orange' },
+  { key: 'pending',      label: 'قيد الانتظار',      color: 'blue'   },
+  { key: 'failed',       label: 'فشل الترحيل',       color: 'red'    },
+  { key: 'exempt',       label: 'معفى (صفر القيمة)', color: 'slate'  },
+]
+
 export default function InventoryPostingHealthPage() {
   const navigate = useNavigate()
+  const [traceFilter, setTraceFilter] = useState<TraceFilter>('ghost_posted')
 
   const { data, isLoading } = useQuery({
     queryKey: ['inventory', 'posting-health'],
@@ -19,7 +39,23 @@ export default function InventoryPostingHealthPage() {
     staleTime: 60_000,
   })
 
-  // Unlinked movements breakdown
+  const qc = useQueryClient()
+  const resolveMut = useMutation({
+    mutationFn: ({ id, action, reason }: { id: number; action: 'exempt' | 'retry'; reason?: string }) =>
+      inventoryApi.resolveGlTrace(id, action, reason),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['inventory', 'gl-trace'] })
+      qc.invalidateQueries({ queryKey: ['inventory', 'health-summary'] })
+    },
+  })
+
+  const { data: traceData, isLoading: traceLoading } = useQuery({
+    queryKey: ['inventory', 'gl-trace', traceFilter],
+    queryFn:  () => inventoryApi.glTrace({ status: traceFilter, limit: 200 }),
+    staleTime: 30_000,
+  })
+
+  // Legacy unlinked movements breakdown (kept for backward compat)
   const { data: movData } = useQuery({
     queryKey: ['inventory', 'movements', { page: 1, size: 200 }],
     queryFn:  () => inventoryApi.list({ page: 1, size: 200 }),
@@ -193,6 +229,179 @@ export default function InventoryPostingHealthPage() {
           </div>
         </div>
       )}
+
+      {/* GL Traceability Panel */}
+      <div className="card overflow-hidden">
+        <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Activity size={16} className="text-slate-400" />
+            <h3 className="font-semibold text-slate-700">تتبع الترحيل المحاسبي (GL Trace)</h3>
+            {traceData && (
+              <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${
+                traceData.summary.traceability_pct >= 95 ? 'bg-green-100 text-green-700 border-green-200' :
+                traceData.summary.traceability_pct >= 80 ? 'bg-amber-100 text-amber-700 border-amber-200' :
+                'bg-red-100 text-red-700 border-red-200'
+              }`}>
+                {traceData.summary.traceability_pct}% قابل للتتبع
+              </span>
+            )}
+          </div>
+          {/* Summary chips */}
+          {traceData && (
+            <div className="flex flex-wrap gap-1.5 text-xs">
+              {traceData.summary.ghost_posted > 0 && (
+                <span className="px-2 py-0.5 rounded-full border bg-orange-100 text-orange-700 border-orange-200 font-semibold">
+                  {traceData.summary.ghost_posted} غير مرتبط
+                </span>
+              )}
+              {traceData.summary.pending > 0 && (
+                <span className="px-2 py-0.5 rounded-full border bg-blue-100 text-blue-700 border-blue-200">
+                  {traceData.summary.pending} قيد الانتظار
+                </span>
+              )}
+              {traceData.summary.failed > 0 && (
+                <span className="px-2 py-0.5 rounded-full border bg-red-100 text-red-700 border-red-200 font-semibold">
+                  {traceData.summary.failed} فشل
+                </span>
+              )}
+              <span className="px-2 py-0.5 rounded-full border bg-green-100 text-green-700 border-green-200">
+                {traceData.summary.clean_posted} مرحّل ✓
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Filter tabs */}
+        <div className="px-4 pt-3 pb-0 flex gap-1.5 flex-wrap">
+          {FILTER_OPTS.map(opt => (
+            <button
+              key={opt.key}
+              onClick={() => setTraceFilter(opt.key)}
+              className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-colors ${
+                traceFilter === opt.key
+                  ? 'bg-brand-600 text-white border-brand-600'
+                  : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              {opt.label}
+              {traceData && opt.key === 'ghost_posted' && traceData.summary.ghost_posted > 0 && (
+                <span className="ml-1 bg-orange-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">
+                  {traceData.summary.ghost_posted}
+                </span>
+              )}
+              {traceData && opt.key === 'failed' && traceData.summary.failed > 0 && (
+                <span className="ml-1 bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">
+                  {traceData.summary.failed}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {traceLoading ? (
+          <div className="p-10 text-center text-slate-400 animate-pulse">جاري تحميل بيانات الترحيل...</div>
+        ) : !traceData || traceData.rows.length === 0 ? (
+          <div className="p-10 text-center">
+            <CheckCircle size={24} className="text-green-400 mx-auto mb-2" />
+            <p className="text-slate-500 text-sm">لا توجد حركات في هذه الفئة ✓</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 border-b border-slate-200 border-t border-t-slate-100">
+                <tr>
+                  {['#', 'التاريخ', 'المخزن', 'النوع', 'الصنف', 'الكمية', 'القيمة', 'حالة GL', 'قيد محاسبي', 'الصندوق', 'إجراء'].map(h => (
+                    <th key={h} className="px-3 py-2.5 text-xs font-semibold text-slate-500 text-right whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {traceData.rows.map(row => {
+                  const isGhost = row.gl_posting_status === 'posted' && !row.journal_entry_id
+                  const statusMeta = GL_STATUS_LABELS[row.gl_posting_status] ?? { label: row.gl_posting_status, cls: 'bg-slate-100 text-slate-500 border-slate-200' }
+                  const movValue = row.value_in > 0 ? row.value_in : row.value_out
+                  return (
+                    <tr key={row.id} className={`transition-colors ${isGhost ? 'bg-orange-50/50' : row.gl_posting_status === 'failed' ? 'bg-red-50/40' : 'hover:bg-slate-50'}`}>
+                      <td className="px-3 py-2.5 text-xs text-slate-400 font-mono">{row.id}</td>
+                      <td className="px-3 py-2.5 text-xs text-slate-500 whitespace-nowrap">{row.movement_date}</td>
+                      <td className="px-3 py-2.5">
+                        <span className="text-xs font-mono bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded">{row.warehouse}</span>
+                      </td>
+                      <td className="px-3 py-2.5 text-xs text-slate-600">{row.movement_type}</td>
+                      <td className="px-3 py-2.5 text-xs">
+                        <span className="text-slate-700">{row.item_name ?? `#${row.item_code}`}</span>
+                      </td>
+                      <td className="px-3 py-2.5 text-xs text-slate-600 text-left ltr">{row.quantity.toLocaleString()}</td>
+                      <td className="px-3 py-2.5 text-xs font-semibold text-brand-700 text-left ltr">
+                        {movValue > 0 ? EGP(movValue) : <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border font-medium ${statusMeta.cls}`}>
+                          {isGhost && <AlertTriangle size={10} />}
+                          {statusMeta.label}
+                          {isGhost && <span className="text-[10px] opacity-70">بدون قيد</span>}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-xs">
+                        {row.journal_entry_id ? (
+                          <span className="font-mono text-green-700">{row.je_number ?? `#${row.journal_entry_id}`}</span>
+                        ) : row.gl_posting_error ? (
+                          <span className="text-red-500 truncate max-w-[160px] block" title={row.gl_posting_error}>
+                            {row.gl_posting_error.slice(0, 40)}...
+                          </span>
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-xs">
+                        {row.outbox_status ? (
+                          <span className={`text-xs px-1.5 py-0.5 rounded border ${
+                            row.outbox_status === 'pending' ? 'bg-blue-50 text-blue-600 border-blue-200' :
+                            row.outbox_status === 'processing' ? 'bg-amber-50 text-amber-600 border-amber-200' :
+                            'bg-slate-50 text-slate-400 border-slate-200'
+                          }`}>
+                            {row.outbox_status} {row.outbox_attempts != null ? `(${row.outbox_attempts}×)` : ''}
+                          </span>
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {(isGhost || row.gl_posting_status === 'failed' || row.gl_posting_status === 'pending') && (
+                          <div className="flex gap-1">
+                            {/* Exempt: only for zero-value movements */}
+                            {(isGhost || row.gl_posting_status === 'pending') && (row.value_in + row.value_out) === 0 && (
+                              <button
+                                onClick={() => resolveMut.mutate({ id: row.id, action: 'exempt', reason: 'zero_value_manual_exempt' })}
+                                disabled={resolveMut.isPending}
+                                title="تعيين كمعفى (قيمة صفرية)"
+                                className="p-1 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded"
+                              >
+                                <Ban size={13} />
+                              </button>
+                            )}
+                            {/* Retry: enqueue in outbox */}
+                            {(isGhost || row.gl_posting_status === 'failed') && (
+                              <button
+                                onClick={() => resolveMut.mutate({ id: row.id, action: 'retry' })}
+                                disabled={resolveMut.isPending}
+                                title="إعادة المحاولة عبر الصندوق"
+                                className="p-1 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded"
+                              >
+                                <RefreshCw size={13} />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* Full matrix table */}
       <div className="card overflow-hidden">

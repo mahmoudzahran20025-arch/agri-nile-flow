@@ -8,6 +8,8 @@ import receipts    from './receipts'
 import adjustments from './adjustments'
 import analytics   from './analytics'
 import governance  from './governance'
+import balances    from './balances'
+import transactions from './transactions'
 
 const inventory = new Hono<{ Bindings: Env }>()
 inventory.use('*', authMiddleware)
@@ -19,5 +21,7 @@ inventory.route('/', receipts)
 inventory.route('/', adjustments)
 inventory.route('/', analytics)
 inventory.route('/', governance)
+inventory.route('/', balances)
+inventory.route('/', transactions)
 
 export default inventory

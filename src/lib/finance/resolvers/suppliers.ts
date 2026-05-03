@@ -2,6 +2,7 @@ import type { D1Database } from '@cloudflare/workers-types'
 import {
   resolveSupplierInvoice as peResolveSupplierInvoice,
   resolveSupplierPayment as peResolveSupplierPayment,
+  resolveControlAccount,
 } from '../../posting_engine'
 import { postFromBusinessEvent } from '../business_events'
 
@@ -17,7 +18,7 @@ export async function resolveSupplierInvoice(
     created_by?: number
   },
 ): Promise<number | null> {
-  const apCode = '2100' // Default AP code - should come from control accounts
+  const apCode = await resolveControlAccount(db, opts.company_id, 'accounts_payable') ?? '212000010'
   const blueprint = await peResolveSupplierInvoice(
     db,
     opts.company_id,
@@ -70,7 +71,7 @@ export async function resolveSupplierPayment(
     ? (await db.prepare('SELECT gl_account_code FROM bank_accounts WHERE id = ?').bind(opts.financial_account_id).first<{ gl_account_code: string }>())?.gl_account_code || ''
     : ''
 
-  const apCode = '2100' // Default AP code
+  const apCode = await resolveControlAccount(db, opts.company_id, 'accounts_payable') ?? '212000010'
   const blueprint = await peResolveSupplierPayment(
     db,
     opts.company_id,

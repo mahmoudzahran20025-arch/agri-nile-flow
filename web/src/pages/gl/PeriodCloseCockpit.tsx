@@ -32,8 +32,17 @@ const STEP_OWNER: Record<string, string> = {
   period_summary: 'Finance Controller',
 }
 
-function mapStepAction(stepKey: string): { to?: string; label?: string } {
-  if (stepKey === 'inventory_gl') return { to: '/gl/batch-posting', label: 'Resolve in Batch Posting' }
+// Improvement 1: inventory_gl step links to TransactionHistoryPage pre-filtered by period dates
+function mapStepAction(stepKey: string, period?: { start_date: string; end_date: string }): { to?: string; label?: string; secondaryTo?: string; secondaryLabel?: string } {
+  if (stepKey === 'inventory_gl') {
+    const txUrl = period
+      ? `/inventory/transactions?start=${period.start_date}&end=${period.end_date}`
+      : '/inventory/transactions'
+    return {
+      to: '/gl/batch-posting', label: 'Resolve in Batch Posting',
+      secondaryTo: txUrl, secondaryLabel: 'View Transactions',
+    }
+  }
   if (stepKey === 'unposted_entries') return { to: '/gl/entries', label: 'Open Journal Entries' }
   if (stepKey === 'balance_check') return { to: '/gl/health-integrity', label: 'Open Integrity Issues' }
   if (stepKey === 'orphan_entries') return { to: '/gl/health-integrity', label: 'Open Integrity Issues' }
@@ -184,7 +193,7 @@ function ReadinessPanel({
 
       <div className="space-y-2">
         {checks.map((step) => {
-          const action = mapStepAction(step.step_key)
+          const action = mapStepAction(step.step_key, period)
           const isRunOneBusy = runningStep === step.step_key
           return (
             <div key={step.step_key} className={`rounded-lg border p-3 ${statusTone(step.status, step.is_critical)}`}>
@@ -220,6 +229,11 @@ function ReadinessPanel({
                   {action.to && (step.status === 'failed' || step.status === 'warning') ? (
                     <Link to={action.to} className="text-[11px] text-[#0F2D5C] underline hover:opacity-80 whitespace-nowrap">
                       {action.label ?? 'Investigate'}
+                    </Link>
+                  ) : null}
+                  {action.secondaryTo && (step.status === 'failed' || step.status === 'warning') ? (
+                    <Link to={action.secondaryTo} className="text-[11px] text-slate-500 underline hover:opacity-80 whitespace-nowrap">
+                      {action.secondaryLabel}
                     </Link>
                   ) : null}
                 </div>

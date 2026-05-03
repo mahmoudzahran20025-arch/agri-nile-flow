@@ -313,6 +313,70 @@ config.post('/seasons/:id/close', async (c) => {
   return c.json({ success: true, data: { id, status: 'closed', wip_carried: wipEntries.length, wip_details: wipEntries } })
 })
 
+// ── GET /config/wip — list WIP balances (pending carry-forwards) ─────────────
+config.get('/wip', async (c) => {
+  const { company_id } = getUser(c)
+  const seasonId = c.req.query('season_id')
+  const status   = c.req.query('status') ?? 'pending'
+
+  const conditions = ['wb.company_id = ?']
+  const params: (string | number)[] = [company_id]
+
+  if (seasonId) { conditions.push('wb.from_season_id = ?'); params.push(Number(seasonId)) }
+  if (status !== 'all') { conditions.push('wb.status = ?'); params.push(status) }
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT
+       wb.id, wb.from_season_id, wb.to_season_id, wb.field_id, wb.crop_name,
+       wb.cost_balance, wb.journal_entry_id, wb.status, wb.created_at,
+       f.name AS field_name,
+       sf.name AS from_season_name,
+       st.name AS to_season_name
+     FROM wip_balances wb
+     LEFT JOIN fields  f  ON f.id  = wb.field_id AND f.company_id = wb.company_id
+     LEFT JOIN seasons sf ON sf.id = wb.from_season_id
+     LEFT JOIN seasons st ON st.id = wb.to_season_id
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY wb.created_at DESC`
+  ).bind(...params).all<{
+    id: number; from_season_id: number; to_season_id: number | null
+    field_id: number; crop_name: string; cost_balance: number
+    journal_entry_id: number | null; status: string; created_at: string
+    field_name: string | null; from_season_name: string | null; to_season_name: string | null
+  }>()
+
+  const total_cost = results.reduce((s, r) => s + r.cost_balance, 0)
+
+  return c.json({ success: true, data: results, total_cost })
+})
+
+// ── POST /config/wip/:id/assign — assign WIP balance to next season ──────────
+config.post('/wip/:id/assign', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const { to_season_id } = await c.req.json<{ to_season_id: number }>()
+
+  if (!to_season_id) return c.json({ success: false, error: 'to_season_id required' }, 400)
+
+  const wip = await c.env.DB.prepare(
+    'SELECT id, status FROM wip_balances WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ id: number; status: string }>()
+
+  if (!wip)                   return c.json({ success: false, error: 'WIP entry not found' }, 404)
+  if (wip.status !== 'pending') return c.json({ success: false, error: 'يمكن تعيين الموسم فقط للقيود المعلقة' }, 422)
+
+  const season = await c.env.DB.prepare(
+    'SELECT id FROM seasons WHERE id = ? AND company_id = ?'
+  ).bind(to_season_id, company_id).first<{ id: number }>()
+  if (!season) return c.json({ success: false, error: 'الموسم المستهدف غير موجود' }, 404)
+
+  await c.env.DB.prepare(
+    `UPDATE wip_balances SET to_season_id = ?, status = 'carried' WHERE id = ? AND company_id = ?`
+  ).bind(to_season_id, id, company_id).run()
+
+  return c.json({ success: true, data: { id, status: 'carried', to_season_id } })
+})
+
 // ── GL Integration Settings (Modular Control) ───────────────
 
 config.get('/gl-integrations', async (c) => {

@@ -19,8 +19,8 @@ export async function resolveWorkOrderLabor(
     field_id?: number | null
   },
 ): Promise<number | null> {
-  const cogsAcc = '5101' // Default COGS account
-  const wagesPayableAcc = '2101' // Default wages payable account
+  const cogsAcc         = await resolveControlAccount(db, opts.company_id, 'labor_expense') ?? '5101'
+  const wagesPayableAcc = await resolveControlAccount(db, opts.company_id, 'wages_payable') ?? '21200001'
   const blueprint = await peResolveWorkOrderLabor(
     db,
     opts.company_id,
@@ -68,9 +68,10 @@ export async function resolveContractAdvance(
     created_by?: number
   },
 ): Promise<number | null> {
-  // Contract advance: DR Contract Advances (Asset) / CR Cash
-  const contractAdvanceAcc = await resolveControlAccount(db, opts.company_id, 'contract_advances') || '1205'
-  const cashAcc = await resolveControlAccount(db, opts.company_id, 'cash') || '1001'
+  // Customer pays us in advance → DR Cash / CR Deferred Revenue (liability)
+  // deferred_revenue maps to 21300001 (migration 0073)
+  const cashAcc           = await resolveControlAccount(db, opts.company_id, 'cash')            || '11010001'
+  const deferredRevenueAcc = await resolveControlAccount(db, opts.company_id, 'deferred_revenue') || '21300001'
 
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
@@ -78,12 +79,12 @@ export async function resolveContractAdvance(
     source_module: 'contracts',
     source_id:     opts.ref_id,
     event_date:    opts.date,
-    description:   `سلفة عقد | ${opts.description}`,
+    description:   `دفعة مقدمة عقد بيع | ${opts.description}`,
     created_by:    opts.created_by,
     payload:       { amount: opts.amount },
     lines:         [
-      { account_code: contractAdvanceAcc, debit: opts.amount, credit: 0, description: `سلفة عقد | ${opts.description}`, rule_slot: 'contract_advance' },
-      { account_code: cashAcc, debit: 0, credit: opts.amount, description: `سلفة عقد | ${opts.description}`, rule_slot: 'cash' },
+      { account_code: cashAcc,            debit: opts.amount, credit: 0,           description: `دفعة مقدمة عقد بيع | ${opts.description}`, rule_slot: 'cash' },
+      { account_code: deferredRevenueAcc, debit: 0,           credit: opts.amount, description: `دفعة مقدمة عقد بيع | ${opts.description}`, rule_slot: 'deferred_revenue' },
     ],
   })
 }

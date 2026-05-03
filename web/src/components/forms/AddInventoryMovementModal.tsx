@@ -14,7 +14,7 @@ export default function AddInventoryMovementModal({ open, onClose, defaultWareho
   const [error,  setError]  = useState('')
   const [form, setForm] = useState({
     movement_date:  today(),
-    movement_type:  'اضافة',
+    movement_type:  'GRN',
     warehouse:      defaultWarehouse ?? '',
     item_code:      '',
     quantity:       '',
@@ -80,7 +80,7 @@ export default function AddInventoryMovementModal({ open, onClose, defaultWareho
         return
       }
       await qc.invalidateQueries({ queryKey: ['inventory'] })
-      setForm({ movement_date: today(), movement_type: 'اضافة', warehouse: defaultWarehouse ?? '', item_code: '', quantity: '', unit_price: '', document_number: '', season_id: '', center_code: '', notes: '' })
+      setForm({ movement_date: today(), movement_type: 'GRN', warehouse: defaultWarehouse ?? '', item_code: '', quantity: '', unit_price: '', document_number: '', season_id: '', center_code: '', notes: '' })
       onClose()
     } catch {
       setError('حدث خطأ في الاتصال')
@@ -101,8 +101,12 @@ export default function AddInventoryMovementModal({ open, onClose, defaultWareho
           <div>
             <label className="label">نوع الحركة</label>
             <select className="input" value={form.movement_type} onChange={e => set('movement_type', e.target.value)}>
-              <option value="اضافة">إضافة (وارد)</option>
-              <option value="صرف">صرف (منصرف)</option>
+              <option value="GRN">إضافة / استلام (GRN)</option>
+              <option value="ISSUE">صرف مخزون (ISSUE)</option>
+              <option value="RETURN_SUPPLIER">مرتجع مورد</option>
+              <option value="RETURN_CUSTOMER">مرتجع عميل</option>
+              <option value="ADJUSTMENT_PROFIT">تسوية — زيادة</option>
+              <option value="ADJUSTMENT_LOSS">تسوية — نقص</option>
             </select>
           </div>
         </div>
@@ -139,7 +143,7 @@ export default function AddInventoryMovementModal({ open, onClose, defaultWareho
             <input type="number" className="input" placeholder="0" min="0.001" step="0.001"
               value={form.quantity} onChange={e => set('quantity', e.target.value)} required />
           </div>
-          {form.movement_type === 'اضافة' && (
+          {(form.movement_type === 'GRN' || form.movement_type === 'RETURN_CUSTOMER' || form.movement_type === 'ADJUSTMENT_PROFIT') && (
             <div>
               <label className="label">سعر الوحدة</label>
               <input type="number" className="input" placeholder="0.00" min="0" step="0.01"

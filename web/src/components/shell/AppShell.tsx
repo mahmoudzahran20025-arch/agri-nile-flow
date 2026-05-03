@@ -83,9 +83,10 @@ const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: 'Inventory',
     items: [
-      { label: 'Movements',        path: '/inventory/movements', icon: <Box       size={18} /> },
-      { label: 'Warehouse Stocks', path: '/inventory',           icon: <Warehouse size={18} /> },
-      { label: 'Items',            path: '/inventory/items',     icon: <FileCheck size={18} /> },
+      { label: 'Movements',        path: '/inventory/movements',     icon: <Box       size={18} /> },
+      { label: 'Transactions',      path: '/inventory/transactions',  icon: <FileText  size={18} /> },
+      { label: 'Warehouse Stocks',  path: '/inventory',               icon: <Warehouse size={18} /> },
+      { label: 'Items',             path: '/inventory/items',         icon: <FileCheck size={18} /> },
     ],
   },
   {

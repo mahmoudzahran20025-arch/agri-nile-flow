@@ -246,8 +246,12 @@ export default function InventoryMovementsPage() {
               onChange={e => applyFilter({ type: e.target.value })}
             >
               <option value="">الكل</option>
-              <option value="اضافة">إضافة</option>
-              <option value="صرف">صرف</option>
+              <option value="GRN">استلام / إضافة (GRN)</option>
+              <option value="ISSUE">صرف مخزون (ISSUE)</option>
+              <option value="RETURN_SUPPLIER">مرتجع مورد</option>
+              <option value="RETURN_CUSTOMER">مرتجع عميل</option>
+              <option value="ADJUSTMENT_PROFIT">تسوية — زيادة</option>
+              <option value="ADJUSTMENT_LOSS">تسوية — نقص</option>
             </select>
           </div>
 

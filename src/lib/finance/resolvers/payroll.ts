@@ -1,6 +1,7 @@
 import type { D1Database } from '@cloudflare/workers-types'
 import {
   resolvePayrollPosting as peResolvePayroll,
+  resolveControlAccount,
 } from '../../posting_engine'
 import { postFromBusinessEvent } from '../business_events'
 
@@ -18,8 +19,8 @@ export async function resolvePayrollPosting(
     field_id?: number | null
   },
 ): Promise<number | null> {
-  const wagesAcc = '5100' // Default wages expense account
-  const wagesPayableAcc = '2101' // Default wages payable account
+  const wagesAcc        = await resolveControlAccount(db, opts.company_id, 'wages_expense')  ?? '51010001'
+  const wagesPayableAcc = await resolveControlAccount(db, opts.company_id, 'wages_payable')  ?? '21200001'
   const blueprint = await peResolvePayroll(
     db,
     opts.company_id,
@@ -68,8 +69,8 @@ export async function resolvePayrollPayment(
   },
 ): Promise<number | null> {
   // Payroll payment: DR Wages Payable / CR Cash
-  const wagesPayableAcc = '2101' // Wages Payable - should come from posting setup
-  const cashAcc = '1001' // Cash - should come from posting setup
+  const wagesPayableAcc = await resolveControlAccount(db, opts.company_id, 'wages_payable') ?? '21200001'
+  const cashAcc         = await resolveControlAccount(db, opts.company_id, 'cash')          ?? '14010101'
 
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,

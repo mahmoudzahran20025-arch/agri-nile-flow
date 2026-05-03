@@ -3,8 +3,10 @@ import {
   resolveInventoryMovement as peResolveInventory,
   resolveInventoryTransfer as peResolveTransfer,
   resolvePurchaseReceipt as peResolvePurchaseReceipt,
+  resolveControlAccount,
 } from '../../posting_engine'
 import { postFromBusinessEvent } from '../business_events'
+import { readInventoryBalance, upsertInventoryBalance, enqueueInventoryPostingOutbox } from '../../inventory_posting'
 
 export async function resolveInventoryMovement(
   db: D1Database,
@@ -31,7 +33,7 @@ export async function resolveInventoryMovement(
     null,
     null,
     opts.value,
-    opts.movement_type === 'اضافة',
+    opts.movement_type,
   )
   if (blueprint.isBlocked || !blueprint.lines.length) {
     throw new Error(`INVENTORY_MOVEMENT_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
@@ -122,7 +124,7 @@ export async function resolvePurchaseReceipt(
     created_by?: number
   },
 ): Promise<number | null> {
-  const apCode = '2100' // Default AP code - should come from control accounts
+  const apCode = await resolveControlAccount(db, opts.company_id, 'accounts_payable') ?? '212000010'
   const blueprint = await peResolvePurchaseReceipt(
     db,
     opts.company_id,
@@ -185,32 +187,30 @@ export async function processPOReceiptOrchestrated(
   let movCount = 0
 
   for (const item of opts.items) {
-    const lastRow = await db.prepare(
-      `SELECT balance_qty, balance_value FROM inventory_movements
-       WHERE company_id = ? AND item_code = ? AND warehouse = ?
-       ORDER BY movement_date DESC, id DESC LIMIT 1`
-    ).bind(opts.company_id, item.item_code, item.warehouse)
-      .first<{ balance_qty: number; balance_value: number }>()
-
-    const prevQty = lastRow?.balance_qty ?? 0
-    const prevVal = lastRow?.balance_value ?? 0
+    // Use authoritative balance snapshot (with staleness-heal fallback)
+    const prev    = await readInventoryBalance(db, opts.company_id, item.item_code, item.warehouse)
     const valueIn = item.qty_received * item.unit_price
-    const balQty  = prevQty + item.qty_received
-    const balVal  = prevVal + valueIn
+    const balQty  = prev.balance_qty + item.qty_received
+    const balVal  = prev.balance_value + valueIn
     const d       = new Date(opts.received_date)
     const localId = `${localIdBase}_${item.po_item_id}`
 
-    await db.prepare(
+    const insertResult = await db.prepare(
       `INSERT INTO inventory_movements
        (company_id, item_code, movement_date, warehouse, movement_type,
         quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
-        year, month, created_by_user_id, local_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        year, month, created_by_user_id, local_id, gl_posting_status)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`
     ).bind(
-      opts.company_id, item.item_code, opts.received_date, item.warehouse, 'اضافة',
+      opts.company_id, item.item_code, opts.received_date, item.warehouse, 'GRN',
       item.qty_received, item.unit_price, item.qty_received, 0, balQty, valueIn, 0, balVal,
       d.getFullYear(), d.getMonth() + 1, opts.userId, localId,
     ).run()
+
+    const movementId = insertResult.meta.last_row_id as number
+
+    // Keep snapshot current so next item in the loop reads the correct balance
+    await upsertInventoryBalance(db, opts.company_id, item.item_code, item.warehouse, balQty, balVal, movementId)
 
     await db.prepare(
       `UPDATE purchase_order_items SET qty_received = qty_received + ? WHERE id = ? AND company_id = ?`
@@ -230,7 +230,7 @@ export async function processPOReceiptOrchestrated(
     `UPDATE purchase_orders SET status = ? WHERE id = ? AND company_id = ?`
   ).bind(newStatus, opts.po_id, opts.company_id).run()
 
-  // Post GL (non-fatal if blocked)
+  // Post GL — on failure, mark movements failed and enqueue for async retry
   const totalAmount = opts.items.reduce((s, i) => s + i.qty_received * i.unit_price, 0)
   try {
     await resolvePurchaseReceipt(db, {
@@ -241,8 +241,25 @@ export async function processPOReceiptOrchestrated(
       date:         opts.received_date,
       created_by:   opts.userId,
     })
-  } catch {
-    // GL failure is non-fatal; inventory movements have already been committed
+  } catch (err: unknown) {
+    const errMsg = String((err as Error)?.message ?? err)
+    // Mark all movements for this PO receipt as failed, then enqueue outbox
+    const { results: failedMovs } = await db.prepare(
+      `UPDATE inventory_movements SET gl_posting_status = 'failed', gl_posting_error = ?
+       WHERE company_id = ? AND local_id LIKE ? AND gl_posting_status = 'pending'
+       RETURNING id, item_code, warehouse, movement_type, value_in, value_out, movement_date`
+    ).bind(errMsg, opts.company_id, `por_%_${opts.po_id}%`).all<{
+      id: number; item_code: number; warehouse: string; movement_type: string
+      value_in: number; value_out: number; movement_date: string
+    }>()
+
+    for (const mov of failedMovs ?? []) {
+      await enqueueInventoryPostingOutbox(db, opts.company_id, 'inventory_movement', mov.id, {
+        company_id: opts.company_id, ref_id: mov.id, item_code: mov.item_code,
+        warehouse: mov.warehouse, movement_type: mov.movement_type,
+        value: mov.value_in - mov.value_out, date: mov.movement_date,
+      })
+    }
   }
 
   return { movements: movCount, status: newStatus }

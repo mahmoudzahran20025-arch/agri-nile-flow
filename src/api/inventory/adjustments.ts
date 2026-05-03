@@ -7,6 +7,7 @@ import {
   enforceInventoryLockDate,
   enqueueInventoryPostingOutbox,
   getInventoryPostingControls,
+  upsertInventoryBalance,
   validateZeroValuePolicy,
 } from '../../lib/inventory_posting'
 
@@ -153,16 +154,28 @@ adjustments.post('/adjustments/:id/post', permissionGuard('inventory', 'create')
   const mo = new Date(adj.adjustment_date).getMonth() + 1
   const batchKey = `adj_${id}_${Date.now()}`
 
+  // Create ONE transaction header for the whole adjustment document.
+  const adjTxRes = await c.env.DB.prepare(
+    `INSERT INTO inventory_transactions
+     (company_id, transaction_type, movement_date, warehouse, notes,
+      line_count, total_qty, total_value, status, created_by_user_id)
+     VALUES (?,'ADJUSTMENT',?,?,?,?,0,0,'confirmed',?)`
+  ).bind(
+    company_id, adj.adjustment_date, warehouseName,
+    `تسوية جردية رقم #${id}`, lines.length, userId,
+  ).run()
+  const adjTransactionId = adjTxRes.meta.last_row_id as number
+
   for (const l of lines) {
     if (l.difference === 0) continue
 
     const movementType = l.difference > 0 ? 'اضافة' : 'صرف'
     const absQty = Math.abs(l.difference)
 
+    // O(1) balance read from snapshot table.
     const lastRow = await c.env.DB.prepare(
-      `SELECT balance_qty, balance_value FROM inventory_movements
-       WHERE company_id = ? AND item_code = ? AND warehouse = ?
-       ORDER BY movement_date DESC, id DESC LIMIT 1`
+      `SELECT balance_qty, balance_value FROM inventory_balances
+       WHERE company_id = ? AND item_code = ? AND warehouse = ?`
     ).bind(company_id, l.item_code, warehouseName)
       .first<{ balance_qty: number; balance_value: number }>()
 
@@ -191,8 +204,8 @@ adjustments.post('/adjustments/:id/post', permissionGuard('inventory', 'create')
        (company_id, item_code, movement_date, warehouse, movement_type,
         quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
         notes, year, month, created_by_user_id, local_id,
-        zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
       company_id, l.item_code, adj.adjustment_date, warehouseName, movementType,
       absQty, unitPrice, qtyIn, qtyOut, prevQty + qtyIn - qtyOut, valIn, valOut, prevVal + valIn - valOut,
@@ -200,10 +213,17 @@ adjustments.post('/adjustments/:id/post', permissionGuard('inventory', 'create')
       totalValue === 0 ? `inventory_adjustment:${id}` : null,
       totalValue === 0 ? role : null,
       controls.posting_mode,
-      totalValue === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled'))
+      totalValue === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled')),
+      adjTransactionId,
     ).run()
 
     const movementId = Number(insertRes.meta.last_row_id)
+
+    // Keep inventory_balances snapshot in sync.
+    await upsertInventoryBalance(
+      c.env.DB, company_id, l.item_code, warehouseName,
+      prevQty + qtyIn - qtyOut, prevVal + valIn - valOut, movementId,
+    )
 
     if (totalValue <= 0) continue
 

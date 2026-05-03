@@ -366,6 +366,31 @@ periods.patch('/:id/close', async (c) => {
     company_id,
   ).run()
 
+  // ── Improvement 4: Inventory balance snapshot ─────────────────────────────
+  // Snapshot inventory_balances into period_inventory_snapshots so auditors
+  // can query "what was stock on hand at end of this period?" without
+  // replaying movement history.
+  await c.env.DB.prepare(
+    'DELETE FROM period_inventory_snapshots WHERE company_id=? AND period_id=?'
+  ).bind(company_id, id).run()
+
+  await c.env.DB.prepare(`
+    INSERT OR REPLACE INTO period_inventory_snapshots
+      (company_id, period_id, item_code, item_name, warehouse, closing_qty, closing_value, snapshotted_at)
+    SELECT
+      ib.company_id,
+      ?,
+      ib.item_code,
+      i.name,
+      ib.warehouse,
+      ib.balance_qty,
+      ib.balance_value,
+      datetime('now')
+    FROM inventory_balances ib
+    LEFT JOIN items i ON i.code = ib.item_code AND i.company_id = ib.company_id
+    WHERE ib.company_id = ?
+  `).bind(id, company_id).run()
+
   // ── Lock the period ───────────────────────────────────────────────────────
   await c.env.DB.prepare(
     `UPDATE financial_periods
@@ -380,7 +405,7 @@ periods.patch('/:id/close', async (c) => {
 
   return c.json({
     success: true,
-    data: { period_id: id, period_name: period.name, snapshot_created: true, forced: force },
+    data: { period_id: id, period_name: period.name, snapshot_created: true, inventory_snapshot_created: true, forced: force },
   })
 })
 

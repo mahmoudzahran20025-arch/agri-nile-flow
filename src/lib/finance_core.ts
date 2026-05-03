@@ -55,24 +55,24 @@ async function postMonthlyDepreciation(
   opts: { company_id: number; period_year: number; period_month: number; user_id: number },
 ): Promise<Array<{ asset_id: number; asset_name: string; depreciation_amount: number; entry_id: number | null }>> {
   const { results: assets } = await db.prepare(
-    `SELECT id, name, cost_value, salvage_value, useful_life_months
+    `SELECT id, name, cost, salvage_value, useful_life_months
      FROM fixed_assets
-     WHERE company_id = ? AND status = 'active' AND useful_life_months > 0`
+     WHERE company_id = ? AND is_active = 1 AND useful_life_months > 0`
   ).bind(opts.company_id).all<{
-    id: number; name: string; cost_value: number; salvage_value: number | null; useful_life_months: number
+    id: number; name: string; cost: number; salvage_value: number | null; useful_life_months: number
   }>()
 
   if (!assets.length) return []
 
-  const depExpAcc   = await resolveControlAccount(db, opts.company_id, 'depreciation_expense') ?? '6200'
-  const accumDepAcc = await resolveControlAccount(db, opts.company_id, 'accumulated_depreciation') ?? '1690'
+  const depExpAcc   = await resolveControlAccount(db, opts.company_id, 'depreciation_expense') ?? '5503'
+  const accumDepAcc = await resolveControlAccount(db, opts.company_id, 'accumulated_depreciation') ?? '2203'
   const month       = String(opts.period_month).padStart(2, '0')
   const entryDate   = `${opts.period_year}-${month}-28`
 
   const out: Array<{ asset_id: number; asset_name: string; depreciation_amount: number; entry_id: number | null }> = []
 
   for (const asset of assets) {
-    const depAmount = Math.round(((asset.cost_value - (asset.salvage_value ?? 0)) / asset.useful_life_months) * 100) / 100
+    const depAmount = Math.round(((asset.cost - (asset.salvage_value ?? 0)) / asset.useful_life_months) * 100) / 100
     if (depAmount <= 0) continue
 
     const entryId = await postFromBusinessEvent(db, {
@@ -95,12 +95,99 @@ async function postMonthlyDepreciation(
 }
 
 async function carryForwardWIP(
-  _db: D1Database,
-  _opts: { company_id: number; season_id: number; user_id: number },
+  db: D1Database,
+  opts: { company_id: number; season_id: number; user_id: number },
 ): Promise<Array<{ field_id: number; crop_name: string; cost_balance: number }>> {
-  // Stub — returns empty when WIP tracking schema is not yet active.
-  // Replace with full implementation once wip_balances table is populated.
-  return []
+  // Find fields in this season that have work_order costs but no completed harvest.
+  // These are genuinely in-progress crops (sugarcane, perennial orchards).
+  const { results: unharvestedFields } = await db.prepare(
+    `SELECT
+       f.id           AS field_id,
+       f.name         AS field_name,
+       COALESCE(f.crop_name, s.crop_type, 'محصول غير محدد') AS crop_name,
+       f.center_code
+     FROM fields f
+     JOIN seasons s ON s.id = ?
+     LEFT JOIN harvest_records hr ON hr.field_id = f.id AND hr.season_id = ? AND hr.status != 'cancelled'
+     WHERE f.company_id = ?
+       AND s.company_id = ?
+       AND hr.id IS NULL
+       AND EXISTS (
+         SELECT 1 FROM work_orders wo
+         WHERE wo.field_id = f.id AND wo.season_id = ? AND wo.company_id = ?
+           AND wo.status NOT IN ('cancelled')
+       )`
+  ).bind(
+    opts.season_id, opts.season_id,
+    opts.company_id, opts.company_id,
+    opts.season_id, opts.company_id
+  ).all<{ field_id: number; field_name: string; crop_name: string; center_code: number | null }>()
+
+  if (!unharvestedFields.length) return []
+
+  const wipAcc    = await resolveControlAccount(db, opts.company_id, 'wip_asset')  ?? '1302'
+  const contraAcc = await resolveControlAccount(db, opts.company_id, 'wip_contra') ?? '3001'
+
+  const out: Array<{ field_id: number; crop_name: string; cost_balance: number }> = []
+
+  for (const field of unharvestedFields) {
+    // Sum all costs attributable to this field in this season:
+    // work_tasks (labour + materials via work orders) + cash_transactions with field_id
+    const [tasksRow, cashRow] = await Promise.all([
+      db.prepare(
+        `SELECT COALESCE(SUM(wt.quantity * wt.unit_cost), 0) AS total
+         FROM work_tasks wt
+         JOIN work_orders wo ON wo.id = wt.work_order_id
+         WHERE wo.company_id = ? AND wo.field_id = ? AND wo.season_id = ?`
+      ).bind(opts.company_id, field.field_id, opts.season_id).first<{ total: number }>(),
+
+      db.prepare(
+        `SELECT COALESCE(SUM(ABS(amount)), 0) AS total
+         FROM cash_transactions
+         WHERE company_id = ? AND field_id = ? AND season_id = ?
+           AND type IN ('expense', 'withdrawal')`
+      ).bind(opts.company_id, field.field_id, opts.season_id).first<{ total: number }>(),
+    ])
+
+    const costBalance = (tasksRow?.total ?? 0) + (cashRow?.total ?? 0)
+    if (costBalance <= 0) continue
+
+    // Check for duplicate (idempotent on re-run)
+    const existing = await db.prepare(
+      `SELECT id FROM wip_balances WHERE company_id = ? AND from_season_id = ? AND field_id = ? AND status = 'pending'`
+    ).bind(opts.company_id, opts.season_id, field.field_id).first<{ id: number }>()
+
+    if (existing) {
+      out.push({ field_id: field.field_id, crop_name: field.crop_name, cost_balance: costBalance })
+      continue
+    }
+
+    // Post GL: DR WIP Asset / CR WIP Contra
+    const entryId = await postFromBusinessEvent(db, {
+      company_id:    opts.company_id,
+      event_type:    'wip_carryforward',
+      source_module: 'operations',
+      source_id:     field.field_id,
+      event_date:    new Date().toISOString().slice(0, 10),
+      description:   `ترحيل أعمال تحت التنفيذ: ${field.field_name} — ${field.crop_name}`,
+      created_by:    opts.user_id,
+      payload:       { season_id: opts.season_id, field_id: field.field_id, cost_balance: costBalance },
+      lines: [
+        { account_code: wipAcc,    debit: costBalance, credit: 0,            description: `أعمال تحت التنفيذ — ${field.field_name}`, rule_slot: 'wip_asset',   source_ledger: 'manual' as const, source_record_id: field.field_id, center_code: field.center_code ?? undefined },
+        { account_code: contraAcc, debit: 0,           credit: costBalance,  description: `مقابل أعمال تحت التنفيذ — ${field.field_name}`, rule_slot: 'wip_contra', source_ledger: 'manual' as const, source_record_id: field.field_id },
+      ],
+    })
+
+    await db.prepare(
+      `INSERT INTO wip_balances
+         (company_id, from_season_id, field_id, crop_name, cost_balance, journal_entry_id, created_by, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`
+    ).bind(opts.company_id, opts.season_id, field.field_id, field.crop_name, costBalance, entryId, opts.user_id).run()
+
+    out.push({ field_id: field.field_id, crop_name: field.crop_name, cost_balance: costBalance })
+  }
+
+  return out
 }
 
 async function postHarvestLedger(

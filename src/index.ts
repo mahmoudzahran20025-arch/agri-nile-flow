@@ -27,6 +27,7 @@ import budgetsRoutes    from './api/budgets'
 import classifierRoutes from './api/classifier'
 import validationRoutes from './api/validation'
 import assetsRoutes     from './api/assets'
+import { processAllPendingOutbox } from './lib/process_outbox'
 
 const app = new Hono<{ Bindings: Env; Variables: { jwtPayload: JwtPayload } }>()
 
@@ -160,6 +161,14 @@ export default {
         console.log(`[Cron] Marked ${result.meta.changes ?? 0} overdue location tasks as missed (${today})`)
       } catch (err) {
         console.error('[Cron] Failed to mark missed tasks:', err)
+      }
+
+      // Process any pending inventory posting outbox messages
+      try {
+        await processAllPendingOutbox(env.DB)
+        console.log('[Cron] Inventory posting outbox sweep complete')
+      } catch (err) {
+        console.error('[Cron] Outbox sweep failed:', err)
       }
     })())
   },

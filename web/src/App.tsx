@@ -22,7 +22,6 @@ const ReconciliationPage       = lazy(() => import('./pages/gl/ReconciliationPag
 const PeriodCloseCockpit       = lazy(() => import('./pages/gl/PeriodCloseCockpit'))
 const BatchPostingCenterPage   = lazy(() => import('./pages/gl/BatchPostingCenterPage'))
 const HealthIntegrityPage      = lazy(() => import('./pages/gl/HealthIntegrityPage'))
-const GlIntegrityAuditPage     = lazy(() => import('./pages/gl/GlIntegrityAuditPage'))
 const GLSettingsPage           = lazy(() => import('./pages/gl/GLSettingsPage'))
 const PostingGroupsPage        = lazy(() => import('./pages/gl/PostingGroupsPage'))
 const PostingSetupPage         = lazy(() => import('./pages/gl/PostingSetupPage'))
@@ -75,8 +74,6 @@ const AdjustmentDetailPage     = lazy(() => import('./pages/inventory/Adjustment
 const ItemMasterPage           = lazy(() => import('./pages/inventory/ItemMasterPage'))
 const InventoryPostingHealthPage = lazy(() => import('./pages/inventory/InventoryPostingHealthPage'))
 const InventoryBalancesPage      = lazy(() => import('./pages/inventory/InventoryBalancesPage'))
-const FixedAssetsPage            = lazy(() => import('./pages/inventory/FixedAssetsPage'))
-const WipBalancesPage            = lazy(() => import('./pages/inventory/WipBalancesPage'))
 const UsersPage                = lazy(() => import('./pages/users/UsersPage'))
 const ConfigPage               = lazy(() => import('./pages/config/ConfigPage'))
 const FieldsPage               = lazy(() => import('./pages/fields/FieldsPage'))
@@ -176,8 +173,6 @@ export default function App() {
         <Route path="inventory/cost-by-field"    element={<CostByFieldPage />} />
         <Route path="inventory/posting-health"   element={<InventoryPostingHealthPage />} />
         <Route path="inventory/balances-detail"  element={<InventoryBalancesPage />} />
-        <Route path="inventory/fixed-assets"     element={<FixedAssetsPage />} />
-        <Route path="inventory/wip"              element={<WipBalancesPage />} />
 
         {/* HR Module */}
         <Route path="hr/dashboard"            element={<HrDashboardPage />} />
@@ -210,7 +205,6 @@ export default function App() {
         <Route path="gl/entries"      element={<JournalEntriesPage />} />
         <Route path="gl/statements"   element={<FinancialStatementsPage />} />
         <Route path="gl/health-integrity" element={<HealthIntegrityPage />} />
-        <Route path="gl/integrity-audit"  element={<GlIntegrityAuditPage />} />
         {/* GL Settings hub — tabs: mappings | integrations | periods */}
         <Route path="gl/settings"      element={<GLSettingsPage />} />
         <Route path="gl/posting-groups" element={<PostingGroupsPage />} />

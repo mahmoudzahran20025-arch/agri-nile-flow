@@ -26,7 +26,7 @@ interface LineItem {
 
 interface BatchForm {
   movement_date:   string
-  movement_type:   'اضافة' | 'صرف'
+  movement_type:   'GRN' | 'ISSUE' | 'RETURN_SUPPLIER' | 'RETURN_CUSTOMER' | 'ADJUSTMENT_PROFIT' | 'ADJUSTMENT_LOSS'
   warehouse:       string
   supplier_code:   string
   document_number: string
@@ -93,7 +93,7 @@ function StepBar({ current }: { current: number }) {
 
 interface GLPreviewPanelProps {
   warehouse:     string
-  movementType:  'اضافة' | 'صرف'
+  movementType:  'GRN' | 'ISSUE' | 'RETURN_SUPPLIER' | 'RETURN_CUSTOMER' | 'ADJUSTMENT_PROFIT' | 'ADJUSTMENT_LOSS'
   lines:         LineItem[]
   paymentMethod: 'cash' | 'credit'
   centerCode?:   number
@@ -212,7 +212,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
 
   const [form, setForm] = useState<BatchForm>({
     movement_date:   today(),
-    movement_type:   'اضافة',
+    movement_type:   'GRN',
     warehouse:       defaultWarehouse ?? '',
     supplier_code:   '',
     document_number: '',
@@ -233,7 +233,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
       setError('')
       setForm({
         movement_date:   today(),
-        movement_type:   'اضافة',
+        movement_type:   'GRN',
         warehouse:       defaultWarehouse ?? '',
         supplier_code:   '',
         document_number: '',
@@ -291,7 +291,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
       field_id:  form.field_id  ? Number(form.field_id)  : undefined,
       size: 100,
     }) as Promise<{ data: WorkOrderItem[] }>,
-    enabled:  open && form.movement_type === 'صرف',
+    enabled:  open && (form.movement_type === 'ISSUE' || form.movement_type === 'RETURN_SUPPLIER' || form.movement_type === 'ADJUSTMENT_LOSS'),
     staleTime: 60_000,
     select: (res) => (res as { data: WorkOrderItem[] }).data ?? [],
   })
@@ -308,7 +308,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
   const { data: suppliersList = [] } = useQuery({
     queryKey: ['suppliers-list-dropdown'],
     queryFn:  () => suppliersApi.list({ size: 200 }) as Promise<{ data: SupplierOption[] }>,
-    enabled:  open && form.movement_type === 'اضافة',
+    enabled:  open && (form.movement_type === 'GRN' || form.movement_type === 'RETURN_CUSTOMER'),
     staleTime: 60_000,
     select: res => (res as unknown as { data: SupplierOption[] }).data ?? res,
   })
@@ -357,7 +357,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
       if (!l.item_code) return { ...l, error: 'اختر الصنف' }
       const qty = Number(l.quantity)
       if (!l.quantity || qty <= 0) return { ...l, error: 'الكمية مطلوبة وأكبر من صفر' }
-      if (form.movement_type === 'صرف' && l.available !== undefined && qty > l.available) {
+      if ((form.movement_type === 'ISSUE' || form.movement_type === 'ADJUSTMENT_LOSS') && l.available !== undefined && qty > l.available) {
         ok = false
         return { ...l, error: `الرصيد المتاح: ${NUM(l.available)}` }
       }
@@ -447,7 +447,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
   const totalQty     = filledLines.reduce((s, l) => s + Number(l.quantity), 0)
   const totalVal     = filledLines.reduce((s, l) => s + Number(l.quantity) * (Number(l.unit_price) || 0), 0)
 
-  const typeIsAdd    = form.movement_type === 'اضافة'
+  const typeIsAdd    = form.movement_type === 'GRN' || form.movement_type === 'RETURN_CUSTOMER' || form.movement_type === 'ADJUSTMENT_PROFIT'
 
   // ─── Render ────────────────────────────────────────────────
 
@@ -468,7 +468,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
                   ${typeIsAdd
                     ? 'border-green-500 bg-green-50 text-green-700 shadow-sm'
                     : 'border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600'}`}
-                onClick={() => setF('movement_type', 'اضافة')}>
+                onClick={() => setF('movement_type', 'GRN')}>
                 <span className="text-2xl">↓</span>
                 <span className="text-sm">إضافة (وارد)</span>
                 <span className="text-xs opacity-70">استلام بضاعة للمخزن</span>
@@ -478,7 +478,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
                   ${!typeIsAdd
                     ? 'border-red-500 bg-red-50 text-red-700 shadow-sm'
                     : 'border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600'}`}
-                onClick={() => setF('movement_type', 'صرف')}>
+                onClick={() => setF('movement_type', 'ISSUE')}>
                 <span className="text-2xl">↑</span>
                 <span className="text-sm">صرف (منصرف)</span>
                 <span className="text-xs opacity-70">إخراج بضاعة من المخزن</span>
@@ -516,7 +516,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
             </div>
             <div>
               <label className="label">المورد</label>
-              {form.movement_type === 'اضافة' && (suppliersList as SupplierOption[]).length > 0 ? (
+              {(form.movement_type === 'GRN') && (suppliersList as SupplierOption[]).length > 0 ? (
                 <select className="input" value={form.supplier_code}
                   onChange={e => setF('supplier_code', e.target.value)}>
                   <option value="">— اختياري —</option>
@@ -899,7 +899,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
           {/* GL Preview Panel */}
           <GLPreviewPanel
             warehouse={form.warehouse}
-            movementType={form.movement_type as 'اضافة' | 'صرف'}
+            movementType={form.movement_type as 'GRN' | 'ISSUE' | 'RETURN_SUPPLIER' | 'RETURN_CUSTOMER' | 'ADJUSTMENT_PROFIT' | 'ADJUSTMENT_LOSS'}
             lines={filledLines}
             paymentMethod={form.payment_method as 'cash' | 'credit'}
             centerCode={form.center_code ? Number(form.center_code) : undefined}

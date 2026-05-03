@@ -435,7 +435,7 @@ postingSetup.post('/posting-setup/validate', async (c) => {
   switch (body.type) {
     case 'inventory_in':
     case 'inventory_out':
-      blueprint = await peResolveInventory(c.env.DB, company_id, body.ipg_code ?? null, body.ppg_code ?? null, amt, body.type === 'inventory_in')
+      blueprint = await peResolveInventory(c.env.DB, company_id, body.ipg_code ?? null, body.ppg_code ?? null, amt, body.type === 'inventory_in' ? 'GRN' : 'ISSUE')
       break
     case 'harvest':
       blueprint = await peResolveHarvest(c.env.DB, company_id, body.ipg_code ?? null, body.ppg_code ?? null, amt)

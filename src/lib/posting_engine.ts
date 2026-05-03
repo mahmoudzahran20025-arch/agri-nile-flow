@@ -188,36 +188,47 @@ async function resolveInventorySetup(
   company_id: number,
   ipg_code: string | null,
   ppg_code: string | null,
+  movementType?: string | null,
 ): Promise<{ row: InventoryPostingRuleRow; step: number } | null> {
-  const cacheKey = getCacheKey(company_id, ipg_code, ppg_code)
+  // Cache key includes movement_type so specific and wildcard rules don't collide.
+  const cacheKey = `${getCacheKey(company_id, ipg_code, ppg_code)}:${movementType ?? 'NULL'}`
   const cached = readCache(inventorySetupCache, cacheKey)
   if (cached !== undefined) {
     const step = deriveInventoryStep(ipg_code, ppg_code, cached)
     return cached ? { row: cached, step } : null
   }
 
-  const candidates: [string | null, string | null, number][] = [
+  // 8-step cascade: for each of the 4 dimension combinations, try movement_type-specific
+  // rule first (step n), then movement_type IS NULL wildcard (step n+4).
+  // NULL movementType → skip the specific pass and only try wildcard.
+  const dimCandidates: [string | null, string | null, number][] = [
     [ipg_code, ppg_code, 1],
     [ipg_code, null,     2],
     [null,     ppg_code, 3],
     [null,     null,     4],
   ]
-  for (const [i, p, step] of candidates) {
-    const row = await db
-      .prepare(`SELECT id, inv_posting_group_code, prod_posting_group_code, inventory_account, wip_account, finished_goods_account
-                FROM posting_rules
-                WHERE company_id = ?
-                  AND rule_type = 'inventory'
-                  AND (inv_posting_group_code IS ? OR (inv_posting_group_code IS NULL AND ? IS NULL))
-                  AND (prod_posting_group_code IS ? OR (prod_posting_group_code IS NULL AND ? IS NULL))
-                  AND is_active = 1
-                ORDER BY priority ASC, id ASC
-                LIMIT 1`)
-      .bind(company_id, i, i, p, p)
-      .first<InventoryPostingRuleRow>()
-    if (row) {
-      writeCache(inventorySetupCache, cacheKey, row)
-      return { row, step }
+  const passes: Array<'specific' | 'wildcard'> = movementType ? ['specific', 'wildcard'] : ['wildcard']
+  for (const pass of passes) {
+    const mt = pass === 'specific' ? movementType! : null
+    for (const [i, p, baseStep] of dimCandidates) {
+      const step = pass === 'specific' ? baseStep : baseStep + 4
+      const row = await db
+        .prepare(`SELECT id, inv_posting_group_code, prod_posting_group_code, inventory_account, wip_account, finished_goods_account
+                  FROM posting_rules
+                  WHERE company_id = ?
+                    AND rule_type = 'inventory'
+                    AND (inv_posting_group_code IS ? OR (inv_posting_group_code IS NULL AND ? IS NULL))
+                    AND (prod_posting_group_code IS ? OR (prod_posting_group_code IS NULL AND ? IS NULL))
+                    AND (movement_type IS ? OR (movement_type IS NULL AND ? IS NULL))
+                    AND is_active = 1
+                  ORDER BY priority ASC, id ASC
+                  LIMIT 1`)
+        .bind(company_id, i, i, p, p, mt, mt)
+        .first<InventoryPostingRuleRow>()
+      if (row) {
+        writeCache(inventorySetupCache, cacheKey, row)
+        return { row, step }
+      }
     }
   }
   writeCache(inventorySetupCache, cacheKey, null)
@@ -342,21 +353,46 @@ export async function resolveControlAccount(
   return writeCache(controlAccountCache, key, row?.account_code ?? null)
 }
 
+// ── Movement Direction Helper ─────────────────────────────────────────────────
+// Derives IN / OUT from the movement_types code, with backward-compat for the
+// legacy Arabic literals 'اضافة' and 'صرف' that still exist in live data.
+
+export function resolveMovementDirection(movementType: string): 'IN' | 'OUT' {
+  // New typed codes
+  const IN_CODES  = new Set(['GRN', 'TRANSFER_IN', 'RETURN_CUSTOMER', 'ADJUSTMENT_PROFIT', 'PRODUCTION_OUTPUT'])
+  const OUT_CODES = new Set(['ISSUE', 'TRANSFER_OUT', 'RETURN_SUPPLIER', 'ADJUSTMENT_LOSS', 'PRODUCTION_INPUT'])
+  if (IN_CODES.has(movementType))  return 'IN'
+  if (OUT_CODES.has(movementType)) return 'OUT'
+  // Legacy Arabic literals
+  if (movementType === 'اضافة') return 'IN'
+  return 'OUT'
+}
+
 // ── Public: resolveInventoryMovement ─────────────────────────────────────────
 
 export async function resolveInventoryMovement(
   db: D1Database, company_id: number,
   ipg_code: string | null, ppg_code: string | null,
-  amount: number, isIncrease: boolean,
+  amount: number, movementType: string,
   description?: string, dimensions?: DimOpts,
 ): Promise<JournalBlueprint> {
+  const isIncrease = resolveMovementDirection(movementType) === 'IN'
+
   const warnings: string[] = []
   if (!ipg_code) warnings.push('Warehouse has no Inventory Posting Group assigned. Using default setup.')
   if (!ppg_code) warnings.push('Item has no Product Posting Group assigned. Using default setup.')
   if (ipg_code) { const w = await checkPostingGroupExists(db, 'inventory_posting_groups', ipg_code, company_id); if (w) warnings.push(w) }
   if (ppg_code) { const w = await checkPostingGroupExists(db, 'product_posting_groups', ppg_code, company_id); if (w) warnings.push(w) }
 
-  const invResult = await resolveInventorySetup(db, company_id, ipg_code, ppg_code)
+  // Normalise to a known code or null so the movement_type cascade is skipped for
+  // legacy Arabic strings that don't exist in posting_rules.movement_type.
+  const mtCode = resolveMovementDirection(movementType) === 'IN' || resolveMovementDirection(movementType) === 'OUT'
+    ? (['GRN','ISSUE','TRANSFER_IN','TRANSFER_OUT','RETURN_CUSTOMER','RETURN_SUPPLIER',
+        'ADJUSTMENT_PROFIT','ADJUSTMENT_LOSS','PRODUCTION_INPUT','PRODUCTION_OUTPUT'].includes(movementType)
+        ? movementType : null)
+    : null
+
+  const invResult = await resolveInventorySetup(db, company_id, ipg_code, ppg_code, mtCode)
   if (!invResult) return blocked(
     [noInvSetupError(ipg_code, ppg_code)], warnings,
     { rule_type: 'inventory', input_ipg: ipg_code, input_ppg: ppg_code },
@@ -381,8 +417,9 @@ export async function resolveInventoryMovement(
     warnings,
   )
 
+  const traceRuleType = `inventory_${movementType.toLowerCase().replace(/[^a-z_]/g, '')}`
   const trace = buildTrace(
-    isIncrease ? 'inventory_receipt' : 'inventory_issue',
+    traceRuleType,
     null, ppg_code, ipg_code,
     Math.max(invResult.step, genResult.step),
     invResult.row.id,
