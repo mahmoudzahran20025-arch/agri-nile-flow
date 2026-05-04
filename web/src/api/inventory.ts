@@ -108,38 +108,50 @@ export const inventoryApi = {
     }>
   }>('/inventory/gl-preview', body)),
 
-  itemsMaster: (params?: {
+  itemsMaster: async (params?: {
     page?: number
     size?: number
     search?: string
     filter_status?: 'all' | 'missing_ppg' | 'missing_ipg' | 'below_reorder'
-  }) => {
+  }): Promise<{
+    data: Array<{
+      code:                    number
+      name:                    string
+      unit:                    string | null
+      category_id:             number | null
+      prod_posting_group_code: string | null
+      inv_posting_group_code:  string | null
+      standard_cost:           number | null
+      reorder_threshold:       number | null
+      category_name:           string | null
+      total_qty:               number
+      total_value:             number
+      warehouse_count:         number
+    }>
+    total:      number
+    page:       number
+    page_size:  number
+    page_count: number
+  }> => {
     const q = new URLSearchParams()
     if (params?.page)          q.set('page',          String(params.page))
     if (params?.size)          q.set('size',          String(params.size))
     if (params?.search)        q.set('search',        params.search)
     if (params?.filter_status) q.set('filter_status', params.filter_status)
     const qs = q.toString()
-    return unwrap(api.get<{
+    // Backend returns pagination fields (total, page, page_count) at top level
+    // alongside data[], so we bypass unwrap and return the full response body.
+    const raw = await api.get<unknown>(`/inventory/items-master${qs ? `?${qs}` : ''}`)
+    if (!raw.success) throw new Error((raw as { error?: string }).error || 'API error')
+    return raw as unknown as {
       data: Array<{
-        code:                    number
-        name:                    string
-        unit:                    string | null
-        category_id:             number | null
-        prod_posting_group_code: string | null
-        inv_posting_group_code:  string | null
-        standard_cost:           number | null
-        reorder_threshold:       number | null
-        category_name:           string | null
-        total_qty:               number
-        total_value:             number
-        warehouse_count:         number
+        code: number; name: string; unit: string | null; category_id: number | null
+        prod_posting_group_code: string | null; inv_posting_group_code: string | null
+        standard_cost: number | null; reorder_threshold: number | null
+        category_name: string | null; total_qty: number; total_value: number; warehouse_count: number
       }>
-      total:      number
-      page:       number
-      page_size:  number
-      page_count: number
-    }>(`/inventory/items-master${qs ? `?${qs}` : ''}`))
+      total: number; page: number; page_size: number; page_count: number
+    }
   },
 
   updateItemMaster: (code: number, body: {
