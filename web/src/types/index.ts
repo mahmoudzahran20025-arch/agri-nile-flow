@@ -40,6 +40,17 @@ export interface Supplier {
   activity:        string | null
   notes:           string | null
   is_active:       number
+  // ERP-enriched fields
+  phone?:                  string | null
+  email?:                  string | null
+  address?:                string | null
+  tax_number?:             string | null
+  credit_limit?:           number | null
+  payment_terms?:          number
+  supplier_type?:          string
+  bus_posting_group_code?: string | null
+  gl_account_code?:        number | null
+  // Aggregated
   total_credit?:   number
   total_debit?:    number
   current_balance?: number

@@ -23,6 +23,8 @@ export const suppliersApi = {
     api.post(`/suppliers/${code}/transactions`, body),
   postTransaction: (code: number, id: number) =>
     unwrap(api.patch<null>(`/suppliers/${code}/transactions/${id}/post`, {})),
+  deleteTransaction: (code: number, id: number) =>
+    unwrap(api.delete<null>(`/suppliers/${code}/transactions/${id}`)),
 
   aging: (asOf?: string) =>
     unwrap(api.get(`/suppliers/aging${asOf ? `?as_of=${asOf}` : ''}`)),

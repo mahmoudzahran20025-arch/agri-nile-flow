@@ -4,12 +4,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight, FileText, Plus, Filter, BarChart3, ShieldCheck,
   CreditCard, TrendingDown, Wallet, BookOpen, AlertTriangle,
-  CheckCircle2, Clock, Edit3, Download,
+  CheckCircle2, Clock, Edit3, Download, Trash2,
 } from 'lucide-react'
 import { suppliersApi, reportsApi, configApi, downloadCsv } from '../../api/client'
 import { usePermission } from '../../hooks/usePermission'
 import DataTable, { type Column } from '../../components/ui/DataTable'
 import AddSupplierTransactionModal from '../../components/forms/AddSupplierTransactionModal'
+import EditSupplierModal from '../../components/forms/EditSupplierModal'
 import type { Supplier, SupplierTransaction } from '../../types'
 import { useToast } from '../../contexts/ToastContext'
 
@@ -82,6 +83,7 @@ export default function SupplierDetailPage() {
   const queryClient      = useQueryClient()
   const [page,        setPage]       = useState(1)
   const [addOpen,     setAddOpen]    = useState(false)
+  const [editOpen,    setEditOpen]   = useState(false)
   const [tab,         setTab]        = useState<TabId>('statement')
   const [seasonId,    setSeasonId]   = useState<number | undefined>(undefined)
   const [filterMonth, setFilterMonth]= useState<number | undefined>(undefined)
@@ -139,6 +141,16 @@ export default function SupplierDetailPage() {
     onError: (err: { message?: string }) => toast(err.message || 'فشل ترحيل الحركة', 'error')
   })
 
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => suppliersApi.deleteTransaction(Number(code), id),
+    onSuccess: () => {
+      toast('تم حذف المسودة بنجاح', 'success')
+      queryClient.invalidateQueries({ queryKey: ['supplier-statement', code] })
+      queryClient.invalidateQueries({ queryKey: ['supplier-summary', code] })
+    },
+    onError: (err: { message?: string }) => toast(err.message || 'فشل حذف الحركة', 'error')
+  })
+
   const TXNS_COLS: Column<SupplierTransaction>[] = [
     { key: 'transaction_date', header: 'التاريخ', width: '100px',
       render: r => new Date(r.transaction_date).toLocaleDateString('en-US') },
@@ -191,17 +203,31 @@ export default function SupplierDetailPage() {
       }
     },
     {
-      key: 'actions', header: '', width: '50px',
+      key: 'actions', header: '', width: '80px',
       render: r => (
         r.status === 'draft' && (role === 'super_admin' || role === 'company_admin') ? (
-          <button
-            onClick={() => postMutation.mutate(r.id)}
-            disabled={postMutation.isPending}
-            className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-            title="اعتماد وترحيل"
-          >
-            <ShieldCheck size={16} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => postMutation.mutate(r.id)}
+              disabled={postMutation.isPending}
+              className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+              title="اعتماد وترحيل"
+            >
+              <ShieldCheck size={16} />
+            </button>
+            <button
+              onClick={() => {
+                if (window.confirm('هل تريد حذف هذه المسودة؟ لا يمكن التراجع عن هذا الإجراء.')) {
+                  deleteMutation.mutate(r.id)
+                }
+              }}
+              disabled={deleteMutation.isPending}
+              className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
+              title="حذف المسودة"
+            >
+              <Trash2 size={15} />
+            </button>
+          </div>
         ) : null
       )
     }
@@ -273,7 +299,7 @@ export default function SupplierDetailPage() {
             {canWrite('suppliers') && (
               <button
                 className="btn-secondary gap-2 text-xs"
-                onClick={() => setAddOpen(true)}
+                onClick={() => setEditOpen(true)}
               >
                 <Edit3 size={13} /> تعديل المورد
               </button>
@@ -317,6 +343,7 @@ export default function SupplierDetailPage() {
             label="دفعة نقدية"
             value={summary?.payments_count ?? 0}
             color="green"
+            onClick={() => navigate(`/treasury?supplier=${code}`)}
           />
           <SmartButton
             icon={<TrendingDown size={18} />}
@@ -469,6 +496,12 @@ export default function SupplierDetailPage() {
         onClose={() => setAddOpen(false)}
         supplierCode={Number(code)}
         supplierName={supplier?.name ?? ''}
+      />
+
+      <EditSupplierModal
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        supplier={supplier}
       />
     </div>
   )
