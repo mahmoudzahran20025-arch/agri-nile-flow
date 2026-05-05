@@ -14,6 +14,8 @@ export interface FixedAsset {
   is_active: number
   notes: string | null
   created_at: string
+  supplier_transaction_id: number | null
+  journal_entry_id: number | null
 }
 
 export interface DepreciationScheduleRow {

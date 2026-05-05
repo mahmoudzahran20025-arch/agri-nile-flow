@@ -124,15 +124,17 @@ suppliers.get('/:code/summary', permissionGuard('suppliers', 'read'), async (c) 
       WHERE company_id = ? AND supplier_code = ? AND direction = 'م' AND status = 'posted'
     `).bind(company_id, code).first<{ count: number; total: number }>(),
 
-    // GL Ledger balance (via journal_entry_lines on supplier account)
+    // GL Ledger balance — only entries linked to this supplier's transactions
     c.env.DB.prepare(`
       SELECT
         COALESCE(SUM(l.debit), 0)  AS total_debit,
         COALESCE(SUM(l.credit), 0) AS total_credit
       FROM journal_entry_lines l
       JOIN journal_entries e ON e.id = l.entry_id AND e.company_id = l.company_id
+      JOIN supplier_transactions st ON st.journal_entry_id = e.id AND st.company_id = e.company_id
       WHERE l.company_id = ? AND l.account_code = ? AND e.is_posted = 1
-    `).bind(company_id, apAccountCode).first<{ total_debit: number; total_credit: number }>(),
+        AND st.supplier_code = ?
+    `).bind(company_id, apAccountCode, code).first<{ total_debit: number; total_credit: number }>(),
   ])
 
   const openBalance = (invoices?.total_credit ?? 0) - (invoices?.total_debit ?? 0)
@@ -170,10 +172,20 @@ suppliers.get('/:code', permissionGuard('suppliers', 'read'), async (c) => {
 // POST /api/suppliers
 suppliers.post('/', financeOnly, async (c) => {
   const { company_id } = getUser(c)
-  const body = await c.req.json<{ code: number; name: string; activity?: string; notes?: string }>()
+  const body = await c.req.json<{
+    code: number; name: string; activity?: string; notes?: string
+    phone?: string; email?: string; address?: string
+    tax_number?: string; credit_limit?: number; payment_terms?: number
+    supplier_type?: string; bus_posting_group_code?: string
+  }>()
 
   if (!body.code || !body.name) {
     return c.json({ success: false, error: 'الكود والاسم مطلوبان' }, 400)
+  }
+
+  // Basic email validation
+  if (body.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) {
+    return c.json({ success: false, error: 'صيغة البريد الإلكتروني غير صحيحة' }, 400)
   }
 
   const exists = await c.env.DB
@@ -183,8 +195,19 @@ suppliers.post('/', financeOnly, async (c) => {
   if (exists) return c.json({ success: false, error: 'الكود مستخدم بالفعل' }, 409)
 
   await c.env.DB
-    .prepare('INSERT INTO suppliers (code, company_id, name, activity, notes) VALUES (?, ?, ?, ?, ?)')
-    .bind(body.code, company_id, body.name, body.activity ?? null, body.notes ?? null).run()
+    .prepare(`INSERT INTO suppliers
+      (code, company_id, name, activity, notes, phone, email, address,
+       tax_number, credit_limit, payment_terms, supplier_type, bus_posting_group_code)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .bind(
+      body.code, company_id, body.name,
+      body.activity ?? null, body.notes ?? null,
+      body.phone ?? null, body.email ?? null, body.address ?? null,
+      body.tax_number ?? null, body.credit_limit ?? null,
+      body.payment_terms ?? 30,
+      body.supplier_type ?? 'supplier',
+      body.bus_posting_group_code ?? null,
+    ).run()
 
   return c.json({ success: true, data: { code: body.code } }, 201)
 })
@@ -193,15 +216,32 @@ suppliers.post('/', financeOnly, async (c) => {
 suppliers.patch('/:code', financeOnly, async (c) => {
   const { company_id } = getUser(c)
   const code = Number(c.req.param('code'))
-  const body = await c.req.json<{ name?: string; activity?: string; notes?: string; is_active?: number }>()
+  const body = await c.req.json<{
+    name?: string; activity?: string; notes?: string; is_active?: number
+    phone?: string; email?: string; address?: string
+    tax_number?: string; credit_limit?: number; payment_terms?: number
+    supplier_type?: string; bus_posting_group_code?: string
+  }>()
+
+  if (body.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) {
+    return c.json({ success: false, error: 'صيغة البريد الإلكتروني غير صحيحة' }, 400)
+  }
 
   const fields: string[] = []
   const values: unknown[] = []
 
-  if (body.name     !== undefined) { fields.push('name = ?');      values.push(body.name) }
-  if (body.activity !== undefined) { fields.push('activity = ?');  values.push(body.activity) }
-  if (body.notes    !== undefined) { fields.push('notes = ?');     values.push(body.notes) }
-  if (body.is_active !== undefined){ fields.push('is_active = ?'); values.push(body.is_active) }
+  if (body.name      !== undefined) { fields.push('name = ?');      values.push(body.name) }
+  if (body.activity  !== undefined) { fields.push('activity = ?');  values.push(body.activity) }
+  if (body.notes     !== undefined) { fields.push('notes = ?');     values.push(body.notes) }
+  if (body.is_active !== undefined) { fields.push('is_active = ?'); values.push(body.is_active) }
+  if (body.phone     !== undefined) { fields.push('phone = ?');     values.push(body.phone) }
+  if (body.email     !== undefined) { fields.push('email = ?');     values.push(body.email) }
+  if (body.address   !== undefined) { fields.push('address = ?');   values.push(body.address) }
+  if (body.tax_number    !== undefined) { fields.push('tax_number = ?');    values.push(body.tax_number) }
+  if (body.credit_limit  !== undefined) { fields.push('credit_limit = ?');  values.push(body.credit_limit) }
+  if (body.payment_terms !== undefined) { fields.push('payment_terms = ?'); values.push(body.payment_terms) }
+  if (body.supplier_type !== undefined) { fields.push('supplier_type = ?'); values.push(body.supplier_type) }
+  if (body.bus_posting_group_code !== undefined) { fields.push('bus_posting_group_code = ?'); values.push(body.bus_posting_group_code) }
 
   if (!fields.length) return c.json({ success: false, error: 'لا توجد بيانات للتحديث' }, 400)
 
@@ -257,7 +297,7 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
   const code = Number(c.req.param('code'))
   const b    = await c.req.json<{
     transaction_date: string; entry_type: string; document_type?: string
-    document_number?: number; expense_category?: string; equipment?: string
+    document_number?: number; expense_category?: string; equipment_type_id?: number; equipment?: string
     unit?: string; quantity?: number; unit_price?: number; amount: number
     credit?: number; debit?: number; check_amount?: number; due_date?: string
     notes?: string; season_id?: number; center_code?: number; account_code?: number
@@ -322,6 +362,63 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
         .prepare('SELECT name FROM suppliers WHERE code = ? AND company_id = ?')
         .bind(code, company_id).first<{name:string}>()
 
+      // If equipment_type_id provided and this is an invoice (د), auto-create fixed asset
+      if (b.equipment_type_id && b.entry_type === 'د') {
+        const equipType = await c.env.DB.prepare(
+          'SELECT id, name, asset_nature, default_life_months FROM equipment_types WHERE id = ? AND company_id = ?'
+        ).bind(b.equipment_type_id, company_id).first<{
+          id: number; name: string; asset_nature: string; default_life_months: number
+        }>()
+
+        if (equipType) {
+          const assetCode = `${code}-${txnId}-${Date.now()}`
+          const depMethod = equipType.asset_nature === 'capital' ? 'straight_line' : 'straight_line'
+          const lifeMonths = equipType.default_life_months || 60
+
+          const assetResult = await c.env.DB.prepare(`
+            INSERT INTO fixed_assets
+            (company_id, asset_code, name, category, acquisition_date, cost, useful_life_months,
+             depreciation_method, supplier_transaction_id, equipment_type_id, center_code, field_id, created_by)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+          `).bind(
+            company_id, assetCode, equipType.name,
+            'equipment', b.transaction_date, b.amount, lifeMonths,
+            depMethod, txnId, b.equipment_type_id,
+            b.center_code ?? null, null, userId
+          ).run()
+
+          const assetId = assetResult.meta.last_row_id as number
+
+          // Generate depreciation schedules automatically
+          const acqDate = new Date(b.transaction_date)
+          const now = new Date()
+          const monthlyDep = lifeMonths > 0 ? Math.round((b.amount / lifeMonths) * 100) / 100 : 0
+
+          for (let y = acqDate.getFullYear(); y <= now.getFullYear(); y++) {
+            const startMonth = y === acqDate.getFullYear() ? acqDate.getMonth() + 1 : 1
+            const endMonth   = y === now.getFullYear() ? now.getMonth() + 1 : 12
+
+            for (let m = startMonth; m <= endMonth; m++) {
+              await c.env.DB.prepare(`
+                INSERT INTO depreciation_schedules
+                (company_id, asset_id, period_year, period_month, amount, status)
+                VALUES (?,?,?,?,?,?)
+              `).bind(company_id, assetId, y, m, monthlyDep, 'pending').run()
+            }
+          }
+
+          // Link supplier transaction to fixed asset (all equipment types).
+          // GL entry (DR purchases/asset account, CR AP) is handled exclusively by
+          // FinanceCore.resolveSupplierInvoice below — single source of truth.
+          // For capital acquisitions to debit account 11030001 (fixed equipment),
+          // configure the EQUIP_CAP product posting group in general_posting_setup
+          // with purch_account = '11030001'.
+          await c.env.DB.prepare(`
+            UPDATE fixed_assets SET supplier_transaction_id = ? WHERE id = ? AND company_id = ?
+          `).bind(txnId, assetId, company_id).run()
+        }
+      }
+
       if (b.entry_type === 'د') {
         await FinanceCore.resolveSupplierInvoice(c.env.DB, {
           company_id,
@@ -342,6 +439,26 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
           created_by: userId,
           center_code: b.center_code ?? undefined,
           supplier_code: code,
+        })
+
+        // Mirror payment into cash_transactions so treasury running balance stays accurate.
+        // skipSupplierMirror=true prevents an infinite loop (cash_movement would otherwise
+        // try to write back to supplier_transactions for the same transaction).
+        await FinanceCore.recordCashMovement(c.env.DB, {
+          company_id,
+          userId,
+          transaction_date: b.transaction_date,
+          direction: 'م',   // outflow — we are paying the supplier
+          amount: b.amount,
+          narration: `${b.expense_category ? b.expense_category + ' — ' : ''}سداد مستحقات ${supplierRow?.name ?? code}`,
+          supplier_code: code,
+          season_id: b.season_id ?? null,
+          center_code: b.center_code ?? null,
+          document_type: b.document_type ?? null,
+          document_number: b.document_number ?? null,
+          notes: b.notes ?? null,
+          status: 'posted',
+          skipSupplierMirror: true, // already in supplier_transactions above
         })
       }
     } catch (e: unknown) {
@@ -435,6 +552,36 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
     const message = e instanceof Error ? e.message : 'خطأ غير معروف'
     return c.json({ success: false, error: `فشل ترحيل الحركة: ${message}` }, 400)
   }
+})
+
+// DELETE /api/suppliers/:code/transactions/:id — Only drafts can be deleted
+suppliers.delete('/:code/transactions/:id', financeOnly, async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const code = Number(c.req.param('code'))
+  const id   = Number(c.req.param('id'))
+
+  const txn = await c.env.DB
+    .prepare(`SELECT id, amount, status FROM supplier_transactions
+              WHERE id = ? AND company_id = ? AND supplier_code = ?`)
+    .bind(id, company_id, code)
+    .first<{ id: number; amount: number; status: string }>()
+
+  if (!txn) return c.json({ success: false, error: 'الحركة غير موجودة' }, 404)
+  if (txn.status !== 'draft') {
+    return c.json({ success: false, error: 'لا يمكن حذف حركة مرحّلة — يجب أن تكون مسودة فقط' }, 409)
+  }
+
+  await c.env.DB
+    .prepare('DELETE FROM supplier_transactions WHERE id = ? AND company_id = ?')
+    .bind(id, company_id).run()
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'DELETE',
+    table_name: 'supplier_transactions', record_id: id,
+    new_value: { deleted_draft: true, supplier_code: code, amount: txn.amount },
+  })
+
+  return c.json({ success: true, data: null })
 })
 
 export default suppliers

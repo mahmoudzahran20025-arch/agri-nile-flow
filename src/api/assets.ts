@@ -5,13 +5,16 @@ import { FinanceCore } from '../lib/finance_core'
 
 const assets = new Hono<{ Bindings: Env }>()
 
-// GET /api/assets — list fixed assets
+// GET /api/assets — list fixed assets with GL linkage from supplier_transactions
 assets.get('/', permissionGuard('admin', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const { results } = await c.env.DB.prepare(`
-    SELECT * FROM fixed_assets
-    WHERE company_id = ?
-    ORDER BY acquisition_date DESC
+    SELECT fa.*, st.journal_entry_id
+    FROM fixed_assets fa
+    LEFT JOIN supplier_transactions st
+      ON st.id = fa.supplier_transaction_id AND st.company_id = fa.company_id
+    WHERE fa.company_id = ?
+    ORDER BY fa.acquisition_date DESC
   `).bind(company_id).all()
   return c.json({ success: true, data: results })
 })
