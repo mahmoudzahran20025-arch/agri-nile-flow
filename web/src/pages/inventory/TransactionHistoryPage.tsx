@@ -160,7 +160,7 @@ function TxDrawer({ tx, onClose }: { tx: TxRow; onClose: () => void }) {
                   <th className="text-right px-3 py-2.5 font-semibold text-slate-500">الكمية</th>
                   <th className="text-right px-3 py-2.5 font-semibold text-slate-500">سعر الوحدة</th>
                   <th className="text-right px-3 py-2.5 font-semibold text-slate-500">القيمة</th>
-                  <th className="text-right px-3 py-2.5 font-semibold text-slate-500">الرصيد</th>
+                  <th className="text-right px-3 py-2.5 font-semibold text-slate-500" title="الرصيد المحاسبي وقت تسجيل الحركة — قد لا يعكس التعديلات اللاحقة">الرصيد *</th>
                   <th className="text-center px-3 py-2.5 font-semibold text-slate-500">GL</th>
                 </tr>
               </thead>

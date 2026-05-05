@@ -74,6 +74,10 @@ const AdjustmentDetailPage     = lazy(() => import('./pages/inventory/Adjustment
 const ItemMasterPage           = lazy(() => import('./pages/inventory/ItemMasterPage'))
 const InventoryPostingHealthPage = lazy(() => import('./pages/inventory/InventoryPostingHealthPage'))
 const InventoryBalancesPage      = lazy(() => import('./pages/inventory/InventoryBalancesPage'))
+const PhysicalCountPage          = lazy(() => import('./pages/inventory/PhysicalCountPage'))
+const FixedAssetsPage            = lazy(() => import('./pages/inventory/FixedAssetsPage'))
+const WipBalancesPage            = lazy(() => import('./pages/inventory/WipBalancesPage'))
+const GlIntegrityAuditPage       = lazy(() => import('./pages/gl/GlIntegrityAuditPage'))
 const UsersPage                = lazy(() => import('./pages/users/UsersPage'))
 const ConfigPage               = lazy(() => import('./pages/config/ConfigPage'))
 const FieldsPage               = lazy(() => import('./pages/fields/FieldsPage'))
@@ -173,6 +177,9 @@ export default function App() {
         <Route path="inventory/cost-by-field"    element={<CostByFieldPage />} />
         <Route path="inventory/posting-health"   element={<InventoryPostingHealthPage />} />
         <Route path="inventory/balances-detail"  element={<InventoryBalancesPage />} />
+        <Route path="inventory/physical-count"   element={<PhysicalCountPage />} />
+        <Route path="inventory/fixed-assets"     element={<FixedAssetsPage />} />
+        <Route path="inventory/wip-balances"     element={<WipBalancesPage />} />
 
         {/* HR Module */}
         <Route path="hr/dashboard"            element={<HrDashboardPage />} />
@@ -221,10 +228,9 @@ export default function App() {
         <Route path="gl/period-close"      element={<PeriodCloseCockpit />} />
         {/* Sprint 3 Finance epics */}
         <Route path="gl/batch-posting"     element={<BatchPostingCenterPage />} />
+        <Route path="gl/integrity-audit"  element={<GlIntegrityAuditPage />} />
         {/* Keep direct routes alive for backward-compat / deep-linking */}
         <Route path="gl/periods"      element={<PeriodsPage />} />
-        <Route path="gl/classifier"   element={<Navigate to="/gl" replace />} />
-        <Route path="gl/integrations" element={<Navigate to="/gl" replace />} />
         <Route path="treasury/ap"     element={<APAgingPage />} />
 
         {/* Finance */}

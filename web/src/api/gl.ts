@@ -669,6 +669,20 @@ export const glApi = {
     detail: Array<{ from: string; to: string; label: string; rows_updated: number; skipped: boolean }>
     message: string
   }>('/gl/reconciliation/backfill-account-codes', {})),
+
+  orphans: () => unwrap(api.get<{
+    total: number
+    rows: Array<{
+      id: number
+      entry_date: string
+      description: string | null
+      ref_type: string | null
+      ref_id: number | null
+      debit_total: number
+      credit_total: number
+      diff: number
+    }>
+  }>('/gl/orphans')),
 }
 
 // ── Reconciliation types (shared with ReconciliationPage, PeriodCloseCockpit) ─

@@ -25,11 +25,14 @@ export default function AdjustmentDetailPage() {
     queryFn: () => configApi.items(),
   })
 
-  const { data: balances } = useQuery({
-    queryKey: ['inventory-balances', adjustment?.data?.warehouse_name],
-    queryFn: () => inventoryApi.balances(adjustment?.data?.warehouse_name),
+  // Use the paginated snapshot endpoint (inventory_balances) — NOT the legacy balances()
+  // which reads vw_stock_balances backed by stale inventory_movements.balance_qty running totals.
+  const { data: balancesResp } = useQuery({
+    queryKey: ['stock-balances', adjustment?.data?.warehouse_name],
+    queryFn: () => inventoryApi.balancesList({ warehouse: adjustment!.data!.warehouse_name, size: 200 }),
     enabled: !!adjustment?.data?.warehouse_name,
   })
+  const balances = balancesResp?.data ?? []
 
   useEffect(() => {
     if (adjustment?.data?.lines) {
@@ -72,7 +75,7 @@ export default function AdjustmentDetailPage() {
   const addLine = () => {
     if (!addingLine.item_code) return
     const item = items?.find((i: any) => i.code === Number(addingLine.item_code))
-    const balance = balances?.find((b: any) => b.item_code === Number(addingLine.item_code)) as any
+    const balance = balances.find((b: any) => b.item_code === Number(addingLine.item_code)) as any
     
     const newLine = {
       item_code: Number(addingLine.item_code),

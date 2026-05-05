@@ -146,9 +146,9 @@ export default function JournalEntriesPage() {
 
   const kpiItems: KpiItem[] = [
     { id: 'total', label: 'TOTAL ENTRIES', value: total.toLocaleString('en-US') },
-    { id: 'posted', label: 'POSTED', value: rawEntries.filter(e => e.is_posted).length, variant: 'success' },
-    { id: 'pending', label: 'PENDING REVIEW', value: rawEntries.filter(e => !e.is_posted).length, variant: 'warning' },
-    { id: 'balance', label: 'GL BALANCE CHECK', value: Math.abs(totals.debit - totals.credit) < 0.01 ? 'BALANCED' : 'UNBALANCED', variant: Math.abs(totals.debit - totals.credit) < 0.01 ? 'success' : 'warning' },
+    { id: 'posted', label: 'POSTED (PAGE)', value: rawEntries.filter(e => e.is_posted).length, variant: 'success' },
+    { id: 'pending', label: 'PENDING (PAGE)', value: rawEntries.filter(e => !e.is_posted).length, variant: 'warning' },
+    { id: 'balance', label: 'GL BALANCE (PAGE)', value: Math.abs(totals.debit - totals.credit) < 0.01 ? 'BALANCED' : 'UNBALANCED', variant: Math.abs(totals.debit - totals.credit) < 0.01 ? 'success' : 'warning' },
   ];
 
   const actions: CommandAction[] = [

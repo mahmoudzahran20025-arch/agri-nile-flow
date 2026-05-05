@@ -59,6 +59,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { label: 'Reconciliation',     path: '/gl/reconciliation',   icon: <ArrowLeftRight size={18} /> },
       { label: 'Period Close',       path: '/gl/period-close',     icon: <CalendarDays   size={18} /> },
       { label: 'Health & Integrity', path: '/gl/health-integrity', icon: <ShieldCheck    size={18} /> },
+      { label: 'GL Integrity Audit', path: '/gl/integrity-audit',  icon: <GitBranch      size={18} /> },
     ],
   },
   {
@@ -85,8 +86,11 @@ const navSections: { title: string; items: NavItem[] }[] = [
     items: [
       { label: 'Movements',        path: '/inventory/movements',     icon: <Box       size={18} /> },
       { label: 'Transactions',      path: '/inventory/transactions',  icon: <FileText  size={18} /> },
-      { label: 'Warehouse Stocks',  path: '/inventory',               icon: <Warehouse size={18} /> },
-      { label: 'Items',             path: '/inventory/items',         icon: <FileCheck size={18} /> },
+      { label: 'Warehouse Balances', path: '/inventory',               icon: <Warehouse size={18} /> },
+        { label: 'Physical Count',     path: '/inventory/physical-count', icon: <ClipboardList size={18} /> },
+      { label: 'Fixed Assets',      path: '/inventory/fixed-assets',   icon: <TrendingUp    size={18} /> },
+      { label: 'WIP Balances',      path: '/inventory/wip-balances',   icon: <GitBranch     size={18} /> },
+      { label: 'Items',             path: '/inventory/items',          icon: <FileCheck     size={18} /> },
     ],
   },
   {

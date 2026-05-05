@@ -401,6 +401,24 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     if (field?.center_code) centerCode = field.center_code
   }
 
+  // Idempotency guard: reject before any inserts if document already exists.
+  if (b.document_number) {
+    const existingDoc = await c.env.DB
+      .prepare(
+        `SELECT id FROM inventory_movements
+         WHERE company_id = ? AND document_number = ? AND warehouse = ? AND movement_type = ?
+         LIMIT 1`
+      )
+      .bind(company_id, b.document_number, b.warehouse, b.movement_type)
+      .first<{ id: number }>()
+    if (existingDoc) {
+      return c.json(
+        { success: false, error: `المستند رقم ${b.document_number} مسجّل مسبقاً لهذا المخزن ونوع الحركة`, code: 'DUPLICATE_DOCUMENT' },
+        409
+      )
+    }
+  }
+
   const date     = new Date(b.movement_date)
   const year     = date.getFullYear()
   const month    = date.getMonth() + 1
@@ -663,18 +681,14 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
   const periodId = await getOpenPeriod(c.env.DB, company_id, b.movement_date)
   if (!periodId) return c.json({ success: false, error: 'الفترة المالية مغلقة' }, 400)
 
-  // O(1) balance read from snapshot table for source warehouse.
-  const srcBal = await c.env.DB.prepare(
-    `SELECT balance_qty, balance_value FROM inventory_balances
-     WHERE company_id = ? AND item_code = ? AND warehouse = ?`
-  ).bind(company_id, b.item_code, b.from_warehouse)
-    .first<{ balance_qty: number; balance_value: number }>()
+  // Staleness-aware balance read for source warehouse — heals stale snapshots automatically.
+  const srcBal = await readInventoryBalance(c.env.DB, company_id, b.item_code, b.from_warehouse)
 
-  if (!srcBal || srcBal.balance_qty < b.quantity) {
+  if (srcBal.balance_qty < b.quantity) {
     return c.json({ success: false, error: 'الرصيد في مخزن المصدر غير كافٍ' }, 409)
   }
 
-  const avgPrice   = srcBal.balance_value / srcBal.balance_qty
+  const avgPrice   = srcBal.balance_qty > 0 ? srcBal.balance_value / srcBal.balance_qty : 0
   const totalValue = b.quantity * avgPrice
 
   try {
@@ -689,15 +703,11 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
     throw e
   }
 
-  // O(1) balance read for destination warehouse.
-  const dstBal = await c.env.DB.prepare(
-    `SELECT balance_qty, balance_value FROM inventory_balances
-     WHERE company_id = ? AND item_code = ? AND warehouse = ?`
-  ).bind(company_id, b.item_code, b.to_warehouse)
-    .first<{ balance_qty: number; balance_value: number }>()
+  // Staleness-aware balance read for destination warehouse.
+  const dstBal = await readInventoryBalance(c.env.DB, company_id, b.item_code, b.to_warehouse)
 
-  const dstPrevQty = dstBal?.balance_qty ?? 0
-  const dstPrevVal = dstBal?.balance_value ?? 0
+  const dstPrevQty = dstBal.balance_qty
+  const dstPrevVal = dstBal.balance_value
   
   // Use a more robust batch key
   const batchKey = `trf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
@@ -959,7 +969,9 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
   ).bind(company_id, `${batchKey}_%_out`).all<{ id: number; item_code: number; local_id: string; value_out: number }>()
 
   for (const ins of inserted) {
-    const idx = Number(ins.local_id.split('_')[2])
+    // local_id format: trf_batch_{timestamp}_{rand}_{i}_out — index is second-to-last segment
+    const parts = ins.local_id.split('_')
+    const idx = Number(parts[parts.length - 2])
     const item = b.items[idx]
     if (!item) continue
     const totVal = ins.value_out ?? 0

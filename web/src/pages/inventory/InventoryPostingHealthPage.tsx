@@ -55,15 +55,10 @@ export default function InventoryPostingHealthPage() {
     staleTime: 30_000,
   })
 
-  // Legacy unlinked movements breakdown (kept for backward compat)
-  const { data: movData } = useQuery({
-    queryKey: ['inventory', 'movements', { page: 1, size: 200 }],
-    queryFn:  () => inventoryApi.list({ page: 1, size: 200 }),
-    staleTime: 60_000,
-  })
-  const movRows = (movData as any)?.data ?? []
-  const unlinkedZeroValue   = movRows.filter((r: any) => !r.journal_entry_id && (r.value_in + r.value_out) === 0)
-  const unlinkedWithValue   = movRows.filter((r: any) => !r.journal_entry_id && (r.value_in + r.value_out) > 0)
+  // Use counts from postingHealth (already fetched above) — no extra 200-movement network call needed.
+  const movSummary        = (data as any)?.data?.movement ?? {}
+  const unlinkedZeroCount  = movSummary.unlinked_zero     ?? 0
+  const unlinkedValueCount = movSummary.unlinked_non_zero ?? 0
 
   const health  = data?.data    ?? []
   const summary = data?.summary ?? { total_combos: 0, covered: 0, exact_setup: 0, missing_setup: 0, health_pct: 100 }
@@ -135,7 +130,7 @@ export default function InventoryPostingHealthPage() {
       </div>
 
       {/* GL Linkage panel */}
-      {(unlinkedZeroValue.length > 0 || unlinkedWithValue.length > 0) && (
+      {(unlinkedZeroCount > 0 || unlinkedValueCount > 0) && (
         <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
           <div className="px-5 py-3.5 border-b border-slate-100 flex items-center gap-2">
             <Link2Off size={16} className="text-slate-400" />
@@ -148,7 +143,7 @@ export default function InventoryPostingHealthPage() {
                 <Tag size={16} className="text-amber-600 mt-0.5 shrink-0" />
                 <div className="flex-1">
                   <p className="font-semibold text-amber-800 text-sm">
-                    {unlinkedZeroValue.length} حركة بسعر صفر
+                    {unlinkedZeroCount} حركة بسعر صفر
                   </p>
                   <p className="text-xs text-amber-700 mt-1">
                     القيمة المالية = 0 ← لا قيد مطلوب. يُنصح بمراجعة أسعار هذه الأصناف وتحديثها.
@@ -164,13 +159,13 @@ export default function InventoryPostingHealthPage() {
             </div>
 
             {/* With value — real gap */}
-            {unlinkedWithValue.length > 0 ? (
+            {unlinkedValueCount > 0 ? (
               <div className="rounded-lg border border-red-200 bg-red-50 p-4">
                 <div className="flex items-start gap-3">
                   <AlertTriangle size={16} className="text-red-600 mt-0.5 shrink-0" />
                   <div className="flex-1">
                     <p className="font-semibold text-red-800 text-sm">
-                      {unlinkedWithValue.length} حركة بقيمة بدون قيد — فجوة محاسبية
+                      {unlinkedValueCount} حركة بقيمة بدون قيد — فجوة محاسبية
                     </p>
                     <p className="text-xs text-red-700 mt-1">
                       هذه الحركات لها قيمة مالية لكن لم يُنشأ لها قيد GL. يحتاج تدخلاً.

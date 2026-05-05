@@ -26,15 +26,12 @@ export const inventoryApi = {
     field_id?: number; season_id?: number; work_order_id?: number
   }) => unwrapPaginated<unknown>(api.get(paginatedUrl('/inventory/movements', p))),
 
-  create: (body: unknown) => api.post('/inventory/movements', body),
-
   createBatch: (body: {
     movement_date:    string
     warehouse:        string
     movement_type:    string
     supplier_code?:   number
     document_number?: number
-    season_id?:       number
     field_id?:        number
     work_order_id?:   number
     notes?:           string
@@ -42,11 +39,6 @@ export const inventoryApi = {
     center_code?:     number
     items: Array<{ item_code: number; quantity: number; unit_price?: number; notes?: string }>
   }) => api.post('/inventory/movements/batch', body),
-
-  transfer: (body: {
-    movement_date: string; item_code: number; quantity: number
-    from_warehouse: string; to_warehouse: string; notes?: string
-  }) => api.post('/inventory/movements/transfer', body),
 
   transferBatch: (body: {
     movement_date: string; from_warehouse: string; to_warehouse: string; notes?: string
@@ -265,9 +257,20 @@ export const inventoryApi = {
 
   // ── Phase 4: Inventory Balances ─────────────────────────────────────────────
 
-  balancesList: (p: {
+  balancesList: async (p: {
     page?: number; size?: number; warehouse?: string; search?: string; stale?: boolean
-  } = {}) => {
+  } = {}): Promise<{
+    data: Array<{
+      item_code: number; item_name: string | null; unit: string | null
+      category_id: number | null; ppg: string | null; ipg: string | null
+      standard_cost: number | null; reorder_threshold: number | null
+      warehouse: string; balance_qty: number; balance_value: number
+      is_stale: number; updated_at: string | null
+    }>
+    warehouses: string[]
+    pagination: { page: number; size: number; total: number; pages: number }
+    stale_count: number
+  }> => {
     const params = new URLSearchParams()
     if (p.page)      params.set('page',      String(p.page))
     if (p.size)      params.set('size',      String(p.size))
@@ -275,7 +278,11 @@ export const inventoryApi = {
     if (p.search)    params.set('search',    p.search)
     if (p.stale)     params.set('stale',     '1')
     const qs = params.toString()
-    return unwrap(api.get<{
+    // The backend returns { success, data: rows[], warehouses, pagination, stale_count }
+    // We must NOT unwrap() here — unwrap() would strip to just res.data (the rows array),
+    // breaking all consumers that access balancesResp?.data, .warehouses, .pagination.
+    const res = await api.get<unknown>(`/inventory/stock-balances${qs ? '?' + qs : ''}`) as {
+      success: boolean; error?: string
       data: Array<{
         item_code: number; item_name: string | null; unit: string | null
         category_id: number | null; ppg: string | null; ipg: string | null
@@ -286,7 +293,9 @@ export const inventoryApi = {
       warehouses: string[]
       pagination: { page: number; size: number; total: number; pages: number }
       stale_count: number
-    }>(`/inventory/balances${qs ? '?' + qs : ''}`))
+    }
+    if (!res.success) throw new Error(res.error || 'API error')
+    return res
   },
 
   balanceItem: (code: number) =>

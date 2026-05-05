@@ -32,7 +32,7 @@ export default function ReportsPage() {
   const { data: cashflow }   = useQuery({ queryKey: ['dashboard', 'cashflow12'], queryFn: () => dashboardApi.monthlyCashflow(12) as Promise<{ year: number; month: number; cash_in: number; cash_out: number }[]> })
   const { data: byCrop }     = useQuery({ queryKey: ['dashboard', 'crop', seasonId], queryFn: () => dashboardApi.costByCrop(seasonId) as Promise<{ crop: string | null; total_cost: number }[]> })
   const { data: suppliers }  = useQuery({ queryKey: ['suppliers', 1, ''], queryFn: () => suppliersApi.list({ page: 1, size: 200 }) as Promise<{ data: Supplier[] }> })
-  const { data: balances }   = useQuery({ queryKey: ['inventory', 'balances', null], queryFn: () => inventoryApi.balances() })
+  const { data: balancesResp } = useQuery({ queryKey: ['inventory', 'stock-balances'], queryFn: () => inventoryApi.balancesList({ size: 2000 }) })
   const { data: partners }   = useQuery({ queryKey: ['partners'], queryFn: treasuryApi.partners })
   const { data: agingRaw }   = useQuery({
     queryKey: ['suppliers-aging', agingAsOf],
@@ -41,7 +41,7 @@ export default function ReportsPage() {
 
   const cashflowData = (cashflow ?? [])
   const suppliersData = suppliers?.data ?? []
-  const balancesData  = (balances ?? []) as { warehouse: string; item_name: string; unit: string; balance_qty: number; balance_value: number }[]
+  const balancesData  = (balancesResp?.data ?? []) as { warehouse: string; item_name: string | null; unit: string | null; balance_qty: number; balance_value: number }[]
   const partnersData  = (partners ?? []) as { name: string; capital_paid: number; current_acct: number }[]
 
   // Warehouse totals
@@ -65,7 +65,7 @@ export default function ReportsPage() {
           <button className="btn-secondary gap-2" onClick={() => downloadCsv('/suppliers', 'أرصدة_الموردين')}>
             <Download size={14} /> موردين
           </button>
-          <button className="btn-secondary gap-2" onClick={() => downloadCsv('/inventory', 'أرصدة_المخازن')}>
+          <button className="btn-secondary gap-2" onClick={() => downloadCsv('/inventory/stock-balances', 'أرصدة_المخازن')}>
             <Download size={14} /> مخزون
           </button>
           <button className="btn-secondary gap-2" onClick={() => downloadCsv('/treasury', 'دفتر_اليومية', { year: new Date().getFullYear() })}>

@@ -202,9 +202,9 @@ export async function postFromBusinessEvent(
 
   // Reject posting into a locked GL period
   const lockedPeriod = await db.prepare(
-    `SELECT id, name FROM gl_periods
+    `SELECT id, name FROM financial_periods
      WHERE company_id = ? AND is_closed = 1
-       AND period_start <= ? AND period_end >= ?
+       AND start_date <= ? AND end_date >= ?
      LIMIT 1`
   ).bind(opts.company_id, opts.event_date, opts.event_date)
     .first<{ id: number; name: string }>()

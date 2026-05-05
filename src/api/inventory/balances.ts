@@ -14,8 +14,11 @@ const balances = new Hono<{ Bindings: Env }>()
 // ── GET /balances ─────────────────────────────────────────────────────────────
 // Returns current stock balances from the snapshot table (O(1) per row).
 // Filters: ?warehouse=&item_code=&zero=1 (include zero balances)
+// Route is /stock-balances (not /balances) to avoid conflict with the legacy
+// GET /balances endpoint in items.ts which is consumed by WarehouseBalancesPage,
+// ChartsPage, and ReportsPage.
 
-balances.get('/balances', permissionGuard('inventory', 'read'), async (c) => {
+balances.get('/stock-balances', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const page      = Math.max(1, Number(c.req.query('page') ?? 1))
   const size      = Math.min(Math.max(Number(c.req.query('size') ?? 50), 1), 200)

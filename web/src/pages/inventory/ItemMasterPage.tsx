@@ -6,7 +6,7 @@
  *   1. الأصناف — searchable table with PPG/IPG badges, balances
  *   2. الإعداد المحاسبي — per-item accounting field editor
  */
-import { useState, useCallback } from 'react'
+import { useState, useCallback, Fragment } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
@@ -321,7 +321,7 @@ export default function ItemMasterPage() {
               className="text-xl font-bold text-amber-700 hover:underline"
               onClick={() => changeFilter('missing_ppg')}
             >
-              {health?.missing_ppg ?? '—'}
+              {health?.missing_setup ?? '—'}
             </button>
           </div>
         </div>
@@ -391,8 +391,8 @@ export default function ItemMasterPage() {
                   const hasIssue  = !item.prod_posting_group_code || !item.inv_posting_group_code
                   const isExpanded = expandedCode === item.code
                   return (
-                    <>
-                      <tr key={item.code}
+                    <Fragment key={item.code}>
+                      <tr
                         className={`hover:bg-slate-50 transition-colors ${hasIssue ? 'bg-amber-50/50' : ''}`}>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
@@ -434,7 +434,7 @@ export default function ItemMasterPage() {
                         </td>
                       </tr>
                       {isExpanded && (
-                        <tr key={`${item.code}-exp`} className="bg-slate-50/70">
+                        <tr className="bg-slate-50/70">
                           <td colSpan={8} className="px-6 py-3">
                             <div className="grid grid-cols-3 gap-4 text-sm">
                               <div>
@@ -453,7 +453,7 @@ export default function ItemMasterPage() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   )
                 })}
               </tbody>

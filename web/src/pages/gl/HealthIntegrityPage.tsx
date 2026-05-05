@@ -1,7 +1,9 @@
-import { Download, Filter, ShieldAlert } from 'lucide-react'
+import { Download, Filter, ShieldAlert, Unlink } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { useGlAuditLog, useGlIntegrityIssues, useGlSystemIntegrityScore } from '../../hooks/useGlFinance'
+import { glApi } from '../../api/gl'
 import SectionCard from '../../components/ui/SectionCard'
 import StatusBadge from '../../components/ui/StatusBadge'
 
@@ -22,6 +24,11 @@ export default function HealthIntegrityPage() {
   const { data: scoreData } = useGlSystemIntegrityScore()
   const { data: issuesData, isLoading: issuesLoading } = useGlIntegrityIssues(showDetailed)
   const { data: auditData } = useGlAuditLog({ page: 1, size: 15 })
+  const { data: orphansData, isLoading: orphansLoading } = useQuery({
+    queryKey: ['gl-orphans'],
+    queryFn:  glApi.orphans,
+    staleTime: 60_000,
+  })
 
   const filtered = useMemo(() => {
     const rows = issuesData?.checks ?? []
@@ -121,6 +128,48 @@ export default function HealthIntegrityPage() {
               <div className="text-[12px] text-[#1D9E75] font-semibold">No issues for current filter.</div>
             )}
           </div>
+        </SectionCard>
+
+        <SectionCard
+          title="Orphan Journal Entries"
+          subtitle={`Entries with unbalanced debit/credit · ${orphansData?.total ?? 0} found`}
+          icon={<Unlink size={16} />}
+          className="xl:col-span-3"
+        >
+          {orphansLoading && <div className="text-[12px] text-slate-500">Loading orphans...</div>}
+          {!orphansLoading && (orphansData?.rows ?? []).length === 0 && (
+            <div className="text-[12px] text-[#1D9E75] font-semibold">No orphan entries found.</div>
+          )}
+          {!orphansLoading && (orphansData?.rows ?? []).length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[12px]">
+                <thead>
+                  <tr className="text-slate-500 font-medium border-b border-slate-100">
+                    <th className="text-left pb-2 pr-4">ID</th>
+                    <th className="text-left pb-2 pr-4">Date</th>
+                    <th className="text-left pb-2 pr-4">Description</th>
+                    <th className="text-left pb-2 pr-4">Ref</th>
+                    <th className="text-right pb-2 pr-4">Debit</th>
+                    <th className="text-right pb-2 pr-4">Credit</th>
+                    <th className="text-right pb-2">Diff</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {(orphansData?.rows ?? []).map(row => (
+                    <tr key={row.id} className="hover:bg-slate-50">
+                      <td className="py-1.5 pr-4 font-mono text-slate-700">#{row.id}</td>
+                      <td className="py-1.5 pr-4 text-slate-600">{row.entry_date}</td>
+                      <td className="py-1.5 pr-4 text-slate-700 max-w-[200px] truncate">{row.description ?? '—'}</td>
+                      <td className="py-1.5 pr-4 text-slate-500">{row.ref_type ?? '—'}{row.ref_id ? ` #${row.ref_id}` : ''}</td>
+                      <td className="py-1.5 pr-4 text-right font-mono">{row.debit_total.toLocaleString()}</td>
+                      <td className="py-1.5 pr-4 text-right font-mono">{row.credit_total.toLocaleString()}</td>
+                      <td className="py-1.5 text-right font-mono text-red-600 font-semibold">{row.diff.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </SectionCard>
 
         <SectionCard

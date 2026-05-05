@@ -23,7 +23,7 @@ governance.post('/gl-preview', permissionGuard('inventory', 'read'), async (c) =
   const b = await c.req.json<{
     warehouse:      string
     item_code:      number
-    movement_type:  'اضافة' | 'صرف'
+    movement_type:  string
     quantity:       number
     unit_price?:    number
     payment_method?: 'cash' | 'credit'
@@ -71,11 +71,12 @@ governance.post('/gl-preview', permissionGuard('inventory', 'read'), async (c) =
     expense_account: string | null
   }>()
 
-  // 4. Compute effective unit price
+  // 4. Compute effective unit price from inventory_balances snapshot (authoritative).
+  // Do NOT read balance_qty from inventory_movements — it is a stale running total
+  // that becomes incorrect after any dedup or retroactive insert.
   const lastRow = await c.env.DB.prepare(
-    `SELECT balance_qty, balance_value FROM inventory_movements
-     WHERE company_id = ? AND item_code = ? AND warehouse = ?
-     ORDER BY movement_date DESC, id DESC LIMIT 1`
+    `SELECT balance_qty, balance_value FROM inventory_balances
+     WHERE company_id = ? AND item_code = ? AND warehouse = ?`
   ).bind(company_id, b.item_code, b.warehouse).first<{ balance_qty: number; balance_value: number }>()
 
   const avgCost = (lastRow?.balance_qty ?? 0) > 0
@@ -99,8 +100,10 @@ governance.post('/gl-preview', permissionGuard('inventory', 'read'), async (c) =
   const supplierAcc = '2120'  // Accounts payable
   const cashAcc     = '14010101'
 
-  if (b.movement_type === 'اضافة') {
-    // Purchase receipt: DR Inventory / CR Supplier (credit) or CR Cash (cash)
+  const isInbound = ['GRN', 'اضافة', 'RETURN_CUSTOMER', 'ADJUSTMENT_PROFIT', 'TRANSFER_IN', 'PRODUCTION_OUTPUT'].includes(b.movement_type)
+
+  if (isInbound) {
+    // Purchase receipt / inbound: DR Inventory / CR Supplier (credit) or CR Cash (cash)
     lines.push({ side: 'DR', account_code: invAcc,   account_label: 'أصول - المخزون',       amount: value, narration: `استلام ${item.name} - ${b.warehouse}` })
     if (b.payment_method === 'cash') {
       lines.push({ side: 'CR', account_code: cashAcc,     account_label: 'صندوق النقدية',      amount: value, narration: `دفع نقدي لـ ${item.name}` })
@@ -108,7 +111,7 @@ governance.post('/gl-preview', permissionGuard('inventory', 'read'), async (c) =
       lines.push({ side: 'CR', account_code: supplierAcc, account_label: 'دائنو الموردين (2120)', amount: value, narration: `ذمة مورد - ${item.name}` })
     }
   } else {
-    // Issue: DR COGS / CR Inventory
+    // Issue / outbound: DR COGS / CR Inventory
     lines.push({ side: 'DR', account_code: cogsAcc,  account_label: 'تكلفة المبيعات (COGS)', amount: value, narration: `صرف ${item.name} - ${b.warehouse}` })
     lines.push({ side: 'CR', account_code: invAcc,   account_label: 'أصول - المخزون',        amount: value, narration: `إخراج مخزون ${item.name}` })
   }

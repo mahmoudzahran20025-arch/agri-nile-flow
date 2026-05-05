@@ -279,7 +279,7 @@ export default function ItemCardPage() {
           {lastRow && (
             <p className="text-xs text-slate-400 mt-3 text-center">
               آخر حركة: {DATE_AR(lastRow.movement_date)} ·
-              الرصيد الحالي: <span className="font-semibold text-slate-600">{NUM(lastRow.balance_qty)} {item?.unit ?? ''}</span>
+              الرصيد الحالي: <span className="font-semibold text-slate-600">{NUM(stockData?.total_qty)} {item?.unit ?? ''}</span>
             </p>
           )}
         </div>
@@ -381,11 +381,11 @@ export default function ItemCardPage() {
                   <td className="px-3 py-2.5 text-green-700 text-center">{NUM(totalIn)}</td>
                   <td className="px-3 py-2.5 text-red-600  text-center">{NUM(totalOut)}</td>
                   <td className="px-3 py-2.5 text-center">
-                    <span className={lastRow && (lastRow.balance_qty ?? 0) > 0 ? 'text-brand-700' : 'text-slate-400'}>
-                      {NUM(lastRow?.balance_qty)}
+                    <span className={(stockData?.total_qty ?? 0) > 0 ? 'text-brand-700' : 'text-slate-400'}>
+                      {NUM(stockData?.total_qty)}
                     </span>
                   </td>
-                  <td className="px-3 py-2.5 text-brand-700 text-center">{EGP(lastRow?.balance_value)}</td>
+                  <td className="px-3 py-2.5 text-brand-700 text-center">{EGP(stockData?.total_value)}</td>
                   <td colSpan={2}></td>
                 </tr>
               </tfoot>

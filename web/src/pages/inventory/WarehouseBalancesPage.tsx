@@ -6,7 +6,7 @@ import { inventoryApi, downloadCsv } from '../../api/client'
 import AddInventoryBatchModal from '../../components/forms/AddInventoryBatchModal'
 import InternalTransferModal from '../../components/forms/InternalTransferModal'
 import { TableSkeleton } from '../../components/ui/Skeleton'
-import type { InventoryBalance } from '../../types'
+import type { } from '../../types'
 import { usePermission } from '../../hooks/usePermission'
 
 function egp(n: number) {
@@ -49,13 +49,15 @@ export default function WarehouseBalancesPage() {
     staleTime: 120_000,
   })
 
-  const { data: balances, isLoading } = useQuery({
-    queryKey: ['inventory', 'balances', activeWarehouse],
-    queryFn:  () => inventoryApi.balances(activeWarehouse ?? undefined) as Promise<InventoryBalance[]>,
+  const { data: balancesResp, isLoading } = useQuery({
+    queryKey: ['inventory', 'stock-balances', activeWarehouse],
+    queryFn:  () => inventoryApi.balancesList({ warehouse: activeWarehouse ?? undefined, size: 2000 }),
   })
+  const balances = balancesResp?.data
 
   // Group by warehouse
-  const grouped = (balances ?? []).reduce<Record<string, InventoryBalance[]>>((acc, row) => {
+  type BalRow = NonNullable<typeof balances>[number]
+  const grouped = (balances ?? []).reduce<Record<string, BalRow[]>>((acc, row) => {
     const wh = row.warehouse ?? 'غير محدد'
     if (!acc[wh]) acc[wh] = []
     acc[wh].push(row)
@@ -126,21 +128,24 @@ export default function WarehouseBalancesPage() {
   return (
     <div className="space-y-5">
       <div className="page-header">
-        <h1 className="page-title">أرصدة المخازن</h1>
+        <div>
+          <h1 className="page-title">أرصدة المخازن</h1>
+          <p className="text-xs text-slate-500 mt-1">لوحة الأرصدة الحالية حسب المخزن مع مؤشرات التكامل المحاسبي</p>
+        </div>
         <div className="flex items-center gap-2">
           <button
             className="btn-secondary gap-2"
-            onClick={() => downloadCsv('/inventory', 'أرصدة_المخازن')}
+            onClick={() => downloadCsv('/inventory/stock-balances', 'أرصدة_المخازن')}
           >
             <Download size={16} />تصدير CSV
           </button>
           {canWrite('inventory') && (
             <>
-              <button 
-                className="btn-secondary gap-2 border-indigo-200 text-indigo-700 hover:bg-indigo-50" 
+              <button
+                className="btn-secondary gap-2"
                 onClick={() => setTransferData({ open: true, itemCode: 0, itemName: '', sourceWarehouse: '', maxQuantity: 0 })}
               >
-                <ArrowRightLeft size={16} /> تحويل مخزني
+                <ArrowRightLeft size={16} /> تحويل بين المخازن
               </button>
               <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
                 <Plus size={16} />

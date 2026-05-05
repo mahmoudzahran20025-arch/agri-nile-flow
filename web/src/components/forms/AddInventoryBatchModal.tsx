@@ -2,10 +2,10 @@ import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import {
   Plus, Trash2, AlertTriangle, CheckCircle,
-  ChevronRight, ChevronLeft, Package, Warehouse, Info, Leaf, BookOpen,
+  ChevronRight, ChevronLeft, Package, Warehouse, Info, BookOpen,
 } from 'lucide-react'
 import Modal from '../ui/Modal'
-import { inventoryApi, configApi, fieldsApi, operationsApi, suppliersApi } from '../../api/client'
+import { inventoryApi, configApi, suppliersApi } from '../../api/client'
 import type { Item } from '../../types'
 
 // ─── Types ────────────────────────────────────────────────────
@@ -31,9 +31,6 @@ interface BatchForm {
   supplier_code:   string
   document_number: string
   notes:           string
-  season_id:       string
-  field_id:        string
-  work_order_id:   string
   center_code:     string
   payment_method:  'cash' | 'credit'
 }
@@ -49,6 +46,16 @@ interface Props {
 const today     = () => new Date().toISOString().slice(0, 10)
 const uid       = () => Math.random().toString(36).slice(2, 9)
 const newLine   = (): LineItem => ({ id: uid(), item_code: '', quantity: '', unit_price: '', notes: '' })
+
+// All 6 supported movement types — matches the backend isSupportedMovementType() list
+const MOVEMENT_TYPES = [
+  { value: 'GRN',               label: 'استلام بضاعة',   sub: 'وارد من مورد',    icon: '↓', isIn: true,  border: 'border-green-500',   bg: 'bg-green-50',   text: 'text-green-700'   },
+  { value: 'RETURN_CUSTOMER',   label: 'مرتجع عميل',    sub: 'مردود للمخزن',   icon: '↩', isIn: true,  border: 'border-teal-500',    bg: 'bg-teal-50',    text: 'text-teal-700'    },
+  { value: 'ADJUSTMENT_PROFIT', label: 'تسوية زيادة',   sub: 'فائض جردي',      icon: '+', isIn: true,  border: 'border-emerald-500', bg: 'bg-emerald-50', text: 'text-emerald-700' },
+  { value: 'ISSUE',             label: 'صرف مخزون',      sub: 'خروج من المخزن',  icon: '↑', isIn: false, border: 'border-red-500',     bg: 'bg-red-50',     text: 'text-red-700'     },
+  { value: 'RETURN_SUPPLIER',   label: 'مرتجع مورد',    sub: 'إرجاع للمورد',   icon: '↪', isIn: false, border: 'border-purple-500',  bg: 'bg-purple-50',  text: 'text-purple-700'  },
+  { value: 'ADJUSTMENT_LOSS',   label: 'تسوية نقص',      sub: 'عجز جردي',       icon: '−', isIn: false, border: 'border-rose-500',    bg: 'bg-rose-50',    text: 'text-rose-700'    },
+] as const
 
 const EGP = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
@@ -217,9 +224,6 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
     supplier_code:   '',
     document_number: '',
     notes:           '',
-    season_id:       '',
-    field_id:        '',
-    work_order_id:   '',
     center_code:     '',
     payment_method:  'credit',
   })
@@ -238,9 +242,6 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
         supplier_code:   '',
         document_number: '',
         notes:           '',
-        season_id:       '',
-        field_id:        '',
-        work_order_id:   '',
         center_code:     '',
         payment_method:  'credit',
       })
@@ -269,33 +270,6 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
     staleTime: 60_000,
   })
 
-  const { data: seasons = [] } = useQuery({
-    queryKey: ['config', 'seasons'],
-    queryFn:  configApi.seasons as () => Promise<{ id: number; name: string; status: string }[]>,
-    enabled:  open,
-    staleTime: 120_000,
-  })
-
-  const { data: fields = [] } = useQuery({
-    queryKey: ['fields', 'list', form.season_id || null],
-    queryFn:  () => fieldsApi.list(form.season_id ? { season_id: Number(form.season_id) } : undefined) as Promise<{ id: number; name: string; code: string; area_feddan: number }[]>,
-    enabled:  open,
-    staleTime: 60_000,
-  })
-
-  type WorkOrderItem = { id: number; name: string; operation_type: string; status: string }
-  const { data: workOrders = [] } = useQuery({
-    queryKey: ['operations', 'orders', form.season_id || null, form.field_id || null],
-    queryFn:  () => operationsApi.listOrders({
-      season_id: form.season_id ? Number(form.season_id) : undefined,
-      field_id:  form.field_id  ? Number(form.field_id)  : undefined,
-      size: 100,
-    }) as Promise<{ data: WorkOrderItem[] }>,
-    enabled:  open && (form.movement_type === 'ISSUE' || form.movement_type === 'RETURN_SUPPLIER' || form.movement_type === 'ADJUSTMENT_LOSS'),
-    staleTime: 60_000,
-    select: (res) => (res as { data: WorkOrderItem[] }).data ?? [],
-  })
-
   type CostCenterOption = { code: number; name: string }
   const { data: costCenters = [] } = useQuery({
     queryKey: ['config', 'cc'],
@@ -308,7 +282,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
   const { data: suppliersList = [] } = useQuery({
     queryKey: ['suppliers-list-dropdown'],
     queryFn:  () => suppliersApi.list({ size: 200 }) as Promise<{ data: SupplierOption[] }>,
-    enabled:  open && (form.movement_type === 'GRN' || form.movement_type === 'RETURN_CUSTOMER'),
+    enabled:  open && (form.movement_type === 'GRN' || form.movement_type === 'RETURN_SUPPLIER'),
     staleTime: 60_000,
     select: res => (res as unknown as { data: SupplierOption[] }).data ?? res,
   })
@@ -324,6 +298,23 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
   const addLine    = () => setLines(ls => [...ls, newLine()])
   const removeLine = (id: string) =>
     setLines(ls => ls.length > 1 ? ls.filter(l => l.id !== id) : ls)
+
+  // Real-time qty validation: blocks outbound qty > available balance
+  const handleQtyChange = useCallback((lineId: string, raw: string) => {
+    const qty = Number(raw)
+    setLines(ls => ls.map(l => {
+      if (l.id !== lineId) return l
+      if (!raw) return { ...l, quantity: '', error: undefined }
+      if (qty <= 0) return { ...l, quantity: raw, error: 'الكمية يجب أن تكون أكبر من صفر' }
+      const isOutbound = form.movement_type === 'ISSUE' ||
+                         form.movement_type === 'RETURN_SUPPLIER' ||
+                         form.movement_type === 'ADJUSTMENT_LOSS'
+      if (isOutbound && l.available !== undefined && qty > l.available) {
+        return { ...l, quantity: raw, error: `الرصيد المتاح: ${NUM(l.available)} ${l.item_unit ?? ''}` }
+      }
+      return { ...l, quantity: raw, error: undefined }
+    }))
+  }, [form.movement_type])
 
   // Fetch stock when item + warehouse are selected
   const fetchStock = useCallback(async (lineId: string, itemCode: string) => {
@@ -357,7 +348,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
       if (!l.item_code) return { ...l, error: 'اختر الصنف' }
       const qty = Number(l.quantity)
       if (!l.quantity || qty <= 0) return { ...l, error: 'الكمية مطلوبة وأكبر من صفر' }
-      if ((form.movement_type === 'ISSUE' || form.movement_type === 'ADJUSTMENT_LOSS') && l.available !== undefined && qty > l.available) {
+      if ((form.movement_type === 'ISSUE' || form.movement_type === 'RETURN_SUPPLIER' || form.movement_type === 'ADJUSTMENT_LOSS') && l.available !== undefined && qty > l.available) {
         ok = false
         return { ...l, error: `الرصيد المتاح: ${NUM(l.available)}` }
       }
@@ -413,9 +404,6 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
         warehouse:       form.warehouse,
         supplier_code:   form.supplier_code   ? Number(form.supplier_code)   : undefined,
         document_number: form.document_number ? Number(form.document_number) : undefined,
-        season_id:       form.season_id       ? Number(form.season_id)       : undefined,
-        field_id:        form.field_id        ? Number(form.field_id)        : undefined,
-        work_order_id:   form.work_order_id   ? Number(form.work_order_id)   : undefined,
         payment_method:  form.payment_method,
         center_code:     form.center_code     ? Number(form.center_code)     : undefined,
         notes:           form.notes || undefined,
@@ -432,7 +420,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
         return
       }
 
-      await qc.invalidateQueries({ queryKey: ['inventory'] })
+      await qc.invalidateQueries({ queryKey: ['inventory'], refetchType: 'active' })
       onClose()
     } catch {
       setError('حدث خطأ في الاتصال، تحقق من الشبكة وأعد المحاولة')
@@ -459,30 +447,26 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
       {step === 1 && (
         <div className="space-y-4">
 
-          {/* Movement type toggle */}
+          {/* Movement type grid — all 6 types */}
           <div>
             <label className="label mb-2">نوع الحركة <span className="text-red-500">*</span></label>
-            <div className="grid grid-cols-2 gap-3">
-              <button type="button"
-                className={`flex flex-col items-center gap-1.5 p-4 rounded-xl border-2 font-medium transition-all
-                  ${typeIsAdd
-                    ? 'border-green-500 bg-green-50 text-green-700 shadow-sm'
-                    : 'border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600'}`}
-                onClick={() => setF('movement_type', 'GRN')}>
-                <span className="text-2xl">↓</span>
-                <span className="text-sm">إضافة (وارد)</span>
-                <span className="text-xs opacity-70">استلام بضاعة للمخزن</span>
-              </button>
-              <button type="button"
-                className={`flex flex-col items-center gap-1.5 p-4 rounded-xl border-2 font-medium transition-all
-                  ${!typeIsAdd
-                    ? 'border-red-500 bg-red-50 text-red-700 shadow-sm'
-                    : 'border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600'}`}
-                onClick={() => setF('movement_type', 'ISSUE')}>
-                <span className="text-2xl">↑</span>
-                <span className="text-sm">صرف (منصرف)</span>
-                <span className="text-xs opacity-70">إخراج بضاعة من المخزن</span>
-              </button>
+            <div className="grid grid-cols-3 gap-2">
+              {MOVEMENT_TYPES.map(mt => {
+                const active = form.movement_type === mt.value
+                return (
+                  <button type="button" key={mt.value}
+                    className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 font-medium transition-all
+                      ${ active
+                        ? `${mt.border} ${mt.bg} ${mt.text} shadow-sm`
+                        : 'border-slate-200 text-slate-400 hover:border-slate-300 hover:bg-slate-50'
+                      }`}
+                    onClick={() => { setF('movement_type', mt.value as BatchForm['movement_type']) }}>
+                    <span className="text-xl font-bold leading-none">{mt.icon}</span>
+                    <span className="text-xs font-semibold text-center leading-tight mt-0.5">{mt.label}</span>
+                    <span className="text-[10px] opacity-60 text-center">{mt.sub}</span>
+                  </button>
+                )
+              })}
             </div>
           </div>
 
@@ -509,14 +493,24 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="label">رقم المستند</label>
-              <input type="number" className="input" placeholder="اختياري"
+              <label className="label">
+                {form.movement_type === 'RETURN_SUPPLIER'
+                  ? <>رقم وصل الاستلام الأصلي <span className="text-purple-600 text-[10px] font-normal">(GRN مرجع)</span></>
+                  : 'رقم المستند'}
+              </label>
+              <input type="number" className="input"
+                placeholder={form.movement_type === 'RETURN_SUPPLIER' ? 'رقم GRN الأصلي' : 'اختياري'}
                 value={form.document_number}
                 onChange={e => setF('document_number', e.target.value)} />
+                          {form.movement_type === 'RETURN_SUPPLIER' && (
+                            <p className="text-[10px] text-purple-600 mt-1 px-1">
+                              ← ربط المرتجع بوصل الاستلام الأصلي لضمان الـ Audit Trail
+                            </p>
+                          )}
             </div>
             <div>
               <label className="label">المورد</label>
-              {(form.movement_type === 'GRN') && (suppliersList as SupplierOption[]).length > 0 ? (
+              {(form.movement_type === 'GRN' || form.movement_type === 'RETURN_SUPPLIER') && (suppliersList as SupplierOption[]).length > 0 ? (
                 <select className="input" value={form.supplier_code}
                   onChange={e => setF('supplier_code', e.target.value)}>
                   <option value="">— اختياري —</option>
@@ -534,10 +528,12 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
             </div>
           </div>
 
-          {/* Payment Method (for Additions only) */}
-          {typeIsAdd && (
+          {/* Payment Method — relevant when a supplier is involved (GRN / RETURN_SUPPLIER) */}
+          {(form.movement_type === 'GRN' || form.movement_type === 'RETURN_SUPPLIER') && (
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-              <label className="label text-xs mb-2">طريقة الدفع للمخزون</label>
+              <label className="label text-xs mb-2">
+                {form.movement_type === 'RETURN_SUPPLIER' ? 'طريقة استرداد قيمة المرتجع' : 'طريقة الدفع للمخزون'}
+              </label>
               <div className="flex gap-2">
                 <button type="button"
                   className={`flex-1 py-2 px-3 rounded-lg border text-sm font-medium transition-all flex items-center justify-center gap-2
@@ -557,61 +553,21 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
                 </button>
               </div>
               <p className="text-[10px] text-slate-400 mt-2 px-1">
-                {form.payment_method === 'cash'
-                  ? 'سيتم خصم قيمة المشتريات من رصيد الخزينة مباشرة.'
-                  : 'سيتم إضافة القيمة لمديونية المورد وسحبها لاحقاً عبر سداد الموردين.'}
+                {form.movement_type === 'RETURN_SUPPLIER'
+                  ? (form.payment_method === 'cash'
+                    ? 'سيتم إضافة المبلغ المرتجع لرصيد الخزينة.'
+                    : 'سيتم تخفيض مديونية المورد بقيمة المرتجع.')
+                  : (form.payment_method === 'cash'
+                    ? 'سيتم خصم قيمة المشتريات من رصيد الخزينة مباشرة.'
+                    : 'سيتم إضافة القيمة لمديونية المورد وسحبها لاحقاً عبر سداد الموردين.')}
               </p>
             </div>
           )}
 
-          {/* Season + Field — Agricultural Context */}
-          <div className="rounded-xl border border-brand-100 bg-brand-50 p-3 space-y-3">
-            <div className="flex items-center gap-2 text-brand-700 text-xs font-semibold">
-              <Leaf size={13} />
-              السياق الزراعي (اختياري)
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="label text-xs">الموسم الزراعي</label>
-                <select className="input text-sm" value={form.season_id}
-                  onChange={e => { setF('season_id', e.target.value); setF('field_id', ''); setF('work_order_id', '') }}>
-                  <option value="">— بدون موسم —</option>
-                  {(seasons as { id: number; name: string; status: string }[]).map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}{s.status === 'active' ? ' ✓' : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="label text-xs">الأرض / الحقل</label>
-                <select className="input text-sm" value={form.field_id}
-                  onChange={e => { setF('field_id', e.target.value); setF('work_order_id', '') }}>
-                  <option value="">— بدون حقل —</option>
-                  {(fields as { id: number; name: string; code: string; area_feddan: number }[]).map(f => (
-                    <option key={f.id} value={f.id}>
-                      {f.name} ({f.area_feddan} فدان)
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            {!typeIsAdd && (
-              <div>
-                <label className="label text-xs">أمر العمل</label>
-                <select className="input text-sm" value={form.work_order_id}
-                  onChange={e => setF('work_order_id', e.target.value)}>
-                  <option value="">— بدون أمر عمل —</option>
-                  {(workOrders as WorkOrderItem[]).filter(wo => !['cancelled', 'costed'].includes(wo.status)).map(wo => (
-                    <option key={wo.id} value={wo.id}>
-                      {wo.name} — {wo.operation_type}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+          {/* Accounting metadata only (optional) */}
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-3">
             <div>
-              <label className="label text-xs">مركز التكلفة</label>
+              <label className="label text-xs">مركز التكلفة (اختياري)</label>
               <select className="input text-sm" value={form.center_code}
                 onChange={e => setF('center_code', e.target.value)}>
                 <option value="">— بدون مركز —</option>
@@ -620,6 +576,9 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
                 ))}
               </select>
             </div>
+            <p className="text-[11px] text-slate-500">
+              يتم إرسال نفس البيانات المتوقعة من الباك-إند: نوع الحركة، المخزن، التاريخ، المورد/الدفع عند الحاجة، مركز التكلفة، وبنود الأصناف.
+            </p>
           </div>
 
           <div>
@@ -697,7 +656,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
                       ${stockWarn ? 'border-red-400 bg-red-50' : ''}`}
                     placeholder="0"
                     value={line.quantity}
-                    onChange={e => updateLine(line.id, { quantity: e.target.value, error: undefined })} />
+                    onChange={e => handleQtyChange(line.id, e.target.value)} />
 
                   {/* Unit price */}
                   <input
@@ -807,7 +766,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
                   <span className="font-medium">#{form.supplier_code}</span>
                 </div>
               )}
-              {typeIsAdd && (
+              {(form.movement_type === 'GRN' || form.movement_type === 'RETURN_SUPPLIER') && (
                 <div className="flex gap-2">
                   <span className="text-slate-500">طريقة الدفع:</span>
                   <span className={`font-bold ${form.payment_method === 'cash' ? 'text-green-600' : 'text-brand-600'}`}>
@@ -815,29 +774,10 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
                   </span>
                 </div>
               )}
-              {form.season_id && (
+              {form.center_code && (
                 <div className="flex gap-2">
-                  <span className="text-slate-500">الموسم:</span>
-                  <span className="font-medium text-brand-700">
-                    {(seasons as { id: number; name: string }[]).find(s => String(s.id) === form.season_id)?.name ?? `#${form.season_id}`}
-                  </span>
-                </div>
-              )}
-              {form.field_id && (
-                <div className="flex gap-2">
-                  <span className="text-slate-500">الحقل:</span>
-                  <span className="font-medium text-brand-700 flex items-center gap-1">
-                    <Leaf size={12} />
-                    {(fields as { id: number; name: string }[]).find(f => String(f.id) === form.field_id)?.name ?? `#${form.field_id}`}
-                  </span>
-                </div>
-              )}
-              {form.work_order_id && (
-                <div className="flex gap-2">
-                  <span className="text-slate-500">أمر العمل:</span>
-                  <span className="font-medium text-amber-700">
-                    {(workOrders as WorkOrderItem[]).find(wo => String(wo.id) === form.work_order_id)?.name ?? `#${form.work_order_id}`}
-                  </span>
+                  <span className="text-slate-500">مركز التكلفة:</span>
+                  <span className="font-medium text-indigo-700">#{form.center_code}</span>
                 </div>
               )}
               {form.notes && (
@@ -909,7 +849,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
             <CheckCircle size={16} className="shrink-0" />
             <span>
               جاهز للحفظ — سيتم إنشاء <strong>{filledLines.length}</strong> حركة مخزنية
-              {typeIsAdd ? ' (إضافة)' : ' (صرف)'}
+              {' ('}{MOVEMENT_TYPES.find(m => m.value === form.movement_type)?.label ?? form.movement_type}{')'}
               {' '}في مخزن <strong>{form.warehouse}</strong>
             </span>
           </div>
@@ -943,7 +883,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
             </button>
           ) : (
             <button type="button"
-              className={`btn-primary gap-2 ${typeIsAdd ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}`}
+              className={`btn-primary gap-2 ${typeIsAdd ? '' : 'bg-red-600 hover:bg-red-700'}`}
               onClick={handleSubmit}
               disabled={saving}>
               {saving

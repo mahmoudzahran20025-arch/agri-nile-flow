@@ -30,6 +30,7 @@ export default function InternalTransferModal({ open, onClose, initialItemCode, 
 
   const [fromWarehouse, setFromWarehouse] = useState(initialSourceWarehouse || '')
   const [toWarehouse, setToWarehouse] = useState('')
+  const [transferDate, setTransferDate] = useState(new Date().toISOString().split('T')[0])
   const [notes, setNotes] = useState('')
   const [lines, setLines] = useState<TransferLine[]>([])
 
@@ -38,6 +39,7 @@ export default function InternalTransferModal({ open, onClose, initialItemCode, 
     if (open) {
       setFromWarehouse(initialSourceWarehouse || '')
       setToWarehouse('')
+      setTransferDate(new Date().toISOString().split('T')[0])
       setNotes('')
       if (initialItemCode) {
         setLines([{ id: uid(), item_code: String(initialItemCode), item_name: initialItemName, quantity: '' }])
@@ -65,6 +67,19 @@ export default function InternalTransferModal({ open, onClose, initialItemCode, 
   const updateLine = (id: string, patch: Partial<TransferLine>) => 
     setLines(ls => ls.map(l => l.id === id ? { ...l, ...patch } : l))
 
+  const handleQtyChange = (id: string, raw: string) => {
+    const qty = Number(raw)
+    setLines(ls => ls.map(l => {
+      if (l.id !== id) return l
+      if (!raw) return { ...l, quantity: '', error: undefined }
+      if (qty <= 0) return { ...l, quantity: raw, error: 'الكمية يجب أن تكون أكبر من صفر' }
+      if (l.available !== undefined && qty > l.available) {
+        return { ...l, quantity: raw, error: `المتاح ${l.available}` }
+      }
+      return { ...l, quantity: raw, error: undefined }
+    }))
+  }
+
   const handleItemChange = async (id: string, code: string) => {
     const it = (items as any[]).find(i => String(i.code) === code)
     updateLine(id, { item_code: code, item_name: it?.name, available: undefined, error: undefined })
@@ -81,7 +96,7 @@ export default function InternalTransferModal({ open, onClose, initialItemCode, 
 
   const batchTransferMutation = useMutation({
     mutationFn: () => inventoryApi.transferBatch({
-      movement_date: new Date().toISOString().split('T')[0],
+      movement_date: transferDate,
       from_warehouse: fromWarehouse,
       to_warehouse: toWarehouse,
       notes,
@@ -90,21 +105,21 @@ export default function InternalTransferModal({ open, onClose, initialItemCode, 
     onSuccess: (res: any) => {
       if (res.success === false) { toast(res.error || 'فشل التحويل', 'error'); return }
       toast(`تم تحويل ${lines.length} صنف بنجاح`, 'success')
-      qc.invalidateQueries({ queryKey: ['inventory'] })
+      qc.invalidateQueries({ queryKey: ['inventory'], refetchType: 'active' })
       onClose()
     },
     onError: () => toast('خطأ في الاتصال بالخادم', 'error')
   })
 
   const isValid = fromWarehouse && toWarehouse && fromWarehouse !== toWarehouse && 
-                  lines.length > 0 && lines.every(l => l.item_code && Number(l.quantity) > 0 && (l.available === undefined || Number(l.quantity) <= l.available))
+                  lines.length > 0 && lines.every(l => l.item_code && Number(l.quantity) > 0 && !l.error && (l.available === undefined || Number(l.quantity) <= l.available))
 
   return (
-    <Modal open={open} onClose={onClose} title="تحويل مخزني (Batch Transfer)" size="lg">
+    <Modal open={open} onClose={onClose} title="تحويل بين المخازن" size="lg">
       <div className="space-y-5">
         
         {/* Warehouses Selection */}
-        <div className="grid grid-cols-[1fr_auto_1fr] gap-4 items-center bg-slate-50 border border-slate-200 rounded-2xl p-4 shadow-sm">
+        <div className="grid grid-cols-[1fr_auto_1fr] gap-4 items-center bg-slate-50 border border-slate-200 rounded-2xl p-4">
           <div className="space-y-1">
             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1">من مخزن (المصدر)</label>
             <select 
@@ -118,7 +133,7 @@ export default function InternalTransferModal({ open, onClose, initialItemCode, 
           </div>
           
           <div className="pt-5 text-brand-500">
-            <ArrowRightLeft size={20} className="animate-pulse-slow" />
+            <ArrowRightLeft size={20} />
           </div>
 
           <div className="space-y-1">
@@ -133,6 +148,23 @@ export default function InternalTransferModal({ open, onClose, initialItemCode, 
             </select>
           </div>
         </div>
+
+        {/* Transfer date */}
+        <div>
+          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1 block mb-1">تاريخ التحويل</label>
+          <input
+            type="date"
+            className="input bg-white border-slate-200"
+            value={transferDate}
+            onChange={e => setTransferDate(e.target.value)}
+          />
+        </div>
+
+        {fromWarehouse && toWarehouse && (
+          <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+            سيتم إنشاء حركة تحويل بتاريخ اليوم من <strong>{fromWarehouse}</strong> إلى <strong>{toWarehouse}</strong> لكل الأصناف المحددة.
+          </div>
+        )}
 
         {/* Items List */}
         <div className="space-y-3">
@@ -178,7 +210,7 @@ export default function InternalTransferModal({ open, onClose, initialItemCode, 
                       className={`input text-sm py-1.5 pr-8 ${line.error ? 'border-red-500 bg-red-50' : ''}`}
                       placeholder="الكمية"
                       value={line.quantity}
-                      onChange={e => updateLine(line.id, { quantity: e.target.value })}
+                      onChange={e => handleQtyChange(line.id, e.target.value)}
                     />
                     <button 
                       className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-brand-600 font-bold"
@@ -188,6 +220,10 @@ export default function InternalTransferModal({ open, onClose, initialItemCode, 
                     </button>
                   </div>
                 </div>
+
+                {line.error && (
+                  <div className="text-[11px] text-red-600 px-1">{line.error}</div>
+                )}
 
                 <button 
                   className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all mt-0.5"
@@ -214,7 +250,7 @@ export default function InternalTransferModal({ open, onClose, initialItemCode, 
         <div className="flex gap-3 pt-2">
           <button className="btn-secondary flex-1" onClick={onClose}>إلغاء</button>
           <button 
-            className="btn-primary flex-1 bg-brand-600 hover:bg-brand-700 shadow-brand-100 gap-2" 
+            className="btn-primary flex-1 gap-2" 
             disabled={batchTransferMutation.isPending || !isValid}
             onClick={() => batchTransferMutation.mutate()}
           >

@@ -63,21 +63,18 @@ items.get('/item/:code/stock', permissionGuard('inventory', 'read'), async (c) =
   const code      = Number(c.req.param('code'))
   const warehouse = c.req.query('warehouse')
 
-  const where    = warehouse ? 'AND warehouse = ?' : ''
-  const subWhere = warehouse ? 'AND warehouse = ?' : ''
+  // Read from inventory_balances snapshot (authoritative, always correct) instead
+  // of inventory_movements.balance_qty (stale running total, breaks after any
+  // dedup or retroactive insert).
+  const whereClause = warehouse ? 'AND ib.warehouse = ?' : ''
   const binds: unknown[] = warehouse
-    ? [company_id, code, warehouse, company_id, code, warehouse]
-    : [company_id, code, company_id, code]
+    ? [company_id, code, warehouse]
+    : [company_id, code]
 
   const { results } = await c.env.DB.prepare(
-    `SELECT warehouse, balance_qty, balance_value
-     FROM inventory_movements im
-     WHERE company_id = ? AND item_code = ? ${where.replace('warehouse', 'im.warehouse')}
-       AND id IN (
-         SELECT MAX(id) FROM inventory_movements
-         WHERE company_id = ? AND item_code = ? ${subWhere}
-         GROUP BY warehouse
-       )`
+    `SELECT ib.warehouse, ib.balance_qty, ib.balance_value
+     FROM inventory_balances ib
+     WHERE ib.company_id = ? AND ib.item_code = ? ${whereClause}`
   ).bind(...binds).all<{ warehouse: string; balance_qty: number; balance_value: number }>()
 
   const totalQty = results.reduce((s, r) => s + (r.balance_qty ?? 0), 0)

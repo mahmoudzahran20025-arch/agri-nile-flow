@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { assetsApi, type FixedAsset } from '../../api/assets'
-import { ChevronDown, ChevronRight, Play, PlusCircle } from 'lucide-react'
+import { ChevronRight, Play, PlusCircle } from 'lucide-react'
 
 const CATEGORY_LABELS: Record<string, string> = {
   equipment:        'معدات',
