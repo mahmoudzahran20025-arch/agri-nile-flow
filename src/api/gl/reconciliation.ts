@@ -18,13 +18,13 @@ reconciliation.get('/source-documents', async (c) => {
   const to = c.req.query('to')
   const mismatchOnly = c.req.query('mismatch_only') === '1'
 
-  let where = 'WHERE sd.company_id = ?'
+  let baseWhere = 'WHERE sd.company_id = ?'
   const binds: unknown[] = [company_id]
 
-  if (sourceModule) { where += ' AND sd.source_module = ?'; binds.push(sourceModule) }
-  if (status) { where += ' AND sd.status = ?'; binds.push(status) }
-  if (from) { where += ' AND sd.event_date >= ?'; binds.push(from) }
-  if (to) { where += ' AND sd.event_date <= ?'; binds.push(to) }
+  if (sourceModule) { baseWhere += ' AND sd.source_module = ?'; binds.push(sourceModule) }
+  if (status) { baseWhere += ' AND sd.status = ?'; binds.push(status) }
+  if (from) { baseWhere += ' AND sd.event_date >= ?'; binds.push(from) }
+  if (to) { baseWhere += ' AND sd.event_date <= ?'; binds.push(to) }
 
   const mismatchClause = `(
     be.id IS NULL OR
@@ -32,7 +32,7 @@ reconciliation.get('/source-documents', async (c) => {
     (be.journal_entry_id IS NOT NULL AND sdl.journal_entry_id IS NOT NULL AND be.journal_entry_id != sdl.journal_entry_id) OR
     (sd.status = 'posted' AND sdl.journal_entry_id IS NULL)
   )`
-  if (mismatchOnly) where += ` AND ${mismatchClause}`
+  const joinedWhere = mismatchOnly ? `${baseWhere} AND ${mismatchClause}` : baseWhere
 
   const [rows, countRow, summaryRow] = await Promise.all([
     c.env.DB.prepare(
@@ -68,13 +68,23 @@ reconciliation.get('/source-documents', async (c) => {
        LEFT JOIN journal_entries je
          ON je.id = sdl.journal_entry_id
         AND je.company_id = sd.company_id
-       ${where}
+       ${joinedWhere}
        ORDER BY sd.event_date DESC, sd.id DESC
        LIMIT ? OFFSET ?`
     ).bind(...binds, size, offset).all(),
 
-    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM source_documents sd ${where}`)
-      .bind(...binds).first<{ n: number }>(),
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS n
+       FROM source_documents sd
+       LEFT JOIN business_events be
+         ON be.id = sd.event_id
+        AND be.company_id = sd.company_id
+       LEFT JOIN source_document_links sdl
+         ON sdl.source_document_id = sd.id
+        AND sdl.company_id = sd.company_id
+        AND sdl.link_type = 'primary'
+       ${joinedWhere}`
+    ).bind(...binds).first<{ n: number }>(),
 
     c.env.DB.prepare(
       `SELECT
@@ -92,7 +102,7 @@ reconciliation.get('/source-documents', async (c) => {
          ON sdl.source_document_id = sd.id
         AND sdl.company_id = sd.company_id
         AND sdl.link_type = 'primary'
-       ${where}`
+       ${joinedWhere}`
     ).bind(...binds).first<{
       total: number
       missing_business_event: number
@@ -146,7 +156,7 @@ reconciliation.get('/integrity', async (c) => {
          je.entry_number,
          je.entry_date,
          je.description,
-         je.source_module,
+         je.ref_type AS source_module,
          ROUND(SUM(jel.debit),  2) AS total_dr,
          ROUND(SUM(jel.credit), 2) AS total_cr,
          ROUND(ABS(SUM(jel.debit) - SUM(jel.credit)), 4) AS imbalance
@@ -190,7 +200,7 @@ reconciliation.get('/integrity', async (c) => {
          -- Cash transactions
          ROUND((SELECT COALESCE(SUM(ABS(ct.amount)),0)
                 FROM cash_transactions ct
-                WHERE ct.company_id = ? AND ct.gl_entry_id IS NOT NULL), 2)       AS cash_ops_posted,
+                WHERE ct.company_id = ? AND ct.journal_entry_id IS NOT NULL), 2)   AS cash_ops_posted,
          ROUND((SELECT COALESCE(SUM(ABS(jel.debit - jel.credit)),0)
                 FROM journal_entry_lines jel
                 JOIN journal_entries je ON je.id = jel.entry_id AND je.company_id = ?

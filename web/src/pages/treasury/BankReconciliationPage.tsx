@@ -10,6 +10,7 @@ import Modal from '../../components/ui/Modal'
 import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
 import { KpiStrip, type KpiItem } from '../../components/ui/KpiStrip'
 import SectionCard from '../../components/ui/SectionCard'
+import { useToast } from '../../contexts/ToastContext'
 
 // ── Helpers ───────────────────────────────────────────────────
 function fmtCurrency(n: number) {
@@ -26,6 +27,7 @@ function diffColor(diff: number) {
 // ════════════════════════════════════════════════════════════
 export default function BankReconciliationPage() {
   const qc = useQueryClient()
+  const { toast } = useToast()
   const [selectedAccount, setSelectedAccount] = useState<BankAccount | null>(null)
   const [showAddAccount, setShowAddAccount] = useState(false)
   const [showImport, setShowImport] = useState(false)
@@ -56,7 +58,9 @@ export default function BankReconciliationPage() {
       qc.invalidateQueries({ queryKey: ['bank-accounts'] })
       setShowAddAccount(false)
       setAccountForm({ bank_name: '', account_name: '', account_number: '', iban: '', currency: 'EGP', opening_balance: '0' })
+      toast('تم إضافة الحساب البنكي بنجاح', 'success')
     },
+    onError: (err: { message?: string }) => toast(err.message || 'فشل إضافة الحساب', 'error'),
   })
 
   const importMut = useMutation({
@@ -78,8 +82,9 @@ export default function BankReconciliationPage() {
       qc.invalidateQueries({ queryKey: ['bank-statements', selectedAccount?.id] })
       setShowImport(false)
       setImportText('')
-      alert(`تم استيراد ${res.imported} سطر بنجاح`)
+      toast(`تم استيراد ${res.imported} سطر بنجاح`, 'success')
     },
+    onError: (err: { message?: string }) => toast(err.message || 'فشل الاستيراد', 'error'),
   })
 
   const createReconMut = useMutation({
@@ -97,7 +102,9 @@ export default function BankReconciliationPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['bank-recon', selectedAccount?.id] })
       setShowRecon(false)
+      toast('تم حفظ المطابقة بنجاح', 'success')
     },
+    onError: (err: { message?: string }) => toast(err.message || 'فشل حفظ المطابقة', 'error'),
   })
 
   const totalBalance = accounts.reduce((s, a) => s + (a.current_balance ?? a.opening_balance), 0)

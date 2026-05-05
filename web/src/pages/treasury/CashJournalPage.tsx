@@ -21,7 +21,8 @@ function egp(n: number | null | undefined) {
 }
 
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
-const YEARS  = [2025, 2026]
+const CURRENT_YEAR = new Date().getFullYear()
+const YEARS = Array.from({ length: 4 }, (_, i) => CURRENT_YEAR - 1 + i)
 
 export default function CashJournalPage() {
   const { canWrite, role } = usePermission()

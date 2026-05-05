@@ -13,7 +13,7 @@ import SectionCard from '../../components/ui/SectionCard'
 
 // ── Helpers ───────────────────────────────────────────────────
 function egp(n: number) {
-  return new Intl.NumberFormat('en-US', { minimumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('en-US', { minimumFractionDigits: 0 }).format(n) + ' ج.م'
 }
 
 function ageBucket(days: number): {

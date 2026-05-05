@@ -251,28 +251,56 @@ integrity.get('/orphans', async (c) => {
   const { company_id } = getUser(c)
   const limit = Math.min(100, Number(c.req.query('limit') ?? 50))
 
-  const orphans = await c.env.DB.prepare(`
-    SELECT
-      l.id AS line_id,
-      l.entry_id,
-      l.account_code,
-      l.debit,
-      l.credit,
-      l.description AS line_description,
-      l.created_at AS line_created_at,
-      'missing_entry' AS orphan_type,
-      'Line exists but entry_id does not reference a valid journal_entry' AS orphan_reason
-    FROM journal_entry_lines l
-    LEFT JOIN journal_entries e ON e.id = l.entry_id AND e.company_id = l.company_id
-    WHERE l.company_id = ? AND e.id IS NULL
-    ORDER BY l.id DESC
-    LIMIT ?
-  `).bind(company_id, limit).all()
+  const [rows, totalRow] = await Promise.all([
+    c.env.DB.prepare(`
+      SELECT
+        je.id,
+        je.entry_date,
+        je.description,
+        je.ref_type,
+        je.ref_id,
+        ROUND(SUM(jel.debit), 2)  AS debit_total,
+        ROUND(SUM(jel.credit), 2) AS credit_total,
+        ROUND(ABS(SUM(jel.debit) - SUM(jel.credit)), 2) AS diff
+      FROM journal_entries je
+      JOIN journal_entry_lines jel ON jel.entry_id = je.id
+      WHERE je.company_id = ?
+      GROUP BY je.id
+      HAVING ABS(SUM(jel.debit) - SUM(jel.credit)) > 0.01
+      ORDER BY diff DESC, je.id DESC
+      LIMIT ?
+    `).bind(company_id, limit).all<{
+      id: number
+      entry_date: string
+      description: string | null
+      ref_type: string | null
+      ref_id: number | null
+      debit_total: number
+      credit_total: number
+      diff: number
+    }>(),
+    c.env.DB.prepare(`
+      SELECT COUNT(*) AS n
+      FROM (
+        SELECT je.id
+        FROM journal_entries je
+        JOIN journal_entry_lines jel ON jel.entry_id = je.id
+        WHERE je.company_id = ?
+        GROUP BY je.id
+        HAVING ABS(SUM(jel.debit) - SUM(jel.credit)) > 0.01
+      ) t
+    `).bind(company_id).first<{ n: number }>(),
+  ])
+
+  const total = totalRow?.n ?? 0
 
   return c.json({
     success: true,
-    count: orphans.results.length,
-    orphans: orphans.results,
+    total,
+    rows: rows.results,
+    // Backward-compatible aliases for older consumers
+    count: total,
+    orphans: rows.results,
   })
 })
 

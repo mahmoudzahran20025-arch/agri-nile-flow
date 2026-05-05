@@ -84,7 +84,6 @@ reports.get('/ledger/:account?', async (c) => {
       s.name AS season_name,
       l.field_id,
       f.name AS field_name,
-      l.created_at,
       SUM(l.debit) OVER (ORDER BY e.entry_date, l.id) AS running_debit,
       SUM(l.credit) OVER (ORDER BY e.entry_date, l.id) AS running_credit
     ${fromClause} ${dateWhere} ${centerWhere}

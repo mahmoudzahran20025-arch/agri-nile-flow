@@ -530,7 +530,12 @@ purchasing.patch('/supplier-invoices/:id/pay', async (c) => {
   const id = Number(c.req.param('id'))
   const b = await c.req.json<{
     paid_amount: number; payment_date?: string; payment_ref?: string
+    financial_account_id?: number; center_code?: number; season_id?: number
   }>()
+
+  if (!b.financial_account_id) {
+    return c.json({ success: false, error: 'يجب تحديد الحساب (الخزينة/البنك) لسداد الفاتورة' }, 400)
+  }
 
   const inv = await c.env.DB.prepare(
     `SELECT id, invoice_number, total_amount, COALESCE(paid_amount,0) AS paid_amount,
@@ -562,7 +567,11 @@ purchasing.patch('/supplier-invoices/:id/pay', async (c) => {
       amount: paymentAmount,
       narration,
       supplier_code: inv.supplier_code ?? undefined,
+      financial_account_id: b.financial_account_id,
+      center_code: b.center_code ?? null,
+      season_id: b.season_id ?? null,
       status: 'posted',
+      skipSupplierMirror: true, // supplier_transactions already has the original invoice
     })
 
     await c.env.DB.prepare(
@@ -581,7 +590,7 @@ purchasing.patch('/supplier-invoices/:id/pay', async (c) => {
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'UPDATE',
     table_name: 'supplier_invoices', record_id: id,
-    new_value: { paid_amount: paymentAmount, payment_date: today },
+    new_value: { paid_amount: paymentAmount, payment_date: today, account: b.financial_account_id },
   })
 
   return c.json({ success: true, data: null })

@@ -14,6 +14,7 @@ import Modal from '../../components/ui/Modal'
 import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
 import { KpiStrip, type KpiItem } from '../../components/ui/KpiStrip'
 import SectionCard from '../../components/ui/SectionCard'
+import { useToast } from '../../contexts/ToastContext'
 
 // ── Helpers ───────────────────────────────────────────────────
 function fmtCurrency(n: number) {
@@ -341,7 +342,8 @@ function InvoiceModal({
 // ════════════════════════════════════════════════════════════
 export default function PurchaseOrdersPage() {
   const qc = useQueryClient()
-  const [filterStatus] = useState('')
+  const { toast } = useToast()
+  const [filterStatus, setFilterStatus] = useState('')
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [showReceive, setShowReceive] = useState<PurchaseOrder | null>(null)
@@ -405,7 +407,9 @@ export default function PurchaseOrdersPage() {
       setShowCreate(false)
       setForm({ supplier_code: '', supplier_name: '', order_date: new Date().toISOString().slice(0, 10), expected_date: '', notes: '' })
       setFormItems([{ ...EMPTY_ITEM }])
+      toast('تم إنشاء طلب الشراء بنجاح', 'success')
     },
+    onError: (err: { message?: string }) => toast(err.message || 'فشل إنشاء طلب الشراء', 'error'),
   })
 
   const statusMut = useMutation({
@@ -414,7 +418,9 @@ export default function PurchaseOrdersPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['purchase-orders'] })
       qc.invalidateQueries({ queryKey: ['purchase-order', expandedId] })
+      toast('تم تحديث حالة الطلب', 'success')
     },
+    onError: (err: { message?: string }) => toast(err.message || 'فشل تحديث الحالة', 'error'),
   })
 
   const receiveMut = useMutation({
@@ -424,7 +430,9 @@ export default function PurchaseOrdersPage() {
       qc.invalidateQueries({ queryKey: ['purchase-orders'] })
       qc.invalidateQueries({ queryKey: ['purchase-order', expandedId] })
       setShowReceive(null)
+      toast('تم تسجيل الاستلام بنجاح', 'success')
     },
+    onError: (err: { message?: string }) => toast(err.message || 'فشل تسجيل الاستلام', 'error'),
   })
 
   function openReceive(po: PurchaseOrder) {
@@ -470,6 +478,28 @@ export default function PurchaseOrdersPage() {
       <CommandBar actions={actions} />
       <div className="flex-1 overflow-auto p-4 md:p-6 space-y-4 animate-fade-in">
       <KpiStrip items={kpis} />
+
+      {/* Status filter */}
+      <div className="flex items-center gap-1 rounded-xl bg-white border border-gray-200 p-1 shadow-sm w-fit">
+        {[
+          { v: '',          l: 'الكل' },
+          { v: 'draft',     l: 'مسودة' },
+          { v: 'sent',      l: 'مُرسل' },
+          { v: 'partial',   l: 'جزئي' },
+          { v: 'received',  l: 'مُستلم' },
+          { v: 'cancelled', l: 'ملغي' },
+        ].map(({ v, l }) => (
+          <button
+            key={v}
+            onClick={() => setFilterStatus(v)}
+            className={`px-3 py-1 text-[11px] font-bold rounded-lg transition-all ${
+              filterStatus === v ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            {l}
+          </button>
+        ))}
+      </div>
 
       <SectionCard title="طلبات الشراء" icon={<ShoppingCart size={15} />}>
 

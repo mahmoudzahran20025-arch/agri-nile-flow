@@ -126,17 +126,35 @@ export async function prepareCashMovement(
 
     if (opts.supplier_code && !opts.skipSupplierMirror) {
       const supKey = `st_${batchKey}`
+
+      // Compute supplier running balance for this mirror entry
+      const lastSupRow = await db
+        .prepare(`SELECT balance_with_checks, balance_no_checks FROM supplier_transactions
+                  WHERE company_id = ? AND supplier_code = ?
+                  ORDER BY transaction_date DESC, id DESC LIMIT 1`)
+        .bind(opts.company_id, opts.supplier_code)
+        .first<{ balance_with_checks: number; balance_no_checks: number }>()
+
+      const prevBalNoChecks   = lastSupRow?.balance_no_checks   ?? 0
+      const prevBalWithChecks = lastSupRow?.balance_with_checks ?? 0
+      // 'م' direction = we pay supplier = debit on supplier = reduces what we owe (credit-debit basis)
+      const supCredit = opts.direction === 'د' ? opts.amount : 0
+      const supDebit  = opts.direction === 'م' ? opts.amount : 0
+      const newSupBalNoChecks   = prevBalNoChecks   + supCredit - supDebit
+      const newSupBalWithChecks = prevBalWithChecks + supCredit - supDebit
+
       stmts.push(db.prepare(
         `INSERT INTO supplier_transactions
          (company_id, season_id, supplier_code, transaction_date, entry_type, document_type,
-          notes, amount, credit, debit, status, created_by_user_id, local_id, center_code)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+          notes, amount, credit, debit, balance_no_checks, balance_with_checks,
+          status, created_by_user_id, local_id, center_code)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       ).bind(
         opts.company_id, opts.season_id ?? null, opts.supplier_code,
         opts.transaction_date, opts.direction, 'cash_payment',
         opts.narration, opts.amount,
-        opts.direction === 'د' ? opts.amount : 0,
-        opts.direction === 'م' ? opts.amount : 0,
+        supCredit, supDebit,
+        newSupBalNoChecks, newSupBalWithChecks,
         status, opts.userId, supKey, opts.center_code ?? null
       ))
     }

@@ -69,10 +69,10 @@ export default function SuppliersBalancePage() {
   }
 
   const kpis: KpiItem[] = [
-    { id: 'suppliers', label: 'SUPPLIERS',           value: rows.length },
-    { id: 'credit',    label: 'TOTAL PAYABLE',        value: egp(totalCredit),  variant: 'warning' },
-    { id: 'debit',     label: 'TOTAL PAID',           value: egp(totalDebit),   variant: 'success' },
-    { id: 'balance',   label: 'NET OUTSTANDING',      value: egp(Math.abs(totalBalance)), variant: Math.abs(totalBalance) > 0 ? 'warning' : 'success' },
+    { id: 'suppliers', label: 'عدد الموردين',          value: rows.length },
+    { id: 'credit',    label: 'إجمالي الدائن',         value: egp(totalCredit),  variant: 'warning' },
+    { id: 'debit',     label: 'إجمالي المدين',         value: egp(totalDebit),   variant: 'success' },
+    { id: 'balance',   label: 'صافي المستحق',          value: egp(Math.abs(totalBalance)), variant: Math.abs(totalBalance) > 0 ? 'warning' : 'success' },
   ]
 
   const actions: CommandAction[] = [
@@ -87,11 +87,11 @@ export default function SuppliersBalancePage() {
         value={seasonId ?? ''}
         onChange={e => setSeasonId(e.target.value ? Number(e.target.value) : undefined)}
       >
-        <option value="">All Seasons</option>
+        <option value="">كل المواسم</option>
         {(seasons ?? []).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
       </select>
       <div className="flex items-center gap-1 text-[11px] text-slate-500">
-        Sort:
+        ترتيب:
         {(['balance', 'credit', 'debit', 'name'] as const).map(k => (
           <button
             key={k}
@@ -108,7 +108,7 @@ export default function SuppliersBalancePage() {
   const payments = (paymentsData?.data as PaymentRow[] | undefined) ?? []
 
   return (
-    <div className={`flex flex-col h-full bg-[#f8fafc] ${selected ? '' : ''}`}>
+    <div className="flex flex-col h-full bg-[#f8fafc]">
       <div className="px-6 py-5 bg-white border-b border-slate-200">
         <h1 className="text-[18px] font-bold text-[#0F2D5C]">ميزان الموردين والعملاء</h1>
         <p className="text-[12px] text-slate-500 mt-0.5">ملخص أرصدة الموردين · دائن / مدين / الرصيد الصافي</p>
@@ -121,8 +121,8 @@ export default function SuppliersBalancePage() {
         {/* â”€â”€ Main table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <div className={`flex-1 overflow-y-auto p-6 transition-all ${selected ? 'lg:pr-3' : ''}`}>
           <SectionCard
-            title="Supplier Balances"
-            subtitle={`${rows.length} supplier(s)`}
+            title="أرصدة الموردين"
+            subtitle={`${rows.length} مورد`}
             icon={<Users size={14} />}
           >
             {isLoading ? (
@@ -218,13 +218,13 @@ export default function SuppliersBalancePage() {
                   className="text-[11px] text-indigo-600 hover:underline flex items-center gap-1"
                   onClick={() => navigate(`/gl/entries?ref_type=supplier_transaction&source_code=${selected.code}`)}
                 >
-                  <ExternalLink size={11} /> GL Entries
+                  <ExternalLink size={11} /> قيود GL
                 </button>
                 <button
                   className="text-[11px] text-[#0F2D5C] hover:underline flex items-center gap-1"
                   onClick={() => navigate(`/suppliers/${selected.code}`)}
                 >
-                  <ExternalLink size={11} /> Profile
+                  <ExternalLink size={11} /> الملف
                 </button>
                 <button className="text-slate-400 hover:text-slate-700" onClick={() => setSelected(null)}>
                   <X size={16} />
@@ -249,11 +249,11 @@ export default function SuppliersBalancePage() {
 
             {/* Payments list */}
             <div className="flex-1 overflow-y-auto px-4 py-3">
-              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-2">Payment History</p>
+              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-2">سجل المدفوعات</p>
               {payments.length === 0 ? (
                 <div className="text-center text-slate-400 py-8">
                   <TrendingDown size={28} className="mx-auto mb-2 opacity-30" />
-                  <p className="text-[12px]">No payment records</p>
+                  <p className="text-[12px]">لا توجد مدفوعات مسجلة</p>
                 </div>
               ) : (
                 <div className="space-y-1.5">
@@ -270,7 +270,7 @@ export default function SuppliersBalancePage() {
                     </div>
                   ))}
                   {payments.length > 50 && (
-                    <p className="text-[11px] text-slate-400 text-center py-2">+ {payments.length - 50} more</p>
+                    <p className="text-[11px] text-slate-400 text-center py-2">+ {payments.length - 50} المزيد</p>
                   )}
                 </div>
               )}
