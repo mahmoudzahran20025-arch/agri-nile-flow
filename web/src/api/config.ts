@@ -15,10 +15,11 @@ export const configApi = {
   createItem:  (body: unknown) => api.post('/config/items', body),
   updateItem:  (code: number, body: unknown) => api.patch(`/config/items/${code}`, body),
 
-  costCenters:  () => unwrap(api.get('/config/cost_centers')),
-  accounts:     () => unwrap(api.get('/config/accounts')),
-  expenseTypes: () => unwrap(api.get('/config/expense_types')),
-  companies:    () => unwrap(api.get('/config/companies')),
+  costCenters:    () => unwrap(api.get('/config/cost_centers')),
+  accounts:       () => unwrap(api.get('/config/accounts')),
+  expenseTypes:   () => unwrap(api.get('/config/expense_types')),
+  equipmentTypes: () => unwrap(api.get('/config/equipment_types')),
+  companies:      () => unwrap(api.get('/config/companies')),
 
   integrations:      () =>
     unwrap(api.get<{ module_key: string; is_enabled: number }[]>('/config/gl-integrations')),

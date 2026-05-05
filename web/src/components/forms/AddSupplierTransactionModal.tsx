@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
+import { Info } from 'lucide-react'
 import Modal from '../ui/Modal'
 import { suppliersApi, configApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
@@ -23,6 +24,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
     document_type:    '',
     document_number:  '',
     expense_category: '',
+    equipment_type_id: '',
     unit:             '',
     quantity:         '',
     unit_price:       '',
@@ -38,7 +40,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
       setForm({
         transaction_date: today(), entry_type: 'م', amount: '',
         document_type: '', document_number: '', expense_category: '',
-        unit: '', quantity: '', unit_price: '', notes: '',
+        equipment_type_id: '', unit: '', quantity: '', unit_price: '', notes: '',
         season_id: '', center_code: '', status: 'draft',
       })
       setError('')
@@ -72,6 +74,14 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
     staleTime: 120_000,
   })
 
+  type EquipmentTypeOption = { id: number; code: string; name: string; asset_nature: string }
+  const { data: equipmentTypes = [] } = useQuery({
+    queryKey: ['config', 'equipment_types'],
+    queryFn:  configApi.equipmentTypes as () => Promise<EquipmentTypeOption[]>,
+    enabled:  open,
+    staleTime: 120_000,
+  })
+
 
   // Auto-compute amount from qty × price
   useEffect(() => {
@@ -98,6 +108,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
         document_type:    form.document_type || undefined,
         document_number:  form.document_number ? Number(form.document_number) : undefined,
         expense_category: form.expense_category || undefined,
+        equipment_type_id: form.equipment_type_id ? Number(form.equipment_type_id) : undefined,
         unit:             form.unit || undefined,
         quantity:         form.quantity ? Number(form.quantity) : undefined,
         unit_price:       form.unit_price ? Number(form.unit_price) : undefined,
@@ -137,6 +148,17 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
   return (
     <Modal open={open} title={`إضافة قيد — ${supplierName}`} onClose={onClose} size="lg">
       <form onSubmit={handleSubmit} className="space-y-4">
+
+        {/* ── Payment + Treasury integration notice ─────── */}
+        {form.entry_type === 'م' && form.status === 'posted' && (
+          <div className="flex gap-2 rounded-md bg-blue-50 border border-blue-200 p-3 text-sm text-blue-800">
+            <Info className="h-4 w-4 mt-0.5 shrink-0 text-blue-500" />
+            <div>
+              <span className="font-semibold">تكامل الخزينة:</span> عند ترحيل دفعة مرحّلة، سيُسجَّل المبلغ تلقائياً
+              في حركات الخزينة لضمان تطابق الأرصدة. لا حاجة لإعادة الإدخال في فورم الخزينة.
+            </div>
+          </div>
+        )}
 
         {/* ── Row 1: Date + Entry Type + Status ──────────── */}
         <div className="grid grid-cols-3 gap-3">
@@ -187,7 +209,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
           </div>
         </div>
 
-        {/* ── Row 3: Document + Expense ───────────────────── */}
+        {/* ── Row 3: Document + Equipment ───────────────────── */}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="label">نوع المستند</label>
@@ -200,10 +222,23 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
             </select>
           </div>
           <div>
-            <label className="label">رقم المستند</label>
-            <input type="number" className="input" placeholder="—" value={form.document_number}
-              onChange={e => set('document_number', e.target.value)} />
+            <label className="label">نوع المعدة {form.entry_type === 'د' && <span className="text-amber-600 text-xs font-semibold">(رأسمالية)</span>}</label>
+            <select className="input" value={form.equipment_type_id}
+              onChange={e => set('equipment_type_id', e.target.value)}>
+              <option value="">— بدون معدات —</option>
+              {(equipmentTypes || []).map(et => (
+                <option key={et.id} value={et.id}>
+                  {et.name} {et.asset_nature === 'capital' ? '🔴' : '📦'}
+                </option>
+              ))}
+            </select>
           </div>
+        </div>
+
+        <div>
+          <label className="label">رقم المستند</label>
+          <input type="number" className="input" placeholder="—" value={form.document_number}
+            onChange={e => set('document_number', e.target.value)} />
         </div>
 
         <div>

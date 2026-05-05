@@ -485,4 +485,73 @@ config.patch('/gl-integrations/:key', async (c) => {
   return c.json({ success: true, data: null })
 })
 
+// ─── Equipment Types ────────────────────────────────────────
+config.get('/equipment_types', async (c) => {
+  const { company_id } = getUser(c)
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, code, name, category, asset_nature, default_life_months, is_active
+     FROM equipment_types WHERE company_id = ? ORDER BY category, name`
+  ).bind(company_id).all()
+  return c.json({ success: true, data: results })
+})
+
+config.post('/equipment_types', async (c) => {
+  const { company_id } = getUser(c)
+  const b = await c.req.json<{
+    code: string; name: string; category?: string
+    asset_nature?: string; default_life_months?: number; notes?: string
+  }>()
+
+  if (!b.code || !b.name) {
+    return c.json({ success: false, error: 'الكود والاسم مطلوبان' }, 400)
+  }
+
+  const allowed_nature = ['capital', 'consumable']
+  if (b.asset_nature && !allowed_nature.includes(b.asset_nature)) {
+    return c.json({ success: false, error: 'طبيعة الأصل غير صالحة (capital/consumable)' }, 400)
+  }
+
+  await c.env.DB.prepare(`
+    INSERT INTO equipment_types
+    (company_id, code, name, category, asset_nature, default_life_months, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    company_id, b.code, b.name,
+    b.category ?? 'other',
+    b.asset_nature ?? 'capital',
+    b.default_life_months ?? 60,
+    b.notes ?? null
+  ).run()
+
+  return c.json({ success: true, data: null }, 201)
+})
+
+config.patch('/equipment_types/:id', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const b = await c.req.json<{
+    name?: string; category?: string; asset_nature?: string
+    default_life_months?: number; is_active?: number; notes?: string
+  }>()
+
+  const sets = []
+  const binds = []
+
+  if (b.name !== undefined) { sets.push('name = ?'); binds.push(b.name) }
+  if (b.category !== undefined) { sets.push('category = ?'); binds.push(b.category) }
+  if (b.asset_nature !== undefined) { sets.push('asset_nature = ?'); binds.push(b.asset_nature) }
+  if (b.default_life_months !== undefined) { sets.push('default_life_months = ?'); binds.push(b.default_life_months) }
+  if (b.is_active !== undefined) { sets.push('is_active = ?'); binds.push(b.is_active) }
+  if (b.notes !== undefined) { sets.push('notes = ?'); binds.push(b.notes) }
+
+  if (sets.length === 0) return c.json({ success: false, error: 'لا توجد بيانات للتحديث' }, 400)
+
+  binds.push(id, company_id)
+  await c.env.DB.prepare(
+    `UPDATE equipment_types SET ${sets.join(', ')} WHERE id = ? AND company_id = ?`
+  ).bind(...binds).run()
+
+  return c.json({ success: true, data: null })
+})
+
 export default config
