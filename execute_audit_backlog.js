@@ -87,7 +87,7 @@ function safeRow(result) {
 
   // AUD-001
   {
-    const inv = runD1(`SELECT COUNT(*) AS total, SUM(CASE WHEN journal_entry_id IS NOT NULL THEN 1 ELSE 0 END) AS linked FROM inventory_movements WHERE company_id = ${COMPANY_ID} AND status='posted'`);
+    const inv = runD1(`SELECT COUNT(*) AS total, SUM(CASE WHEN journal_entry_id IS NOT NULL OR COALESCE(gl_posting_status,'') IN ('exempt_zero_value','skipped_zero_value') THEN 1 ELSE 0 END) AS linked FROM inventory_movements WHERE company_id = ${COMPANY_ID} AND status='posted'`);
     const cash = runD1(`SELECT COUNT(*) AS total, SUM(CASE WHEN journal_entry_id IS NOT NULL THEN 1 ELSE 0 END) AS linked FROM cash_transactions WHERE company_id = ${COMPANY_ID} AND status='posted'`);
     const sup = runD1(`SELECT COUNT(*) AS total, SUM(CASE WHEN journal_entry_id IS NOT NULL THEN 1 ELSE 0 END) AS linked FROM supplier_transactions WHERE company_id = ${COMPANY_ID} AND status='posted'`);
     const pay = runD1(`SELECT COUNT(*) AS total, SUM(CASE WHEN journal_entry_id IS NOT NULL THEN 1 ELSE 0 END) AS linked FROM payroll_runs WHERE company_id = ${COMPANY_ID} AND status='posted'`);

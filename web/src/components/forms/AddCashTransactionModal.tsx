@@ -1,9 +1,14 @@
 import { useState, useEffect } from 'react'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
-import { Users, Briefcase, Receipt } from 'lucide-react'
+import { Users, Briefcase, Receipt, Info, TrendingDown, TrendingUp } from 'lucide-react'
 import Modal from '../ui/Modal'
 import { treasuryApi, suppliersApi, configApi, employeesApi, fieldsApi, glApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
+
+function egp(n: number | null | undefined) {
+  if (n == null) return '—'
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
+}
 
 interface Props { open: boolean; onClose: () => void }
 
@@ -129,11 +134,26 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
     staleTime: 120_000,
   })
 
+  // Load supplier summary for balance display
+  const { data: supplierSummary } = useQuery({
+    queryKey: ['supplier-summary-mini', form.supplier_code],
+    queryFn:  () => suppliersApi.summary(Number(form.supplier_code)),
+    enabled:  open && beneficiaryType === 'supplier' && !!form.supplier_code,
+    staleTime: 30_000,
+  })
+
   // Auto-fill recipient name when supplier changes
   useEffect(() => {
     if (beneficiaryType === 'supplier' && form.supplier_code) {
       const sup = (suppliers as SupplierOption[]).find(s => String(s.code) === form.supplier_code)
-      if (sup) set('recipient_name', sup.name)
+      if (sup) {
+        set('recipient_name', sup.name)
+        // Auto-suggest narration if empty
+        if (!form.narration) {
+          const action = form.direction === 'م' ? 'سداد مستحقات' : 'تحصيل من'
+          set('narration', `${action} ${sup.name}`)
+        }
+      }
     }
   }, [form.supplier_code, suppliers, beneficiaryType])
 
@@ -158,6 +178,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
     e.preventDefault()
     setError('')
     if (!form.narration.trim() || !form.amount) { setError('البيان والمبلغ مطلوبان'); return }
+    if (!form.financial_account_id) { setError('يجب اختيار الحساب (الخزينة أو البنك)'); return }
     if (form.status === 'posted' && !form.season_id) { setError('الموسم مطلوب عند الترحيل'); return }
     if (form.status === 'posted' && !form.center_code) { setError('مركز التكلفة مطلوب عند الترحيل'); return }
     if (form.narration.trim().length < 3) { setError('البيان يجب أن يكون 3 أحرف على الأقل'); return }
@@ -278,25 +299,59 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
 
         {/* ── Beneficiary Details ─────────────────────────── */}
         {beneficiaryType === 'supplier' && (
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">المورد / العميل</label>
-              <select className="input" value={form.supplier_code}
-                onChange={e => set('supplier_code', e.target.value)}>
-                <option value="">— اختر المورد —</option>
-                {(suppliers as SupplierOption[]).map(s => (
-                  <option key={s.code} value={s.code}>
-                    {s.name}{s.activity ? ` (${s.activity})` : ''}
-                  </option>
-                ))}
-              </select>
+          <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">المورد / العميل</label>
+                <select className="input" value={form.supplier_code}
+                  onChange={e => set('supplier_code', e.target.value)}>
+                  <option value="">— اختر المورد —</option>
+                  {(suppliers as SupplierOption[]).map(s => (
+                    <option key={s.code} value={s.code}>
+                      {s.name}{s.activity ? ` (${s.activity})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">اسم المستلم / المسلم</label>
+                <input className="input" placeholder="يتم تعبئته تلقائياً..."
+                  value={form.recipient_name}
+                  onChange={e => set('recipient_name', e.target.value)} />
+              </div>
             </div>
-            <div>
-              <label className="label">اسم المستلم / المسلم</label>
-              <input className="input" placeholder="يتم تعبئته تلقائياً..."
-                value={form.recipient_name}
-                onChange={e => set('recipient_name', e.target.value)} />
-            </div>
+
+            {/* Supplier balance indicator */}
+            {form.supplier_code && supplierSummary && (
+              <div className={`flex items-center justify-between rounded-xl px-3 py-2 text-xs border ${
+                (supplierSummary.open_balance ?? 0) > 0
+                  ? 'bg-amber-50 border-amber-200 text-amber-800'
+                  : 'bg-slate-50 border-slate-200 text-slate-600'
+              }`}>
+                <span className="flex items-center gap-1.5">
+                  {(supplierSummary.open_balance ?? 0) > 0
+                    ? <TrendingDown size={12} className="text-amber-600" />
+                    : <TrendingUp   size={12} className="text-slate-400" />}
+                  رصيد المورد الحالي (المستحق):
+                </span>
+                <span className="font-black tabular-nums">
+                  {egp(supplierSummary.open_balance)}
+                </span>
+              </div>
+            )}
+
+            {/* Integration note */}
+            {form.supplier_code && (
+              <div className="flex items-start gap-2 rounded-xl bg-blue-50 border border-blue-200 px-3 py-2 text-[11px] text-blue-700">
+                <Info size={12} className="mt-0.5 shrink-0 text-blue-500" />
+                <span>
+                  {form.direction === 'م'
+                    ? 'هذه الحركة ستُسجَّل تلقائياً في كشف حساب المورد كدفعة (تخفيض المستحق)'
+                    : 'هذه الحركة ستُسجَّل تلقائياً في كشف حساب المورد كتحصيل (زيادة المستحق)'}
+                  {' — '}لا تُدخل نفس الحركة يدوياً في ملف المورد تجنباً للتكرار.
+                </span>
+              </div>
+            )}
           </div>
         )}
 
