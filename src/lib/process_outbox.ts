@@ -137,7 +137,7 @@ export async function processInventoryPostingOutbox(
 export async function processAllPendingOutbox(db: D1Database): Promise<void> {
   const { results } = await db.prepare(
     `SELECT DISTINCT company_id FROM inventory_posting_outbox
-     WHERE status = 'pending'
+     WHERE status IN ('pending', 'processing', 'outbox_pending')
      LIMIT 20`
   ).all<{ company_id: number }>()
 

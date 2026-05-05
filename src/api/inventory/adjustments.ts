@@ -4,6 +4,7 @@ import { getUser, permissionGuard } from '../../middleware/auth'
 import { getOpenPeriod } from '../../lib/gl'
 import { FinanceCore } from '../../lib/finance_core'
 import {
+  readInventoryBalance,
   enforceInventoryLockDate,
   enqueueInventoryPostingOutbox,
   getInventoryPostingControls,
@@ -77,7 +78,13 @@ adjustments.put('/adjustments/:id/lines', permissionGuard('inventory', 'create')
   if (!adj) return c.json({ success: false, error: 'التسوية غير موجودة' }, 404)
   if (adj.status !== 'draft') return c.json({ success: false, error: 'لا يمكن تعديل بنود تسوية مرحّلة' }, 400)
 
-  await c.env.DB.prepare('DELETE FROM inventory_adjustment_lines WHERE adjustment_id = ?').bind(id).run()
+  await c.env.DB.prepare(
+    `DELETE FROM inventory_adjustment_lines
+     WHERE adjustment_id = ?
+       AND adjustment_id IN (
+         SELECT id FROM inventory_adjustments WHERE id = ? AND company_id = ?
+       )`
+  ).bind(id, id, company_id).run()
 
   const lineStmts = b.lines.map((l) => {
     const theoreticalQty = Number(l.theoretical_qty ?? 0)
@@ -128,13 +135,16 @@ adjustments.post('/adjustments/:id/post', permissionGuard('inventory', 'create')
   if (!adj) return c.json({ success: false, error: 'التسوية غير موجودة' }, 404)
   if (adj.status !== 'draft') return c.json({ success: false, error: 'التسوية تم ترحيلها بالفعل' }, 400)
 
-  const wh = await c.env.DB.prepare('SELECT name FROM warehouses WHERE id = ?')
-    .bind(adj.warehouse_id).first<{ name: string }>()
+  const wh = await c.env.DB.prepare('SELECT name FROM warehouses WHERE id = ? AND company_id = ?')
+    .bind(adj.warehouse_id, company_id).first<{ name: string }>()
   const warehouseName = wh?.name || 'مخزن'
 
   const { results: lines } = await c.env.DB.prepare(
-    'SELECT * FROM inventory_adjustment_lines WHERE adjustment_id = ?'
-  ).bind(id).all<{ item_code: number; difference: number; theoretical_qty: number; counted_qty: number }>()
+    `SELECT al.*
+     FROM inventory_adjustment_lines al
+     JOIN inventory_adjustments a ON a.id = al.adjustment_id
+     WHERE al.adjustment_id = ? AND a.company_id = ?`
+  ).bind(id, company_id).all<{ item_code: number; difference: number; theoretical_qty: number; counted_qty: number }>()
 
   if (!lines.length) {
     return c.json({ success: false, error: 'لا يمكن ترحيل تسوية بدون بنود محفوظة', code: 'ADJUSTMENT_LINES_REQUIRED' }, 422)
@@ -169,29 +179,23 @@ adjustments.post('/adjustments/:id/post', permissionGuard('inventory', 'create')
   for (const l of lines) {
     if (l.difference === 0) continue
 
-    const movementType = l.difference > 0 ? 'اضافة' : 'صرف'
+    const movementType = l.difference > 0 ? 'ADJUSTMENT_PROFIT' : 'ADJUSTMENT_LOSS'
     const absQty = Math.abs(l.difference)
 
-    // O(1) balance read from snapshot table.
-    const lastRow = await c.env.DB.prepare(
-      `SELECT balance_qty, balance_value FROM inventory_balances
-       WHERE company_id = ? AND item_code = ? AND warehouse = ?`
-    ).bind(company_id, l.item_code, warehouseName)
-      .first<{ balance_qty: number; balance_value: number }>()
-
-    const prevQty = lastRow?.balance_qty ?? 0
-    const prevVal = lastRow?.balance_value ?? 0
+    const lastRow = await readInventoryBalance(c.env.DB, company_id, l.item_code, warehouseName)
+    const prevQty = lastRow.balance_qty ?? 0
+    const prevVal = lastRow.balance_value ?? 0
     const unitPrice  = prevQty > 0 ? prevVal / prevQty : 0
     const totalValue = absQty * unitPrice
 
-    if (movementType === 'صرف' && absQty > prevQty) {
+    if (movementType === 'ADJUSTMENT_LOSS' && absQty > prevQty) {
       return c.json({ success: false, error: `الصنف #${l.item_code}: الرصيد المتاح (${prevQty}) أقل من كمية التسوية (${absQty})`, code: 'INSUFFICIENT_STOCK' }, 409)
     }
 
-    const qtyIn  = movementType === 'اضافة' ? absQty : 0
-    const qtyOut = movementType === 'صرف'   ? absQty : 0
-    const valIn  = movementType === 'اضافة' ? totalValue : 0
-    const valOut = movementType === 'صرف'   ? totalValue : 0
+    const qtyIn  = movementType === 'ADJUSTMENT_PROFIT' ? absQty : 0
+    const qtyOut = movementType === 'ADJUSTMENT_LOSS'   ? absQty : 0
+    const valIn  = movementType === 'ADJUSTMENT_PROFIT' ? totalValue : 0
+    const valOut = movementType === 'ADJUSTMENT_LOSS'   ? totalValue : 0
 
     try {
       validateZeroValuePolicy(controls, role, totalValue, `inventory_adjustment:${id}`)
@@ -273,8 +277,8 @@ adjustments.post('/adjustments/:id/post', permissionGuard('inventory', 'create')
   }
 
   await c.env.DB.prepare(
-    'UPDATE inventory_adjustments SET status = "posted" WHERE id = ?'
-  ).bind(id).run()
+    'UPDATE inventory_adjustments SET status = "posted" WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).run()
 
   return c.json({ success: true })
 })

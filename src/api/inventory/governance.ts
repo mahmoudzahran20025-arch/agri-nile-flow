@@ -695,11 +695,16 @@ governance.post('/gl-trace/:id/resolve', permissionGuard('inventory', 'create'),
   if (!movId) return c.json({ success: false, error: 'movement id required' }, 400)
 
   const mov = await c.env.DB.prepare(
-    `SELECT id, gl_posting_status, value_in, value_out, journal_entry_id
+    `SELECT id, gl_posting_status, value_in, value_out, journal_entry_id,
+            item_code, warehouse, movement_type, movement_date,
+            center_code, supplier_code, work_order_id, created_by_user_id
      FROM inventory_movements WHERE company_id = ? AND id = ?`
   ).bind(company_id, movId).first<{
     id: number; gl_posting_status: string
     value_in: number; value_out: number; journal_entry_id: number | null
+    item_code: number; warehouse: string; movement_type: string; movement_date: string
+    center_code: number | null; supplier_code: number | null
+    work_order_id: number | null; created_by_user_id: number | null
   }>()
 
   if (!mov) return c.json({ success: false, error: 'movement not found' }, 404)
@@ -722,17 +727,41 @@ governance.post('/gl-trace/:id/resolve', permissionGuard('inventory', 'create'),
     return c.json({ success: true, action: 'exempt', movement_id: movId })
   }
 
-  // action='retry' — enqueue in outbox
+  // action='retry' — enqueue in outbox with correct schema
+  // The unique constraint is on (company_id, idempotency_key), not (company_id, movement_id).
+  // We must include event_type (NOT NULL) and payload_json (NOT NULL) in the INSERT.
+  // Use ON CONFLICT to reset failed/stuck rows so the cron worker picks them up again.
+  const itemRow = await c.env.DB.prepare(
+    `SELECT name FROM items WHERE code = ? AND company_id = ? LIMIT 1`
+  ).bind(mov.item_code, company_id).first<{ name: string }>()
+
+  const retryPayload = {
+    company_id,
+    ref_id:         movId,
+    item_code:      mov.item_code,
+    warehouse:      mov.warehouse,
+    movement_type:  mov.movement_type,
+    value:          (mov.value_in ?? 0) + (mov.value_out ?? 0),
+    date:           mov.movement_date,
+    item_name:      itemRow?.name ?? String(mov.item_code),
+    created_by:     mov.created_by_user_id ?? undefined,
+    center_code:    mov.center_code ?? undefined,
+    supplier_code:  mov.supplier_code ?? undefined,
+    work_order_id:  mov.work_order_id ?? undefined,
+  }
+
+  const idempotencyKey = `inventory_movement:${movId}`
   await c.env.DB.prepare(
     `INSERT INTO inventory_posting_outbox
-       (company_id, movement_id, status, attempts, created_at, updated_at)
-     VALUES (?, ?, 'pending', 0, datetime('now'), datetime('now'))
-     ON CONFLICT(company_id, movement_id) DO UPDATE SET
-       status     = 'pending',
-       attempts   = 0,
-       last_error = NULL,
-       updated_at = datetime('now')`
-  ).bind(company_id, movId).run()
+       (company_id, event_type, movement_id, payload_json, status, attempts, idempotency_key, created_at, updated_at)
+     VALUES (?, 'inventory_movement', ?, ?, 'pending', 0, ?, datetime('now'), datetime('now'))
+     ON CONFLICT(company_id, idempotency_key) DO UPDATE SET
+       status       = 'pending',
+       attempts     = 0,
+       last_error   = NULL,
+       payload_json = excluded.payload_json,
+       updated_at   = datetime('now')`
+  ).bind(company_id, movId, JSON.stringify(retryPayload), idempotencyKey).run()
 
   return c.json({ success: true, action: 'retry', movement_id: movId, outbox: 'enqueued' })
 })

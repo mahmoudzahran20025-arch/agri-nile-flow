@@ -20,11 +20,11 @@ analytics.get('/cost-by-field', permissionGuard('inventory', 'read'), async (c) 
        f.id, f.code, f.name AS field_name, f.area_feddan, f.crop_type,
        f.season_id,
        s.name AS season_name,
-       COALESCE(SUM(CASE WHEN im.movement_type = 'صرف' THEN im.value_out ELSE 0 END), 0) AS total_consumed,
-       COALESCE(SUM(CASE WHEN im.movement_type = 'اضافة' THEN im.value_in  ELSE 0 END), 0) AS total_added,
-       COUNT(DISTINCT CASE WHEN im.movement_type = 'صرف' THEN im.item_code END)           AS items_consumed,
+       COALESCE(SUM(CASE WHEN im.movement_type IN ('صرف', 'ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS') THEN im.value_out ELSE 0 END), 0) AS total_consumed,
+       COALESCE(SUM(CASE WHEN im.movement_type IN ('اضافة', 'GRN', 'TRANSFER_IN', 'RETURN_CUSTOMER', 'PRODUCTION_OUTPUT', 'ADJUSTMENT_PROFIT') THEN im.value_in  ELSE 0 END), 0) AS total_added,
+       COUNT(DISTINCT CASE WHEN im.movement_type IN ('صرف', 'ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS') THEN im.item_code END)           AS items_consumed,
        CASE WHEN f.area_feddan > 0
-            THEN COALESCE(SUM(CASE WHEN im.movement_type = 'صرف' THEN im.value_out ELSE 0 END), 0) / f.area_feddan
+            THEN COALESCE(SUM(CASE WHEN im.movement_type IN ('صرف', 'ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS') THEN im.value_out ELSE 0 END), 0) / f.area_feddan
             ELSE NULL END AS cost_per_feddan,
        fsb.id          AS budget_id,
        fsb.budget_per_feddan,
@@ -32,7 +32,7 @@ analytics.get('/cost-by-field', permissionGuard('inventory', 'read'), async (c) 
          WHEN fsb.budget_per_feddan IS NULL OR fsb.budget_per_feddan = 0 OR f.area_feddan = 0 THEN NULL
          ELSE ROUND(
            (
-             (COALESCE(SUM(CASE WHEN im.movement_type = 'صرف' THEN im.value_out ELSE 0 END), 0) / f.area_feddan)
+             (COALESCE(SUM(CASE WHEN im.movement_type IN ('صرف', 'ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS') THEN im.value_out ELSE 0 END), 0) / f.area_feddan)
              - fsb.budget_per_feddan
            ) * 100.0 / fsb.budget_per_feddan,
            1
@@ -74,7 +74,7 @@ analytics.get('/reorder-alerts', permissionGuard('inventory', 'read'), async (c)
       FROM inventory_movements im
       JOIN work_orders wo ON wo.id = im.work_order_id AND wo.company_id = im.company_id
       WHERE im.company_id = ?
-        AND im.movement_type = 'صرف'
+        AND im.movement_type IN ('صرف', 'ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS')
         AND wo.status IN ('pending', 'in_progress', 'done')
       GROUP BY im.item_code
     )
@@ -84,12 +84,12 @@ analytics.get('/reorder-alerts', permissionGuard('inventory', 'read'), async (c)
       i.unit,
       lb.balance_qty  AS current_balance,
       ac.consumed_qty AS consumed_active_orders,
-      ROUND(ac.consumed_qty * 100.0 / lb.balance_qty, 1) AS consumption_pct,
+      ROUND(ac.consumed_qty * 100.0 / NULLIF(lb.balance_qty, 0), 1) AS consumption_pct,
       (SELECT COUNT(DISTINCT wo2.id)
        FROM inventory_movements im2
        JOIN work_orders wo2 ON wo2.id = im2.work_order_id AND wo2.company_id = im2.company_id
        WHERE im2.item_code = lb.item_code AND im2.company_id = ?
-         AND im2.movement_type = 'صرف'
+        AND im2.movement_type IN ('صرف', 'ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS')
          AND wo2.status IN ('pending', 'in_progress', 'done')
       ) AS active_order_count
     FROM last_balance lb
