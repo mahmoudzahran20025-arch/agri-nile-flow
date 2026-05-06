@@ -44,9 +44,6 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
     center_code:      '',
     field_id:         '',
     expense_code:     '',
-    unit:             '',
-    quantity:         '',
-    unit_price:       '',
     status:           'draft' as 'draft' | 'posted',
     financial_account_id: '',
     partner_id:       '',
@@ -60,7 +57,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
         transaction_date: today(), direction: 'م', narration: '', amount: '',
         document_number: '', document_type: '', recipient_name: '', notes: '',
         supplier_code: '', season_id: '', center_code: '', field_id: '', expense_code: '',
-        unit: '', quantity: '', unit_price: '', status: 'draft',
+        status: 'draft',
         financial_account_id: '', partner_id: '',
       })
       setBeneficiaryType('supplier')
@@ -165,14 +162,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
     }
   }, [form.supplier_code, employees, beneficiaryType])
 
-  // Auto-compute amount from qty × price
-  useEffect(() => {
-    const qty = Number(form.quantity)
-    const price = Number(form.unit_price)
-    if (qty > 0 && price > 0) {
-      set('amount', String(qty * price))
-    }
-  }, [form.quantity, form.unit_price])
+
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -201,9 +191,6 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
         center_code:      form.center_code ? Number(form.center_code) : undefined,
         field_id:         form.field_id ? Number(form.field_id) : undefined,
         expense_code:     form.expense_code ? Number(form.expense_code) : null,
-        unit:             form.unit || null,
-        quantity:         form.quantity ? Number(form.quantity) : null,
-        unit_price:       form.unit_price ? Number(form.unit_price) : null,
         financial_account_id: form.financial_account_id ? Number(form.financial_account_id) : null,
         partner_id:       form.partner_id ? Number(form.partner_id) : null,
         status:           form.status,
@@ -230,9 +217,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
     }
   }
 
-  const computedAmount = Number(form.quantity) > 0 && Number(form.unit_price) > 0
-    ? (Number(form.quantity) * Number(form.unit_price)).toLocaleString('en-US', { style: 'currency', currency: 'EGP' })
-    : null
+
 
   return (
     <Modal open={open} title="إضافة حركة خزينة" onClose={onClose} size="lg">
@@ -485,42 +470,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
           </div>
         </div>
 
-        {/* ── Qty × Price (collapsible detail) ────────────── */}
-        <details className="group rounded-xl border border-slate-200 bg-slate-50">
-          <summary className="flex items-center gap-2 px-3 py-2 cursor-pointer text-sm text-slate-500 hover:text-slate-700 select-none">
-            <span className="text-xs font-semibold uppercase tracking-wide">تفاصيل الكمية والسعر</span>
-            {computedAmount && (
-              <span className="mr-auto text-xs font-medium text-brand-600">
-                = {computedAmount}
-              </span>
-            )}
-          </summary>
-          <div className="grid grid-cols-3 gap-3 p-3 pt-2 border-t border-slate-200">
-            <div>
-              <label className="label text-xs">الوحدة</label>
-              <select className="input text-sm" value={form.unit} onChange={e => set('unit', e.target.value)}>
-                <option value="">—</option>
-                <option value="طن">طن</option>
-                <option value="كجم">كجم</option>
-                <option value="فدان">فدان</option>
-                <option value="لتر">لتر</option>
-                <option value="عبوة">عبوة</option>
-                <option value="قطعة">قطعة</option>
-                <option value="كرتونة">كرتونة</option>
-              </select>
-            </div>
-            <div>
-              <label className="label text-xs">الكمية</label>
-              <input type="number" className="input text-sm" placeholder="0" min="0" step="0.001"
-                value={form.quantity} onChange={e => set('quantity', e.target.value)} />
-            </div>
-            <div>
-              <label className="label text-xs">سعر الوحدة</label>
-              <input type="number" className="input text-sm" placeholder="0.00" min="0" step="0.01"
-                value={form.unit_price} onChange={e => set('unit_price', e.target.value)} />
-            </div>
-          </div>
-        </details>
+
 
         {/* ── Notes ───────────────────────────────────────── */}
         <div>

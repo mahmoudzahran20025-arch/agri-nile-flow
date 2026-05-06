@@ -1,6 +1,6 @@
 import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types'
 import { getOpenPeriod } from '../gl'
-import { resolveControlAccount } from '../posting_engine'
+import { resolveCashLedger } from './resolvers/cash'
 
 interface CashMovementInput {
   company_id: number
@@ -18,14 +18,12 @@ interface CashMovementInput {
   season_id?: number | null
   notes?: string | null
   document_type?: string | null
-  unit?: string | null
-  quantity?: number | null
-  unit_price?: number | null
   contraAccount?: string | null
   partner_id?: number | null
   financial_account_id?: number | null
   status?: 'draft' | 'posted'
   skipSupplierMirror?: boolean
+  skipGlPosting?: boolean
 }
 
 interface CashDraftRow {
@@ -89,49 +87,20 @@ export async function prepareCashMovement(
      (company_id, season_id, supplier_code, partner_id, financial_account_id, transaction_date,
       direction, document_number, recipient_name, narration, amount,
       debit, credit, running_balance, year, month, created_by_user_id, status, center_code, field_id, expense_code, local_id,
-      document_type, notes, unit, quantity, unit_price)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      document_type, notes)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(
     opts.company_id, opts.season_id ?? null, opts.supplier_code ?? null, opts.partner_id ?? null, opts.financial_account_id ?? null,
     opts.transaction_date, opts.direction, opts.document_number ?? null,
     opts.recipient_name ?? null, opts.narration, opts.amount,
     opts.direction === 'م' ? opts.amount : 0,
     opts.direction === 'د' ? opts.amount : 0,
-    newBalance,
-    new Date(opts.transaction_date).getFullYear(), new Date(opts.transaction_date).getMonth() + 1,
+    newBalance, new Date(opts.transaction_date).getFullYear(), new Date(opts.transaction_date).getMonth() + 1,
     opts.userId, status, opts.center_code ?? null, opts.field_id ?? null, opts.expense_code ?? null, batchKey,
-    opts.document_type ?? null, opts.notes ?? null, opts.unit ?? null, opts.quantity ?? null, opts.unit_price ?? null
+    opts.document_type ?? null, opts.notes ?? null
   ))
 
   if (isPosted) {
-    let cashAccCode = ''
-    if (opts.financial_account_id) {
-      const accInfo = await db.prepare("SELECT gl_account_code FROM bank_accounts WHERE id = ? AND company_id = ?").bind(opts.financial_account_id, opts.company_id).first<{ gl_account_code: string }>()
-      cashAccCode = accInfo?.gl_account_code || ''
-    }
-
-    if (!cashAccCode) {
-      const resolvedControl = await resolveControlAccount(db, opts.company_id, 'cash')
-      cashAccCode = resolvedControl || ''
-    }
-
-    let contraAcc = opts.contraAccount
-    if (!contraAcc) {
-      if (opts.expense_code) {
-        const et = await db.prepare("SELECT gl_account_code FROM expense_types WHERE code = ? AND company_id = ?").bind(opts.expense_code, opts.company_id).first<{gl_account_code: string}>()
-        if (et?.gl_account_code) contraAcc = et.gl_account_code
-      }
-      if (!contraAcc) {
-        const key = opts.partner_id
-          ? 'partner_current_account'
-          : opts.supplier_code
-          ? 'accounts_payable'
-          : (opts.direction === 'د' ? 'revenue_default' : 'expense_default')
-        const resolvedContra = await resolveControlAccount(db, opts.company_id, key)
-        contraAcc = resolvedContra || ''
-      }
-    }
-
     if (opts.supplier_code && !opts.skipSupplierMirror) {
       const supKey = `st_${batchKey}`
 
@@ -174,6 +143,31 @@ export async function prepareCashMovement(
     'SELECT id FROM cash_transactions WHERE local_id = ? AND company_id = ?'
   ).bind(batchKey, opts.company_id).first<{ id: number }>()
 
+  let journalEntryId: number | null = null
+
+  if (isPosted && inserted?.id && !opts.skipGlPosting) {
+    journalEntryId = await resolveCashLedger(db, {
+      company_id: opts.company_id,
+      ref_id: inserted.id,
+      financial_account_id: opts.financial_account_id ?? undefined,
+      direction: opts.direction,
+      amount: opts.amount,
+      date: opts.transaction_date,
+      description: opts.narration,
+      created_by: opts.userId,
+      center_code: opts.center_code ?? undefined,
+      expense_code: opts.expense_code,
+      supplier_code: opts.supplier_code,
+      partner_id: opts.partner_id,
+      contra_account: opts.contraAccount,
+    })
+
+    if (journalEntryId) {
+      await db.prepare('UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ?')
+        .bind(journalEntryId, inserted.id).run()
+    }
+  }
+
   return { 
     id: inserted?.id ?? null, 
     status, 
@@ -182,6 +176,7 @@ export async function prepareCashMovement(
     // Backward compatibility aliases
     txnId: inserted?.id ?? null,
     balance: newBalance,
+    journalEntryId,
   }
 }
 
