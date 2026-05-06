@@ -1,9 +1,10 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
-import { getUser, permissionGuard } from '../middleware/auth'
+import { authMiddleware, getUser, permissionGuard } from '../middleware/auth'
 import { FinanceCore } from '../lib/finance_core'
 
 const assets = new Hono<{ Bindings: Env }>()
+assets.use('*', authMiddleware)
 
 // GET /api/assets — list fixed assets with GL linkage from supplier_transactions
 assets.get('/', permissionGuard('admin', 'read'), async (c) => {

@@ -100,7 +100,7 @@ export default function JournalEntriesPage() {
     enabled: !!selectedId,
   }) as { data?: EntryDetail };
 
-  const { data: traceData, isFetching: traceLoading } = useQuery({
+  const { data: traceData, isFetching: traceLoading, isError: traceIsError, error: traceError } = useQuery({
     queryKey: ['gl-entry-trace', selectedId],
     queryFn: () => glApi.entryTrace(selectedId!),
     enabled: !!selectedId && traceOpen,
@@ -368,6 +368,7 @@ export default function JournalEntriesPage() {
         <GlEntryTraceDrawer
           isOpen={traceOpen && !!selectedId}
           loading={traceLoading}
+          errorMessage={traceIsError ? ((traceError as Error)?.message || 'Failed to load trace data') : undefined}
           tab={traceTab}
           onTabChange={setTraceTab}
           onClose={() => setTraceOpen(false)}

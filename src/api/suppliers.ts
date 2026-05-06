@@ -13,6 +13,110 @@ suppliers.use('*', authMiddleware)
 // Read operations use DB-driven permissionGuard so any role with suppliers.read can view.
 const financeOnly = roleGuard(['super_admin', 'company_admin', 'accountant'])
 
+async function rebalanceSupplierBalances(db: Env['DB'], companyId: number, supplierCode: number) {
+  const rows = await db.prepare(
+    `SELECT id, credit, debit, check_amount
+     FROM supplier_transactions
+     WHERE company_id = ? AND supplier_code = ?
+     ORDER BY transaction_date ASC, id ASC`
+  ).bind(companyId, supplierCode).all<{
+    id: number
+    credit: number | null
+    debit: number | null
+    check_amount: number | null
+  }>()
+
+  let runningNoChecks = 0
+  let runningWithChecks = 0
+  const typedRows = (rows.results ?? []) as Array<{
+    id: number
+    credit: number | null
+    debit: number | null
+    check_amount: number | null
+  }>
+
+  const updates = typedRows.map((row) => {
+    const credit = row.credit ?? 0
+    const debit = row.debit ?? 0
+    const checkAmt = row.check_amount ?? 0
+    runningNoChecks += credit - debit
+    runningWithChecks += credit - debit + checkAmt
+    return db.prepare(
+      `UPDATE supplier_transactions
+       SET balance_no_checks = ?, balance_with_checks = ?
+       WHERE id = ? AND company_id = ?`
+    ).bind(runningNoChecks, runningWithChecks, row.id, companyId)
+  })
+
+  if (updates.length) {
+    await db.batch(updates)
+  }
+}
+
+async function createOwnedCapitalAsset(
+  db: Env['DB'],
+  opts: {
+    companyId: number
+    txnId: number
+    supplierCode: number
+    equipmentType: { id: number; name: string; asset_nature: string; default_life_months: number } | null
+    transactionDate: string
+    amount: number
+    centerCode: number | null
+    userId: number
+  },
+) {
+  if (!opts.equipmentType || opts.equipmentType.asset_nature !== 'capital') return null
+
+  const assetCode = `${opts.supplierCode}-${opts.txnId}-${Date.now()}`
+  const lifeMonths = opts.equipmentType.default_life_months || 60
+
+  const assetResult = await db.prepare(`
+    INSERT INTO fixed_assets
+    (company_id, asset_code, name, category, acquisition_date, cost, useful_life_months,
+      depreciation_method, supplier_transaction_id, equipment_type_id, center_code, field_id, created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).bind(
+    opts.companyId,
+    assetCode,
+    opts.equipmentType.name,
+    'equipment',
+    opts.transactionDate,
+    opts.amount,
+    lifeMonths,
+    'straight_line',
+    opts.txnId,
+    opts.equipmentType.id,
+    opts.centerCode,
+    null,
+    opts.userId,
+  ).run()
+
+  const assetId = assetResult.meta.last_row_id as number
+  const acqDate = new Date(opts.transactionDate)
+  const now = new Date()
+  const monthlyDep = lifeMonths > 0 ? Math.round((opts.amount / lifeMonths) * 100) / 100 : 0
+
+  const scheduleInserts: Array<ReturnType<typeof db.prepare>> = []
+  for (let y = acqDate.getFullYear(); y <= now.getFullYear(); y++) {
+    const startMonth = y === acqDate.getFullYear() ? acqDate.getMonth() + 1 : 1
+    const endMonth = y === now.getFullYear() ? now.getMonth() + 1 : 12
+
+    for (let m = startMonth; m <= endMonth; m++) {
+      scheduleInserts.push(db.prepare(`
+        INSERT INTO depreciation_schedules
+        (company_id, asset_id, period_year, period_month, amount, status)
+        VALUES (?,?,?,?,?,?)
+      `).bind(opts.companyId, assetId, y, m, monthlyDep, 'pending'))
+    }
+  }
+  if (scheduleInserts.length) {
+    await db.batch(scheduleInserts)
+  }
+
+  return assetId
+}
+
 // GET /api/suppliers?page=1&size=50&q=search
 suppliers.get('/', permissionGuard('suppliers', 'read'), async (c) => {
   const { company_id } = getUser(c)
@@ -273,10 +377,11 @@ suppliers.get('/:code/statement', permissionGuard('suppliers', 'read'), async (c
       `SELECT id, transaction_date, entry_type, document_type, document_number,
               expense_category, equipment, unit, quantity, unit_price, amount,
               credit, debit, check_amount, balance_no_checks, balance_with_checks,
-              due_date, center_code, notes, year, month
+              due_date, center_code, financial_account_id, equipment_type_id, equipment_usage_mode,
+              notes, year, month, status, journal_entry_id
        FROM supplier_transactions
        ${where}
-       ORDER BY transaction_date ASC, id ASC
+       ORDER BY transaction_date DESC, id DESC
        LIMIT ? OFFSET ?`
     ).bind(...binds, size, offset).all(),
 
@@ -301,11 +406,24 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
     unit?: string; quantity?: number; unit_price?: number; amount: number
     credit?: number; debit?: number; check_amount?: number; due_date?: string
     notes?: string; season_id?: number; center_code?: number; account_code?: number
+    financial_account_id?: number; equipment_usage_mode?: 'owned' | 'rental'
     status?: 'draft' | 'posted'
   }>()
 
   if (!b.transaction_date || !b.entry_type || b.amount == null) {
     return c.json({ success: false, error: 'التاريخ ونوع القيد والمبلغ مطلوبة' }, 400)
+  }
+
+  const supplier = await c.env.DB
+    .prepare('SELECT code, name, is_active FROM suppliers WHERE code = ? AND company_id = ?')
+    .bind(code, company_id)
+    .first<{ code: number; name: string; is_active: number }>()
+
+  if (!supplier) {
+    return c.json({ success: false, error: 'المورد غير موجود' }, 404)
+  }
+  if (!supplier.is_active) {
+    return c.json({ success: false, error: 'المورد غير نشط ولا يمكن إضافة حركة جديدة' }, 409)
   }
 
   const status = b.status ?? 'posted'
@@ -314,118 +432,100 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
     return c.json({ success: false, error: 'الموسم ومركز التكلفة مطلوبان عند الترحيل' }, 422)
   }
 
-  const periodId = await getOpenPeriod(c.env.DB, company_id, b.transaction_date)
-  if (!periodId) {
-    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.transaction_date}` }, 400)
+  if (status === 'posted' && b.entry_type === 'م' && b.financial_account_id == null) {
+    return c.json({ success: false, error: 'حساب الخزينة / البنك مطلوب عند ترحيل سداد المورد' }, 422)
   }
 
-  // Calculate running balance for supplier (balance_with_checks / balance_no_checks)
-  const lastBalRow = await c.env.DB
-    .prepare(`SELECT balance_with_checks, balance_no_checks FROM supplier_transactions
-              WHERE company_id = ? AND supplier_code = ?
-              ORDER BY transaction_date DESC, id DESC LIMIT 1`)
-    .bind(company_id, code).first<{ balance_with_checks: number; balance_no_checks: number }>()
+  if (b.equipment_type_id && b.equipment_usage_mode == null) {
+    return c.json({ success: false, error: 'يجب تحديد ما إذا كانت المعدة إيجارًا أم مملوكة للشركة' }, 422)
+  }
 
-  const prevBalWithChecks = lastBalRow?.balance_with_checks ?? 0
-  const prevBalNoChecks   = lastBalRow?.balance_no_checks   ?? 0
+  if (b.equipment_type_id && b.equipment_usage_mode === 'owned' && b.entry_type === 'د' && status !== 'posted') {
+    return c.json({
+      success: false,
+      error: 'إدخال معدات رأسمالية يجب أن يكون مرحّلًا مباشرة لضمان إنشاء الأصل الثابت وربطه بالقيد'
+    }, 422)
+  }
+
+  let equipmentType: { id: number; name: string; asset_nature: string; default_life_months: number } | null = null
+  if (b.equipment_type_id) {
+    equipmentType = await c.env.DB.prepare(
+      'SELECT id, name, asset_nature, default_life_months FROM equipment_types WHERE id = ? AND company_id = ?'
+    ).bind(b.equipment_type_id, company_id).first<{
+      id: number; name: string; asset_nature: string; default_life_months: number
+    }>()
+
+    if (!equipmentType) {
+      return c.json({ success: false, error: 'نوع المعدة غير موجود أو غير متاح لهذه الشركة' }, 422)
+    }
+  }
+
+  if (status === 'posted') {
+    const periodId = await getOpenPeriod(c.env.DB, company_id, b.transaction_date)
+    if (!periodId) {
+      return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.transaction_date}` }, 400)
+    }
+  }
+
   const credit = b.credit ?? (b.entry_type === 'د' ? b.amount : 0)
   const debit  = b.debit  ?? (b.entry_type === 'م' ? b.amount : 0)
   const checkAmt = b.check_amount ?? 0
-  const newBalNoChecks   = prevBalNoChecks   + credit - debit
-  const newBalWithChecks = prevBalWithChecks + credit - debit + checkAmt
 
   const date = new Date(b.transaction_date)
+  const equipmentName = (b.equipment && b.equipment.trim()) || equipmentType?.name || null
+  const normalizedExpenseCategory = b.expense_category?.trim() || null
+  const notesWithMeta = b.notes?.trim() || null
+
   const result = await c.env.DB.prepare(
     `INSERT INTO supplier_transactions
-     (company_id, season_id, supplier_code, account_code, center_code,
+     (company_id, season_id, supplier_code, account_code, center_code, financial_account_id,
       transaction_date, entry_type, document_type, document_number,
-      expense_category, equipment, unit, quantity, unit_price, amount,
+      expense_category, equipment, equipment_type_id, equipment_usage_mode, unit, quantity, unit_price, amount,
       credit, debit, check_amount, balance_no_checks, balance_with_checks,
       due_date, notes, year, month, created_by_user_id, status)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(
-    company_id, b.season_id ?? null, code, b.account_code ?? null, b.center_code ?? null,
+    company_id, b.season_id ?? null, code, b.account_code ?? null, b.center_code ?? null, b.financial_account_id ?? null,
     b.transaction_date, b.entry_type, b.document_type ?? null, b.document_number ?? null,
-    b.expense_category ?? null, b.equipment ?? null, b.unit ?? null,
+    normalizedExpenseCategory, equipmentName, b.equipment_type_id ?? null, b.equipment_usage_mode ?? null, b.unit ?? null,
     b.quantity ?? null, b.unit_price ?? null, b.amount,
-    credit, debit, checkAmt, newBalNoChecks, newBalWithChecks,
-    b.due_date ?? null, b.notes ?? null,
+    credit, debit, checkAmt, 0, 0,
+    b.due_date ?? null, notesWithMeta,
     date.getFullYear(), date.getMonth() + 1, userId, status
   ).run()
 
   const txnId = result.meta.last_row_id
 
+  // Recompute all balances in date-order to keep backdated inserts consistent.
+  await rebalanceSupplierBalances(c.env.DB, company_id, code)
+
   // Auto-post GL entry only for 'posted' status
   if (status === 'posted') {
+    let createdAssetId: number | null = null
     try {
-      const supplierRow = await c.env.DB
-        .prepare('SELECT name FROM suppliers WHERE code = ? AND company_id = ?')
-        .bind(code, company_id).first<{name:string}>()
-
-      // If equipment_type_id provided and this is an invoice (د), auto-create fixed asset
-      if (b.equipment_type_id && b.entry_type === 'د') {
-        const equipType = await c.env.DB.prepare(
-          'SELECT id, name, asset_nature, default_life_months FROM equipment_types WHERE id = ? AND company_id = ?'
-        ).bind(b.equipment_type_id, company_id).first<{
-          id: number; name: string; asset_nature: string; default_life_months: number
-        }>()
-
-        if (equipType) {
-          const assetCode = `${code}-${txnId}-${Date.now()}`
-          const depMethod = equipType.asset_nature === 'capital' ? 'straight_line' : 'straight_line'
-          const lifeMonths = equipType.default_life_months || 60
-
-          const assetResult = await c.env.DB.prepare(`
-            INSERT INTO fixed_assets
-            (company_id, asset_code, name, category, acquisition_date, cost, useful_life_months,
-             depreciation_method, supplier_transaction_id, equipment_type_id, center_code, field_id, created_by)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-          `).bind(
-            company_id, assetCode, equipType.name,
-            'equipment', b.transaction_date, b.amount, lifeMonths,
-            depMethod, txnId, b.equipment_type_id,
-            b.center_code ?? null, null, userId
-          ).run()
-
-          const assetId = assetResult.meta.last_row_id as number
-
-          // Generate depreciation schedules automatically
-          const acqDate = new Date(b.transaction_date)
-          const now = new Date()
-          const monthlyDep = lifeMonths > 0 ? Math.round((b.amount / lifeMonths) * 100) / 100 : 0
-
-          for (let y = acqDate.getFullYear(); y <= now.getFullYear(); y++) {
-            const startMonth = y === acqDate.getFullYear() ? acqDate.getMonth() + 1 : 1
-            const endMonth   = y === now.getFullYear() ? now.getMonth() + 1 : 12
-
-            for (let m = startMonth; m <= endMonth; m++) {
-              await c.env.DB.prepare(`
-                INSERT INTO depreciation_schedules
-                (company_id, asset_id, period_year, period_month, amount, status)
-                VALUES (?,?,?,?,?,?)
-              `).bind(company_id, assetId, y, m, monthlyDep, 'pending').run()
-            }
-          }
-
-          // Link supplier transaction to fixed asset (all equipment types).
-          // GL entry (DR purchases/asset account, CR AP) is handled exclusively by
-          // FinanceCore.resolveSupplierInvoice below — single source of truth.
-          // For capital acquisitions to debit account 11030001 (fixed equipment),
-          // configure the EQUIP_CAP product posting group in general_posting_setup
-          // with purch_account = '11030001'.
-          await c.env.DB.prepare(`
-            UPDATE fixed_assets SET supplier_transaction_id = ? WHERE id = ? AND company_id = ?
-          `).bind(txnId, assetId, company_id).run()
-        }
-      }
+      const supplierName = supplier.name
 
       if (b.entry_type === 'د') {
+        // Create the asset first so any downstream posting failure can be compensated.
+        if (b.equipment_usage_mode === 'owned') {
+          createdAssetId = await createOwnedCapitalAsset(c.env.DB, {
+            companyId: company_id,
+            txnId,
+            supplierCode: code,
+            equipmentType,
+            transactionDate: b.transaction_date,
+            amount: b.amount,
+            centerCode: b.center_code ?? null,
+            userId,
+          })
+        }
+
         await FinanceCore.resolveSupplierInvoice(c.env.DB, {
           company_id,
           ref_id: txnId,
           amount: b.amount,
           date: b.transaction_date,
-          description: `${b.expense_category ?? b.entry_type} — ${supplierRow?.name ?? code}`,
+          description: `${b.expense_category ?? b.entry_type} — ${supplierName ?? code}`,
           created_by: userId,
           supplier_code: code
         })
@@ -435,14 +535,15 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
           ref_id: txnId,
           amount: b.amount,
           date: b.transaction_date,
-          description: `${b.expense_category ?? b.entry_type} — ${supplierRow?.name ?? code}`,
+          description: `${b.expense_category ?? b.entry_type} — ${supplierName ?? code}`,
           created_by: userId,
           center_code: b.center_code ?? undefined,
           supplier_code: code,
+          financial_account_id: b.financial_account_id ?? null,
         })
 
         // Mirror payment into cash_transactions so treasury running balance stays accurate.
-        // skipSupplierMirror=true prevents an infinite loop (cash_movement would otherwise
+        // skipSupplierMirror=true prevents an infinite loop (cash_movement would otherwise
         // try to write back to supplier_transactions for the same transaction).
         await FinanceCore.recordCashMovement(c.env.DB, {
           company_id,
@@ -450,7 +551,8 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
           transaction_date: b.transaction_date,
           direction: 'م',   // outflow — we are paying the supplier
           amount: b.amount,
-          narration: `${b.expense_category ? b.expense_category + ' — ' : ''}سداد مستحقات ${supplierRow?.name ?? code}`,
+          financial_account_id: b.financial_account_id ?? null,
+          narration: `${b.expense_category ? b.expense_category + ' — ' : ''}سداد مستحقات ${supplierName ?? code}`,
           supplier_code: code,
           season_id: b.season_id ?? null,
           center_code: b.center_code ?? null,
@@ -462,13 +564,19 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
         })
       }
     } catch (e: unknown) {
+      if (createdAssetId != null) {
+        await c.env.DB.prepare('DELETE FROM depreciation_schedules WHERE asset_id = ? AND company_id = ?')
+          .bind(createdAssetId, company_id).run()
+        await c.env.DB.prepare('DELETE FROM fixed_assets WHERE id = ? AND company_id = ?')
+          .bind(createdAssetId, company_id).run()
+      }
       await c.env.DB.prepare(
         "UPDATE supplier_transactions SET status = 'draft' WHERE id = ?"
       ).bind(txnId).run()
       const message = e instanceof Error ? e.message : 'خطأ غير معروف'
-      return c.json({ 
-        success: false, 
-        error: `تم حفظ الفاتورة كمسودة، لكن فشل إنشاء القيد المحاسبي: ${message}` 
+      return c.json({
+        success: false,
+        error: `تم حفظ الفاتورة كمسودة، لكن فشل إنشاء القيد المحاسبي: ${message}`
       }, 400)
     }
   }
@@ -479,6 +587,9 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
     new_value: {
       entry_type: b.entry_type, supplier: code, amount: b.amount,
       date: b.transaction_date, doc: b.document_number, status,
+      financial_account_id: b.financial_account_id ?? null,
+      equipment_type_id: b.equipment_type_id ?? null,
+      equipment_usage_mode: b.equipment_usage_mode ?? null,
     },
   })
 
@@ -491,34 +602,98 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
   const code = Number(c.req.param('code'))
   const id   = Number(c.req.param('id'))
 
+  const supplier = await c.env.DB
+    .prepare('SELECT code, name, is_active FROM suppliers WHERE code = ? AND company_id = ?')
+    .bind(code, company_id)
+    .first<{ code: number; name: string; is_active: number }>()
+
+  if (!supplier) {
+    return c.json({ success: false, error: 'المورد غير موجود' }, 404)
+  }
+  if (!supplier.is_active) {
+    return c.json({ success: false, error: 'المورد غير نشط ولا يمكن ترحيل حركة جديدة' }, 409)
+  }
+
   const txn = await c.env.DB
-    .prepare(`SELECT id, entry_type, amount, transaction_date, expense_category, center_code, account_code
-              FROM supplier_transactions WHERE id = ? AND company_id = ? AND status = 'draft'`)
-    .bind(id, company_id).first<{
+    .prepare(`SELECT id, supplier_code, entry_type, amount, transaction_date, expense_category,
+                     center_code, account_code, season_id, document_type, document_number, notes,
+                     financial_account_id, equipment_type_id, equipment_usage_mode
+              FROM supplier_transactions
+              WHERE id = ? AND company_id = ? AND supplier_code = ? AND status = 'draft'`)
+    .bind(id, company_id, code).first<{
       id: number
+      supplier_code: number
       entry_type: string
       amount: number
       transaction_date: string
       expense_category: string | null
       center_code: number | null
       account_code: string | null
+      season_id: number | null
+      document_type: string | null
+      document_number: number | null
+      notes: string | null
+      financial_account_id: number | null
+      equipment_type_id: number | null
+      equipment_usage_mode: 'owned' | 'rental' | null
     }>()
 
   if (!txn) return c.json({ success: false, error: 'المسودة غير موجودة أو تم ترحيلها بالفعل' }, 404)
 
+  if (txn.season_id == null || txn.center_code == null) {
+    return c.json({ success: false, error: 'لا يمكن ترحيل المسودة بدون موسم ومركز تكلفة' }, 422)
+  }
+
+  const periodId = await getOpenPeriod(c.env.DB, company_id, txn.transaction_date)
+  if (!periodId) {
+    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${txn.transaction_date}` }, 400)
+  }
+
+  if (txn.entry_type === 'م' && txn.financial_account_id == null) {
+    return c.json({ success: false, error: 'لا يمكن ترحيل مسودة سداد بدون تحديد حساب الخزينة / البنك' }, 422)
+  }
+
+  let txnEquipmentType: { id: number; name: string; asset_nature: string; default_life_months: number } | null = null
+  if (txn.equipment_type_id) {
+    if (txn.equipment_usage_mode == null) {
+      return c.json({ success: false, error: 'لا يمكن ترحيل مسودة معدات بدون تحديد نوع الاستخدام (إيجار/مملوك)' }, 422)
+    }
+
+    txnEquipmentType = await c.env.DB
+      .prepare('SELECT id, name, asset_nature, default_life_months FROM equipment_types WHERE id = ? AND company_id = ?')
+      .bind(txn.equipment_type_id, company_id)
+      .first<{ id: number; name: string; asset_nature: string; default_life_months: number }>()
+
+    if (!txnEquipmentType) {
+      return c.json({ success: false, error: 'نوع المعدة غير صالح لهذه الشركة' }, 422)
+    }
+  }
+
+  let createdAssetId: number | null = null
   try {
-    const supplierRow = await c.env.DB
-      .prepare('SELECT name FROM suppliers WHERE code = ? AND company_id = ?')
-      .bind(code, company_id).first<{name:string}>()
+    const supplierName = supplier.name
 
     // 1. Post to GL
     if (txn.entry_type === 'د') {
+      if (txn.equipment_usage_mode === 'owned') {
+        createdAssetId = await createOwnedCapitalAsset(c.env.DB, {
+          companyId: company_id,
+          txnId: id,
+          supplierCode: code,
+          equipmentType: txnEquipmentType,
+          transactionDate: txn.transaction_date,
+          amount: txn.amount,
+          centerCode: txn.center_code ?? null,
+          userId,
+        })
+      }
+
       await FinanceCore.resolveSupplierInvoice(c.env.DB, {
         company_id,
         ref_id: id,
         amount: txn.amount,
         date: txn.transaction_date,
-        description: `${txn.expense_category ?? txn.entry_type} — ${supplierRow?.name ?? code}`,
+        description: `${txn.expense_category ?? txn.entry_type} — ${supplierName ?? code}`,
         created_by: userId,
         supplier_code: code
       })
@@ -528,10 +703,31 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
         ref_id: id,
         amount: txn.amount,
         date: txn.transaction_date,
-        description: `${txn.expense_category ?? txn.entry_type} — ${supplierRow?.name ?? code}`,
+        description: `${txn.expense_category ?? txn.entry_type} — ${supplierName ?? code}`,
         created_by: userId,
         center_code: txn.center_code ?? undefined,
         supplier_code: code,
+        financial_account_id: txn.financial_account_id ?? null,
+      })
+
+      // Keep treasury running balance and supplier payment visibility aligned
+      // with the direct posted path.
+      await FinanceCore.recordCashMovement(c.env.DB, {
+        company_id,
+        userId,
+        transaction_date: txn.transaction_date,
+        direction: 'م',
+        amount: txn.amount,
+        financial_account_id: txn.financial_account_id ?? null,
+        narration: `${txn.expense_category ? txn.expense_category + ' — ' : ''}سداد مستحقات ${supplierName ?? code}`,
+        supplier_code: code,
+        season_id: txn.season_id ?? null,
+        center_code: txn.center_code ?? null,
+        document_type: txn.document_type ?? null,
+        document_number: txn.document_number ?? null,
+        notes: txn.notes ?? null,
+        status: 'posted',
+        skipSupplierMirror: true,
       })
     }
 
@@ -549,6 +745,12 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
 
     return c.json({ success: true, data: null })
   } catch (e: unknown) {
+    if (createdAssetId != null) {
+      await c.env.DB.prepare('DELETE FROM depreciation_schedules WHERE asset_id = ? AND company_id = ?')
+        .bind(createdAssetId, company_id).run()
+      await c.env.DB.prepare('DELETE FROM fixed_assets WHERE id = ? AND company_id = ?')
+        .bind(createdAssetId, company_id).run()
+    }
     const message = e instanceof Error ? e.message : 'خطأ غير معروف'
     return c.json({ success: false, error: `فشل ترحيل الحركة: ${message}` }, 400)
   }
@@ -574,6 +776,8 @@ suppliers.delete('/:code/transactions/:id', financeOnly, async (c) => {
   await c.env.DB
     .prepare('DELETE FROM supplier_transactions WHERE id = ? AND company_id = ?')
     .bind(id, company_id).run()
+
+  await rebalanceSupplierBalances(c.env.DB, company_id, code)
 
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'DELETE',

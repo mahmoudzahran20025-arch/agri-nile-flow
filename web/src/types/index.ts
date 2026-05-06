@@ -75,10 +75,14 @@ export interface SupplierTransaction {
   balance_with_checks: number | null
   due_date:            string | null
   center_code:         number | null
+  financial_account_id?: number | null
+  equipment_type_id?:   number | null
+  equipment_usage_mode?: 'owned' | 'rental' | null
   notes:               string | null
   year:                number | null
   month:               number | null
   status?:             'draft' | 'posted'
+  journal_entry_id?:   number | null
 }
 
 export interface CashTransaction {

@@ -32,7 +32,7 @@ export async function processInventoryPostingOutbox(
   const { results: jobs } = await db.prepare(
     `SELECT id, event_type, movement_id, payload_json, attempts
      FROM inventory_posting_outbox
-     WHERE company_id = ? AND status IN ('pending', 'processing', 'outbox_pending')
+     WHERE company_id = ? AND status IN ('pending', 'outbox_pending')
      ORDER BY id ASC
      LIMIT ?`
   ).bind(companyId, limit).all<{
@@ -133,11 +133,31 @@ export async function processInventoryPostingOutbox(
 /**
  * Called from the cron handler — iterates over all companies that have pending
  * outbox messages and processes each in turn.
+ *
+ * Stuck-job recovery: any row left in 'processing' for more than 5 minutes is
+ * reset to 'pending' (attempts + 1) before scanning begins. This handles Worker
+ * crashes that occur after marking a job 'processing' but before completing it.
  */
 export async function processAllPendingOutbox(db: D1Database): Promise<void> {
+  // Reset stale 'processing' jobs — 5 min staleness threshold
+  try {
+    const staleResult = await db.prepare(
+      `UPDATE inventory_posting_outbox
+       SET status = 'pending', attempts = attempts + 1,
+           last_error = 'reset: stale processing (>5 min)', updated_at = datetime('now')
+       WHERE status = 'processing'
+         AND updated_at < datetime('now', '-5 minutes')`
+    ).run()
+    if ((staleResult.meta.changes ?? 0) > 0) {
+      console.warn(`[Outbox] Reset ${staleResult.meta.changes} stale processing jobs`)
+    }
+  } catch (err) {
+    console.error('[Outbox] Stale-job reset failed:', err)
+  }
+
   const { results } = await db.prepare(
     `SELECT DISTINCT company_id FROM inventory_posting_outbox
-     WHERE status IN ('pending', 'processing', 'outbox_pending')
+     WHERE status IN ('pending', 'outbox_pending')
      LIMIT 20`
   ).all<{ company_id: number }>()
 

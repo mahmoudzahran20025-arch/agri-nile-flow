@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight, FileText, Plus, Filter, BarChart3, ShieldCheck,
   CreditCard, TrendingDown, Wallet, BookOpen, AlertTriangle,
-  CheckCircle2, Clock, Edit3, Download, Trash2,
+  CheckCircle2, Clock, Edit3, Download, Trash2, Link2,
 } from 'lucide-react'
 import { suppliersApi, reportsApi, configApi, downloadCsv } from '../../api/client'
 import { usePermission } from '../../hooks/usePermission'
@@ -75,7 +75,7 @@ function SupplierStatusBadge({ isActive }: { isActive: number | undefined }) {
 }
 
 export default function SupplierDetailPage() {
-  const { canWrite, role } = usePermission()
+  const { canWrite } = usePermission()
   const { code }         = useParams<{ code: string }>()
   const navigate         = useNavigate()
   const [searchParams]   = useSearchParams()
@@ -191,6 +191,22 @@ export default function SupplierDetailPage() {
     { key: 'expense_category', header: 'الخدمة',                   render: r => r.expense_category ?? '—' },
     { key: 'amount', header: 'القيمة', width: '110px',
       render: r => <span className="font-semibold tabular-nums">{egp(r.amount)}</span> },
+    {
+      key: 'journal_entry_id', header: 'القيد اليومية', width: '115px', align: 'center',
+      render: r => (
+        r.journal_entry_id ? (
+          <a
+            href={`/gl/entries?id=${r.journal_entry_id}&trace=1`}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-semibold hover:bg-emerald-100 transition-colors"
+          >
+            <span className="font-mono">{r.journal_entry_id}</span>
+            <Link2 size={9} className="opacity-60" />
+          </a>
+        ) : (
+          <span className="text-slate-300 text-[11px]">—</span>
+        )
+      )
+    },
     { key: 'credit', header: 'دائن ↑', width: '110px',
       render: r => r.credit ? <span className="text-amber-700 font-semibold tabular-nums">{egp(r.credit)}</span> : <span className="text-slate-200">—</span> },
     { key: 'debit',  header: 'مدين ↓', width: '110px',
@@ -205,7 +221,7 @@ export default function SupplierDetailPage() {
     {
       key: 'actions', header: '', width: '80px',
       render: r => (
-        r.status === 'draft' && (role === 'super_admin' || role === 'company_admin') ? (
+        r.status === 'draft' && canWrite('suppliers') ? (
           <div className="flex items-center gap-1">
             <button
               onClick={() => postMutation.mutate(r.id)}
@@ -256,6 +272,9 @@ export default function SupplierDetailPage() {
 
   const openBalance = summary?.open_balance ?? (supplier?.current_balance ?? 0)
   const hasDrafts   = (summary?.draft_count ?? 0) > 0
+  const glApBalance = (summary?.gl_credit ?? 0) - (summary?.gl_debit ?? 0)
+  const apGap = Math.round((openBalance - glApBalance) * 100) / 100
+  const isApInSync = Math.abs(apGap) < 0.01
 
   return (
     <div className="space-y-0 animate-fade-in">
@@ -370,6 +389,41 @@ export default function SupplierDetailPage() {
 
       {/* ── Tabs + Content ──────────────────────────────────── */}
       <div className="px-6 py-4 space-y-4">
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h3 className="text-sm font-black text-slate-800">مطابقة ذمم المورد مع GL</h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">مقارنة مباشرة بين رصيد المورد الفرعي ورصيد حساب الدائنين من القيود</p>
+            </div>
+            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold border ${
+              isApInSync
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-red-50 text-red-700 border-red-200'
+            }`}>
+              {isApInSync ? 'مطابق' : 'يوجد فرق'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] text-slate-500">Subledger (Supplier)</p>
+              <p className="font-black text-slate-800 tabular-nums">{egp(openBalance)}</p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] text-slate-500">GL AP Balance</p>
+              <p className="font-black text-slate-800 tabular-nums">{egp(glApBalance)}</p>
+            </div>
+            <div className={`rounded-lg border px-3 py-2 ${
+              isApInSync
+                ? 'border-emerald-200 bg-emerald-50'
+                : 'border-red-200 bg-red-50'
+            }`}>
+              <p className={`text-[11px] ${isApInSync ? 'text-emerald-700' : 'text-red-700'}`}>Gap</p>
+              <p className={`font-black tabular-nums ${isApInSync ? 'text-emerald-700' : 'text-red-700'}`}>{egp(apGap)}</p>
+            </div>
+          </div>
+        </div>
+
         {/* Tab bar */}
         <div className="flex items-center gap-0 border-b border-slate-200">
           {([

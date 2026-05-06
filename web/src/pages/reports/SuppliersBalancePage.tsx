@@ -28,20 +28,28 @@ export default function SuppliersBalancePage() {
   const [seasonId, setSeasonId]   = useState<number | undefined>(undefined)
   const [sortKey, setSortKey]     = useState<'name' | 'credit' | 'debit' | 'balance'>('balance')
   const [selected, setSelected]   = useState<BalanceRow | null>(null)
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'supplier_transactions' | 'supplier_invoices'>('all')
 
   const { data: seasons } = useQuery({
     queryKey: ['config', 'seasons'],
     queryFn:  configApi.seasons as () => Promise<Season[]>,
   })
 
-  const { data: rows = [], isLoading, refetch } = useQuery({
+  const { data: balanceData, isLoading, refetch } = useQuery({
     queryKey: ['reports', 'suppliers-balance', seasonId],
     queryFn:  () => reportsApi.suppliersBalance(seasonId),
   })
 
+  const rows = balanceData?.data ?? []
+  const legacyCoverage = balanceData?.legacy_coverage
+
   const { data: paymentsData } = useQuery({
-    queryKey: ['reports', 'supplier-payments', selected?.code, seasonId],
-    queryFn:  () => reportsApi.supplierPayments({ supplier_code: selected?.code, season_id: seasonId }),
+    queryKey: ['reports', 'supplier-payments', selected?.code, seasonId, sourceFilter],
+    queryFn:  () => reportsApi.supplierPayments({
+      supplier_code: selected?.code,
+      season_id: seasonId,
+      source_table: sourceFilter === 'all' ? undefined : sourceFilter,
+    }),
     enabled: !!selected,
   })
 
@@ -112,6 +120,23 @@ export default function SuppliersBalancePage() {
       <div className="px-6 py-5 bg-white border-b border-slate-200">
         <h1 className="text-[18px] font-bold text-[#0F2D5C]">ميزان الموردين والعملاء</h1>
         <p className="text-[12px] text-slate-500 mt-0.5">ملخص أرصدة الموردين · دائن / مدين / الرصيد الصافي</p>
+        <div className="mt-2">
+          {legacyCoverage ? (
+            legacyCoverage.has_legacy_gaps ? (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border bg-amber-50 text-amber-700 border-amber-200">
+                Legacy Coverage: {legacyCoverage.coverage_rate_pct}% (Gaps: {legacyCoverage.missing_journal_link_events + legacyCoverage.missing_supplier_code_events})
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border bg-emerald-50 text-emerald-700 border-emerald-200">
+                Legacy Coverage: {legacyCoverage.coverage_rate_pct}% (No gaps)
+              </span>
+            )
+          ) : (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border bg-slate-50 text-slate-600 border-slate-200">
+              Legacy Coverage: N/A
+            </span>
+          )}
+        </div>
       </div>
 
       <CommandBar actions={actions} rightSlot={rightSlot} />
@@ -250,6 +275,22 @@ export default function SuppliersBalancePage() {
             {/* Payments list */}
             <div className="flex-1 overflow-y-auto px-4 py-3">
               <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-2">سجل المدفوعات</p>
+              <div className="mb-3 flex items-center gap-1 text-[11px]">
+                <span className="text-slate-500">المصدر:</span>
+                {([
+                  { id: 'all', label: 'الكل' },
+                  { id: 'supplier_transactions', label: 'حركات المورد' },
+                  { id: 'supplier_invoices', label: 'فواتير المورد' },
+                ] as const).map(opt => (
+                  <button
+                    key={opt.id}
+                    onClick={() => setSourceFilter(opt.id)}
+                    className={`px-2 py-0.5 rounded ${sourceFilter === opt.id ? 'bg-[#0F2D5C] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
               {payments.length === 0 ? (
                 <div className="text-center text-slate-400 py-8">
                   <TrendingDown size={28} className="mx-auto mb-2 opacity-30" />

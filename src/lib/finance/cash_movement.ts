@@ -58,22 +58,30 @@ export async function prepareCashMovement(
     periodId = await getOpenPeriod(db, opts.company_id, opts.transaction_date)
     if (!periodId) throw new Error(`PERIOD_CLOSED: No open period for ${opts.transaction_date}`)
 
-    const lastRow = await db
-      .prepare(`SELECT running_balance FROM cash_transactions
-                WHERE company_id = ? AND financial_account_id = ? 
-                  AND transaction_date <= ? AND status = 'posted'
-                ORDER BY transaction_date DESC, id DESC LIMIT 1`)
-      .bind(opts.company_id, opts.financial_account_id, opts.transaction_date).first<{ running_balance: number }>()
+    const accountId = opts.financial_account_id ?? null
 
-    const prevBalance = lastRow?.running_balance ?? 0
-    delta = opts.direction === 'د' ? opts.amount : -opts.amount
-    newBalance = prevBalance + delta
+    if (accountId !== null) {
+      const lastRow = await db
+        .prepare(`SELECT running_balance FROM cash_transactions
+                  WHERE company_id = ? AND financial_account_id = ? 
+                    AND transaction_date <= ? AND status = 'posted'
+                  ORDER BY transaction_date DESC, id DESC LIMIT 1`)
+        .bind(opts.company_id, accountId, opts.transaction_date).first<{ running_balance: number }>()
 
-    stmts.push(db.prepare(
-      `UPDATE cash_transactions SET running_balance = running_balance + ?
-       WHERE company_id = ? AND financial_account_id = ? AND status = 'posted'
-         AND (transaction_date > ? OR (transaction_date = ? AND (local_id IS NULL OR local_id != ?)))`
-    ).bind(delta, opts.company_id, opts.financial_account_id, opts.transaction_date, opts.transaction_date, batchKey))
+      const prevBalance = lastRow?.running_balance ?? 0
+      delta = opts.direction === 'د' ? opts.amount : -opts.amount
+      newBalance = prevBalance + delta
+
+      stmts.push(db.prepare(
+        `UPDATE cash_transactions SET running_balance = running_balance + ?
+         WHERE company_id = ? AND financial_account_id = ? AND status = 'posted'
+           AND (transaction_date > ? OR (transaction_date = ? AND (local_id IS NULL OR local_id != ?)))`
+      ).bind(delta, opts.company_id, accountId, opts.transaction_date, opts.transaction_date, batchKey))
+    } else {
+      // No specific cash account — record without running balance tracking
+      delta = opts.direction === 'د' ? opts.amount : -opts.amount
+      newBalance = null
+    }
   }
 
   stmts.push(db.prepare(
@@ -98,7 +106,7 @@ export async function prepareCashMovement(
   if (isPosted) {
     let cashAccCode = ''
     if (opts.financial_account_id) {
-      const accInfo = await db.prepare("SELECT gl_account_code FROM bank_accounts WHERE id = ?").bind(opts.financial_account_id).first<{ gl_account_code: string }>()
+      const accInfo = await db.prepare("SELECT gl_account_code FROM bank_accounts WHERE id = ? AND company_id = ?").bind(opts.financial_account_id, opts.company_id).first<{ gl_account_code: string }>()
       cashAccCode = accInfo?.gl_account_code || ''
     }
 

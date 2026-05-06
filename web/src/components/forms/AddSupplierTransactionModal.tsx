@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { Info } from 'lucide-react'
 import Modal from '../ui/Modal'
-import { suppliersApi, configApi } from '../../api/client'
+import { suppliersApi, configApi, financeApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 
 interface Props { open: boolean; onClose: () => void; supplierCode: number; supplierName: string }
@@ -10,7 +10,7 @@ interface Props { open: boolean; onClose: () => void; supplierCode: number; supp
 const today = () => new Date().toISOString().slice(0, 10)
 
 const DOCUMENT_TYPES = ['فاتورة', 'شيك', 'تحويل بنكي', 'نقداً', 'إيصال', 'أمر شراء', 'أخرى']
-const UNITS = ['طن', 'كجم', 'فدان', 'لتر', 'عبوة', 'قطعة', 'كرتونة', 'متر', 'شيكارة']
+const UNITS = ['طن', 'كجم', 'فدان', 'لتر', 'عبوة', 'قطعة', 'كرتونة', 'متر', 'شيكارة', 'ساعة', 'يوم']
 
 export default function AddSupplierTransactionModal({ open, onClose, supplierCode, supplierName }: Props) {
   const qc = useQueryClient()
@@ -25,13 +25,15 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
     document_number:  '',
     expense_category: '',
     equipment_type_id: '',
+    equipment_usage_mode: '',
     unit:             '',
     quantity:         '',
     unit_price:       '',
     notes:            '',
     season_id:        '',
     center_code:      '',
-    status:           'draft' as 'draft' | 'posted',
+    financial_account_id: '',
+    status:           'posted' as 'draft' | 'posted',
   })
 
   // Reset form when modal opens
@@ -40,8 +42,9 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
       setForm({
         transaction_date: today(), entry_type: 'م', amount: '',
         document_type: '', document_number: '', expense_category: '',
-        equipment_type_id: '', unit: '', quantity: '', unit_price: '', notes: '',
-        season_id: '', center_code: '', status: 'draft',
+        equipment_type_id: '', equipment_usage_mode: '',
+        unit: '', quantity: '', unit_price: '', notes: '',
+        season_id: '', center_code: '', financial_account_id: '', status: 'posted',
       })
       setError('')
     }
@@ -82,6 +85,16 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
     staleTime: 120_000,
   })
 
+  type BankAccountOption = { id: number; bank_name: string; account_name: string; is_active: number }
+  const { data: bankAccounts = [] } = useQuery({
+    queryKey: ['finance', 'bank_accounts'],
+    queryFn: financeApi.getBankAccounts as () => Promise<BankAccountOption[]>,
+    enabled: open,
+    staleTime: 120_000,
+  })
+
+  const selectedEquipmentType = equipmentTypes.find(et => String(et.id) === form.equipment_type_id)
+
 
   // Auto-compute amount from qty × price
   useEffect(() => {
@@ -92,12 +105,40 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
     }
   }, [form.quantity, form.unit_price])
 
+  useEffect(() => {
+    // Owned capital equipment must be posted to trigger fixed asset creation.
+    if (form.entry_type === 'د' && form.equipment_type_id && form.equipment_usage_mode === 'owned' && form.status !== 'posted') {
+      setForm(f => ({ ...f, status: 'posted' }))
+    }
+  }, [form.entry_type, form.equipment_type_id, form.equipment_usage_mode, form.status])
+
+  useEffect(() => {
+    // Selecting equipment means this is a supplier invoice path (credit/AP increase).
+    if (form.equipment_type_id && form.entry_type !== 'د') {
+      setForm(f => ({ ...f, entry_type: 'د', document_type: f.document_type || 'فاتورة' }))
+    }
+  }, [form.equipment_type_id, form.entry_type])
+
+  useEffect(() => {
+    if (!form.equipment_type_id && form.equipment_usage_mode) {
+      setForm(f => ({ ...f, equipment_usage_mode: '' }))
+    }
+  }, [form.equipment_type_id, form.equipment_usage_mode])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
     if (!form.amount || Number(form.amount) <= 0) { setError('المبلغ مطلوب وأكبر من صفر'); return }
     if (form.status === 'posted' && !form.season_id) { setError('الموسم مطلوب عند الترحيل'); return }
     if (form.status === 'posted' && !form.center_code) { setError('مركز التكلفة مطلوب عند الترحيل'); return }
+    if (form.entry_type === 'م' && form.status === 'posted' && !form.financial_account_id) {
+      setError('حساب الخزينة / البنك مطلوب عند ترحيل سداد المورد')
+      return
+    }
+    if (form.equipment_type_id && !form.equipment_usage_mode) {
+      setError('حدد هل هذه المعدة إيجار أم مملوكة للشركة')
+      return
+    }
 
     setSaving(true)
     try {
@@ -109,12 +150,14 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
         document_number:  form.document_number ? Number(form.document_number) : undefined,
         expense_category: form.expense_category || undefined,
         equipment_type_id: form.equipment_type_id ? Number(form.equipment_type_id) : undefined,
+        equipment_usage_mode: form.equipment_usage_mode || undefined,
         unit:             form.unit || undefined,
         quantity:         form.quantity ? Number(form.quantity) : undefined,
         unit_price:       form.unit_price ? Number(form.unit_price) : undefined,
         notes:            form.notes.trim() || undefined,
         season_id:        form.season_id ? Number(form.season_id) : undefined,
         center_code:      form.center_code ? Number(form.center_code) : undefined,
+        financial_account_id: form.financial_account_id ? Number(form.financial_account_id) : undefined,
         status:           form.status,
       })
       if (!(res as { success: boolean }).success) {
@@ -160,6 +203,30 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
           </div>
         )}
 
+        {form.entry_type === 'د' && !!form.equipment_type_id && form.equipment_usage_mode === 'owned' && selectedEquipmentType?.asset_nature === 'capital' && (
+          <div className="flex gap-2 rounded-md bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">
+            <Info className="h-4 w-4 mt-0.5 shrink-0 text-amber-500" />
+            <div>
+              <span className="font-semibold">تكامل الأصل الثابت:</span> هذا القيد سيُرحّل مباشرة مع إنشاء أصل ثابت وربطه
+              بحركة المورد تلقائياً.
+            </div>
+          </div>
+        )}
+
+        {form.equipment_type_id && form.equipment_usage_mode === 'rental' && (
+          <div className="flex gap-2 rounded-md bg-sky-50 border border-sky-200 p-3 text-sm text-sky-800">
+            <Info className="h-4 w-4 mt-0.5 shrink-0 text-sky-500" />
+            <div>
+              <span className="font-semibold">معدات بالإيجار:</span> ستظهر في إحصائيات المعدات التشغيلية، ولن يتم إنشاء أصل ثابت لها.
+            </div>
+          </div>
+        )}
+
+        <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+          <span className="font-semibold text-slate-700">توضيح سريع:</span>
+          <span className="ml-2">"دائن (د)" = فاتورة/مستحقات تزيد رصيد المورد، "مدين (م)" = سداد يقلل رصيد المورد.</span>
+        </div>
+
         {/* ── Row 1: Date + Entry Type + Status ──────────── */}
         <div className="grid grid-cols-3 gap-3">
           <div>
@@ -169,15 +236,23 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
           </div>
           <div>
             <label className="label">نوع القيد <span className="text-red-500">*</span></label>
-            <select className="input" value={form.entry_type} onChange={e => set('entry_type', e.target.value)}>
-              <option value="م">مدين (م) — عليه</option>
-              <option value="د">دائن (د) — له</option>
+            <select
+              className="input"
+              value={form.entry_type}
+              onChange={e => set('entry_type', e.target.value)}
+              disabled={!!form.equipment_type_id}
+            >
+              <option value="د">دائن (د) — فاتورة مورد / زيادة مستحقات</option>
+              <option value="م">مدين (م) — سداد مورد / تقليل مستحقات</option>
             </select>
+            {!!form.equipment_type_id && (
+              <p className="mt-1 text-[11px] text-amber-700">تم قفل النوع على "دائن" لأن مسار المعدات يعتمد على فاتورة مورد.</p>
+            )}
           </div>
           <div>
             <label className="label">الحالة</label>
             <select className="input" value={form.status} onChange={e => set('status', e.target.value)}>
-              <option value="draft">مسودة</option>
+              <option value="draft" disabled={form.entry_type === 'د' && !!form.equipment_type_id && form.equipment_usage_mode === 'owned'}>مسودة</option>
               <option value="posted">مرحّل</option>
             </select>
           </div>
@@ -222,7 +297,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
             </select>
           </div>
           <div>
-            <label className="label">نوع المعدة {form.entry_type === 'د' && <span className="text-amber-600 text-xs font-semibold">(رأسمالية)</span>}</label>
+            <label className="label">نوع المعدة</label>
             <select className="input" value={form.equipment_type_id}
               onChange={e => set('equipment_type_id', e.target.value)}>
               <option value="">— بدون معدات —</option>
@@ -235,11 +310,49 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
           </div>
         </div>
 
+        {form.equipment_type_id && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">طريقة التعامل مع المعدة <span className="text-red-500">*</span></label>
+              <select className="input" value={form.equipment_usage_mode}
+                onChange={e => set('equipment_usage_mode', e.target.value)}>
+                <option value="">— اختر —</option>
+                <option value="rental">إيجار / تشغيل للغير</option>
+                <option value="owned">تملك الشركة</option>
+              </select>
+            </div>
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              <span className="font-semibold text-slate-700">التأثير المحاسبي:</span>{' '}
+              {form.equipment_usage_mode === 'owned'
+                ? (selectedEquipmentType?.asset_nature === 'capital'
+                  ? 'سيتم إنشاء أصل ثابت عند الترحيل.'
+                  : 'سيبقى القيد تشغيليًا لأن نوع المعدة غير رأسمالي.')
+                : form.equipment_usage_mode === 'rental'
+                  ? 'سيُعامل كمصروف/خدمة تشغيلية بدون إنشاء أصل ثابت.'
+                  : 'اختر الطريقة لتحديد هل الحركة أصل ثابت أم استخدام تشغيلي.'}
+            </div>
+          </div>
+        )}
+
         <div>
           <label className="label">رقم المستند</label>
           <input type="number" className="input" placeholder="—" value={form.document_number}
             onChange={e => set('document_number', e.target.value)} />
         </div>
+
+        {form.entry_type === 'م' && (
+          <div>
+            <label className="label">حساب الخزينة / البنك {form.status === 'posted' && <span className="text-red-500">*</span>}</label>
+            <select className="input" value={form.financial_account_id}
+              onChange={e => set('financial_account_id', e.target.value)}>
+              <option value="">— اختر الحساب —</option>
+              {bankAccounts.filter(acc => acc.is_active === 1).map(acc => (
+                <option key={acc.id} value={acc.id}>{acc.bank_name} — {acc.account_name}</option>
+              ))}
+            </select>
+            <p className="mt-1 text-[11px] text-slate-500">هذا الحساب يُستخدم في قيد السداد وفي رصيد الخزينة الفعلي.</p>
+          </div>
+        )}
 
         <div>
           <label className="label">بند المصروف / الخدمة</label>

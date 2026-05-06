@@ -15,9 +15,10 @@ APP_ENV    = "production"
 ENABLE_POSTING_ENGINE = "true"
 
 # ── Cron Triggers ─────────────────────────────────────────────
-# تشتغل كل يوم الساعة 10 مساءً UTC (منتصف الليل بتوقيت القاهرة)
+# "0 22 * * *"   — daily at 22:00 UTC: marks overdue location tasks as missed
+# "*/15 * * * *" — every 15 min: sweeps inventory GL posting outbox
 [triggers]
-crons = ["0 22 * * *"]
+crons = ["0 22 * * *", "*/15 * * * *"]
 
 # R2 deferred — not activated yet
 # [[r2_buckets]]

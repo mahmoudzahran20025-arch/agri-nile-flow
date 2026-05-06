@@ -4,6 +4,20 @@
  * Posting Engine V2 — Multi-Dimensional Cascade + Multi-Currency
  * ==============================================================
  *
+ * ⚠️  NOT YET WIRED — ZERO CALLERS IN PRODUCTION
+ * ------------------------------------------------
+ * This engine is fully implemented but not integrated into the active request
+ * flow. All live GL postings go through posting_engine.ts (V1).
+ *
+ * Wire this engine when the business requires:
+ *   - Date-bounded posting rules (valid_from / valid_to)
+ *   - Warehouse dimension in the cascade (wh_id)
+ *   - Multi-currency transactions (currency_code / amount_in_base_currency)
+ *
+ * Migration path: replace peResolveXxx() calls in src/lib/finance/resolvers/*
+ * one resolver at a time, using the V2ResolutionInput interface below.
+ * The postFromBusinessEvent() layer and journal write path need no changes.
+ *
  * Differences from V1 (posting_engine.ts):
  *  - Validity-date filtering on rules (valid_from / valid_to)
  *  - priority_index ordering within cascade steps

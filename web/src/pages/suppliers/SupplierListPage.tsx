@@ -7,6 +7,7 @@ import { usePermission } from '../../hooks/usePermission'
 import DataTable, { type Column, type SortState } from '../../components/ui/DataTable'
 import SidePanel from '../../components/ui/SidePanel'
 import AddSupplierModal from '../../components/forms/AddSupplierModal'
+import AddSupplierTransactionModal from '../../components/forms/AddSupplierTransactionModal'
 import type { Supplier } from '../../types'
 
 function egp(n: number | undefined) {
@@ -19,10 +20,11 @@ type StatusFilter  = 'all' | 'active' | 'inactive'
 type BalanceFilter = 'all' | 'credit' | 'debit' | 'zero'
 
 // ── Supplier Quick-View Panel ─────────────────────────────────
-function SupplierPanel({ supplier, onClose, onNavigate }: {
+function SupplierPanel({ supplier, onClose, onNavigate, onAddTransaction }: {
   supplier: Supplier | null
   onClose:  () => void
   onNavigate: (code: number) => void
+  onAddTransaction?: (supplier: Supplier) => void
 }) {
   if (!supplier) return null
   const balance = supplier.current_balance ?? 0
@@ -88,6 +90,16 @@ function SupplierPanel({ supplier, onClose, onNavigate }: {
           <ExternalLink size={15} />
           عرض التفاصيل الكاملة
         </button>
+
+        {onAddTransaction && (
+          <button
+            onClick={() => onAddTransaction(supplier)}
+            className="btn-secondary w-full gap-2 justify-center"
+          >
+            <Plus size={15} />
+            إضافة حركة مالية
+          </button>
+        )}
       </div>
     </SidePanel>
   )
@@ -136,6 +148,7 @@ export default function SupplierListPage() {
   const [q,            setQ]            = useState('')
   const [qInput,       setQInput]       = useState('')
   const [addOpen,      setAddOpen]      = useState(false)
+  const [txnSupplier,  setTxnSupplier]  = useState<Supplier | null>(null)
   const [selected,     setSelected]     = useState<Supplier | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [balFilter,    setBalFilter]    = useState<BalanceFilter>('all')
@@ -199,6 +212,31 @@ export default function SupplierListPage() {
   }
 
   const hasActiveFilters = statusFilter !== 'all' || balFilter !== 'all'
+
+  const columns = useMemo<Column<Supplier>[]>(() => {
+    if (!canWrite('suppliers')) return COLUMNS
+    return [
+      ...COLUMNS,
+      {
+        key: 'actions',
+        header: 'إجراء',
+        align: 'center',
+        width: '120px',
+        render: (r) => (
+          <button
+            type="button"
+            className="btn-secondary text-xs px-2.5 py-1"
+            onClick={(e) => {
+              e.stopPropagation()
+              setTxnSupplier(r)
+            }}
+          >
+            إضافة قيد
+          </button>
+        ),
+      },
+    ]
+  }, [canWrite])
 
   return (
     <div className="space-y-5">
@@ -298,7 +336,7 @@ export default function SupplierListPage() {
       </div>
 
       <DataTable<Supplier>
-        columns={COLUMNS}
+        columns={columns}
         data={filtered}
         loading={isLoading}
         total={filtered.length}
@@ -317,9 +355,17 @@ export default function SupplierListPage() {
         supplier={selected}
         onClose={() => setSelected(null)}
         onNavigate={code => { setSelected(null); navigate(`/suppliers/${code}`) }}
+        onAddTransaction={canWrite('suppliers') ? (supplier) => setTxnSupplier(supplier) : undefined}
       />
 
       <AddSupplierModal open={addOpen} onClose={() => setAddOpen(false)} />
+
+      <AddSupplierTransactionModal
+        open={!!txnSupplier}
+        onClose={() => setTxnSupplier(null)}
+        supplierCode={txnSupplier?.code ?? 0}
+        supplierName={txnSupplier?.name ?? ''}
+      />
     </div>
   )
 }

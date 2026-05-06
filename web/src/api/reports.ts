@@ -1,5 +1,15 @@
 import { api, unwrap, paginatedUrl } from './core'
 
+type LegacyCoverage = {
+  has_legacy_gaps: boolean
+  posted_events_total: number
+  covered_events: number
+  missing_journal_link_events: number
+  missing_supplier_code_events: number
+  coverage_rate_pct: number
+  notes: string
+}
+
 export const reportsApi = {
   costCenters: (season_id?: number) =>
     unwrap(api.get<{
@@ -41,7 +51,11 @@ export const reportsApi = {
       }
     }>(`/reports/cost-centers/${code}/detail${season_id ? `?season_id=${season_id}` : ''}`)),
 
-  supplierPayments: async (p?: { supplier_code?: number; season_id?: number }) => {
+  supplierPayments: async (p?: {
+    supplier_code?: number
+    season_id?: number
+    source_table?: 'supplier_transactions' | 'supplier_invoices'
+  }) => {
     const raw = await api.get<unknown[]>(paginatedUrl('/reports/supplier-payments', p ?? {})) as unknown as {
       success: boolean
       error?: string
@@ -53,6 +67,7 @@ export const reportsApi = {
         total_debit: number
         balance: number
       }>
+      legacy_coverage?: LegacyCoverage
     }
 
     if (!raw.success) throw new Error(raw.error || 'API returned success=false')
@@ -60,15 +75,29 @@ export const reportsApi = {
     return {
       data: raw.data ?? [],
       summary: raw.summary ?? [],
+      legacy_coverage: raw.legacy_coverage ?? null,
     }
   },
 
-  suppliersBalance: (season_id?: number) =>
-    unwrap(api.get<Array<{
-      code: number; name: string; activity: string | null
-      total_credit: number; total_debit: number; balance: number
-      last_balance: number; tx_count: number
-    }>>(`/reports/suppliers-balance${season_id ? `?season_id=${season_id}` : ''}`)),
+  suppliersBalance: async (season_id?: number) => {
+    const raw = await api.get<unknown[]>(`/reports/suppliers-balance${season_id ? `?season_id=${season_id}` : ''}`) as unknown as {
+      success: boolean
+      error?: string
+      data?: Array<{
+        code: number; name: string; activity: string | null
+        total_credit: number; total_debit: number; balance: number
+        last_balance: number; tx_count: number
+      }>
+      legacy_coverage?: LegacyCoverage
+    }
+
+    if (!raw.success) throw new Error(raw.error || 'API returned success=false')
+
+    return {
+      data: raw.data ?? [],
+      legacy_coverage: raw.legacy_coverage ?? null,
+    }
+  },
 
   seasonSummary: (season_id: number) =>
     unwrap(api.get<{

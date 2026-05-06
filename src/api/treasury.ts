@@ -4,6 +4,7 @@ import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
 import { FinanceCore } from '../lib/finance_core'
 import { logAudit } from '../lib/audit'
 import { resolveControlAccount } from '../lib/posting_engine'
+import { getOpenPeriod } from '../lib/gl'
 
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
@@ -198,11 +199,33 @@ treasury.get('/partners', async (c) => {
 // POST /api/treasury/partners
 treasury.post('/partners', async (c) => {
   const { company_id, sub: userId } = getUser(c)
-  const b = await c.req.json<{ name: string; capital_paid?: number; current_acct?: number }>()
+  const b = await c.req.json<{
+    name: string
+    capital_paid?: number
+    current_acct?: number
+    transaction_date?: string
+    season_id?: number
+    center_code?: number
+  }>()
   if (!b.name) return c.json({ success: false, error: 'الاسم مطلوب' }, 400)
 
   const capitalPaid = b.capital_paid ?? 0
   const currentAcct = b.current_acct ?? 0
+  const txDate = b.transaction_date ?? new Date().toISOString().slice(0, 10)
+
+  if (capitalPaid > 0) {
+    if (b.season_id == null || b.center_code == null) {
+      return c.json({
+        success: false,
+        error: 'الموسم ومركز التكلفة مطلوبان عند إدخال رأس مال مرحّل'
+      }, 422)
+    }
+
+    const periodId = await getOpenPeriod(c.env.DB, company_id, txDate)
+    if (!periodId) {
+      return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${txDate}` }, 400)
+    }
+  }
 
   const result = await c.env.DB.prepare(
     'INSERT INTO partners (company_id, name, capital_paid, current_acct) VALUES (?,?,?,?)'
@@ -212,7 +235,6 @@ treasury.post('/partners', async (c) => {
 
   // GL entry for initial capital if > 0
   if (capitalPaid > 0) {
-    const today = new Date().toISOString().slice(0, 10)
     let equityCode: string | null = null
     let cashCode: string | null = null
     try {
@@ -226,10 +248,13 @@ treasury.post('/partners', async (c) => {
       // Record Cash Movement (which also handles GL entry)
       await FinanceCore.recordCashMovement(c.env.DB, {
         company_id, userId,
-        transaction_date: today,
+        transaction_date: txDate,
         direction: 'د',
         amount: capitalPaid,
         narration: `إضافة رأس مال شريك: ${b.name.trim()}`,
+        season_id: b.season_id,
+        center_code: b.center_code,
+        status: 'posted',
         contraAccount: equityCode // link to equity instead of revenue
       })
     }
@@ -248,7 +273,12 @@ treasury.post('/partners', async (c) => {
 treasury.patch('/partners/:id', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
-  const b  = await c.req.json<{ name?: string; capital_paid?: number; current_acct?: number }>()
+  const b  = await c.req.json<{
+    name?: string
+    capital_paid?: number
+    current_acct?: number
+    transaction_date?: string
+  }>()
 
   // Get current values BEFORE update for delta calculation
   const current = await c.env.DB
@@ -269,8 +299,17 @@ treasury.patch('/partners/:id', async (c) => {
     .bind(...values, id, company_id).run()
 
   // GL entries for equity changes
-  const today = new Date().toISOString().slice(0, 10)
+  const txDate = b.transaction_date ?? new Date().toISOString().slice(0, 10)
   const partnerName = b.name?.trim() ?? current.name
+  const hasCapitalDelta = b.capital_paid !== undefined && Math.abs(b.capital_paid - (current.capital_paid ?? 0)) > 0.01
+  const hasCurrentDelta = b.current_acct !== undefined && Math.abs(b.current_acct - (current.current_acct ?? 0)) > 0.01
+
+  if (hasCapitalDelta || hasCurrentDelta) {
+    const periodId = await getOpenPeriod(c.env.DB, company_id, txDate)
+    if (!periodId) {
+      return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${txDate}` }, 400)
+    }
+  }
 
   if (b.capital_paid !== undefined) {
       const delta = b.capital_paid - (current.capital_paid ?? 0)
@@ -283,7 +322,7 @@ treasury.patch('/partners/:id', async (c) => {
           company_id, ref_id: id, partner_id: id,
           amount: Math.abs(delta),
           direction: delta > 0 ? 'injection' : 'withdrawal',
-          date: today, description: desc, created_by: userId,
+          date: txDate, description: desc, created_by: userId,
         })
       }
     }
@@ -299,7 +338,7 @@ treasury.patch('/partners/:id', async (c) => {
           company_id, ref_id: id, partner_id: id,
           amount: Math.abs(delta),
           direction: delta > 0 ? 'deposit' : 'withdrawal',
-          date: today, description: desc, created_by: userId,
+          date: txDate, description: desc, created_by: userId,
         })
       }
     }

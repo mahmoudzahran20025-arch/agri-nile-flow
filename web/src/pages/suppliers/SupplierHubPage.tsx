@@ -71,7 +71,7 @@ function DepreciationPanel({ assetId, cost }: { assetId: number; cost: number })
                     : <span className="text-amber-500">معلّق</span>}
                 </td>
                 <td>{r.journal_entry_id
-                  ? <a href={`/gl/entries/${r.journal_entry_id}`} className="text-blue-600 underline">#{r.journal_entry_id}</a>
+                  ? <a href={`/gl/entries?id=${r.journal_entry_id}&trace=1`} className="text-blue-600 underline">#{r.journal_entry_id}</a>
                   : '—'}
                 </td>
               </tr>
@@ -185,7 +185,7 @@ function FixedAssetsPanel() {
                   <td className="px-3 py-2 text-center">
                     {asset.journal_entry_id ? (
                       <a
-                        href={`/gl/entries/${asset.journal_entry_id}`}
+                        href={`/gl/entries?id=${asset.journal_entry_id}&trace=1`}
                         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-semibold hover:bg-emerald-100 transition-colors"
                         onClick={e => e.stopPropagation()}
                       >
@@ -236,6 +236,7 @@ function EquipmentTab() {
     document_type: string | null; equipment: string | null; unit: string | null
     quantity: number | null; unit_price: number | null; amount: number
     expense_category: string | null; notes: string | null
+    equipment_usage_mode: 'owned' | 'rental' | null
     journal_entry_id: number | null; gl_posted: number | null
   }> ?? []).filter(r => r.equipment)
 
@@ -247,6 +248,20 @@ function EquipmentTab() {
   const byEquipment = rows.reduce<Record<string, { cnt: number; total: number }>>((acc, r) => {
     const key = r.equipment!.trim()
     if (!acc[key]) acc[key] = { cnt: 0, total: 0 }
+    acc[key].cnt++
+    acc[key].total += r.amount ?? 0
+    return acc
+  }, {})
+
+  const byMode = rows.reduce<Record<string, { cnt: number; total: number; label: string }>>((acc, r) => {
+    const key = r.equipment_usage_mode ?? 'unclassified'
+    if (!acc[key]) {
+      acc[key] = {
+        cnt: 0,
+        total: 0,
+        label: key === 'owned' ? 'مملوك للشركة' : key === 'rental' ? 'إيجار / تشغيلي' : 'غير مصنف',
+      }
+    }
     acc[key].cnt++
     acc[key].total += r.amount ?? 0
     return acc
@@ -278,6 +293,17 @@ function EquipmentTab() {
 
       {subTab === 'movements' && (
         <>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {Object.entries(byMode).map(([mode, summary]) => (
+              <div key={mode} className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                <p className="text-[13px] font-bold text-slate-700">{summary.label}</p>
+                <p className="text-xl font-black text-brand-700 mt-1 tabular-nums">{summary.cnt}</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">عملية معدات</p>
+                <p className="text-[12px] font-semibold text-emerald-700 mt-2">{egp(summary.total)}</p>
+              </div>
+            ))}
+          </div>
+
           {/* Summary cards */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             {Object.entries(byEquipment).sort((a, b) => b[1].total - a[1].total).map(([eq, s]) => (
@@ -306,6 +332,7 @@ function EquipmentTab() {
                       <th className="px-3 py-2.5 text-right">المورد</th>
                       <th className="px-3 py-2.5 text-right">المستند</th>
                       <th className="px-3 py-2.5 text-right">المعدة</th>
+                      <th className="px-3 py-2.5 text-right">الملكية</th>
                       <th className="px-3 py-2.5 text-right">الفئة</th>
                       <th className="px-3 py-2.5 text-right">الوحدة</th>
                       <th className="px-3 py-2.5 text-right">الكمية</th>
@@ -326,6 +353,17 @@ function EquipmentTab() {
                             {r.equipment?.trim()}
                           </span>
                         </td>
+                        <td className="px-3 py-2 text-[11px]">
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 border font-semibold ${
+                            r.equipment_usage_mode === 'owned'
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : r.equipment_usage_mode === 'rental'
+                                ? 'bg-sky-50 text-sky-700 border-sky-200'
+                                : 'bg-slate-50 text-slate-500 border-slate-200'
+                          }`}>
+                            {r.equipment_usage_mode === 'owned' ? 'مملوك' : r.equipment_usage_mode === 'rental' ? 'إيجار' : 'غير محدد'}
+                          </span>
+                        </td>
                         <td className="px-3 py-2 text-slate-500 text-[11px]">{r.expense_category ?? '—'}</td>
                         <td className="px-3 py-2 text-slate-500">{r.unit?.trim() ?? '—'}</td>
                         <td className="px-3 py-2 tabular-nums text-right text-slate-700">{r.quantity ?? '—'}</td>
@@ -333,7 +371,7 @@ function EquipmentTab() {
                         <td className="px-3 py-2 text-center">
                           {r.journal_entry_id ? (
                             r.gl_posted === 1 ? (
-                              <a href={`/gl/entries/${r.journal_entry_id}`}
+                              <a href={`/gl/entries?id=${r.journal_entry_id}&trace=1`}
                                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-semibold hover:bg-emerald-100 transition-colors">
                                 <CheckCircle2 size={10} />
                                 <span className="font-mono">{r.journal_entry_id}</span>
@@ -354,7 +392,7 @@ function EquipmentTab() {
                     ))}
                     {rows.length === 0 && (
                       <tr>
-                        <td colSpan={10} className="px-3 py-8 text-center text-slate-400">لا توجد بيانات معدات</td>
+                        <td colSpan={11} className="px-3 py-8 text-center text-slate-400">لا توجد بيانات معدات</td>
                       </tr>
                     )}
                   </tbody>

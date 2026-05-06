@@ -30,6 +30,7 @@ type TraceTab = 'source' | 'lines' | 'trace'
 interface GlEntryTraceDrawerProps {
   isOpen: boolean
   loading?: boolean
+  errorMessage?: string
   tab: TraceTab
   onTabChange: (tab: TraceTab) => void
   onClose: () => void
@@ -43,6 +44,7 @@ function currency(n: number) {
 export default function GlEntryTraceDrawer({
   isOpen,
   loading,
+  errorMessage,
   tab,
   onTabChange,
   onClose,
@@ -98,6 +100,14 @@ export default function GlEntryTraceDrawer({
             <div className="h-4 w-2/3 rounded bg-slate-100 animate-pulse" />
             <div className="h-4 w-1/2 rounded bg-slate-100 animate-pulse" />
             <div className="h-24 w-full rounded bg-slate-100 animate-pulse" />
+          </div>
+        ) : errorMessage ? (
+          <div className="rounded border border-rose-200 bg-rose-50 p-3 text-[12px] text-rose-700">
+            <div className="font-semibold">Unable to load trace data</div>
+            <div className="mt-1">{errorMessage}</div>
+            <div className="mt-2 text-[11px] text-rose-600">
+              This usually means the journal entry does not exist anymore, or your session does not have access.
+            </div>
           </div>
         ) : !payload ? (
           <div className="text-[12px] text-slate-500">No trace data found for this entry.</div>

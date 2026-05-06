@@ -68,7 +68,7 @@ export async function resolveSupplierPayment(
   },
 ): Promise<number | null> {
   const cashAcc = opts.financial_account_id
-    ? (await db.prepare('SELECT gl_account_code FROM bank_accounts WHERE id = ?').bind(opts.financial_account_id).first<{ gl_account_code: string }>())?.gl_account_code || ''
+    ? (await db.prepare('SELECT gl_account_code FROM bank_accounts WHERE id = ? AND company_id = ?').bind(opts.financial_account_id, opts.company_id).first<{ gl_account_code: string }>())?.gl_account_code || ''
     : ''
 
   const apCode = await resolveControlAccount(db, opts.company_id, 'accounts_payable') ?? '212000010'

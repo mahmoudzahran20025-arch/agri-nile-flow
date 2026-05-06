@@ -144,31 +144,34 @@ export default {
   fetch: app.fetch,
 
   // ─── Scheduled Cron Handler ─────────────────────────────────
-  // يشتغل كل يوم الساعة 10 مساءً UTC (تقريباً منتصف الليل بتوقيت القاهرة)
-  // يحوّل جميع مهام الزيارات المعلقة من أيام سابقة إلى "missed"
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+  // Two triggers (see wrangler.toml):
+  //   "0 22 * * *"   — daily at 22:00 UTC: marks overdue location tasks as missed
+  //   "*/15 * * * *" — every 15 min: sweeps inventory GL posting outbox
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil((async () => {
-      try {
-        const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+      const isDailyRun = event.cron === '0 22 * * *'
 
-        // تحويل كل location_tasks بتاريخ أقدم من اليوم وحالتها pending → missed
-        const result = await env.DB.prepare(
-          `UPDATE location_tasks
-           SET status = 'missed'
-           WHERE status = 'pending' AND task_date < ?`
-        ).bind(today).run()
-
-        console.log(`[Cron] Marked ${result.meta.changes ?? 0} overdue location tasks as missed (${today})`)
-      } catch (err) {
-        console.error('[Cron] Failed to mark missed tasks:', err)
+      // ── Daily: mark overdue location tasks as missed ───────
+      if (isDailyRun) {
+        try {
+          const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+          const result = await env.DB.prepare(
+            `UPDATE location_tasks
+             SET status = 'missed'
+             WHERE status = 'pending' AND task_date < ?`
+          ).bind(today).run()
+          console.log(`[Cron:daily] Marked ${result.meta.changes ?? 0} overdue location tasks as missed (${today})`)
+        } catch (err) {
+          console.error('[Cron:daily] Failed to mark missed tasks:', err)
+        }
       }
 
-      // Process any pending inventory posting outbox messages
+      // ── Every 15 min: sweep inventory GL posting outbox ────
       try {
         await processAllPendingOutbox(env.DB)
-        console.log('[Cron] Inventory posting outbox sweep complete')
+        console.log(`[Cron:outbox] Inventory posting outbox sweep complete (${event.cron})`)
       } catch (err) {
-        console.error('[Cron] Outbox sweep failed:', err)
+        console.error('[Cron:outbox] Outbox sweep failed:', err)
       }
     })())
   },
