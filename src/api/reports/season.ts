@@ -295,6 +295,7 @@ season.get('/season-pnl', async (c) => {
     // ── Ops cost annotations (each labeled, used to show GL coverage gaps) ─
     opsInvCostRow,
     opsLaborCostRow,
+    opsEquipmentCostRow,
     opsCashCostRow,
     opsSupCostRow,
     opsRentCostRow,
@@ -411,6 +412,13 @@ season.get('/season-pnl', async (c) => {
     `).bind(company_id, seasonId).first<{ total: number }>(),
 
     c.env.DB.prepare(`
+      SELECT COALESCE(SUM(woe.total_cost),0) AS total
+      FROM work_order_equipment woe
+      JOIN work_orders wo ON wo.id=woe.work_order_id AND wo.company_id=woe.company_id
+      WHERE wo.company_id=? AND wo.season_id=?
+    `).bind(company_id, seasonId).first<{ total: number }>(),
+
+    c.env.DB.prepare(`
       SELECT COALESCE(SUM(amount),0) AS total FROM cash_transactions
       WHERE company_id=? AND season_id=? AND direction='م' AND status='posted' AND supplier_code IS NULL
     `).bind(company_id, seasonId).first<{ total: number }>(),
@@ -436,8 +444,10 @@ season.get('/season-pnl', async (c) => {
       SELECT
         f.id, f.code, f.name AS field_name, f.area_feddan, f.crop_type,
         COALESCE(SUM(sc.quantity_ton * sc.unit_price), 0) AS ops_revenue,
-        COALESCE(inv.inv_cost, 0)   AS ops_inv_cost,
-        COALESCE(lab.labor_cost, 0) AS ops_labor_cost
+        COALESCE(inv.inv_cost, 0)       AS ops_inv_cost,
+        COALESCE(lab.labor_cost, 0)     AS ops_labor_cost,
+        COALESCE(eq.equipment_cost, 0)  AS ops_equipment_cost,
+        COALESCE(cash.cash_cost, 0)     AS ops_cash_cost
       FROM fields f
       LEFT JOIN sales_contracts sc
              ON sc.field_id=f.id AND sc.company_id=f.company_id AND sc.season_id=?
@@ -445,7 +455,9 @@ season.get('/season-pnl', async (c) => {
       LEFT JOIN (
         SELECT field_id, SUM(value_out) AS inv_cost
         FROM inventory_movements
-        WHERE company_id=? AND season_id=? AND movement_type IN ('صرف','ISSUE') AND field_id IS NOT NULL
+        WHERE company_id=? AND season_id=?
+          AND movement_type IN ('ISSUE','TRANSFER_OUT','COGS_ADJUSTMENT','PRODUCTION_INPUT','ADJUSTMENT_LOSS')
+          AND field_id IS NOT NULL
         GROUP BY field_id
       ) inv ON inv.field_id=f.id
       LEFT JOIN (
@@ -454,11 +466,32 @@ season.get('/season-pnl', async (c) => {
         WHERE wo.company_id=? AND wo.season_id=? AND wo.field_id IS NOT NULL
         GROUP BY wo.field_id
       ) lab ON lab.field_id=f.id
+      LEFT JOIN (
+        SELECT wo.field_id, SUM(woe.total_cost) AS equipment_cost
+        FROM work_order_equipment woe
+        JOIN work_orders wo ON wo.id=woe.work_order_id AND wo.company_id=woe.company_id
+        WHERE wo.company_id=? AND wo.season_id=? AND wo.field_id IS NOT NULL
+        GROUP BY wo.field_id
+      ) eq ON eq.field_id=f.id
+      LEFT JOIN (
+        SELECT field_id, SUM(amount) AS cash_cost
+        FROM cash_transactions
+        WHERE company_id=? AND season_id=? AND direction='م' AND status='posted' AND field_id IS NOT NULL
+        GROUP BY field_id
+      ) cash ON cash.field_id=f.id
       WHERE f.company_id=? AND f.season_id=?
       GROUP BY f.id ORDER BY ops_revenue DESC
-    `).bind(seasonId, company_id, seasonId, company_id, seasonId, company_id, seasonId).all<{
+    `).bind(
+      seasonId,
+      company_id, seasonId,
+      company_id, seasonId,
+      company_id, seasonId,
+      company_id, seasonId,
+      company_id, seasonId,
+    ).all<{
       id: number; code: string; field_name: string; area_feddan: number; crop_type: string | null
       ops_revenue: number; ops_inv_cost: number; ops_labor_cost: number
+      ops_equipment_cost: number; ops_cash_cost: number
     }>(),
   ])
 
@@ -473,13 +506,14 @@ season.get('/season-pnl', async (c) => {
   }
 
   // ── Ops totals (annotation) ───────────────────────────────────────────────
-  const opsInvCost    = opsInvCostRow?.total    ?? 0
-  const opsLaborCost  = opsLaborCostRow?.total  ?? 0
-  const opsCashCost   = opsCashCostRow?.total   ?? 0
-  const opsSupCost    = opsSupCostRow?.total     ?? 0
-  const opsRentCost   = opsRentCostRow?.total   ?? 0
-  const opsPayroll    = opsPayrollCostRow?.total ?? 0
-  const opsTotalCost  = opsInvCost + opsLaborCost + opsCashCost + opsSupCost + opsRentCost + opsPayroll
+  const opsInvCost       = opsInvCostRow?.total       ?? 0
+  const opsLaborCost     = opsLaborCostRow?.total     ?? 0
+  const opsEquipmentCost = opsEquipmentCostRow?.total ?? 0
+  const opsCashCost      = opsCashCostRow?.total      ?? 0
+  const opsSupCost       = opsSupCostRow?.total       ?? 0
+  const opsRentCost      = opsRentCostRow?.total      ?? 0
+  const opsPayroll       = opsPayrollCostRow?.total   ?? 0
+  const opsTotalCost     = opsInvCost + opsLaborCost + opsEquipmentCost + opsCashCost + opsSupCost + opsRentCost + opsPayroll
   const opsRevenue    = opsRevenueRow?.contracts_value ?? 0
 
   // ── Per-field enrichment with GL data ────────────────────────────────────
@@ -489,8 +523,8 @@ season.get('/season-pnl', async (c) => {
   const totalArea = areaRow?.total ?? 0
   const enrichedFields = byField.results.map(f => {
     const gl = glFieldMap[f.id]
-    // Prefer GL cost if available; fall back to ops cost with a note
-    const fieldExpense   = gl?.gl_field_expense ?? (f.ops_inv_cost + f.ops_labor_cost)
+    // Prefer GL cost if available; fall back to full ops cost (inv + labor + equipment + direct cash)
+    const fieldExpense   = gl?.gl_field_expense ?? (f.ops_inv_cost + f.ops_labor_cost + f.ops_equipment_cost + f.ops_cash_cost)
     const fieldRevenue   = gl?.gl_field_revenue ?? f.ops_revenue
     const fieldMargin    = fieldRevenue - fieldExpense
     return {
@@ -502,6 +536,10 @@ season.get('/season-pnl', async (c) => {
       field_revenue:     fieldRevenue,
       field_margin:      fieldMargin,
       margin_per_feddan: f.area_feddan > 0 ? fieldMargin / f.area_feddan : null,
+      inv_cost:          f.ops_inv_cost,
+      labor_cost:        f.ops_labor_cost,
+      equipment_cost:    f.ops_equipment_cost,
+      cash_cost:         f.ops_cash_cost,
       cost_source:       gl ? 'gl' : 'ops_fallback',
       _note:             !gl
         ? 'تكاليف الحقل مستخرجة من الجداول التشغيلية — لم تُرحَّل قيود GL للحقل بعد'
@@ -541,6 +579,7 @@ season.get('/season-pnl', async (c) => {
         costs: {
           inventory:       opsInvCost,
           labor:           opsLaborCost,
+          equipment:       opsEquipmentCost,
           cash_out:        opsCashCost,
           supplier_credit: opsSupCost,
           land_rent:       opsRentCost,

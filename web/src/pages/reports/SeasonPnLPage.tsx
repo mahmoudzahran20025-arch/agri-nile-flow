@@ -72,6 +72,7 @@ function WaterfallRow({ icon, label, value, sub, variant, pctOfRev }: WaterfallR
 type FieldRow = {
   id: number; code: string; field_name: string; area_feddan: number; crop_type: string | null
   field_revenue: number; inv_cost: number; labor_cost: number
+  equipment_cost: number; cash_cost: number
   field_cost: number; field_margin: number; margin_per_feddan: number | null
 }
 
@@ -110,8 +111,10 @@ function FieldPnLRow({ row }: { row: FieldRow }) {
       <td className="px-4 py-3">
         <div className="space-y-0.5">
           <p className="font-semibold text-red-600 text-sm">{row.field_cost > 0 ? egp(row.field_cost) : <span className="text-slate-300">—</span>}</p>
-          {row.inv_cost > 0 && <p className="text-xs text-violet-600">مخزون: {egp(row.inv_cost)}</p>}
-          {row.labor_cost > 0 && <p className="text-xs text-blue-600">عمالة: {egp(row.labor_cost)}</p>}
+          {row.inv_cost       > 0 && <p className="text-xs text-violet-600">مخزون: {egp(row.inv_cost)}</p>}
+          {row.labor_cost     > 0 && <p className="text-xs text-blue-600">عمالة: {egp(row.labor_cost)}</p>}
+          {row.equipment_cost > 0 && <p className="text-xs text-purple-600">معدات: {egp(row.equipment_cost)}</p>}
+          {row.cash_cost      > 0 && <p className="text-xs text-sky-600">نقدي: {egp(row.cash_cost)}</p>}
         </div>
       </td>
 
@@ -386,6 +389,16 @@ export default function SeasonPnLPage() {
               variant="cost"
               pctOfRev={revenue > 0 ? (data.costs.labor / revenue) * 100 : undefined}
             />
+            {(data.costs.equipment ?? 0) > 0 && (
+              <WaterfallRow
+                icon={<Wrench size={16} className="text-purple-500" />}
+                label="تكلفة تشغيل المعدات"
+                sub="ساعات تشغيل × تكلفة الساعة"
+                value={data.costs.equipment}
+                variant="cost"
+                pctOfRev={revenue > 0 ? (data.costs.equipment / revenue) * 100 : undefined}
+              />
+            )}
             <WaterfallRow
               icon={<Banknote size={16} className="text-sky-500" />}
               label="المصروفات النقدية"

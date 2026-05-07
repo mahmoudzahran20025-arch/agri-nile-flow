@@ -115,7 +115,7 @@ export const reportsApi = {
     unwrap(api.get<{
       season: { id: number; name: string; season_type: string; start_date: string; end_date: string; status: string } | null
       revenue: { contracts_value: number; advance_collected: number; contracts_count: number }
-      costs: { inventory: number; labor: number; cash_out: number; supplier_credit: number; land_rent: number; payroll: number; total: number }
+      costs: { inventory: number; labor: number; equipment: number; cash_out: number; supplier_credit: number; land_rent: number; payroll: number; total: number }
       net_margin: number
       total_area: number
       margin_per_feddan: number | null
@@ -123,6 +123,7 @@ export const reportsApi = {
       by_field: Array<{
         id: number; code: string; field_name: string; area_feddan: number; crop_type: string | null
         field_revenue: number; inv_cost: number; labor_cost: number
+        equipment_cost: number; cash_cost: number
         field_cost: number; field_margin: number; margin_per_feddan: number | null
       }>
     }>(`/reports/season-pnl?season_id=${season_id}`)),

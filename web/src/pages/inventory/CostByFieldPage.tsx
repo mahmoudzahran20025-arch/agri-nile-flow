@@ -28,9 +28,13 @@ interface FieldCost {
   crop_type:          string | null
   season_id:          number | null
   season_name:        string | null
-  total_consumed:     number
+  total_consumed:     number   // inventory issues only (legacy column kept for compat)
   total_added:        number
   items_consumed:     number
+  labor_cost:         number
+  equipment_cost:     number
+  cash_cost:          number
+  total_cost:         number   // inv + labor + equipment + cash
   cost_per_feddan:    number | null
   budget_id:          number | null
   budget_per_feddan:  number | null
@@ -239,9 +243,9 @@ export default function CostByFieldPage() {
   })
 
   // ── KPIs ──────────────────────────────────────────────────────
-  const totalConsumed    = rows.reduce((s, r) => s + r.total_consumed, 0)
+  const totalCost        = rows.reduce((s, r) => s + (r.total_cost ?? r.total_consumed), 0)
   const totalArea        = rows.reduce((s, r) => s + r.area_feddan, 0)
-  const avgCostPerFeddan = totalArea > 0 ? totalConsumed / totalArea : 0
+  const avgCostPerFeddan = totalArea > 0 ? totalCost / totalArea : 0
 
   const withBudget   = rows.filter(r => r.budget_per_feddan != null)
   const overBudget   = rows.filter(r => getBudgetStatus(r) === 'over_budget')
@@ -257,7 +261,7 @@ export default function CostByFieldPage() {
             <Wheat size={20} className="text-brand-700" />
           </div>
           <div>
-            <h1 className="page-title">تكلفة المدخلات بالفدان</h1>
+            <h1 className="page-title">تكلفة الإنتاج بالفدان</h1>
             <p className="text-sm text-slate-400">تحليل التكلفة الفعلية مقابل الميزانية المستهدفة</p>
           </div>
         </div>
@@ -317,11 +321,11 @@ export default function CostByFieldPage() {
             <p className="text-xs text-slate-400 mt-0.5">فدان • {rows.length} حقل</p>
           </div>
 
-          {/* Total consumed */}
+          {/* Total cost (all types) */}
           <div className="card p-4">
-            <p className="text-xs text-slate-500 font-medium mb-1">إجمالي المدخلات المُصرفة</p>
-            <p className="text-xl font-bold text-red-600">{egp(totalConsumed)}</p>
-            <p className="text-xs text-slate-400 mt-0.5">قيمة صرف المخزون</p>
+            <p className="text-xs text-slate-500 font-medium mb-1">إجمالي التكاليف الكلية</p>
+            <p className="text-xl font-bold text-red-600">{egp(totalCost)}</p>
+            <p className="text-xs text-slate-400 mt-0.5">مخزون + عمالة + معدات + نقدي</p>
           </div>
 
           {/* Avg cost / feddan */}
@@ -379,7 +383,7 @@ export default function CostByFieldPage() {
               <tr className="bg-slate-50 border-b border-slate-200">
                 {[
                   'الحقل', 'المساحة (فدان)', 'الموسم / المحصول',
-                  'المدخلات', 'تكلفة الفدان',
+                  'التكاليف الكلية', 'تكلفة الفدان',
                   'الميزانية / فدان', 'الانحراف', 'الحالة',
                 ].map(h => (
                   <th key={h}
@@ -429,16 +433,22 @@ export default function CostByFieldPage() {
                       {row.crop_type && <p className="text-slate-400 text-xs mt-0.5">{row.crop_type}</p>}
                     </td>
 
-                    {/* Items consumed */}
+                    {/* Cost breakdown */}
                     <td className="px-4 py-3">
                       <div className="space-y-0.5">
-                        <span className="flex items-center gap-1 text-slate-600">
-                          <Package size={11} />
-                          <span className="text-xs">{row.items_consumed} صنف</span>
-                        </span>
-                        <p className="font-medium text-red-600 text-xs">
-                          {row.total_consumed > 0 ? egp(row.total_consumed) : <span className="text-slate-300">—</span>}
+                        <p className="font-semibold text-red-600 text-sm">
+                          {(row.total_cost ?? row.total_consumed) > 0
+                            ? egp(row.total_cost ?? row.total_consumed)
+                            : <span className="text-slate-300">—</span>}
                         </p>
+                        {row.total_consumed  > 0 && (
+                          <span className="flex items-center gap-1 text-violet-600 text-xs">
+                            <Package size={10} />{row.items_consumed} صنف · {egp(row.total_consumed)}
+                          </span>
+                        )}
+                        {row.labor_cost     > 0 && <p className="text-xs text-blue-600">عمالة: {egp(row.labor_cost)}</p>}
+                        {row.equipment_cost > 0 && <p className="text-xs text-purple-600">معدات: {egp(row.equipment_cost)}</p>}
+                        {row.cash_cost      > 0 && <p className="text-xs text-sky-600">نقدي: {egp(row.cash_cost)}</p>}
                       </div>
                     </td>
 
