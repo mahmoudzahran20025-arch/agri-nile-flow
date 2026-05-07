@@ -257,7 +257,7 @@ fields.get('/harvest/cost-estimate', async (c) => {
   if (!field_id || !season_id)
     return c.json({ success: false, error: 'field_id و season_id مطلوبان' }, 400)
 
-  const [field, materialsRow, laborRow] = await Promise.all([
+  const [field, materialsRow, laborRow, equipmentRow, cashRow] = await Promise.all([
     c.env.DB.prepare(
       'SELECT area_feddan, rent_per_feddan, name, code FROM fields WHERE id = ? AND company_id = ?'
     ).bind(field_id, company_id).first<{ area_feddan: number; rent_per_feddan: number; name: string; code: string }>(),
@@ -265,7 +265,8 @@ fields.get('/harvest/cost-estimate', async (c) => {
     c.env.DB.prepare(
       `SELECT COALESCE(SUM(value_out), 0) AS total
        FROM inventory_movements
-       WHERE company_id = ? AND field_id = ? AND season_id = ? AND movement_type IN ('صرف', 'ISSUE')`
+       WHERE company_id = ? AND field_id = ? AND season_id = ?
+         AND movement_type IN ('ISSUE','TRANSFER_OUT','COGS_ADJUSTMENT','PRODUCTION_INPUT','ADJUSTMENT_LOSS')`
     ).bind(company_id, field_id, season_id).first<{ total: number }>(),
 
     c.env.DB.prepare(
@@ -274,28 +275,44 @@ fields.get('/harvest/cost-estimate', async (c) => {
        JOIN work_orders wo ON wo.id = wt.work_order_id AND wo.company_id = wt.company_id
        WHERE wo.company_id = ? AND wo.field_id = ? AND wo.season_id = ? AND wo.status != 'cancelled'`
     ).bind(company_id, field_id, season_id).first<{ total: number }>(),
+
+    c.env.DB.prepare(
+      `SELECT COALESCE(SUM(woe.total_cost), 0) AS total
+       FROM work_order_equipment woe
+       JOIN work_orders wo ON wo.id = woe.work_order_id AND wo.company_id = woe.company_id
+       WHERE wo.company_id = ? AND wo.field_id = ? AND wo.season_id = ? AND wo.status != 'cancelled'`
+    ).bind(company_id, field_id, season_id).first<{ total: number }>(),
+
+    c.env.DB.prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS total
+       FROM cash_transactions
+       WHERE company_id = ? AND field_id = ? AND season_id = ? AND direction = 'م' AND status = 'posted'`
+    ).bind(company_id, field_id, season_id).first<{ total: number }>(),
   ])
 
   if (!field) return c.json({ success: false, error: 'القطعة غير موجودة' }, 404)
 
-  const materials_cost = materialsRow?.total ?? 0
-  const labor_cost     = laborRow?.total ?? 0
-  const land_rent      = (field.rent_per_feddan ?? 0) * (field.area_feddan ?? 0)
-  const total_cost     = materials_cost + labor_cost + land_rent
+  const materials_cost  = materialsRow?.total  ?? 0
+  const labor_cost      = laborRow?.total      ?? 0
+  const equipment_cost  = equipmentRow?.total  ?? 0
+  const cash_cost       = cashRow?.total       ?? 0
+  const land_rent       = (field.rent_per_feddan ?? 0) * (field.area_feddan ?? 0)
+  const total_cost      = materials_cost + labor_cost + equipment_cost + cash_cost + land_rent
 
   return c.json({
     success: true,
     data: {
       field_id,
       season_id,
-      field_name:      field.name,
-      field_code:      field.code,
-      area_feddan:     field.area_feddan,
+      field_name:     field.name,
+      field_code:     field.code,
+      area_feddan:    field.area_feddan,
       materials_cost,
       labor_cost,
+      equipment_cost,
+      cash_cost,
       land_rent,
       total_cost,
-      note: 'لا تشمل المصروفات النقدية المدفوعة مباشرة (لا يوجد ربط مباشر بين المعاملات النقدية والقطعة)'
     }
   })
 })

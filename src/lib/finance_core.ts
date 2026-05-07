@@ -208,6 +208,12 @@ async function postHarvestLedger(
 ): Promise<void> {
   if (opts.total_revenue <= 0 && opts.total_actual_cost <= 0) return
 
+  // Void any prior GL entries for this harvest_id before re-posting (idempotent on edit)
+  await db.prepare(
+    `DELETE FROM journal_entries
+     WHERE company_id = ? AND ref_type IN ('harvest_cost','harvest_revenue') AND ref_id = ?`
+  ).bind(opts.company_id, opts.harvest_id).run()
+
   const revenueAcc   = await resolveControlAccount(db, opts.company_id, 'revenue_crops')
                     ?? await resolveControlAccount(db, opts.company_id, 'revenue_default')
                     ?? '4100'
