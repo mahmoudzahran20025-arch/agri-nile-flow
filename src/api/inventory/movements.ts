@@ -17,7 +17,6 @@ import {
 const movements = new Hono<{ Bindings: Env }>()
 
 const SUPPORTED_MOVEMENT_TYPES = new Set([
-  'اضافة', 'صرف',
   'GRN', 'ISSUE',
   'TRANSFER_IN', 'TRANSFER_OUT',
   'RETURN_SUPPLIER', 'RETURN_CUSTOMER',
@@ -32,8 +31,6 @@ function isSupportedMovementType(movementType: string): boolean {
 // ── Helper: map legacy Arabic / typed movement_type to transaction_type ───────
 function mapToTransactionType(movementType: string): string {
   const MAP: Record<string, string> = {
-    'اضافة':             'GRN',
-    'صرف':               'ISSUE',
     'GRN':               'GRN',
     'ISSUE':             'ISSUE',
     'TRANSFER_IN':       'TRANSFER_IN',
@@ -242,18 +239,18 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
       movementValue === 0 ? (zeroValueReason ?? null) : null,
       movementValue === 0 ? role : null,
       controls.posting_mode,
-      movementValue === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled')),
+      movementValue === 0 ? 'exempt_zero_value' : 'pending',
       transactionId,
     ),
     c.env.DB.prepare(
       `UPDATE inventory_movements
        SET balance_qty = balance_qty + ?, balance_value = balance_value + ?
        WHERE company_id = ? AND item_code = ? AND warehouse = ?
-         AND (movement_date > ? OR (movement_date = ? AND id > (SELECT id FROM inventory_movements WHERE local_id = ?)))`
-    ).bind(dQty, dVal, company_id, b.item_code, b.warehouse, b.movement_date, b.movement_date, localId)
+         AND (movement_date > ? OR (movement_date = ? AND id > (SELECT id FROM inventory_movements WHERE local_id = ? AND company_id = ?)))`
+    ).bind(dQty, dVal, company_id, b.item_code, b.warehouse, b.movement_date, b.movement_date, localId, company_id)
   ])
 
-  const movRow = await c.env.DB.prepare('SELECT id FROM inventory_movements WHERE local_id = ?').bind(localId).first<{id:number}>()
+  const movRow = await c.env.DB.prepare('SELECT id FROM inventory_movements WHERE local_id = ? AND company_id = ?').bind(localId, company_id).first<{id:number}>()
   const movId = movRow!.id
 
   // Keep inventory_balances snapshot in sync with the movement just inserted.
@@ -263,83 +260,49 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     .prepare('SELECT name FROM items WHERE code = ? AND company_id = ?')
     .bind(b.item_code, company_id).first<{name:string}>()
 
+  // All GL posting goes through the outbox — uniform async_reliable path.
+  // The cron sweeps every 15 min; manual trigger available in BatchPostingCenter.
+  // Movement ledger is committed and immutable; GL failure is always recoverable.
   const glValue = movementValue
   let glEntryId: number | null = null
   if (glValue > 0) {
-    if (controls.posting_mode === 'strict_sync') {
-      try {
-        glEntryId = await FinanceCore.resolveInventoryMovement(c.env.DB, {
-          company_id,
-          ref_id: movId,
-          item_code: b.item_code,
-          warehouse: b.warehouse,
-          movement_type: b.movement_type,
-          value: glValue,
-          date: b.movement_date,
-          item_name: itemRow?.name ?? String(b.item_code),
-          created_by: userId,
-          center_code: centerCode ?? undefined,
-          payment_method: b.payment_method,
-          supplier_code: b.supplier_code,
-          work_order_id: b.work_order_id,
-        })
-        await c.env.DB.prepare(
-          'UPDATE inventory_movements SET gl_posting_status = ?, gl_posted_at = datetime(\'now\') WHERE id = ? AND company_id = ?'
-        ).bind('posted', movId, company_id).run()
-      } catch (err: any) {
-        // Never DELETE a committed movement — mark failed and enqueue for async retry.
-        // The movement ledger is the source of truth; GL failure is recoverable.
-        await c.env.DB.prepare(
-          `UPDATE inventory_movements SET gl_posting_status = 'failed', gl_posting_error = ?
-           WHERE id = ? AND company_id = ?`
-        ).bind(String(err.message), movId, company_id).run()
-        await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', movId, {
-          company_id, ref_id: movId, item_code: b.item_code, warehouse: b.warehouse,
-          movement_type: b.movement_type, value: glValue, date: b.movement_date,
-          item_name: itemRow?.name ?? String(b.item_code), created_by: userId,
-          center_code: centerCode ?? null, payment_method: b.payment_method ?? null,
-          supplier_code: b.supplier_code ?? null, work_order_id: b.work_order_id ?? null,
-        })
-        glEntryId = null
-      }
-    } else if (controls.posting_mode === 'async_reliable') {
-      await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', movId, {
-        company_id,
-        ref_id: movId,
-        item_code: b.item_code,
-        warehouse: b.warehouse,
-        movement_type: b.movement_type,
-        value: glValue,
-        date: b.movement_date,
-        item_name: itemRow?.name ?? String(b.item_code),
-        created_by: userId,
-        center_code: centerCode ?? null,
-        payment_method: b.payment_method ?? null,
-        supplier_code: b.supplier_code ?? null,
-        work_order_id: b.work_order_id ?? null,
-      })
-      await c.env.DB.prepare(
-        'UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?'
-      ).bind('pending', movId, company_id).run()
-    } else {
-      await c.env.DB.prepare(
-        'UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?'
-      ).bind('decoupled', movId, company_id).run()
+    const outboxPayload = {
+      company_id, ref_id: movId,
+      item_code: b.item_code, warehouse: b.warehouse,
+      movement_type: b.movement_type, value: glValue, date: b.movement_date,
+      item_name: itemRow?.name ?? String(b.item_code), created_by: userId,
+      center_code: centerCode ?? null, payment_method: b.payment_method ?? null,
+      supplier_code: b.supplier_code ?? null, work_order_id: b.work_order_id ?? null,
     }
+    await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', movId, outboxPayload)
+    await c.env.DB.prepare(
+      'UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?'
+    ).bind('pending', movId, company_id).run()
   }
 
-  if ((b.movement_type === 'اضافة' || b.movement_type === 'GRN') && b.payment_method === 'cash') {
-    await FinanceCore.recordCashMovement(c.env.DB, {
-      company_id, userId,
-      transaction_date: b.movement_date,
-      direction: 'م',
-      amount: valueIn,
-      narration: `شراء نقدي: ${itemRow?.name ?? b.item_code} (مخزن: ${b.warehouse})`,
-      document_number: b.document_number,
-      supplier_code: b.supplier_code,
-      center_code: centerCode,
-      notes: b.notes
-    })
+  if (b.movement_type === 'GRN' && b.payment_method === 'cash' && valueIn > 0) {
+    try {
+      await FinanceCore.recordCashMovement(c.env.DB, {
+        company_id, userId,
+        transaction_date: b.movement_date,
+        direction: 'م',
+        amount: valueIn,
+        narration: `شراء نقدي: ${itemRow?.name ?? b.item_code} (مخزن: ${b.warehouse})`,
+        document_number: b.document_number,
+        supplier_code: b.supplier_code,
+        center_code: centerCode,
+        notes: b.notes,
+        skipGlPosting: true, // GL already enqueued via inventory outbox; cash entry only
+      })
+    } catch (cashErr: any) {
+      // Non-fatal: inventory movement is committed. Log and surface via audit trail.
+      console.error(`[movements] cash mirror failed for movId=${movId}: ${cashErr?.message}`)
+      void logAudit(c.env.DB, {
+        user_id: userId, company_id, action: 'CREATE',
+        table_name: 'cash_transactions', record_id: movId,
+        new_value: { error: cashErr?.message, context: 'cash_mirror_on_grn' },
+      })
+    }
   }
 
   void logAudit(c.env.DB, {
@@ -517,7 +480,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
       (lr.valueIn + lr.valueOut) === 0 ? (b.zero_value_reason?.trim() ?? null) : null,
       (lr.valueIn + lr.valueOut) === 0 ? role : null,
       controls.posting_mode,
-      (lr.valueIn + lr.valueOut) === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled')),
+      (lr.valueIn + lr.valueOut) === 0 ? 'exempt_zero_value' : 'pending',
       batchTransactionId,
     )
   )
@@ -561,85 +524,40 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
 
     if (glValue <= 0) continue
 
-    if (controls.posting_mode === 'strict_sync') {
-      try {
-        await FinanceCore.resolveInventoryMovement(c.env.DB, {
-          company_id,
-          ref_id: ins.id,
-          item_code: lr.item_code,
-          warehouse: b.warehouse,
-          movement_type: b.movement_type,
-          value: glValue,
-          date: b.movement_date,
-          item_name: itemRow?.name ?? String(lr.item_code),
-          created_by: userId,
-          center_code: centerCode ?? undefined,
-          payment_method: b.payment_method,
-          supplier_code: b.supplier_code,
-          work_order_id: b.work_order_id,
-        })
-        await c.env.DB.prepare(
-          `UPDATE inventory_movements SET gl_posting_status = 'posted', gl_posted_at = datetime('now') WHERE id = ? AND company_id = ?`
-        ).bind(ins.id, company_id).run()
-      } catch (err: any) {
-        // Keep the movement — it is the source of truth. Enqueue for retry.
-        // Deleting committed movements corrupts the inventory ledger.
-        const errMsg = String(err?.message ?? err)
-        await c.env.DB.prepare(
-          `UPDATE inventory_movements SET gl_posting_status = 'failed', gl_posting_error = ? WHERE id = ? AND company_id = ?`
-        ).bind(errMsg, ins.id, company_id).run()
-        await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', ins.id, {
-          company_id,
-          ref_id: ins.id,
-          item_code: lr.item_code,
-          warehouse: b.warehouse,
-          movement_type: b.movement_type,
-          value: glValue,
-          date: b.movement_date,
-          item_name: itemRow?.name ?? String(lr.item_code),
-          created_by: userId,
-          center_code: centerCode ?? null,
-          payment_method: b.payment_method ?? null,
-          supplier_code: b.supplier_code ?? null,
-          work_order_id: b.work_order_id ?? null,
-        })
-      }
-    } else if (controls.posting_mode === 'async_reliable') {
-      await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', ins.id, {
-        company_id,
-        ref_id: ins.id,
-        item_code: lr.item_code,
-        warehouse: b.warehouse,
-        movement_type: b.movement_type,
-        value: glValue,
-        date: b.movement_date,
-        item_name: itemRow?.name ?? String(lr.item_code),
-        created_by: userId,
-        center_code: centerCode ?? null,
-        payment_method: b.payment_method ?? null,
-        supplier_code: b.supplier_code ?? null,
-        work_order_id: b.work_order_id ?? null,
-      })
-      await c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?')
-        .bind('pending', ins.id, company_id).run()
-    } else {
-      await c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?')
-        .bind('decoupled', ins.id, company_id).run()
-    }
+    await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', ins.id, {
+      company_id, ref_id: ins.id,
+      item_code: lr.item_code, warehouse: b.warehouse,
+      movement_type: b.movement_type, value: glValue, date: b.movement_date,
+      item_name: itemRow?.name ?? String(lr.item_code), created_by: userId,
+      center_code: centerCode ?? null, payment_method: b.payment_method ?? null,
+      supplier_code: b.supplier_code ?? null, work_order_id: b.work_order_id ?? null,
+    })
+    await c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?')
+      .bind('pending', ins.id, company_id).run()
   }
 
   if ((b.movement_type === 'اضافة' || b.movement_type === 'GRN') && b.payment_method === 'cash' && totalValue > 0) {
-    await FinanceCore.recordCashMovement(c.env.DB, {
-      company_id, userId,
-      transaction_date: b.movement_date,
-      direction: 'م',
-      amount: totalValue,
-      narration: `شراء نقدي Batch (مخزن: ${b.warehouse}) - ${lineResults.length} صنف`,
-      document_number: b.document_number,
-      supplier_code: b.supplier_code,
-      center_code: centerCode,
-      notes: b.notes
-    })
+    try {
+      await FinanceCore.recordCashMovement(c.env.DB, {
+        company_id, userId,
+        transaction_date: b.movement_date,
+        direction: 'م',
+        amount: totalValue,
+        narration: `شراء نقدي Batch (مخزن: ${b.warehouse}) - ${lineResults.length} صنف`,
+        document_number: b.document_number,
+        supplier_code: b.supplier_code,
+        center_code: centerCode,
+        notes: b.notes,
+        skipGlPosting: true, // GL already enqueued via inventory outbox; cash entry only
+      })
+    } catch (cashErr: any) {
+      console.error(`[movements/batch] cash mirror failed: ${cashErr?.message}`)
+      void logAudit(c.env.DB, {
+        user_id: userId, company_id, action: 'CREATE',
+        table_name: 'cash_transactions', record_id: 0,
+        new_value: { error: cashErr?.message, context: 'cash_mirror_on_batch_grn', warehouse: b.warehouse },
+      })
+    }
   }
 
   return c.json({
@@ -741,7 +659,7 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
       totalValue === 0 ? (b.notes?.trim() ?? null) : null,
       totalValue === 0 ? role : null,
       controls.posting_mode,
-      totalValue === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled')),
+      totalValue === 0 ? 'exempt_zero_value' : 'pending',
       trfTransactionId),
 
     c.env.DB.prepare(
@@ -755,7 +673,7 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
       totalValue === 0 ? (b.notes?.trim() ?? null) : null,
       totalValue === 0 ? role : null,
       controls.posting_mode,
-      totalValue === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled')),
+      totalValue === 0 ? 'exempt_zero_value' : 'pending',
       trfTransactionId)
   ])
 
@@ -782,65 +700,17 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
     .bind(b.item_code, company_id).first<{ name: string }>()
 
   if (totalValue > 0 && outId && inId) {
-    if (controls.posting_mode === 'strict_sync') {
-      try {
-        const jeId = await FinanceCore.resolveInventoryTransfer(c.env.DB, {
-          company_id,
-          ref_id: outId,
-          item_code: b.item_code,
-          from_warehouse: b.from_warehouse,
-          to_warehouse: b.to_warehouse,
-          value: totalValue,
-          date: b.movement_date,
-          item_name: itemRow?.name ?? String(b.item_code),
-          created_by: userId,
-        })
-        await c.env.DB.batch([
-          c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ?, gl_posted_at = datetime(\'now\'), journal_entry_id = ? WHERE id = ? AND company_id = ?')
-            .bind('posted', jeId, outId, company_id),
-          c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ?, gl_posted_at = datetime(\'now\'), journal_entry_id = ? WHERE id = ? AND company_id = ?')
-            .bind('posted', jeId, inId, company_id),
-        ])
-      } catch (err: any) {
-        // Never DELETE committed movements — mark both failed and enqueue for async retry.
-        const errMsg = String(err.message)
-        await c.env.DB.batch([
-          c.env.DB.prepare(`UPDATE inventory_movements SET gl_posting_status = 'failed', gl_posting_error = ? WHERE id = ? AND company_id = ?`).bind(errMsg, outId, company_id),
-          c.env.DB.prepare(`UPDATE inventory_movements SET gl_posting_status = 'failed', gl_posting_error = ? WHERE id = ? AND company_id = ?`).bind(errMsg, inId, company_id),
-        ])
-        if (outId) {
-          await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_transfer', outId, {
-            company_id, ref_id: outId, item_code: b.item_code,
-            from_warehouse: b.from_warehouse, to_warehouse: b.to_warehouse,
-            value: totalValue, date: b.movement_date,
-            item_name: itemRow?.name ?? String(b.item_code), created_by: userId,
-            target_movement_id: inId,
-          })
-        }
-      }
-    } else if (controls.posting_mode === 'async_reliable') {
-      await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_transfer', outId, {
-        company_id,
-        ref_id: outId,
-        item_code: b.item_code,
-        from_warehouse: b.from_warehouse,
-        to_warehouse: b.to_warehouse,
-        value: totalValue,
-        date: b.movement_date,
-        item_name: itemRow?.name ?? String(b.item_code),
-        created_by: userId,
-        target_movement_id: inId,
-      })
-      await c.env.DB.batch([
-        c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('pending', outId, company_id),
-        c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('pending', inId, company_id),
-      ])
-    } else {
-      await c.env.DB.batch([
-        c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('decoupled', outId, company_id),
-        c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('decoupled', inId, company_id),
-      ])
-    }
+    await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_transfer', outId, {
+      company_id, ref_id: outId, item_code: b.item_code,
+      from_warehouse: b.from_warehouse, to_warehouse: b.to_warehouse,
+      value: totalValue, date: b.movement_date,
+      item_name: itemRow?.name ?? String(b.item_code), created_by: userId,
+      target_movement_id: inId,
+    })
+    await c.env.DB.batch([
+      c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('pending', outId, company_id),
+      c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('pending', inId, company_id),
+    ])
   }
 
   return c.json({ 
@@ -942,7 +812,7 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
       totVal === 0 ? (b.notes?.trim() ?? null) : null,
       totVal === 0 ? role : null,
       controls.posting_mode,
-      totVal === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled')),
+      totVal === 0 ? 'exempt_zero_value' : 'pending',
       trfBatchTransactionId))
 
     stmts.push(c.env.DB.prepare(
@@ -956,7 +826,7 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
       totVal === 0 ? (b.notes?.trim() ?? null) : null,
       totVal === 0 ? role : null,
       controls.posting_mode,
-      totVal === 0 ? 'exempt_zero_value' : (controls.posting_mode === 'strict_sync' ? 'posting' : (controls.posting_mode === 'async_reliable' ? 'pending' : 'decoupled')),
+      totVal === 0 ? 'exempt_zero_value' : 'pending',
       trfBatchTransactionId))
   }
 
@@ -987,63 +857,17 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
 
     if (totVal <= 0 || !inId) continue
 
-    if (controls.posting_mode === 'strict_sync') {
-      try {
-        const jeId = await FinanceCore.resolveInventoryTransfer(c.env.DB, {
-          company_id,
-          ref_id: ins.id,
-          item_code: ins.item_code,
-          from_warehouse: b.from_warehouse,
-          to_warehouse: b.to_warehouse,
-          value: totVal,
-          date: b.movement_date,
-          item_name: itemRow?.name ?? String(ins.item_code),
-          created_by: userId,
-        })
-        await c.env.DB.batch([
-          c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ?, gl_posted_at = datetime(\'now\'), journal_entry_id = ? WHERE id = ? AND company_id = ?')
-            .bind('posted', jeId, ins.id, company_id),
-          c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ?, gl_posted_at = datetime(\'now\'), journal_entry_id = ? WHERE id = ? AND company_id = ?')
-            .bind('posted', jeId, inId, company_id),
-        ])
-      } catch (err: any) {
-        // Never DELETE committed movements — mark failed and enqueue for retry.
-        const errMsg = String(err.message)
-        await c.env.DB.prepare(
-          `UPDATE inventory_movements SET gl_posting_status = 'failed', gl_posting_error = ?
-           WHERE company_id = ? AND local_id LIKE ?`
-        ).bind(errMsg, company_id, `${batchKey}_%`).run()
-        await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_transfer', ins.id, {
-          company_id, ref_id: ins.id, item_code: ins.item_code,
-          from_warehouse: b.from_warehouse, to_warehouse: b.to_warehouse,
-          value: totVal, date: b.movement_date,
-          item_name: itemRow?.name ?? String(ins.item_code), created_by: userId,
-          target_movement_id: inId,
-        })
-      }
-    } else if (controls.posting_mode === 'async_reliable') {
-      await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_transfer', ins.id, {
-        company_id,
-        ref_id: ins.id,
-        item_code: ins.item_code,
-        from_warehouse: b.from_warehouse,
-        to_warehouse: b.to_warehouse,
-        value: totVal,
-        date: b.movement_date,
-        item_name: itemRow?.name ?? String(ins.item_code),
-        created_by: userId,
-        target_movement_id: inId,
-      })
-      await c.env.DB.batch([
-        c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('pending', ins.id, company_id),
-        c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('pending', inId, company_id),
-      ])
-    } else {
-      await c.env.DB.batch([
-        c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('decoupled', ins.id, company_id),
-        c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('decoupled', inId, company_id),
-      ])
-    }
+    await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_transfer', ins.id, {
+      company_id, ref_id: ins.id, item_code: ins.item_code,
+      from_warehouse: b.from_warehouse, to_warehouse: b.to_warehouse,
+      value: totVal, date: b.movement_date,
+      item_name: itemRow?.name ?? String(ins.item_code), created_by: userId,
+      target_movement_id: inId,
+    })
+    await c.env.DB.batch([
+      c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('pending', ins.id, company_id),
+      c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('pending', inId, company_id),
+    ])
   }
 
   return c.json({ success: true, data: { count: b.items.length, batch_key: batchKey } })

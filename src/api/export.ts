@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
+import { resolveMovementDirection } from '../lib/posting_engine'
 
 const exportApi = new Hono<{ Bindings: Env }>()
 exportApi.use('*', authMiddleware)
@@ -162,7 +163,7 @@ exportApi.get('/inventory/movements', async (c) => {
 
   const headers = ['التاريخ','المخزن','النوع','الصنف','الوحدة','الكمية','سعر الوحدة','وارد','منصرف','رصيد كمية','رصيد قيمة','المستند','ملاحظات']
   const rows    = results.map((r: Record<string,unknown>) => [
-    r.movement_date, r.warehouse, r.movement_type === 'اضافة' ? 'وارد' : 'منصرف',
+    r.movement_date, r.warehouse, resolveMovementDirection(String(r.movement_type ?? '')) === 'IN' ? 'وارد' : 'منصرف',
     r.item_name, r.unit, r.quantity, r.unit_price, r.qty_in, r.qty_out,
     r.balance_qty, r.balance_value, r.document_number, r.notes
   ])

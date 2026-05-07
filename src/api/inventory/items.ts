@@ -8,20 +8,26 @@ const items = new Hono<{ Bindings: Env }>()
 
 items.get('/balances', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
-  const warehouseId = c.req.query('warehouse_id')
+  const warehouseId  = c.req.query('warehouse_id')
   const oldWarehouse = c.req.query('warehouse')
 
-  let query = `SELECT * FROM vw_stock_balances WHERE company_id = ?`
+  // Reads from inventory_balances snapshot (replaces dead vw_stock_balances / stock_quants view)
+  let query = `
+    SELECT ib.item_code, ib.warehouse, ib.balance_qty, ib.balance_value,
+           i.name AS item_name, i.unit, i.category
+    FROM inventory_balances ib
+    JOIN items i ON i.code = ib.item_code AND i.company_id = ib.company_id
+    WHERE ib.company_id = ?`
   const binds: unknown[] = [company_id]
 
   if (warehouseId) {
-    query += ` AND warehouse_id = ?`
-    binds.push(Number(warehouseId))
+    query += ` AND ib.warehouse = (SELECT name FROM warehouses WHERE id = ? AND company_id = ? LIMIT 1)`
+    binds.push(Number(warehouseId), company_id)
   } else if (oldWarehouse) {
-    query += ` AND warehouse = ?`
+    query += ` AND ib.warehouse = ?`
     binds.push(oldWarehouse)
   }
-  query += ` ORDER BY warehouse, item_name`
+  query += ` ORDER BY ib.warehouse, i.name`
 
   const { results } = await c.env.DB.prepare(query).bind(...binds).all()
   return c.json({ success: true, data: results })

@@ -10,6 +10,7 @@ import type { Env } from '../../types'
 import { getUser, permissionGuard } from '../../middleware/auth'
 import { getInventoryPostingControls } from '../../lib/inventory_posting'
 import { processInventoryPostingOutbox } from '../../lib/process_outbox'
+import { resolveMovementDirection } from '../../lib/posting_engine'
 
 const governance = new Hono<{ Bindings: Env }>()
 
@@ -100,7 +101,7 @@ governance.post('/gl-preview', permissionGuard('inventory', 'read'), async (c) =
   const supplierAcc = '2120'  // Accounts payable
   const cashAcc     = '14010101'
 
-  const isInbound = ['GRN', 'اضافة', 'RETURN_CUSTOMER', 'ADJUSTMENT_PROFIT', 'TRANSFER_IN', 'PRODUCTION_OUTPUT'].includes(b.movement_type)
+  const isInbound = resolveMovementDirection(b.movement_type) === 'IN'
 
   if (isInbound) {
     // Purchase receipt / inbound: DR Inventory / CR Supplier (credit) or CR Cash (cash)

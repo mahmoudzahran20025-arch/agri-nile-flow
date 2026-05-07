@@ -55,31 +55,52 @@ treasury.get('/transactions', async (c) => {
   const partnerId = c.req.query('partner_id')
   const offset    = (page - 1) * size
 
-  let where   = 'WHERE company_id = ?'
-  const binds: unknown[] = [company_id]
+  const supplierCode = c.req.query('supplier_code')
 
-  if (direction) { where += ' AND direction = ?';  binds.push(direction) }
-  if (seasonId)  { where += ' AND season_id = ?';  binds.push(seasonId) }
-  if (status)    { where += ' AND status = ?';     binds.push(status) }
-  if (month)     { where += ' AND month = ?';      binds.push(Number(month)) }
-  if (year)      { where += ' AND year = ?';       binds.push(Number(year)) }
-  if (accountId) { where += ' AND financial_account_id = ?'; binds.push(Number(accountId)) }
-  if (partnerId) { where += ' AND partner_id = ?'; binds.push(Number(partnerId)) }
-  if (search)    { where += ' AND (narration LIKE ? OR recipient_name LIKE ?)'; const like = `%${search}%`; binds.push(like, like) }
+  // Build filter clause (without leading company_id — added explicitly in each query)
+  let filters = ''
+  const filterBinds: unknown[] = []
+
+  if (direction)    { filters += ' AND ct.direction = ?';             filterBinds.push(direction) }
+  if (seasonId)     { filters += ' AND ct.season_id = ?';             filterBinds.push(seasonId) }
+  if (status)       { filters += ' AND ct.status = ?';               filterBinds.push(status) }
+  if (month)        { filters += ' AND ct.month = ?';                filterBinds.push(Number(month)) }
+  if (year)         { filters += ' AND ct.year = ?';                 filterBinds.push(Number(year)) }
+  if (accountId)    { filters += ' AND ct.financial_account_id = ?'; filterBinds.push(Number(accountId)) }
+  if (partnerId)    { filters += ' AND ct.partner_id = ?';           filterBinds.push(Number(partnerId)) }
+  if (supplierCode) { filters += ' AND ct.supplier_code = ?';        filterBinds.push(Number(supplierCode)) }
+  if (search)       {
+    filters += ' AND (ct.narration LIKE ? OR ct.recipient_name LIKE ? OR s.name LIKE ?)'
+    const like = `%${search}%`
+    filterBinds.push(like, like, like)
+  }
 
   const [rows, cnt] = await Promise.all([
     c.env.DB.prepare(
-      `SELECT id, transaction_date, direction, document_number, recipient_name,
-              narration, amount, debit, credit, running_balance, year, month, notes, status,
-              field_id, center_code, season_id, document_type, unit, quantity, unit_price,
-              financial_account_id, partner_id
-       FROM cash_transactions ${where}
-       ORDER BY transaction_date ASC, id ASC LIMIT ? OFFSET ?`
-    ).bind(...binds, size, offset).all(),
+      `SELECT ct.id, ct.transaction_date, ct.direction, ct.document_number, ct.recipient_name,
+              ct.narration, ct.amount, ct.debit, ct.credit, ct.running_balance, ct.year, ct.month,
+              ct.notes, ct.status, ct.field_id, ct.center_code, ct.season_id, ct.document_type,
+              ct.financial_account_id, ct.partner_id, ct.journal_entry_id,
+              ct.supplier_code, ct.expense_code,
+              s.name  AS supplier_name,
+              et.name AS expense_name
+       FROM cash_transactions ct
+       LEFT JOIN suppliers     s  ON s.code  = ct.supplier_code AND s.company_id = ct.company_id
+       LEFT JOIN expense_types et ON et.code = ct.expense_code  AND et.company_id = ct.company_id
+       WHERE ct.company_id = ? ${filters}
+       ORDER BY ct.transaction_date ASC, ct.id ASC LIMIT ? OFFSET ?`
+    ).bind(company_id, ...filterBinds, size, offset).all(),
 
-    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM cash_transactions ${where}`)
-      .bind(...binds).first<{ n: number }>(),
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM cash_transactions ct
+       LEFT JOIN suppliers s ON s.code = ct.supplier_code AND s.company_id = ct.company_id
+       WHERE ct.company_id = ? ${filters}`
+    ).bind(company_id, ...filterBinds).first<{ n: number }>(),
   ])
+
+  // Keep backward-compat binds alias for other queries below
+  const binds = [company_id, ...filterBinds]
+  void binds // suppresses unused warning — used implicitly in count query above
 
   return c.json({
     success: true, data: rows.results,
@@ -117,6 +138,10 @@ treasury.post('/transactions', zValidator('json', transactionSchema), async (c) 
 
   if (b.status === 'posted' && (b.season_id == null || b.center_code == null)) {
     return c.json({ success: false, error: 'الموسم ومركز التكلفة مطلوبان عند الترحيل' }, 422)
+  }
+  // Outflow without supplier/partner linkage must specify an expense_code for proper GL classification
+  if (b.status === 'posted' && b.direction === 'م' && b.supplier_code == null && b.partner_id == null && b.expense_code == null) {
+    return c.json({ success: false, error: 'بند المصروف مطلوب للصرف بدون مورد أو شريك' }, 422)
   }
 
   try {

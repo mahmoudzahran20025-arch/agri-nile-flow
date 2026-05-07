@@ -23,12 +23,18 @@ entries.get('/', async (c) => {
   const start     = c.req.query('start')
   const end       = c.req.query('end')
   const ref_type  = c.req.query('ref_type')
+  const search    = c.req.query('search')
 
   let where = 'WHERE e.company_id = ?'
   const p: unknown[] = [company_id]
   if (start)    { where += ' AND e.entry_date >= ?'; p.push(start) }
   if (end)      { where += ' AND e.entry_date <= ?'; p.push(end) }
   if (ref_type) { where += ' AND e.ref_type = ?';   p.push(ref_type) }
+  if (search)   {
+    where += ' AND (e.description LIKE ? OR e.entry_number LIKE ? OR CAST(e.id AS TEXT) LIKE ?)'
+    const s = `%${search}%`
+    p.push(s, s, s)
+  }
 
   const [rows, cnt] = await Promise.all([
     c.env.DB.prepare(

@@ -13,44 +13,103 @@ suppliers.use('*', authMiddleware)
 // Read operations use DB-driven permissionGuard so any role with suppliers.read can view.
 const financeOnly = roleGuard(['super_admin', 'company_admin', 'accountant'])
 
-async function rebalanceSupplierBalances(db: Env['DB'], companyId: number, supplierCode: number) {
-  const rows = await db.prepare(
+/**
+ * Updates the running balance for a newly inserted supplier transaction and
+ * propagates the delta forward to all rows with a later date/id.
+ *
+ * O(1) reads + O(K) updates where K = rows after the insertion point.
+ * For backdated inserts (date < latest), falls back to full rebalance because
+ * the cumulative balances of every subsequent row must shift.
+ *
+ * Call this AFTER the new row is already inserted with balance_no_checks = 0.
+ */
+async function updateSupplierRunningBalance(
+  db: Env['DB'],
+  companyId: number,
+  supplierCode: number,
+  newTxnId: number,
+  newTxnDate: string,
+) {
+  // Check if this is a backdated insert (not the latest transaction)
+  const latestRow = await db.prepare(
+    `SELECT transaction_date FROM supplier_transactions
+     WHERE company_id = ? AND supplier_code = ? AND id != ?
+     ORDER BY transaction_date DESC, id DESC LIMIT 1`
+  ).bind(companyId, supplierCode, newTxnId).first<{ transaction_date: string }>()
+
+  const isBackdated = latestRow && latestRow.transaction_date > newTxnDate
+
+  if (isBackdated) {
+    // Full rebalance — every row after the insertion point needs recalculation
+    return _fullRebalanceSupplierBalances(db, companyId, supplierCode)
+  }
+
+  // Fast path: compute balance at the row just before this one, then apply delta
+  const prevRow = await db.prepare(
+    `SELECT balance_no_checks, balance_with_checks FROM supplier_transactions
+     WHERE company_id = ? AND supplier_code = ? AND id < ?
+     ORDER BY transaction_date DESC, id DESC LIMIT 1`
+  ).bind(companyId, supplierCode, newTxnId).first<{
+    balance_no_checks: number
+    balance_with_checks: number
+  }>()
+
+  const newRow = await db.prepare(
+    `SELECT credit, debit, check_amount FROM supplier_transactions WHERE id = ? AND company_id = ?`
+  ).bind(newTxnId, companyId).first<{ credit: number; debit: number; check_amount: number | null }>()
+
+  if (!newRow) return
+
+  const prevNoChecks   = prevRow?.balance_no_checks   ?? 0
+  const prevWithChecks = prevRow?.balance_with_checks ?? 0
+  const delta          = (newRow.credit ?? 0) - (newRow.debit ?? 0)
+  const deltaCheck     = delta + (newRow.check_amount ?? 0)
+
+  const newNoChecks   = prevNoChecks   + delta
+  const newWithChecks = prevWithChecks + deltaCheck
+
+  // Update the new row itself
+  await db.prepare(
+    `UPDATE supplier_transactions SET balance_no_checks = ?, balance_with_checks = ? WHERE id = ? AND company_id = ?`
+  ).bind(newNoChecks, newWithChecks, newTxnId, companyId).run()
+
+  // Propagate delta to all subsequent rows (same delta shifts every future row)
+  if (Math.abs(delta) > 0 || Math.abs(deltaCheck) > 0) {
+    await db.prepare(
+      `UPDATE supplier_transactions
+       SET balance_no_checks   = balance_no_checks   + ?,
+           balance_with_checks = balance_with_checks + ?
+       WHERE company_id = ? AND supplier_code = ? AND id > ?`
+    ).bind(delta, deltaCheck, companyId, supplierCode, newTxnId).run()
+  }
+}
+
+/** Full rebalance — only used for backdated inserts or delete operations. */
+async function _fullRebalanceSupplierBalances(db: Env['DB'], companyId: number, supplierCode: number) {
+  const { results: rows } = await db.prepare(
     `SELECT id, credit, debit, check_amount
      FROM supplier_transactions
      WHERE company_id = ? AND supplier_code = ?
      ORDER BY transaction_date ASC, id ASC`
   ).bind(companyId, supplierCode).all<{
-    id: number
-    credit: number | null
-    debit: number | null
-    check_amount: number | null
+    id: number; credit: number | null; debit: number | null; check_amount: number | null
   }>()
 
   let runningNoChecks = 0
   let runningWithChecks = 0
-  const typedRows = (rows.results ?? []) as Array<{
-    id: number
-    credit: number | null
-    debit: number | null
-    check_amount: number | null
-  }>
 
-  const updates = typedRows.map((row) => {
-    const credit = row.credit ?? 0
-    const debit = row.debit ?? 0
+  const updates = (rows ?? []).map((row) => {
+    const credit   = row.credit    ?? 0
+    const debit    = row.debit     ?? 0
     const checkAmt = row.check_amount ?? 0
-    runningNoChecks += credit - debit
+    runningNoChecks   += credit - debit
     runningWithChecks += credit - debit + checkAmt
     return db.prepare(
-      `UPDATE supplier_transactions
-       SET balance_no_checks = ?, balance_with_checks = ?
-       WHERE id = ? AND company_id = ?`
+      `UPDATE supplier_transactions SET balance_no_checks = ?, balance_with_checks = ? WHERE id = ? AND company_id = ?`
     ).bind(runningNoChecks, runningWithChecks, row.id, companyId)
   })
 
-  if (updates.length) {
-    await db.batch(updates)
-  }
+  if (updates.length) await db.batch(updates)
 }
 
 async function createOwnedCapitalAsset(
@@ -128,23 +187,39 @@ suppliers.get('/', permissionGuard('suppliers', 'read'), async (c) => {
   const where  = q ? 'AND (s.name LIKE ? OR CAST(s.code AS TEXT) LIKE ?)' : ''
   const params = q ? [company_id, `%${q}%`, `%${q}%`] : [company_id]
 
-  const [rowsResult, countResult] = await Promise.all([
+  const [rowsResult, countResult, draftMeta] = await Promise.all([
     c.env.DB.prepare(
       `SELECT s.code, s.name, s.activity, s.is_active,
-              COALESCE(SUM(st.credit), 0) AS total_credit,
-              COALESCE(SUM(st.debit),  0) AS total_debit,
-              COALESCE(SUM(st.credit), 0) - COALESCE(SUM(st.debit), 0) AS current_balance
+              COALESCE(last_tx.balance_no_checks, 0)   AS current_balance,
+              COALESCE(last_tx.balance_with_checks, 0) AS current_balance_with_checks
        FROM suppliers s
-       LEFT JOIN supplier_transactions st ON st.supplier_code = s.code AND st.company_id = s.company_id
+       LEFT JOIN (
+         SELECT supplier_code,
+                balance_no_checks,
+                balance_with_checks
+         FROM supplier_transactions
+         WHERE company_id = ?
+           AND id = (
+             SELECT MAX(id) FROM supplier_transactions st2
+             WHERE st2.supplier_code = supplier_transactions.supplier_code
+               AND st2.company_id = supplier_transactions.company_id
+           )
+       ) last_tx ON last_tx.supplier_code = s.code
        WHERE s.company_id = ? ${where}
-       GROUP BY s.code
-       ORDER BY ABS(current_balance) DESC
+       ORDER BY ABS(COALESCE(last_tx.balance_no_checks, 0)) DESC
        LIMIT ? OFFSET ?`
-    ).bind(...params, size, offset).all(),
+    ).bind(company_id, ...params, size, offset).all(),
 
     c.env.DB.prepare(
       `SELECT COUNT(*) AS total FROM suppliers s WHERE s.company_id = ? ${where}`
     ).bind(...params).first<{ total: number }>(),
+
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS draft_count,
+              COUNT(DISTINCT supplier_code) AS suppliers_with_drafts
+       FROM supplier_transactions
+       WHERE company_id = ? AND status = 'draft'`
+    ).bind(company_id).first<{ draft_count: number; suppliers_with_drafts: number }>(),
   ])
 
   return c.json({
@@ -154,6 +229,10 @@ suppliers.get('/', permissionGuard('suppliers', 'read'), async (c) => {
     page,
     page_size: size,
     has_more: offset + size < (countResult?.total ?? 0),
+    meta: {
+      draft_count:          draftMeta?.draft_count          ?? 0,
+      suppliers_with_drafts: draftMeta?.suppliers_with_drafts ?? 0,
+    },
   })
 })
 
@@ -164,16 +243,28 @@ suppliers.get('/aging', permissionGuard('suppliers', 'read'), async (c) => {
 
   const { results } = await c.env.DB.prepare(
     `SELECT s.code, s.name, s.activity,
-            COALESCE(SUM(t.credit), 0) - COALESCE(SUM(t.debit), 0) AS total_balance,
+            COALESCE(last_tx.balance_no_checks, 0) AS total_balance,
             COALESCE(SUM(CASE WHEN t.transaction_date >= date(?, '-30 days') AND t.transaction_date <= ? THEN t.credit - t.debit ELSE 0 END), 0) AS current_0_30,
             COALESCE(SUM(CASE WHEN t.transaction_date >= date(?, '-60 days') AND t.transaction_date < date(?, '-30 days') THEN t.credit - t.debit ELSE 0 END), 0) AS aged_31_60,
             COALESCE(SUM(CASE WHEN t.transaction_date >= date(?, '-90 days') AND t.transaction_date < date(?, '-60 days') THEN t.credit - t.debit ELSE 0 END), 0) AS aged_61_90,
             COALESCE(SUM(CASE WHEN t.transaction_date < date(?, '-90 days') THEN t.credit - t.debit ELSE 0 END), 0) AS aged_90_plus
      FROM suppliers s
      LEFT JOIN supplier_transactions t ON t.supplier_code = s.code AND t.company_id = s.company_id
-                                          AND t.transaction_date <= ?
+                                          AND t.status = 'posted' AND t.transaction_date <= ?
+     LEFT JOIN (
+       SELECT supplier_code, balance_no_checks
+       FROM supplier_transactions
+       WHERE company_id = ? AND status = 'posted'
+         AND id = (
+           SELECT MAX(id) FROM supplier_transactions st2
+           WHERE st2.supplier_code = supplier_transactions.supplier_code
+             AND st2.company_id = supplier_transactions.company_id
+             AND st2.status = 'posted'
+             AND st2.transaction_date <= ?
+         )
+     ) last_tx ON last_tx.supplier_code = s.code
      WHERE s.company_id = ? AND s.is_active = 1
-     GROUP BY s.code, s.name, s.activity
+     GROUP BY s.code, s.name, s.activity, last_tx.balance_no_checks
      HAVING total_balance <> 0
      ORDER BY total_balance DESC
     `
@@ -182,7 +273,8 @@ suppliers.get('/aging', permissionGuard('suppliers', 'read'), async (c) => {
     asOf, asOf,
     asOf, asOf,
     asOf,
-    asOf, company_id,
+    company_id, asOf,
+    company_id,
   ).all()
 
   const totals = (results as Record<string, number>[]).reduce(
@@ -197,6 +289,25 @@ suppliers.get('/aging', permissionGuard('suppliers', 'read'), async (c) => {
   )
 
   return c.json({ success: true, data: { suppliers: results, totals, as_of: asOf } })
+})
+
+// GET /api/suppliers/drafts — all draft transactions across all suppliers (must be before /:code)
+suppliers.get('/drafts', permissionGuard('suppliers', 'read'), async (c) => {
+  const { company_id } = getUser(c)
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT t.id, t.supplier_code, t.transaction_date, t.entry_type,
+            t.document_type, t.document_number, t.expense_category,
+            t.amount, t.credit, t.debit, t.notes, t.season_id,
+            t.center_code, t.financial_account_id, t.created_at,
+            s.name AS supplier_name, s.activity AS supplier_activity
+     FROM supplier_transactions t
+     JOIN suppliers s ON s.code = t.supplier_code AND s.company_id = t.company_id
+     WHERE t.company_id = ? AND t.status = 'draft'
+     ORDER BY t.transaction_date DESC, t.id DESC`
+  ).bind(company_id).all()
+
+  return c.json({ success: true, data: results })
 })
 
 // GET /api/suppliers/:code/summary — Odoo-style smart-button aggregates
@@ -480,15 +591,14 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
     `INSERT INTO supplier_transactions
      (company_id, season_id, supplier_code, account_code, center_code, financial_account_id,
       transaction_date, entry_type, document_type, document_number,
-      expense_category, equipment, equipment_type_id, equipment_usage_mode, unit, quantity, unit_price, amount,
+      expense_category, equipment, equipment_type_id, equipment_usage_mode, amount,
       credit, debit, check_amount, balance_no_checks, balance_with_checks,
       due_date, notes, year, month, created_by_user_id, status)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(
     company_id, b.season_id ?? null, code, b.account_code ?? null, b.center_code ?? null, b.financial_account_id ?? null,
     b.transaction_date, b.entry_type, b.document_type ?? null, b.document_number ?? null,
-    normalizedExpenseCategory, equipmentName, b.equipment_type_id ?? null, b.equipment_usage_mode ?? null, b.unit ?? null,
-    b.quantity ?? null, b.unit_price ?? null, b.amount,
+    normalizedExpenseCategory, equipmentName, b.equipment_type_id ?? null, b.equipment_usage_mode ?? null, b.amount,
     credit, debit, checkAmt, 0, 0,
     b.due_date ?? null, notesWithMeta,
     date.getFullYear(), date.getMonth() + 1, userId, status
@@ -496,8 +606,7 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
 
   const txnId = result.meta.last_row_id
 
-  // Recompute all balances in date-order to keep backdated inserts consistent.
-  await rebalanceSupplierBalances(c.env.DB, company_id, code)
+  await updateSupplierRunningBalance(c.env.DB, company_id, code, txnId, b.transaction_date)
 
   // Auto-post GL entry only for 'posted' status
   if (status === 'posted') {
@@ -545,6 +654,7 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
         // Mirror payment into cash_transactions so treasury running balance stays accurate.
         // skipSupplierMirror=true prevents an infinite loop (cash_movement would otherwise
         // try to write back to supplier_transactions for the same transaction).
+        // skipGlPosting=true prevents double GL entries (resolveSupplierPayment already posted it).
         await FinanceCore.recordCashMovement(c.env.DB, {
           company_id,
           userId,
@@ -560,7 +670,8 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
           document_number: b.document_number ?? null,
           notes: b.notes ?? null,
           status: 'posted',
-          skipSupplierMirror: true, // already in supplier_transactions above
+          skipSupplierMirror: true,
+          skipGlPosting: true,
         })
       }
     } catch (e: unknown) {
@@ -728,6 +839,7 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
         notes: txn.notes ?? null,
         status: 'posted',
         skipSupplierMirror: true,
+        skipGlPosting: true,
       })
     }
 
@@ -777,7 +889,7 @@ suppliers.delete('/:code/transactions/:id', financeOnly, async (c) => {
     .prepare('DELETE FROM supplier_transactions WHERE id = ? AND company_id = ?')
     .bind(id, company_id).run()
 
-  await rebalanceSupplierBalances(c.env.DB, company_id, code)
+  await _fullRebalanceSupplierBalances(c.env.DB, company_id, code)
 
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'DELETE',

@@ -20,11 +20,11 @@ analytics.get('/cost-by-field', permissionGuard('inventory', 'read'), async (c) 
        f.id, f.code, f.name AS field_name, f.area_feddan, f.crop_type,
        f.season_id,
        s.name AS season_name,
-       COALESCE(SUM(CASE WHEN im.movement_type IN ('صرف', 'ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS') THEN im.value_out ELSE 0 END), 0) AS total_consumed,
-       COALESCE(SUM(CASE WHEN im.movement_type IN ('اضافة', 'GRN', 'TRANSFER_IN', 'RETURN_CUSTOMER', 'PRODUCTION_OUTPUT', 'ADJUSTMENT_PROFIT') THEN im.value_in  ELSE 0 END), 0) AS total_added,
-       COUNT(DISTINCT CASE WHEN im.movement_type IN ('صرف', 'ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS') THEN im.item_code END)           AS items_consumed,
+       COALESCE(SUM(CASE WHEN im.movement_type IN ('ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS') THEN im.value_out ELSE 0 END), 0) AS total_consumed,
+       COALESCE(SUM(CASE WHEN im.movement_type IN ('GRN', 'TRANSFER_IN', 'RETURN_CUSTOMER', 'PRODUCTION_OUTPUT', 'ADJUSTMENT_PROFIT') THEN im.value_in  ELSE 0 END), 0) AS total_added,
+       COUNT(DISTINCT CASE WHEN im.movement_type IN ('ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS') THEN im.item_code END)           AS items_consumed,
        CASE WHEN f.area_feddan > 0
-            THEN COALESCE(SUM(CASE WHEN im.movement_type IN ('صرف', 'ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS') THEN im.value_out ELSE 0 END), 0) / f.area_feddan
+            THEN COALESCE(SUM(CASE WHEN im.movement_type IN ('ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS') THEN im.value_out ELSE 0 END), 0) / f.area_feddan
             ELSE NULL END AS cost_per_feddan,
        fsb.id          AS budget_id,
        fsb.budget_per_feddan,
@@ -32,7 +32,7 @@ analytics.get('/cost-by-field', permissionGuard('inventory', 'read'), async (c) 
          WHEN fsb.budget_per_feddan IS NULL OR fsb.budget_per_feddan = 0 OR f.area_feddan = 0 THEN NULL
          ELSE ROUND(
            (
-             (COALESCE(SUM(CASE WHEN im.movement_type IN ('صرف', 'ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS') THEN im.value_out ELSE 0 END), 0) / f.area_feddan)
+             (COALESCE(SUM(CASE WHEN im.movement_type IN ('ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS') THEN im.value_out ELSE 0 END), 0) / f.area_feddan)
              - fsb.budget_per_feddan
            ) * 100.0 / fsb.budget_per_feddan,
            1
@@ -74,7 +74,7 @@ analytics.get('/reorder-alerts', permissionGuard('inventory', 'read'), async (c)
       FROM inventory_movements im
       JOIN work_orders wo ON wo.id = im.work_order_id AND wo.company_id = im.company_id
       WHERE im.company_id = ?
-        AND im.movement_type IN ('صرف', 'ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS')
+        AND im.movement_type IN ('ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS')
         AND wo.status IN ('pending', 'in_progress', 'done')
       GROUP BY im.item_code
     )

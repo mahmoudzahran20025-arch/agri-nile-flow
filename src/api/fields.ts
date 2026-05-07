@@ -265,7 +265,7 @@ fields.get('/harvest/cost-estimate', async (c) => {
     c.env.DB.prepare(
       `SELECT COALESCE(SUM(value_out), 0) AS total
        FROM inventory_movements
-       WHERE company_id = ? AND field_id = ? AND season_id = ? AND movement_type = 'صرف'`
+       WHERE company_id = ? AND field_id = ? AND season_id = ? AND movement_type IN ('صرف', 'ISSUE')`
     ).bind(company_id, field_id, season_id).first<{ total: number }>(),
 
     c.env.DB.prepare(

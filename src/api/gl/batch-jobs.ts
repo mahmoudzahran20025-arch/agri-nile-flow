@@ -189,7 +189,7 @@ batchJobs.post('/batch-post/jobs/:id/process', async (c) => {
             ref_id: item.source_id,
             item_code: Number(payload.item_code ?? 0),
             warehouse: String(payload.warehouse ?? ''),
-            movement_type: String(payload.movement_type ?? 'اضافة'),
+            movement_type: String(payload.movement_type ?? 'GRN'),
             value: Number(payload.value ?? 0),
             date: String(payload.date ?? new Date().toISOString().split('T')[0]),
             item_name: String(payload.item_name ?? ''),
