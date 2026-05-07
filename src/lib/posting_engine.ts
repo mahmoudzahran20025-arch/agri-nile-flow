@@ -354,18 +354,10 @@ export async function resolveControlAccount(
 }
 
 // ── Movement Direction Helper ─────────────────────────────────────────────────
-// Derives IN / OUT from the movement_types code, with backward-compat for the
-// legacy Arabic literals 'اضافة' and 'صرف' that still exist in live data.
 
 export function resolveMovementDirection(movementType: string): 'IN' | 'OUT' {
-  // New typed codes
-  const IN_CODES  = new Set(['GRN', 'TRANSFER_IN', 'RETURN_CUSTOMER', 'ADJUSTMENT_PROFIT', 'PRODUCTION_OUTPUT'])
-  const OUT_CODES = new Set(['ISSUE', 'TRANSFER_OUT', 'RETURN_SUPPLIER', 'ADJUSTMENT_LOSS', 'PRODUCTION_INPUT'])
-  if (IN_CODES.has(movementType))  return 'IN'
-  if (OUT_CODES.has(movementType)) return 'OUT'
-  // Legacy Arabic literals
-  if (movementType === 'اضافة') return 'IN'
-  return 'OUT'
+  const IN_CODES = new Set(['GRN', 'TRANSFER_IN', 'RETURN_CUSTOMER', 'ADJUSTMENT_PROFIT', 'PRODUCTION_OUTPUT'])
+  return IN_CODES.has(movementType) ? 'IN' : 'OUT'
 }
 
 // ── Public: resolveInventoryMovement ─────────────────────────────────────────

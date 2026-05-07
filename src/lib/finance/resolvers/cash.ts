@@ -47,13 +47,23 @@ export async function resolveCashLedger(
   }
 
   if (!contraAcc) {
-    const key = opts.partner_id
-      ? 'partner_current_account'
-      : opts.supplier_code
-        ? 'accounts_payable'
-        : opts.direction === 'د' ? 'revenue_default' : 'expense_default'
+    // Partner inflows = capital injection → equity; partner outflows = current account
+    // Supplier outflows = AP clearing; no-party inflows = revenue; no-party outflows = expense
+    const key = opts.partner_id && opts.direction === 'د'
+      ? 'equity_default'
+      : opts.partner_id
+        ? 'partner_current_account'
+        : opts.supplier_code
+          ? 'accounts_payable'
+          : opts.direction === 'د' ? 'revenue_default' : 'expense_default'
     contraAcc = (await resolveControlAccount(db, opts.company_id, key)) || ''
-    contraResolution = contraResolution || `control:${key}`
+    // Fall back to partner_current_account if equity_default not configured
+    if (!contraAcc && opts.partner_id && opts.direction === 'د') {
+      contraAcc = (await resolveControlAccount(db, opts.company_id, 'partner_current_account')) || ''
+      contraResolution = `control:partner_current_account(equity_default:missing)`
+    } else {
+      contraResolution = contraResolution || `control:${key}`
+    }
   }
 
   const blueprint = await peResolveCash(

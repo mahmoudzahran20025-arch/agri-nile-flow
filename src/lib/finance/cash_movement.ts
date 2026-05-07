@@ -104,21 +104,33 @@ export async function prepareCashMovement(
     if (opts.supplier_code && !opts.skipSupplierMirror) {
       const supKey = `st_${batchKey}`
 
-      // Compute supplier running balance for this mirror entry
+      // Find the last supplier_transaction at or before this date to anchor the balance
       const lastSupRow = await db
-        .prepare(`SELECT balance_with_checks, balance_no_checks FROM supplier_transactions
+        .prepare(`SELECT id, balance_with_checks, balance_no_checks FROM supplier_transactions
                   WHERE company_id = ? AND supplier_code = ?
+                    AND transaction_date <= ?
                   ORDER BY transaction_date DESC, id DESC LIMIT 1`)
-        .bind(opts.company_id, opts.supplier_code)
-        .first<{ balance_with_checks: number; balance_no_checks: number }>()
+        .bind(opts.company_id, opts.supplier_code, opts.transaction_date)
+        .first<{ id: number; balance_with_checks: number; balance_no_checks: number }>()
 
       const prevBalNoChecks   = lastSupRow?.balance_no_checks   ?? 0
       const prevBalWithChecks = lastSupRow?.balance_with_checks ?? 0
-      // 'م' direction = we pay supplier = debit on supplier = reduces what we owe (credit-debit basis)
+      // 'م' direction = we pay supplier = debit on supplier = reduces what we owe
       const supCredit = opts.direction === 'د' ? opts.amount : 0
       const supDebit  = opts.direction === 'م' ? opts.amount : 0
-      const newSupBalNoChecks   = prevBalNoChecks   + supCredit - supDebit
-      const newSupBalWithChecks = prevBalWithChecks + supCredit - supDebit
+      const supDelta  = supCredit - supDebit
+      const newSupBalNoChecks   = prevBalNoChecks   + supDelta
+      const newSupBalWithChecks = prevBalWithChecks + supDelta
+
+      // Shift all subsequent supplier_transactions forward by delta
+      stmts.push(db.prepare(
+        `UPDATE supplier_transactions
+         SET balance_no_checks = balance_no_checks + ?,
+             balance_with_checks = balance_with_checks + ?
+         WHERE company_id = ? AND supplier_code = ?
+           AND (transaction_date > ? OR (transaction_date = ? AND local_id IS NOT NULL AND local_id != ?))`
+      ).bind(supDelta, supDelta, opts.company_id, opts.supplier_code,
+             opts.transaction_date, opts.transaction_date, supKey))
 
       stmts.push(db.prepare(
         `INSERT INTO supplier_transactions
@@ -193,8 +205,14 @@ export async function commitCashDrafts(
   for (const draftId of opts.draftIds) {
     try {
       const draft = await db.prepare(
-        'SELECT * FROM cash_transactions WHERE id = ? AND company_id = ? AND status = ?'
-      ).bind(draftId, opts.company_id, 'draft').first<CashDraftRow>()
+        `SELECT id, transaction_date, direction, amount, narration,
+                supplier_code, center_code, partner_id, financial_account_id, expense_code,
+                season_id, field_id, notes, document_type, document_number, recipient_name
+         FROM cash_transactions WHERE id = ? AND company_id = ? AND status = 'draft'`
+      ).bind(draftId, opts.company_id).first<CashDraftRow & {
+        season_id: number | null; field_id: number | null; notes: string | null
+        document_type: string | null; document_number: number | null; recipient_name: string | null
+      }>()
 
       if (!draft) {
         result.failed++
@@ -202,22 +220,68 @@ export async function commitCashDrafts(
         continue
       }
 
-      await prepareCashMovement(db, {
-        company_id: opts.company_id,
-        userId: opts.userId,
-        transaction_date: draft.transaction_date,
-        direction: draft.direction,
-        amount: draft.amount,
-        narration: draft.narration,
-        supplier_code: draft.supplier_code,
-        center_code: draft.center_code,
-        partner_id: draft.partner_id,
-        financial_account_id: draft.financial_account_id,
-        expense_code: draft.expense_code,
-        status: 'posted',
-      })
+      const periodId = await getOpenPeriod(db, opts.company_id, draft.transaction_date)
+      if (!periodId) {
+        result.failed++
+        result.errors.push(`Draft ${draftId}: no open period for ${draft.transaction_date}`)
+        continue
+      }
 
-      await db.prepare('DELETE FROM cash_transactions WHERE id = ?').bind(draftId).run()
+      // Compute running balance at the draft's date position
+      const lastPostedRow = await db.prepare(
+        `SELECT running_balance FROM cash_transactions
+         WHERE company_id = ? AND financial_account_id IS NOT DISTINCT FROM ?
+           AND status = 'posted' AND transaction_date <= ? AND id != ?
+         ORDER BY transaction_date DESC, id DESC LIMIT 1`
+      ).bind(opts.company_id, draft.financial_account_id ?? null, draft.transaction_date, draftId)
+        .first<{ running_balance: number }>()
+
+      const prevBalance = lastPostedRow?.running_balance ?? 0
+      const delta       = draft.direction === 'د' ? draft.amount : -draft.amount
+      const newBalance  = prevBalance + delta
+
+      // Promote in-place: no delete/recreate — audit trail preserved, same ID
+      await db.prepare(
+        `UPDATE cash_transactions SET status = 'posted', running_balance = ?
+         WHERE id = ? AND company_id = ?`
+      ).bind(newBalance, draftId, opts.company_id).run()
+
+      // Shift all later rows in the same account forward by delta
+      if (draft.financial_account_id != null && Math.abs(delta) > 0) {
+        await db.prepare(
+          `UPDATE cash_transactions SET running_balance = running_balance + ?
+           WHERE company_id = ? AND financial_account_id = ? AND status = 'posted'
+             AND (transaction_date > ? OR (transaction_date = ? AND id > ?))`
+        ).bind(delta, opts.company_id, draft.financial_account_id,
+               draft.transaction_date, draft.transaction_date, draftId).run()
+      }
+
+      // Create GL entry if not already present
+      const existing = await db.prepare(
+        'SELECT journal_entry_id FROM cash_transactions WHERE id = ?'
+      ).bind(draftId).first<{ journal_entry_id: number | null }>()
+
+      if (!existing?.journal_entry_id) {
+        const jeId = await resolveCashLedger(db, {
+          company_id:           opts.company_id,
+          ref_id:               draftId,
+          financial_account_id: draft.financial_account_id,
+          direction:            draft.direction,
+          amount:               draft.amount,
+          date:                 draft.transaction_date,
+          description:          draft.narration,
+          created_by:           opts.userId,
+          center_code:          draft.center_code ?? undefined,
+          expense_code:         draft.expense_code,
+          supplier_code:        draft.supplier_code,
+          partner_id:           draft.partner_id,
+        })
+        if (jeId) {
+          await db.prepare('UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ?')
+            .bind(jeId, draftId).run()
+        }
+      }
+
       result.committed++
     } catch (err: any) {
       result.failed++
