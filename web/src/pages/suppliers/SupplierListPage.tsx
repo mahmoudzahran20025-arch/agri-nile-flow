@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Search, Plus, ExternalLink, FileText, X } from 'lucide-react'
+import { Search, Plus, ExternalLink, FileText, X, Clock } from 'lucide-react'
 import { suppliersApi } from '../../api/client'
 import { usePermission } from '../../hooks/usePermission'
 import DataTable, { type Column, type SortState } from '../../components/ui/DataTable'
@@ -158,9 +158,12 @@ export default function SupplierListPage() {
     queryKey: ['suppliers', page, q],
     queryFn:  () => suppliersApi.list({ page, size: 100, q: q || undefined }) as Promise<{
       data: Supplier[]; total: number; page: number; page_size: number; has_more: boolean
+      meta?: { draft_count: number; suppliers_with_drafts: number }
     }>,
     staleTime: 30_000,
   })
+
+  const draftMeta = (data as { meta?: { draft_count: number; suppliers_with_drafts: number } } | undefined)?.meta
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -173,7 +176,6 @@ export default function SupplierListPage() {
     return () => clearTimeout(timer)
   }, [qInput, q])
 
-  if (error) console.error('❌ Suppliers query error:', error)
 
   // ── Client-side filter + sort ──────────────────────────────
   const filtered = useMemo(() => {
@@ -254,6 +256,13 @@ export default function SupplierListPage() {
         <div className="card bg-red-50 border border-red-200 p-4">
           <p className="text-red-700 font-medium">❌ خطأ في تحميل البيانات</p>
           <p className="text-red-600 text-sm">{String(error)}</p>
+        </div>
+      )}
+
+      {(draftMeta?.draft_count ?? 0) > 0 && (
+        <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-amber-800 text-xs font-semibold">
+          <Clock size={13} className="text-amber-500 shrink-0" />
+          يوجد {draftMeta!.draft_count} قيد في المسودة لدى {draftMeta!.suppliers_with_drafts} مورد — لن تؤثر على الأرصدة حتى يتم ترحيلها
         </div>
       )}
 

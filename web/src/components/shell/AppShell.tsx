@@ -34,6 +34,8 @@ import PeriodWarningBanner from '../PeriodWarningBanner';
 import QuickEntryFAB from '../QuickEntryFAB';
 import KeyboardShortcuts from '../KeyboardShortcuts';
 import { useAppStore } from '../../store/appStore';
+import { useQuery } from '@tanstack/react-query';
+import { suppliersApi } from '../../api/suppliers';
 
 interface NavItem {
   label: string;
@@ -207,6 +209,16 @@ const SidebarContent = ({ onNavClick }: { onNavClick?: () => void }) => {
   const { user, role, logout } = useAppStore();
   const navigate = useNavigate();
 
+  const { data: supplierListData } = useQuery({
+    queryKey: ['suppliers', 1, ''],
+    queryFn:  () => suppliersApi.list({ page: 1, size: 1 }) as Promise<{
+      data: unknown[]; total: number; meta?: { draft_count: number }
+    }>,
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+  })
+  const supplierDraftCount = supplierListData?.meta?.draft_count ?? 0
+
   const initials = user?.full_name
     ? user.full_name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase()
     : 'U';
@@ -226,18 +238,31 @@ const SidebarContent = ({ onNavClick }: { onNavClick?: () => void }) => {
 
       {/* Navigation */}
       <div className="flex-1 overflow-y-auto py-6 px-3 custom-scrollbar" onClick={onNavClick}>
-        {navSections.map((section, idx) => (
+        {navSections.map((section, idx) => {
+          const items = section.title === 'Suppliers & AP'
+            ? [
+                {
+                  label: 'Pending Approvals',
+                  path: '/suppliers/pending',
+                  icon: <ShieldCheck size={18} />,
+                  badge: supplierDraftCount > 0 ? supplierDraftCount : undefined,
+                },
+                ...section.items,
+              ]
+            : section.items
+          return (
           <div key={idx} className="mb-8">
             <div className="px-4 mb-3 text-[11px] font-bold text-slate-400 uppercase tracking-[0.15em] opacity-70">
               {section.title}
             </div>
             <div className="space-y-1">
-              {section.items.map((item, itemIdx) => (
+              {items.map((item, itemIdx) => (
                 <NavItemNode key={itemIdx} item={item} />
               ))}
             </div>
           </div>
-        ))}
+          )
+        })}
       </div>
 
       {/* User Footer */}

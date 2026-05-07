@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Download, GitBranch, CheckCircle2, X, CornerDownRight } from 'lucide-react';
+import { Plus, Download, GitBranch, CheckCircle2, X, CornerDownRight, Search, Calendar, Filter, XCircle } from 'lucide-react';
 import { glApi } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import NewEntryForm from '../../components/gl/NewEntryForm';
@@ -34,10 +34,22 @@ export default function JournalEntriesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [page, setPage] = useState(1);
-  const [tab, setTab] = useState('All Entries');
   const [sort, setSort] = useState<SortState>({ key: 'entry_date', dir: 'desc' });
+  const [search, setSearch] = useState('');
+  const [tab, setTab] = useState<'All' | 'Posted' | 'Drafts' | 'Reversals'>('All');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
   const [fyFilter, setFyFilter] = useState('');
+  const [expenseFilter, setExpenseFilter] = useState('');
+  const [centerFilter, setCenterFilter] = useState('');
+
+  // Debounced search
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 500);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   const [selectedId, setSelectedId] = useState<number | null>(() => {
     const idParam = searchParams.get('id');
@@ -66,9 +78,30 @@ export default function JournalEntriesPage() {
     onError: (err: any) => toast(err?.message || err?.error || 'Failed to reverse entry', 'error'),
   });
 
+  const { data: expenseTypes = [] } = useQuery({
+    queryKey: ['config', 'expense-types'],
+    queryFn: () => configApi.expenseTypes() as Promise<{ code: number; name: string }[]>,
+    staleTime: 300_000,
+  });
+
+  const { data: costCenters = [] } = useQuery({
+    queryKey: ['config', 'cost-centers'],
+    queryFn: () => configApi.costCenters() as Promise<{ code: number; name: string }[]>,
+    staleTime: 300_000,
+  });
+
   const { data: entriesData, isLoading } = useQuery({
-    queryKey: ['gl-entries', page, sourceFilter, fyFilter],
-    queryFn: () => glApi.entries({ page, size: 50, ref_type: sourceFilter || undefined }),
+    queryKey: ['gl-entries', page, sourceFilter, fyFilter, debouncedSearch, startDate, endDate, expenseFilter, centerFilter],
+    queryFn: () => glApi.entries({
+      page,
+      size: 50,
+      ref_type: sourceFilter || undefined,
+      search: debouncedSearch || undefined,
+      start: startDate || undefined,
+      end: endDate || undefined,
+      expense_code: expenseFilter || undefined,
+      center_code: centerFilter || undefined,
+    }),
   });
 
   const rawEntries = ((entriesData as any)?.data ?? []) as JournalEntry[];
@@ -112,11 +145,12 @@ export default function JournalEntriesPage() {
       header: 'Entry No.',
       render: (row) => <span className="text-[#0F2D5C] font-semibold">#{row.entry_number || row.id}</span>
     },
-    { key: 'entry_date', header: 'Date', sortable: true },
-    { key: 'description', header: 'Description' },
+    { key: 'entry_date', header: 'Date', sortable: true, width: '120px' },
+    { key: 'description', header: 'Description', sortable: true },
     {
       key: 'ref_type',
       header: 'Source',
+      sortable: true,
       render: (row) => <StatusBadge type="source" variant={(row.ref_type?.replace('_transaction', '')?.replace('_movement', '') || 'manual') as any} />
     },
     {
@@ -130,7 +164,8 @@ export default function JournalEntriesPage() {
       key: 'total_credit',
       header: 'Credit',
       align: 'right',
-      render: (row) => <span className="text-red-600 font-mono font-medium">{fmt(row.total_credit)}</span>
+      render: (row) => <span className="text-red-600 font-mono font-medium">{fmt(row.total_credit)}</span>,
+      sortable: true
     },
     {
       key: 'status',
@@ -176,19 +211,80 @@ export default function JournalEntriesPage() {
   ];
 
   const rightSlot = (
-    <>
-      <select className="input h-8 text-[12px] py-1 w-32" value={fyFilter} onChange={e => setFyFilter(e.target.value)}>
-        <option value="">All FY</option>
-        <option value="2025-2026">2025-2026</option>
-      </select>
-      <select className="input h-8 text-[12px] py-1 w-36" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}>
-        <option value="">All Sources</option>
-        <option value="cash_transaction">Cash</option>
-        <option value="supplier_transaction">Supplier</option>
-        <option value="inventory_movement">Inventory</option>
-        <option value="manual">Manual</option>
-      </select>
-    </>
+    <div className="flex items-center gap-2 overflow-x-auto pb-1 max-w-[800px] no-scrollbar">
+      <div className="flex items-center gap-2 shrink-0">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+          <input
+            type="text"
+            className="input pl-8 h-8 text-[12px] w-40 bg-white"
+            placeholder="الوصف أو الرقم..."
+            value={search}
+            onChange={e => { setSearch(e.target.value); setPage(1); }}
+          />
+          {search && (
+            <button
+              onClick={() => { setSearch(''); setPage(1); }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+            >
+              <XCircle size={12} />
+            </button>
+          )}
+        </div>
+
+        <div className="h-4 w-[1px] bg-slate-200" />
+
+        <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2 h-8">
+          <Calendar size={13} className="text-slate-400" />
+          <input
+            type="date"
+            className="bg-transparent border-none p-0 text-[11px] focus:ring-0 w-24"
+            value={startDate}
+            onChange={e => { setStartDate(e.target.value); setPage(1); }}
+          />
+          <span className="text-slate-300">→</span>
+          <input
+            type="date"
+            className="bg-transparent border-none p-0 text-[11px] focus:ring-0 w-24"
+            value={endDate}
+            onChange={e => { setEndDate(e.target.value); setPage(1); }}
+          />
+        </div>
+
+        <div className="h-4 w-[1px] bg-slate-200" />
+
+        <select className="input h-8 text-[11px] py-1 w-28 bg-white" value={sourceFilter} onChange={e => { setSourceFilter(e.target.value); setPage(1); }}>
+          <option value="">كل المصادر</option>
+          <option value="business_event">Business Event</option>
+          <option value="cash_transaction">Cash (Treasury)</option>
+          <option value="supplier_transaction">Supplier (A/P)</option>
+          <option value="inventory_movement">Inventory</option>
+          <option value="manual">Manual</option>
+        </select>
+
+        <select className="input h-8 text-[11px] py-1 w-32 bg-white" value={expenseFilter} onChange={e => { setExpenseFilter(e.target.value); setPage(1); }}>
+          <option value="">بند المصروف</option>
+          {expenseTypes.map(et => <option key={et.code} value={et.code}>{et.name}</option>)}
+        </select>
+
+        <select className="input h-8 text-[11px] py-1 w-28 bg-white" value={centerFilter} onChange={e => { setCenterFilter(e.target.value); setPage(1); }}>
+          <option value="">مركز التكلفة</option>
+          {costCenters.map(cc => <option key={cc.code} value={cc.code}>{cc.name}</option>)}
+        </select>
+
+        {(search || startDate || endDate || sourceFilter || expenseFilter || centerFilter || fyFilter) && (
+          <button
+            onClick={() => {
+              setSearch(''); setStartDate(''); setEndDate('');
+              setSourceFilter(''); setExpenseFilter(''); setCenterFilter(''); setFyFilter(''); setPage(1);
+            }}
+            className="flex items-center gap-1 text-[11px] text-red-500 hover:text-red-700 font-medium ml-1 whitespace-nowrap"
+          >
+            <Filter size={12} /> مسح الكل
+          </button>
+        )}
+      </div>
+    </div>
   );
 
   return (

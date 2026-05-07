@@ -1,4 +1,6 @@
 import { api, unwrap, unwrapPaginated, paginatedUrl } from './core'
+import type { BankAccount } from './finance'
+export type { BankAccount }
 
 export interface IntegrityCheck {
   key:         string
@@ -148,55 +150,51 @@ export interface BatchPostJobsResult {
 }
 
 export interface EntryTraceResult {
-  success: true
-  data: {
-    entry: {
-      id: number
-      entry_number: string | null
-      entry_date: string
-      description: string
-      ref_type: string | null
-      ref_id: number | null
-      is_posted: number
-      created_by: number | null
-      created_at: string
-    }
-    lines: Array<{
-      id: number
-      account_code: string
-      account_name?: string
-      account_type?: string
-      debit: number
-      credit: number
-      description?: string
-      rule_slot?: string | null
-      center_code?: number | null
-      season_id?: number | null
-      field_id?: number | null
-    }>
-    trace: Record<string, unknown> | null
-    source_event: {
-      id: number
-      event_type: string
-      event_date: string
-      source_module: string
-      source_id: number
-      status?: string
-      payload?: string
-    } | null
-    source_document: {
-      id: number
-      source_module: string
-      source_id: number
-      document_type: string
-      event_id?: number
-      event_date?: string
-      status?: string
-      link_type?: string
-      journal_entry_id?: number
-    } | null
-    has_trace: boolean
+  entry: {
+    id: number
+    entry_number: string | null
+    entry_date: string
+    description: string
+    ref_type: string | null
+    ref_id: number | null
+    is_posted: number
+    created_by: number | null
+    created_at: string
   }
+  lines: Array<{
+    id: number
+    account_code: string
+    account_name?: string
+    account_type?: string
+    debit: number
+    credit: number
+    description?: string
+    rule_slot?: string | null
+    center_code?: number | null
+    season_id?: number | null
+    field_id?: number | null
+  }>
+  trace: Record<string, unknown> | null
+  source_event: {
+    id: number
+    event_type: string
+    event_date: string
+    source_module: string
+    source_id: number
+    status: string
+    payload: string | Record<string, unknown> | null
+  } | null
+  source_document: {
+    id: number
+    source_module: string
+    source_id: number
+    document_type: string
+    event_id: number | null
+    event_date: string | null
+    status: string | null
+    link_type: string | null
+  } | null
+  has_trace: boolean
 }
 
 export type PgType = 'business' | 'product' | 'inventory'
@@ -402,7 +400,7 @@ export const glApi = {
   runPeriodChecklistStep: (id: number, stepKey: string) =>
     unwrap(api.post<PeriodCloseChecklistStep>(`/gl/periods/${id}/checklist/run/${stepKey}`, {})),
 
-  entries:     (p?: { page?: number; size?: number; start?: string; end?: string; ref_type?: string }) =>
+  entries:     (p?: { page?: number; size?: number; start?: string; end?: string; ref_type?: string; search?: string }) =>
     unwrapPaginated<unknown>(api.get(paginatedUrl('/gl/entries', p ?? {}))),
   getEntry:    (id: number) => unwrap(api.get(`/gl/entries/${id}`)),
   createEntry: (body: unknown) => api.post('/gl/entries/manual-entries', body),
@@ -460,7 +458,7 @@ export const glApi = {
   entryTrace: (id: number) => unwrap(api.get<EntryTraceResult>(`/gl/entries/${id}/trace`)),
 
   // Note: bankAccounts lives in finance domain but kept here for backward compat
-  bankAccounts: () => unwrap(api.get<unknown[]>('/finance/bank-accounts')),
+  bankAccounts: () => unwrap(api.get<BankAccount[]>('/finance/bank-accounts')),
 
   // ── Posting Groups ──────────────────────────────────────────────────────────
   postingGroups:       (type: PgType) => unwrap(api.get<PostingGroup[]>(`/gl/posting-groups/${type}`)),

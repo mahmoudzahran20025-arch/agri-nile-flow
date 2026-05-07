@@ -165,8 +165,8 @@ export default function MasterDataPage() {
           })
         }
       }
-    } catch (err) {
-      console.error('Save error:', err)
+    } catch {
+      // mutation onError handlers surface these errors to the user
     }
   }
 

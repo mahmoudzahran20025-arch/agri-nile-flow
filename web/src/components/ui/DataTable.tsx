@@ -3,7 +3,7 @@ import { ChevronRight, ChevronLeft, SearchX, ArrowUp, ArrowDown, ArrowUpDown } f
 
 export interface Column<T> {
   key: keyof T | string;
-  header: string;
+  header: React.ReactNode;
   render?: (row: T) => React.ReactNode;
   align?: 'right' | 'left' | 'center';
   width?: string;

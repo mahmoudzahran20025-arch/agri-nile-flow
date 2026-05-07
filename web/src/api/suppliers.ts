@@ -28,4 +28,26 @@ export const suppliersApi = {
 
   aging: (asOf?: string) =>
     unwrap(api.get(`/suppliers/aging${asOf ? `?as_of=${asOf}` : ''}`)),
+
+  drafts: () => unwrap(api.get<SupplierDraft[]>('/suppliers/drafts')),
+}
+
+export interface SupplierDraft {
+  id:                  number
+  supplier_code:       number
+  supplier_name:       string
+  supplier_activity:   string | null
+  transaction_date:    string
+  entry_type:          'د' | 'م'
+  document_type:       string | null
+  document_number:     number | null
+  expense_category:    string | null
+  amount:              number
+  credit:              number
+  debit:               number
+  notes:               string | null
+  season_id:           number | null
+  center_code:         number | null
+  financial_account_id: number | null
+  created_at:          string
 }

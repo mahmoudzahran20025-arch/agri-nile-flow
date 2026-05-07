@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 
 interface SectionCardProps {
-  title: string
+  title: ReactNode
   subtitle?: string
   icon?: ReactNode
   badge?: ReactNode

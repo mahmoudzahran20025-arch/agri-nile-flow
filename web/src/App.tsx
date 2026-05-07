@@ -57,11 +57,11 @@ const SeasonReportsPage     = lazy(() => import('./pages/reports/SeasonReportsPa
 // ── Lazy chunks: Operations / misc ──────────────────────────────────────────
 const SupplierHubPage          = lazy(() => import('./pages/suppliers/SupplierHubPage'))
 const SupplierDetailPage       = lazy(() => import('./pages/suppliers/SupplierDetailPage'))
+const PendingApprovalsPage     = lazy(() => import('./pages/suppliers/PendingApprovalsPage'))
+const TreasuryHubPage          = lazy(() => import('./pages/treasury/TreasuryHubPage'))
 const CashJournalPage          = lazy(() => import('./pages/treasury/CashJournalPage'))
 const PartnersPage             = lazy(() => import('./pages/treasury/PartnersPage'))
 const BankReconciliationPage   = lazy(() => import('./pages/treasury/BankReconciliationPage'))
-const PurchaseOrdersPage       = lazy(() => import('./pages/treasury/PurchaseOrdersPage'))
-const APAgingPage              = lazy(() => import('./pages/treasury/APAgingPage'))
 const WarehouseBalancesPage    = lazy(() => import('./pages/inventory/WarehouseBalancesPage'))
 const WarehousesPage           = lazy(() => import('./pages/inventory/WarehousesPage'))
 const InventoryMovementsPage   = lazy(() => import('./pages/inventory/InventoryMovementsPage'))
@@ -142,7 +142,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       {isDebugEnabled && (
-        <Route path="/debug" element={<RequireAuth><DebugPage /></RequireAuth>} />
+        <Route path="/debug" element={isDebugEnabled ? <RequireAuth><DebugPage /></RequireAuth> : <Navigate to="/dashboard" replace />} />
       )}
 
       <Route
@@ -157,11 +157,12 @@ export default function App() {
         <Route path="dashboard"  element={<DashboardPage />} />
 
         {/* Suppliers */}
-        <Route path="suppliers"        element={<SupplierHubPage />} />
-        <Route path="suppliers/:code"  element={<SupplierDetailPage />} />
+        <Route path="suppliers"              element={<SupplierHubPage />} />
+        <Route path="suppliers/pending"      element={<PendingApprovalsPage />} />
+        <Route path="suppliers/:code"        element={<SupplierDetailPage />} />
 
-        {/* Treasury */}
-        <Route path="treasury"          element={<CashJournalPage />} />
+        {/* Treasury Hub — unified Procure-to-Pay workspace */}
+        <Route path="treasury"          element={<TreasuryHubPage />} />
         <Route path="treasury/partners" element={<PartnersPage />} />
 
         {/* Inventory */}
@@ -231,11 +232,12 @@ export default function App() {
         <Route path="gl/integrity-audit"  element={<GlIntegrityAuditPage />} />
         {/* Keep direct routes alive for backward-compat / deep-linking */}
         <Route path="gl/periods"      element={<PeriodsPage />} />
-        <Route path="treasury/ap"     element={<APAgingPage />} />
+        {/* /treasury/ap and /treasury/po redirect into the Hub with the correct tab */}
+        <Route path="treasury/ap"     element={<Navigate to="/treasury?tab=ap"  replace />} />
+        <Route path="treasury/po"     element={<Navigate to="/treasury?tab=po"  replace />} />
 
         {/* Finance */}
         <Route path="treasury/bank"      element={<BankReconciliationPage />} />
-        <Route path="treasury/po"        element={<PurchaseOrdersPage />} />
 
         {/* Reports */}
         <Route path="reports"                    element={<ReportsPage />} />

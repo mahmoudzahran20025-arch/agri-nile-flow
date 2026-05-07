@@ -85,6 +85,7 @@ export default function SupplierDetailPage() {
   const [addOpen,     setAddOpen]    = useState(false)
   const [editOpen,    setEditOpen]   = useState(false)
   const [tab,         setTab]        = useState<TabId>('statement')
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [seasonId,    setSeasonId]   = useState<number | undefined>(undefined)
   const [filterMonth, setFilterMonth]= useState<number | undefined>(undefined)
   const highlightId = searchParams.get('highlight') ? Number(searchParams.get('highlight')) : null
@@ -141,6 +142,38 @@ export default function SupplierDetailPage() {
     onError: (err: { message?: string }) => toast(err.message || 'فشل ترحيل الحركة', 'error')
   })
 
+  const bulkPostMut = useMutation({
+    mutationFn: async (ids: number[]) => {
+      const results = await Promise.allSettled(
+        ids.map(id => suppliersApi.postTransaction(Number(code), id))
+      )
+      const failed = results.filter(r => r.status === 'rejected')
+      if (failed.length > 0) {
+        const firstErr = (failed[0] as PromiseRejectedResult).reason
+        throw Object.assign(
+          new Error(firstErr?.message || 'فشل ترحيل بعض الحركات'),
+          { failedCount: failed.length, total: ids.length }
+        )
+      }
+    },
+    onSuccess: (_data, ids) => {
+      toast(`تم ترحيل ${ids.length} قيد بنجاح`, 'success')
+      setSelectedIds(new Set())
+      queryClient.invalidateQueries({ queryKey: ['supplier-statement', code] })
+      queryClient.invalidateQueries({ queryKey: ['supplier-summary', code] })
+      queryClient.invalidateQueries({ queryKey: ['supplier', code] })
+    },
+    onError: (err: { message?: string; failedCount?: number; total?: number }) => {
+      const msg = err.failedCount != null
+        ? `فشل ترحيل ${err.failedCount} من ${err.total} قيد: ${err.message}`
+        : err.message || 'فشل الترحيل الجماعي'
+      toast(msg, 'error')
+      setSelectedIds(new Set())
+      queryClient.invalidateQueries({ queryKey: ['supplier-statement', code] })
+      queryClient.invalidateQueries({ queryKey: ['supplier-summary', code] })
+    },
+  })
+
   const deleteMutation = useMutation({
     mutationFn: (id: number) => suppliersApi.deleteTransaction(Number(code), id),
     onSuccess: () => {
@@ -152,6 +185,24 @@ export default function SupplierDetailPage() {
   })
 
   const TXNS_COLS: Column<SupplierTransaction>[] = [
+    {
+      key: 'id', header: '', width: '36px',
+      render: r => r.status === 'draft' && canWrite('suppliers') ? (
+        <input
+          type="checkbox"
+          className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-600 cursor-pointer"
+          checked={selectedIds.has(r.id)}
+          onChange={e => {
+            setSelectedIds(prev => {
+              const next = new Set(prev)
+              e.target.checked ? next.add(r.id) : next.delete(r.id)
+              return next
+            })
+          }}
+          onClick={ev => ev.stopPropagation()}
+        />
+      ) : <span className="block w-3.5 h-3.5" />,
+    },
     { key: 'transaction_date', header: 'التاريخ', width: '100px',
       render: r => new Date(r.transaction_date).toLocaleDateString('en-US') },
     {
@@ -314,7 +365,17 @@ export default function SupplierDetailPage() {
           </div>
 
           {/* Action Buttons */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+            {selectedIds.size > 0 && canWrite('suppliers') && (
+              <button
+                className="btn-primary gap-2 text-xs bg-emerald-600 hover:bg-emerald-700"
+                onClick={() => bulkPostMut.mutate([...selectedIds])}
+                disabled={bulkPostMut.isPending}
+              >
+                <ShieldCheck size={13} />
+                {bulkPostMut.isPending ? 'جاري الترحيل...' : `ترحيل ${selectedIds.size} قيد`}
+              </button>
+            )}
             {canWrite('suppliers') && (
               <button
                 className="btn-secondary gap-2 text-xs"

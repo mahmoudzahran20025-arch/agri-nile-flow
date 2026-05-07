@@ -88,8 +88,8 @@ export default function InternalTransferModal({ open, onClose, initialItemCode, 
       try {
         const stock = await inventoryApi.itemStock(Number(code), fromWarehouse)
         updateLine(id, { available: stock.total_qty })
-      } catch (err) {
-        console.error('Failed to fetch stock', err)
+      } catch {
+        // stock fetch is best-effort — unavailable stock simply shows no available qty
       }
     }
   }

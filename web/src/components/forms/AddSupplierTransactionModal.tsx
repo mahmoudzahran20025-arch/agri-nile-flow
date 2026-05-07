@@ -10,7 +10,6 @@ interface Props { open: boolean; onClose: () => void; supplierCode: number; supp
 const today = () => new Date().toISOString().slice(0, 10)
 
 const DOCUMENT_TYPES = ['فاتورة', 'شيك', 'تحويل بنكي', 'نقداً', 'إيصال', 'أمر شراء', 'أخرى']
-const UNITS = ['طن', 'كجم', 'فدان', 'لتر', 'عبوة', 'قطعة', 'كرتونة', 'متر', 'شيكارة', 'ساعة', 'يوم']
 
 export default function AddSupplierTransactionModal({ open, onClose, supplierCode, supplierName }: Props) {
   const qc = useQueryClient()
@@ -26,9 +25,6 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
     expense_category: '',
     equipment_type_id: '',
     equipment_usage_mode: '',
-    unit:             '',
-    quantity:         '',
-    unit_price:       '',
     notes:            '',
     season_id:        '',
     center_code:      '',
@@ -43,7 +39,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
         transaction_date: today(), entry_type: 'م', amount: '',
         document_type: '', document_number: '', expense_category: '',
         equipment_type_id: '', equipment_usage_mode: '',
-        unit: '', quantity: '', unit_price: '', notes: '',
+        notes: '',
         season_id: '', center_code: '', financial_account_id: '', status: 'posted',
       })
       setError('')
@@ -96,14 +92,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
   const selectedEquipmentType = equipmentTypes.find(et => String(et.id) === form.equipment_type_id)
 
 
-  // Auto-compute amount from qty × price
-  useEffect(() => {
-    const qty = Number(form.quantity)
-    const price = Number(form.unit_price)
-    if (qty > 0 && price > 0) {
-      set('amount', String(Math.round(qty * price * 100) / 100))
-    }
-  }, [form.quantity, form.unit_price])
+
 
   useEffect(() => {
     // Owned capital equipment must be posted to trigger fixed asset creation.
@@ -151,9 +140,6 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
         expense_category: form.expense_category || undefined,
         equipment_type_id: form.equipment_type_id ? Number(form.equipment_type_id) : undefined,
         equipment_usage_mode: form.equipment_usage_mode || undefined,
-        unit:             form.unit || undefined,
-        quantity:         form.quantity ? Number(form.quantity) : undefined,
-        unit_price:       form.unit_price ? Number(form.unit_price) : undefined,
         notes:            form.notes.trim() || undefined,
         season_id:        form.season_id ? Number(form.season_id) : undefined,
         center_code:      form.center_code ? Number(form.center_code) : undefined,
@@ -181,12 +167,9 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
     }
   }
 
-  const computedAmount = Number(form.quantity) > 0 && Number(form.unit_price) > 0
-    ? (Number(form.quantity) * Number(form.unit_price))
-    : null
 
-  const egp = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 2 }).format(n)
+
+
 
   return (
     <Modal open={open} title={`إضافة قيد — ${supplierName}`} onClose={onClose} size="lg">
@@ -365,40 +348,11 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
           </select>
         </div>
 
-        {/* ── Row 4: Qty × Price → Amount ─────────────────── */}
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">الكمية والسعر</span>
-            {computedAmount !== null && (
-              <span className="text-sm font-bold text-brand-700">
-                الإجمالي: {egp(computedAmount)}
-              </span>
-            )}
-          </div>
-          <div className="grid grid-cols-4 gap-3">
-            <div>
-              <label className="label text-xs">الوحدة</label>
-              <select className="input text-sm" value={form.unit} onChange={e => set('unit', e.target.value)}>
-                <option value="">—</option>
-                {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="label text-xs">الكمية</label>
-              <input type="number" className="input text-sm" placeholder="0" min="0" step="0.001"
-                value={form.quantity} onChange={e => set('quantity', e.target.value)} />
-            </div>
-            <div>
-              <label className="label text-xs">سعر الوحدة</label>
-              <input type="number" className="input text-sm" placeholder="0.00" min="0" step="0.01"
-                value={form.unit_price} onChange={e => set('unit_price', e.target.value)} />
-            </div>
-            <div>
-              <label className="label text-xs">المبلغ <span className="text-red-500">*</span></label>
-              <input type="number" className="input text-sm font-semibold" placeholder="0.00" min="0.01" step="0.01"
-                value={form.amount} onChange={e => set('amount', e.target.value)} required />
-            </div>
-          </div>
+        {/* ── Amount ──────────────────────────────────────── */}
+        <div>
+          <label className="label">المبلغ <span className="text-red-500">*</span></label>
+          <input type="number" className="input text-lg font-semibold" placeholder="0.00" min="0.01" step="0.01"
+            value={form.amount} onChange={e => set('amount', e.target.value)} required />
         </div>
 
         {/* ── Notes ───────────────────────────────────────── */}

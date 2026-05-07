@@ -51,7 +51,7 @@ export default function GlEntryTraceDrawer({
   trace,
 }: GlEntryTraceDrawerProps) {
   const navigate = useNavigate()
-  const payload = trace?.data
+  const payload = trace
 
   return (
     <div

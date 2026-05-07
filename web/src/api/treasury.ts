@@ -1,11 +1,13 @@
 import { api, unwrap, unwrapPaginated, paginatedUrl } from './core'
 
 export const treasuryApi = {
-  balance: () => unwrap(api.get<{ balance: number }>('/treasury/balance')),
+  balance: (account_id?: number) =>
+    unwrap(api.get<{ balance: number }>(`/treasury/balance${account_id ? `?account_id=${account_id}` : ''}`)),
 
   list: (p: {
     page?: number; size?: number; direction?: string
     month?: number; year?: number; status?: string; search?: string
+    account_id?: number; supplier_code?: number
   }) => unwrapPaginated<unknown>(api.get(paginatedUrl('/treasury/transactions', p))),
 
   create:   (body: unknown) => api.post('/treasury/transactions', body),

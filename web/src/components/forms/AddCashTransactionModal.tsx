@@ -10,7 +10,26 @@ function egp(n: number | null | undefined) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 }
 
-interface Props { open: boolean; onClose: () => void }
+export interface CashTransactionPrefill {
+  supplier_code?: number
+  supplier_name?: string
+  amount?: number
+  narration?: string
+  document_type?: string
+  document_number?: string
+  direction?: 'م' | 'د'
+  /** AP invoice id — stored in notes for traceability */
+  invoice_id?: number
+  invoice_number?: string
+}
+
+interface Props {
+  open: boolean
+  onClose: () => void
+  prefill?: CashTransactionPrefill
+  /** If provided, shown as a locked context banner (e.g. "سداد فاتورة AP #5") */
+  contextLabel?: string
+}
 
 type BeneficiaryType = 'supplier' | 'employee' | 'partner' | 'general'
 
@@ -25,7 +44,7 @@ const BENEFICIARY_TYPES: { value: BeneficiaryType; label: string; icon: React.Re
 
 const DOCUMENT_TYPES = ['فاتورة', 'شيك', 'تحويل بنكي', 'نقداً', 'إيصال', 'أخرى']
 
-export default function AddCashTransactionModal({ open, onClose }: Props) {
+export default function AddCashTransactionModal({ open, onClose, prefill, contextLabel }: Props) {
   const qc = useQueryClient()
   const { toast } = useToast()
   const [saving, setSaving]   = useState(false)
@@ -50,17 +69,31 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
   })
   const [beneficiaryType, setBeneficiaryType] = useState<BeneficiaryType>('supplier')
 
-  // Reset form when modal opens
+  // Reset form when modal opens, applying any prefill
   useEffect(() => {
     if (open) {
+      const invoiceNote = prefill?.invoice_id
+        ? `سداد فاتورة #${prefill.invoice_number ?? prefill.invoice_id}`
+        : ''
       setForm({
-        transaction_date: today(), direction: 'م', narration: '', amount: '',
-        document_number: '', document_type: '', recipient_name: '', notes: '',
-        supplier_code: '', season_id: '', center_code: '', field_id: '', expense_code: '',
-        status: 'draft',
-        financial_account_id: '', partner_id: '',
+        transaction_date: today(),
+        direction:        prefill?.direction   ?? 'م',
+        narration:        prefill?.narration   ?? '',
+        amount:           prefill?.amount != null ? String(prefill.amount) : '',
+        document_number:  prefill?.document_number ?? '',
+        document_type:    prefill?.document_type   ?? '',
+        recipient_name:   prefill?.supplier_name   ?? '',
+        notes:            invoiceNote,
+        supplier_code:    prefill?.supplier_code != null ? String(prefill.supplier_code) : '',
+        season_id:        '',
+        center_code:      '',
+        field_id:         '',
+        expense_code:     '',
+        status:           'draft',
+        financial_account_id: '',
+        partner_id:       '',
       })
-      setBeneficiaryType('supplier')
+      setBeneficiaryType(prefill?.supplier_code != null ? 'supplier' : 'supplier')
       setError('')
     }
   }, [open])
@@ -173,6 +206,9 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
     if (form.status === 'posted' && !form.center_code) { setError('مركز التكلفة مطلوب عند الترحيل'); return }
     if (form.narration.trim().length < 3) { setError('البيان يجب أن يكون 3 أحرف على الأقل'); return }
     if (Number(form.amount) <= 0) { setError('المبلغ يجب أن يكون أكبر من صفر'); return }
+    if (form.status === 'posted' && form.direction === 'م' && !form.supplier_code && !form.partner_id && !form.expense_code) {
+      setError('بند المصروف مطلوب للصرف بدون مورد أو شريك'); return
+    }
 
     setSaving(true)
     try {
@@ -209,6 +245,11 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
         'success'
       )
       await qc.invalidateQueries({ queryKey: ['treasury'] })
+      if (beneficiaryType === 'supplier' && form.supplier_code) {
+        // queryKey uses the raw string code (from useParams), not a number
+        await qc.invalidateQueries({ queryKey: ['supplier-statement', form.supplier_code] })
+        await qc.invalidateQueries({ queryKey: ['supplier-summary-mini', form.supplier_code] })
+      }
       onClose()
     } catch {
       setError('حدث خطأ في الاتصال')
@@ -220,8 +261,17 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
 
 
   return (
-    <Modal open={open} title="إضافة حركة خزينة" onClose={onClose} size="lg">
+    <Modal open={open} title={contextLabel ? contextLabel : 'إضافة حركة خزينة'} onClose={onClose} size="lg">
       <form onSubmit={handleSubmit} className="space-y-4">
+
+        {/* ── Context banner (prefill mode) ────────────────── */}
+        {contextLabel && (
+          <div className="flex items-center gap-2 rounded-xl bg-indigo-50 border border-indigo-200 px-3 py-2.5 text-xs text-indigo-800">
+            <Info size={13} className="shrink-0 text-indigo-500" />
+            <span className="font-semibold">{contextLabel}</span>
+            <span className="text-indigo-500 mr-auto">— البيانات مُعبَّأة تلقائياً، راجع وأكمل</span>
+          </div>
+        )}
 
         {/* ── Row 1: Date + Direction + Status ────────────── */}
         <div className="grid grid-cols-3 gap-3">
@@ -364,19 +414,27 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
         )}
 
         {beneficiaryType === 'partner' && (
-          <div>
-            <label className="label">الشريك</label>
-            <select className="input" value={form.partner_id}
-              onChange={e => {
-                set('partner_id', e.target.value)
-                const p = (partners as { id: number; name: string }[]).find(x => x.id === Number(e.target.value))
-                if (p) set('recipient_name', p.name)
-              }}>
-              <option value="">— اختر الشريك —</option>
-              {(partners as { id: number; name: string }[]).map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
+          <div className="space-y-2">
+            <div>
+              <label className="label">الشريك</label>
+              <select className="input" value={form.partner_id}
+                onChange={e => {
+                  set('partner_id', e.target.value)
+                  const p = (partners as { id: number; name: string }[]).find(x => x.id === Number(e.target.value))
+                  if (p) set('recipient_name', p.name)
+                }}>
+                <option value="">— اختر الشريك —</option>
+                {(partners as { id: number; name: string }[]).map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+            {form.direction === 'د' && (
+              <div className="flex items-start gap-2 rounded-xl bg-blue-50 border border-blue-200 px-3 py-2 text-[11px] text-blue-700">
+                <Info size={12} className="mt-0.5 shrink-0 text-blue-500" />
+                <span>الوارد من الشريك يُصنَّف كحقوق ملكية (ضخ رأس مال) ويُرحَّل لحساب رأس المال أو الجاري.</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -435,7 +493,12 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
             </select>
           </div>
           <div>
-            <label className="label">بند المصروف</label>
+            <label className="label">
+              بند المصروف{' '}
+              {form.status === 'posted' && form.direction === 'م' && !form.supplier_code && !form.partner_id
+                ? <span className="text-red-500">*</span>
+                : <span className="text-slate-400 font-normal text-[10px]">(موصى به)</span>}
+            </label>
             <select className="input" value={form.expense_code}
               onChange={e => set('expense_code', e.target.value)}>
               <option value="">— بدون تصنيف —</option>

@@ -98,15 +98,19 @@ export interface CashTransaction {
   running_balance: number | null
   year:            number | null
   month:           number | null
-  status?:         'draft' | 'posted'
-  notes:           string | null
-  field_id?:       number | null
-  center_code?:    number | null
-  season_id?:      number | null
-  document_type?:  string | null
-  unit?:           string | null
-  quantity?:       number | null
-  unit_price?:     number | null
+  status?:           'draft' | 'posted'
+  notes:             string | null
+  field_id?:         number | null
+  center_code?:      number | null
+  season_id?:        number | null
+  document_type?:    string | null
+  financial_account_id?: number | null
+  partner_id?:       number | null
+  journal_entry_id?: number | null
+  supplier_code?:    number | null
+  expense_code?:     string | null
+  supplier_name?:    string | null  // joined from suppliers table
+  expense_name?:     string | null  // joined from expense_types table
 }
 
 export interface InventoryBalance {
