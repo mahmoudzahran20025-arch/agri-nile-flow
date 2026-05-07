@@ -5,7 +5,7 @@ import {
   ChevronRight, ChevronLeft, Package, Warehouse, Info, BookOpen,
 } from 'lucide-react'
 import Modal from '../ui/Modal'
-import { inventoryApi, configApi, suppliersApi } from '../../api/client'
+import { inventoryApi, configApi, suppliersApi, fieldsApi } from '../../api/client'
 import type { Item } from '../../types'
 
 // ─── Types ────────────────────────────────────────────────────
@@ -33,6 +33,7 @@ interface BatchForm {
   notes:           string
   center_code:     string
   payment_method:  'cash' | 'credit'
+  field_id?:       string
 }
 
 interface Props {
@@ -244,6 +245,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
         notes:           '',
         center_code:     '',
         payment_method:  'credit',
+        field_id:        '',
       })
       setLines([newLine()])
     }
@@ -285,6 +287,14 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
     enabled:  open && (form.movement_type === 'GRN' || form.movement_type === 'RETURN_SUPPLIER'),
     staleTime: 60_000,
     select: res => (res as unknown as { data: SupplierOption[] }).data ?? res,
+  })
+
+  type FieldOption = { id: number; name: string }
+  const { data: fieldsList = [] } = useQuery({
+    queryKey: ['fields'],
+    queryFn:  () => fieldsApi.list() as Promise<FieldOption[]>,
+    enabled:  open && form.movement_type === 'ISSUE',
+    staleTime: 120_000,
   })
 
   // ─── Form helpers ──────────────────────────────────────────
@@ -406,6 +416,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
         document_number: form.document_number ? Number(form.document_number) : undefined,
         payment_method:  form.payment_method,
         center_code:     form.center_code     ? Number(form.center_code)     : undefined,
+        field_id:        form.field_id        ? Number(form.field_id)        : undefined,
         notes:           form.notes || undefined,
         items: lines.map(l => ({
           item_code:  Number(l.item_code),
@@ -526,6 +537,21 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
                   onChange={e => setF('supplier_code', e.target.value)} />
               )}
             </div>
+            
+            {/* Field selection — relevant for ISSUE */}
+            {form.movement_type === 'ISSUE' && (
+              <div>
+                <label className="label">الحقل / القطعة الزراعية (اختياري)</label>
+                <select className="input" value={form.field_id || ''}
+                  onChange={e => setF('field_id', e.target.value)}>
+                  <option value="">— بدون توجيه لحقل —</option>
+                  {(fieldsList as FieldOption[]).map(f => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-slate-400 mt-1 px-1">سيتم تحميل التكلفة على مركز التكلفة المرتبط بهذا الحقل تلقائياً.</p>
+              </div>
+            )}
           </div>
 
           {/* Payment Method — relevant when a supplier is involved (GRN / RETURN_SUPPLIER) */}

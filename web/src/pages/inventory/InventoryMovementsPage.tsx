@@ -16,7 +16,7 @@ interface Movement {
   id: number
   movement_date: string
   warehouse: string
-  movement_type: 'اضافة' | 'صرف'
+  movement_type: string
   item_code: number
   item_name: string | null
   unit: string | null
@@ -49,8 +49,10 @@ const NUM = (n: number) =>
   new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(n)
 
 // ─── Movement type badge ──────────────────────────────────────────────────────
+const IN_TYPES = new Set(['GRN', 'TRANSFER_IN', 'RETURN_CUSTOMER', 'ADJUSTMENT_PROFIT', 'PRODUCTION_OUTPUT'])
+
 function TypeBadge({ type }: { type: string }) {
-  if (type === 'اضافة') {
+  if (IN_TYPES.has(type)) {
     return (
       <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
         <ArrowDownCircle size={11} /> إضافة
@@ -411,12 +413,12 @@ export default function InventoryMovementsPage() {
                     </td>
                     <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{row.warehouse}</td>
                     <td className="px-4 py-3 text-right tabular-nums">
-                      <span className={row.movement_type === 'اضافة' ? 'text-emerald-700 font-semibold' : 'text-rose-700 font-semibold'}>
-                        {row.movement_type === 'اضافة' ? '+' : '−'}{NUM(row.quantity)}
+                      <span className={IN_TYPES.has(row.movement_type) ? 'text-emerald-700 font-semibold' : 'text-rose-700 font-semibold'}>
+                        {IN_TYPES.has(row.movement_type) ? '+' : '−'}{NUM(row.quantity)}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                      {EGP(row.movement_type === 'اضافة' ? row.value_in : row.value_out)}
+                      {EGP(IN_TYPES.has(row.movement_type) ? row.value_in : row.value_out)}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
                       <span className={row.balance_qty < 0 ? 'text-red-600 font-bold' : 'text-slate-600'}>

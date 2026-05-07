@@ -260,7 +260,7 @@ export default function ItemCardPage() {
               {card.slice(-15).map((row, i) => {
                 const maxBal = Math.max(...card.slice(-15).map(r => Math.abs(r.balance_qty ?? 0)), 1)
                 const h      = Math.max(((row.balance_qty ?? 0) / maxBal) * 100, 4)
-                const isAdd  = row.movement_type === 'اضافة'
+                const isAdd  = ['GRN','TRANSFER_IN','RETURN_CUSTOMER','ADJUSTMENT_PROFIT','PRODUCTION_OUTPUT'].includes(row.movement_type)
                 return (
                   <div key={i} className="flex-1 flex flex-col items-center group relative h-full justify-end"
                     title={`${DATE_AR(row.movement_date)} — ${row.movement_type}: ${NUM(row.quantity)}\nالرصيد: ${NUM(row.balance_qty)}`}>
@@ -334,7 +334,7 @@ export default function ItemCardPage() {
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {card.map((row, i) => {
-                  const isAdd  = row.movement_type === 'اضافة'
+                  const isAdd  = ['GRN','TRANSFER_IN','RETURN_CUSTOMER','ADJUSTMENT_PROFIT','PRODUCTION_OUTPUT'].includes(row.movement_type)
                   const isLast = i === card.length - 1
                   return (
                     <tr key={i} className={`hover:bg-slate-50 transition-colors ${isLast ? 'bg-brand-50/40 font-medium' : ''}`}>
