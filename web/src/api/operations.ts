@@ -12,6 +12,12 @@ export interface WOTemplateTask {
   estimated_hours?: number; notes?: string
 }
 
+export interface WOTemplateEquipment {
+  id: number; template_id: number; company_id: number
+  equipment_name: string; item_order: number
+  estimated_hours?: number; cost_per_hour: number; notes?: string
+}
+
 export const operationsApi = {
   listOrders: (p?: {
     season_id?: number; field_id?: number; status?: string
@@ -38,7 +44,7 @@ export const operationsApi = {
   listTemplates: () =>
     unwrap(api.get<WOTemplate[]>('/operations/templates')),
   getTemplate: (id: number) =>
-    unwrap(api.get<WOTemplate & { tasks: WOTemplateTask[] }>(`/operations/templates/${id}`)),
+    unwrap(api.get<WOTemplate & { tasks: WOTemplateTask[]; equipment: WOTemplateEquipment[] }>(`/operations/templates/${id}`)),
   createTemplate: (body: {
     name: string; operation_type: string; description?: string
     tasks?: Array<{ task_name: string; estimated_hours?: number; notes?: string }>
@@ -55,8 +61,13 @@ export const operationsApi = {
   }) => unwrap(api.patch<null>(`/operations/template-tasks/${taskId}`, body)),
   deleteTemplateTask: (taskId: number) =>
     unwrap(api.delete<null>(`/operations/template-tasks/${taskId}`)),
+  addTemplateEquipment: (tplId: number, body: {
+    equipment_name: string; estimated_hours?: number; cost_per_hour?: number; notes?: string
+  }) => unwrap(api.post<{ id: number }>(`/operations/templates/${tplId}/equipment`, body)),
+  deleteTemplateEquipment: (equipId: number) =>
+    unwrap(api.delete<null>(`/operations/template-equipment/${equipId}`)),
   useTemplate: (tplId: number, body: {
     name?: string; planned_date: string
     season_id?: number; field_id?: number; area_feddan?: number; notes?: string
-  }) => unwrap(api.post<{ id: number; task_count: number }>(`/operations/templates/${tplId}/use`, body)),
+  }) => unwrap(api.post<{ id: number; task_count: number; equipment_count: number }>(`/operations/templates/${tplId}/use`, body)),
 }

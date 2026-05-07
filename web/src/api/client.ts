@@ -37,7 +37,7 @@ export { exportUrl, downloadCsv } from './export'
 
 // ─── Domain types re-exported for consumers ──────────────────────────────────
 export type { RbacMatrix }                           from './auth'
-export type { WOTemplate, WOTemplateTask }           from './operations'
+export type { WOTemplate, WOTemplateTask, WOTemplateEquipment } from './operations'
 export type { IntegrityCheck, IntegrityCheckResult } from './gl'
 export type { AuditLogRow, ErrorLogEntry, AuditStats } from './audit'
 export type {

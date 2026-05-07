@@ -373,10 +373,15 @@ operations.get('/templates/:id', async (c) => {
   ).bind(id, company_id).first()
   if (!tpl) return c.json({ success: false, error: 'النموذج غير موجود' }, 404)
 
-  const { results: tasks } = await c.env.DB.prepare(
-    'SELECT * FROM wo_template_tasks WHERE template_id = ? ORDER BY task_order, id'
-  ).bind(id).all()
-  return c.json({ success: true, data: { ...tpl, tasks } })
+  const [{ results: tasks }, { results: equipment }] = await Promise.all([
+    c.env.DB.prepare(
+      'SELECT * FROM wo_template_tasks WHERE template_id = ? ORDER BY task_order, id'
+    ).bind(id).all(),
+    c.env.DB.prepare(
+      'SELECT * FROM wo_template_equipment WHERE template_id = ? ORDER BY item_order, id'
+    ).bind(id).all(),
+  ])
+  return c.json({ success: true, data: { ...tpl, tasks, equipment } })
 })
 
 // POST /api/operations/templates
@@ -478,6 +483,37 @@ operations.delete('/template-tasks/:id', async (c) => {
   return c.json({ success: true, data: null })
 })
 
+// POST /api/operations/templates/:id/equipment
+operations.post('/templates/:id/equipment', async (c) => {
+  const { company_id } = getUser(c)
+  const tplId = Number(c.req.param('id'))
+  const b = await c.req.json<{
+    equipment_name: string; estimated_hours?: number; cost_per_hour?: number; notes?: string
+  }>()
+  if (!b.equipment_name) return c.json({ success: false, error: 'اسم المعدة مطلوب' }, 400)
+
+  const maxRow = await c.env.DB.prepare(
+    'SELECT COALESCE(MAX(item_order),0) AS m FROM wo_template_equipment WHERE template_id = ?'
+  ).bind(tplId).first<{ m: number }>()
+
+  const r = await c.env.DB.prepare(
+    `INSERT INTO wo_template_equipment (template_id, company_id, equipment_name, item_order, estimated_hours, cost_per_hour, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(tplId, company_id, b.equipment_name, (maxRow?.m ?? 0) + 1,
+    b.estimated_hours ?? null, b.cost_per_hour ?? 0, b.notes ?? null).run()
+  return c.json({ success: true, data: { id: r.meta.last_row_id } }, 201)
+})
+
+// DELETE /api/operations/template-equipment/:id
+operations.delete('/template-equipment/:id', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  await c.env.DB.prepare(
+    'DELETE FROM wo_template_equipment WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).run()
+  return c.json({ success: true, data: null })
+})
+
 // POST /api/operations/templates/:id/use  — create work order from template
 operations.post('/templates/:id/use', async (c) => {
   const { company_id, sub: userId } = getUser(c)
@@ -493,9 +529,14 @@ operations.post('/templates/:id/use', async (c) => {
   ).bind(tplId, company_id).first<{ name: string; operation_type: string }>()
   if (!tpl) return c.json({ success: false, error: 'النموذج غير موجود' }, 404)
 
-  const { results: tplTasks } = await c.env.DB.prepare(
-    'SELECT * FROM wo_template_tasks WHERE template_id = ? ORDER BY task_order, id'
-  ).bind(tplId).all<{ task_name: string; notes: string | null }>()
+  const [{ results: tplTasks }, { results: tplEquipment }] = await Promise.all([
+    c.env.DB.prepare(
+      'SELECT * FROM wo_template_tasks WHERE template_id = ? ORDER BY task_order, id'
+    ).bind(tplId).all<{ task_name: string; notes: string | null }>(),
+    c.env.DB.prepare(
+      'SELECT * FROM wo_template_equipment WHERE template_id = ? ORDER BY item_order, id'
+    ).bind(tplId).all<{ equipment_name: string; estimated_hours: number | null; cost_per_hour: number; notes: string | null }>(),
+  ])
 
   const woResult = await c.env.DB.prepare(
     `INSERT INTO work_orders (company_id, season_id, field_id, name, operation_type,
@@ -514,13 +555,20 @@ operations.post('/templates/:id/use', async (c) => {
        VALUES (?, ?, ?, ?, ?)`
     ).bind(woId, company_id, b.planned_date, t.task_name, t.notes ?? null).run()
   }
+  for (const e of tplEquipment) {
+    await c.env.DB.prepare(
+      `INSERT INTO work_order_equipment (work_order_id, company_id, equipment_name, task_date, hours_worked, cost_per_hour, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(woId, company_id, e.equipment_name, b.planned_date,
+      e.estimated_hours ?? 0, e.cost_per_hour, e.notes ?? null).run()
+  }
 
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'CREATE',
     table_name: 'work_orders', record_id: woId,
-    new_value: { name: b.name ?? tpl.name, from_template: tplId, task_count: tplTasks.length },
+    new_value: { name: b.name ?? tpl.name, from_template: tplId, task_count: tplTasks.length, equipment_count: tplEquipment.length },
   })
-  return c.json({ success: true, data: { id: woId, task_count: tplTasks.length } }, 201)
+  return c.json({ success: true, data: { id: woId, task_count: tplTasks.length, equipment_count: tplEquipment.length } }, 201)
 })
 
 export default operations
