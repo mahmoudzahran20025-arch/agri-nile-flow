@@ -15,8 +15,9 @@ import {
   Unlock,
   User,
   XCircle,
+  ArrowRightLeft,
 } from 'lucide-react'
-import { glApi } from '../../api/client'
+import { glApi, configApi } from '../../api/client'
 import type { FinancialPeriod, PeriodCloseChecklistStep } from '../../api/gl'
 import { KpiStrip, type KpiItem } from '../../components/ui/KpiStrip'
 import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
@@ -252,6 +253,8 @@ export default function PeriodCloseCockpit() {
   const [confirmClose, setConfirmClose] = useState<FinancialPeriod | null>(null)
   const [confirmForceClose, setConfirmForceClose] = useState<FinancialPeriod | null>(null)
   const [showAdd, setShowAdd] = useState(false)
+  const [showWipFlush, setShowWipFlush] = useState(false)
+  const [wipSeasonId, setWipSeasonId] = useState('')
   const [runningStep, setRunningStep] = useState<string | null>(null)
   const [form, setForm] = useState({ name: '', period_type: 'monthly', start_date: '', end_date: '' })
 
@@ -325,6 +328,21 @@ export default function PeriodCloseCockpit() {
     },
   })
 
+  const { data: seasons = [] } = useQuery({
+    queryKey: ['seasons'],
+    queryFn:  configApi.seasons,
+  })
+
+  const wipFlushMut = useMutation({
+    mutationFn: ({ id, season_id }: { id: number; season_id: number }) =>
+      glApi.wipFlush(id, { season_id }),
+    onSuccess: () => {
+      setShowWipFlush(false)
+      setWipSeasonId('')
+      qc.invalidateQueries({ queryKey: ['gl-entries'] })
+    },
+  })
+
   function refreshAll() {
     refetchPeriods()
     refetchChecklist()
@@ -372,6 +390,14 @@ export default function PeriodCloseCockpit() {
       onClick: () => selectedPeriod && runAllMut.mutate(selectedPeriod.id),
       disabled: !selectedPeriod || !!selectedPeriod.is_closed || runAllMut.isPending,
       variant: 'primary',
+    },
+    {
+      id: 'wip-flush',
+      label: 'Flush WIP → COGS',
+      icon: <ArrowRightLeft size={14} />,
+      onClick: () => setShowWipFlush(true),
+      disabled: !selectedPeriod || !!selectedPeriod.is_closed,
+      variant: 'secondary',
     },
     {
       id: 'new',
@@ -563,6 +589,61 @@ export default function PeriodCloseCockpit() {
           </div>
         </Modal>
       ) : null}
+
+      {/* WIP → COGS Flush Modal */}
+      <Modal open={showWipFlush} onClose={() => setShowWipFlush(false)} title="تسوية WIP → تكلفة البضاعة المباعة" size="md">
+        <div className="space-y-4 text-[13px]">
+          <div className="bg-amber-50 border border-amber-200 rounded p-3 text-amber-800">
+            <p className="font-semibold mb-1">ما هذه العملية؟</p>
+            <p className="text-[12px]">
+              تُنشئ هذه العملية قيداً محاسبياً يُحوّل رصيد حساب الإنتاج الجاري (WIP) إلى حساب تكلفة البضاعة المباعة (COGS)
+              عند نهاية الموسم. القيد: مدين COGS / دائن WIP.
+            </p>
+          </div>
+          <div>
+            <label className="block font-semibold text-slate-600 mb-1">الموسم *</label>
+            <select
+              className="input"
+              value={wipSeasonId}
+              onChange={e => setWipSeasonId(e.target.value)}
+            >
+              <option value="">-- اختر الموسم --</option>
+              {(seasons as Array<{ id: number; name: string }>).map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+          {selectedPeriod && (
+            <p className="text-[12px] text-slate-500">
+              سيُرحَّل القيد في الفترة: <strong>{selectedPeriod.name}</strong> بتاريخ نهايتها ({selectedPeriod.end_date})
+            </p>
+          )}
+          {wipFlushMut.isError && (
+            <p className="text-[12px] text-red-600">
+              {(wipFlushMut.error as { message?: string })?.message ?? 'حدث خطأ'}
+            </p>
+          )}
+          {wipFlushMut.isSuccess && (
+            <p className="text-[12px] text-emerald-700 font-semibold">
+              تمت التسوية بنجاح — رقم القيد: #{wipFlushMut.data?.entry_id} — المبلغ: {wipFlushMut.data?.amount.toLocaleString('ar-EG')}
+            </p>
+          )}
+        </div>
+        <div className="flex justify-end gap-3 mt-6">
+          <button className="btn-secondary" onClick={() => setShowWipFlush(false)}>إلغاء</button>
+          <button
+            className="btn-primary flex items-center gap-2"
+            disabled={!wipSeasonId || wipFlushMut.isPending || !selectedPeriod}
+            onClick={() => selectedPeriod && wipFlushMut.mutate({
+              id: selectedPeriod.id,
+              season_id: Number(wipSeasonId),
+            })}
+          >
+            {wipFlushMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <ArrowRightLeft size={14} />}
+            تنفيذ التسوية
+          </button>
+        </div>
+      </Modal>
 
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add New Financial Period" size="md">
         <div className="space-y-4 text-[13px]">

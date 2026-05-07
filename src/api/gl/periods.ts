@@ -409,6 +409,116 @@ periods.patch('/:id/close', async (c) => {
   })
 })
 
+// ─── POST /api/gl/periods/:id/wip-flush ──────────────────────────────────────
+// Flush WIP → COGS for a season: Dr COGS / Cr WIP for the net WIP balance
+// attributable to work orders in that season.
+
+periods.post('/:id/wip-flush', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const periodId = Number(c.req.param('id'))
+  const b = await c.req.json<{ season_id: number; memo?: string }>()
+  if (!b.season_id) return c.json({ success: false, error: 'season_id مطلوب' }, 400)
+
+  const period = await c.env.DB.prepare(
+    'SELECT id, name, end_date, is_closed FROM financial_periods WHERE id=? AND company_id=?'
+  ).bind(periodId, company_id).first<{ id: number; name: string; end_date: string; is_closed: number }>()
+  if (!period) return c.json({ success: false, error: 'الفترة غير موجودة' }, 404)
+  if (period.is_closed) return c.json({ success: false, error: 'لا يمكن تسوية WIP في فترة مغلقة' }, 409)
+
+  // Resolve WIP account from inventory_posting_rules (first active row)
+  const wipRow = await c.env.DB.prepare(
+    `SELECT wip_account FROM inventory_posting_rules
+     WHERE company_id=? AND wip_account IS NOT NULL AND is_active=1 LIMIT 1`
+  ).bind(company_id).first<{ wip_account: string }>()
+  if (!wipRow?.wip_account) {
+    return c.json({ success: false, error: 'لا يوجد حساب WIP مُعرَّف في إعدادات الترحيل' }, 422)
+  }
+
+  // Resolve COGS account from general_posting_setup (first active row)
+  const cogsRow = await c.env.DB.prepare(
+    `SELECT cogs_account FROM general_posting_setup
+     WHERE company_id=? AND cogs_account IS NOT NULL AND is_active=1 LIMIT 1`
+  ).bind(company_id).first<{ cogs_account: string }>()
+  if (!cogsRow?.cogs_account) {
+    return c.json({ success: false, error: 'لا يوجد حساب تكلفة البضاعة المباعة (COGS) مُعرَّف في إعدادات الترحيل' }, 422)
+  }
+
+  // Calculate net WIP balance for the season from GL (posted entries)
+  const wipBalRow = await c.env.DB.prepare(`
+    SELECT
+      COALESCE(SUM(jel.debit), 0)  - COALESCE(SUM(jel.credit), 0) AS net_balance
+    FROM journal_entry_lines jel
+    JOIN journal_entries je ON je.id = jel.entry_id
+    WHERE je.company_id = ?
+      AND je.is_posted = 1
+      AND jel.account_code = ?
+      AND je.ref_type IN ('work_order','inventory_movement','cash_transaction')
+      AND je.ref_id IN (
+        SELECT id FROM work_orders WHERE company_id=? AND season_id=?
+        UNION ALL
+        SELECT im.id FROM inventory_movements im
+        JOIN work_orders wo ON wo.id = im.work_order_id
+        WHERE im.company_id=? AND wo.season_id=?
+        UNION ALL
+        SELECT id FROM cash_transactions WHERE company_id=? AND season_id=?
+      )
+  `).bind(
+    company_id, wipRow.wip_account,
+    company_id, b.season_id,
+    company_id, b.season_id,
+    company_id, b.season_id,
+  ).first<{ net_balance: number }>()
+
+  // Fallback: sum ALL WIP-account postings if above returns 0 (coarse flush)
+  let wipAmount = wipBalRow?.net_balance ?? 0
+  if (wipAmount <= 0) {
+    const allWipRow = await c.env.DB.prepare(`
+      SELECT COALESCE(SUM(jel.debit),0) - COALESCE(SUM(jel.credit),0) AS net_balance
+      FROM journal_entry_lines jel
+      JOIN journal_entries je ON je.id = jel.entry_id
+      WHERE je.company_id=? AND je.is_posted=1 AND jel.account_code=?
+    `).bind(company_id, wipRow.wip_account).first<{ net_balance: number }>()
+    wipAmount = allWipRow?.net_balance ?? 0
+  }
+
+  if (wipAmount <= 0) {
+    return c.json({
+      success: false,
+      error: 'رصيد WIP يساوي صفر أو دائن — لا توجد قيمة لتحويلها إلى تكلفة',
+    }, 409)
+  }
+
+  // Create journal entry: Dr COGS / Cr WIP
+  const memo = b.memo ?? `تسوية WIP → تكلفة البضاعة المباعة — الموسم ${b.season_id} / الفترة ${period.name}`
+  const jeResult = await c.env.DB.prepare(`
+    INSERT INTO journal_entries
+      (company_id, period_id, entry_date, description, ref_type, is_posted, created_by)
+    VALUES (?, ?, ?, ?, 'wip_flush', 1, ?)`
+  ).bind(company_id, periodId, period.end_date, memo, userId).run()
+  const jeId = jeResult.meta.last_row_id as number
+
+  // Dr COGS
+  await c.env.DB.prepare(`
+    INSERT INTO journal_entry_lines (entry_id, account_code, debit, credit, description)
+    VALUES (?, ?, ?, 0, ?)`
+  ).bind(jeId, cogsRow.cogs_account, wipAmount, memo).run()
+
+  // Cr WIP
+  await c.env.DB.prepare(`
+    INSERT INTO journal_entry_lines (entry_id, account_code, debit, credit, description)
+    VALUES (?, ?, 0, ?, ?)`
+  ).bind(jeId, wipRow.wip_account, wipAmount, memo).run()
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'CREATE', table_name: 'journal_entries', record_id: jeId,
+    new_value: { type: 'wip_flush', season_id: b.season_id, amount: wipAmount, wip_account: wipRow.wip_account, cogs_account: cogsRow.cogs_account },
+  })
+  return c.json({
+    success: true,
+    data: { entry_id: jeId, wip_account: wipRow.wip_account, cogs_account: cogsRow.cogs_account, amount: wipAmount },
+  }, 201)
+})
+
 // ─── PATCH /api/gl/periods/:id/reopen ─────────────────────────────────────────
 // Restricted to super_admin and company_admin ONLY.
 // Also enforces single-open-period policy.

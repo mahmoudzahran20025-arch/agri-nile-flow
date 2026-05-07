@@ -399,6 +399,8 @@ export const glApi = {
   runPeriodChecklist: (id: number) => unwrap(api.post<PeriodCloseRunResult>(`/gl/periods/${id}/checklist/run`, {})),
   runPeriodChecklistStep: (id: number, stepKey: string) =>
     unwrap(api.post<PeriodCloseChecklistStep>(`/gl/periods/${id}/checklist/run/${stepKey}`, {})),
+  wipFlush: (id: number, body: { season_id: number; memo?: string }) =>
+    unwrap(api.post<{ entry_id: number; wip_account: string; cogs_account: string; amount: number }>(`/gl/periods/${id}/wip-flush`, body)),
 
   entries:     (p?: { page?: number; size?: number; start?: string; end?: string; ref_type?: string; search?: string; expense_code?: number; center_code?: string }) =>
     unwrapPaginated<unknown>(api.get(paginatedUrl('/gl/entries', p ?? {}))),
