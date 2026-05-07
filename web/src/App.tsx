@@ -59,7 +59,6 @@ const SupplierHubPage          = lazy(() => import('./pages/suppliers/SupplierHu
 const SupplierDetailPage       = lazy(() => import('./pages/suppliers/SupplierDetailPage'))
 const PendingApprovalsPage     = lazy(() => import('./pages/suppliers/PendingApprovalsPage'))
 const TreasuryHubPage          = lazy(() => import('./pages/treasury/TreasuryHubPage'))
-const CashJournalPage          = lazy(() => import('./pages/treasury/CashJournalPage'))
 const PartnersPage             = lazy(() => import('./pages/treasury/PartnersPage'))
 const BankReconciliationPage   = lazy(() => import('./pages/treasury/BankReconciliationPage'))
 const WarehouseBalancesPage    = lazy(() => import('./pages/inventory/WarehouseBalancesPage'))

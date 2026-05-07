@@ -400,7 +400,7 @@ export const glApi = {
   runPeriodChecklistStep: (id: number, stepKey: string) =>
     unwrap(api.post<PeriodCloseChecklistStep>(`/gl/periods/${id}/checklist/run/${stepKey}`, {})),
 
-  entries:     (p?: { page?: number; size?: number; start?: string; end?: string; ref_type?: string; search?: string }) =>
+  entries:     (p?: { page?: number; size?: number; start?: string; end?: string; ref_type?: string; search?: string; expense_code?: number; center_code?: string }) =>
     unwrapPaginated<unknown>(api.get(paginatedUrl('/gl/entries', p ?? {}))),
   getEntry:    (id: number) => unwrap(api.get(`/gl/entries/${id}`)),
   createEntry: (body: unknown) => api.post('/gl/entries/manual-entries', body),

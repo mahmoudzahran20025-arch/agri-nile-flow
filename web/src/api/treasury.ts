@@ -7,7 +7,7 @@ export const treasuryApi = {
   list: (p: {
     page?: number; size?: number; direction?: string
     month?: number; year?: number; status?: string; search?: string
-    account_id?: number; supplier_code?: number
+    account_id?: number; supplier_code?: number; expense_code?: number
   }) => unwrapPaginated<unknown>(api.get(paginatedUrl('/treasury/transactions', p))),
 
   create:   (body: unknown) => api.post('/treasury/transactions', body),

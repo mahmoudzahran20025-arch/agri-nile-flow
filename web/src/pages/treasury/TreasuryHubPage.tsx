@@ -16,7 +16,7 @@ import DataTable, { type Column, type SortState } from '../../components/ui/Data
 import AddCashTransactionModal, { type CashTransactionPrefill } from '../../components/forms/AddCashTransactionModal'
 import type { CashTransaction } from '../../types'
 import { useToast } from '../../contexts/ToastContext'
-import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
+import { CommandBar } from '../../components/shell/CommandBar'
 import { KpiStrip, type KpiItem } from '../../components/ui/KpiStrip'
 import SectionCard from '../../components/ui/SectionCard'
 import Modal from '../../components/ui/Modal'
@@ -79,7 +79,6 @@ const MATCH_STATUS: Record<MatchStatus, { label: string; color: string; icon: Re
 // ══════════════════════════════════════════════════════════════
 export default function TreasuryHubPage() {
   const { canWrite, role } = usePermission()
-  const { toast }          = useToast()
   const queryClient        = useQueryClient()
   const navigate           = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -237,8 +236,6 @@ export default function TreasuryHubPage() {
           <JournalTab
             accounts={accounts}
             role={role}
-            canWrite={canWrite}
-            onOpenAdd={() => { setCashPrefill(undefined); setCashContext(undefined); setAddOpen(true) }}
           />
         )}
 
@@ -284,12 +281,10 @@ export default function TreasuryHubPage() {
 // Tab 1 — Cash Journal
 // ══════════════════════════════════════════════════════════════
 function JournalTab({
-  accounts, role, canWrite, onOpenAdd,
+  accounts, role,
 }: {
   accounts: BankAccount[]
-  role: string
-  canWrite: (module: string) => boolean
-  onOpenAdd: () => void
+  role: string | null
 }) {
   const { toast }   = useToast()
   const queryClient = useQueryClient()
@@ -322,7 +317,7 @@ function JournalTab({
   })
   const hasOpenPeriod = (periods ?? []).some(p => !p.is_closed)
 
-  const { data, isLoading, refetch } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['treasury', 'txns', page, direction, month, year, status, search, accountId, supplierCode],
     queryFn:  () => treasuryApi.list({
       page, size: 100,

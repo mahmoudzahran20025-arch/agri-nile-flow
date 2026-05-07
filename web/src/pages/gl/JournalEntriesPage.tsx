@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { Plus, Download, GitBranch, CheckCircle2, X, CornerDownRight, Search, Calendar, Filter, XCircle } from 'lucide-react';
-import { glApi } from '../../api/client';
+import { glApi, configApi } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import NewEntryForm from '../../components/gl/NewEntryForm';
 import GlEntryTraceDrawer from '../../components/gl/GlEntryTraceDrawer';
@@ -36,7 +36,7 @@ export default function JournalEntriesPage() {
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<SortState>({ key: 'entry_date', dir: 'desc' });
   const [search, setSearch] = useState('');
-  const [tab, setTab] = useState<'All' | 'Posted' | 'Drafts' | 'Reversals'>('All');
+  const [tab, setTab] = useState<'All' | 'Posted' | 'Drafts' | 'Voided' | 'Reversals'>('All');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
@@ -99,7 +99,7 @@ export default function JournalEntriesPage() {
       search: debouncedSearch || undefined,
       start: startDate || undefined,
       end: endDate || undefined,
-      expense_code: expenseFilter || undefined,
+      expense_code: expenseFilter ? Number(expenseFilter) : undefined,
       center_code: centerFilter || undefined,
     }),
   });
@@ -321,7 +321,7 @@ export default function JournalEntriesPage() {
             <button 
               key={t} 
               className={`pb-3 text-[13px] font-semibold transition-colors relative ${tab === t ? 'text-[#0F2D5C]' : 'text-slate-500 hover:text-slate-800'}`} 
-              onClick={() => { setTab(t); setPage(1); setSelectedId(null); }}
+              onClick={() => { setTab(t as Parameters<typeof setTab>[0]); setPage(1); setSelectedId(null); }}
             >
               {t}
               {tab === t && <div className="absolute bottom-0 left-0 w-full h-0.5 bg-[#0F2D5C] rounded-t-full" />}
