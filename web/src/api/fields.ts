@@ -110,6 +110,7 @@ export const fieldsApi = {
   costEstimate: (field_id: number, season_id: number): Promise<{
     field_id: number; season_id: number; field_name: string; field_code: string
     area_feddan: number; materials_cost: number; labor_cost: number
+    equipment_cost: number; cash_cost: number
     land_rent: number; total_cost: number; note: string
   }> =>
     unwrap(api.get(`/fields/harvest/cost-estimate?field_id=${field_id}&season_id=${season_id}`)),

@@ -39,6 +39,12 @@ export const operationsApi = {
   deleteEquipment: (id: number) => api.delete(`/operations/equipment/${id}`),
   summary:     (season_id?: number) =>
     unwrap(api.get<unknown[]>(`/operations/summary${season_id ? `?season_id=${season_id}` : ''}`)),
+  ordersByField: (field_id: number, season_id?: number) =>
+    unwrap(api.get<Array<{
+      id: number; name: string; operation_type: string; status: string
+      planned_date: string; actual_date: string | null
+      labor_cost: number; inv_cost: number; equipment_cost: number; total_cost: number
+    }>>(`/operations/orders/by-field?field_id=${field_id}${season_id ? `&season_id=${season_id}` : ''}`)),
 
   // Templates
   listTemplates: () =>

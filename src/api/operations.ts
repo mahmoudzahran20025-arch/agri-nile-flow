@@ -349,6 +349,39 @@ operations.get('/summary', async (c) => {
   return c.json({ success: true, data: results })
 })
 
+// GET /api/operations/orders/by-field  — drill-down for CostByFieldPage
+operations.get('/orders/by-field', async (c) => {
+  const { company_id } = getUser(c)
+  const field_id  = c.req.query('field_id')
+  const season_id = c.req.query('season_id')
+  if (!field_id) return c.json({ success: false, error: 'field_id مطلوب' }, 400)
+
+  const params: unknown[] = [company_id, Number(field_id)]
+  let sql = `
+    SELECT
+      wo.id, wo.name, wo.operation_type, wo.status, wo.planned_date, wo.actual_date,
+      COALESCE(SUM(wt.quantity * wt.unit_cost), 0) AS labor_cost,
+      COALESCE((SELECT SUM(im.total_cost) FROM inventory_movements im WHERE im.work_order_id = wo.id), 0) AS inv_cost,
+      COALESCE((SELECT SUM(woe.total_cost) FROM work_order_equipment woe WHERE woe.work_order_id = wo.id), 0) AS equipment_cost
+    FROM work_orders wo
+    LEFT JOIN work_tasks wt ON wt.work_order_id = wo.id
+    WHERE wo.company_id = ? AND wo.field_id = ?`
+  if (season_id) { sql += ' AND wo.season_id = ?'; params.push(Number(season_id)) }
+  sql += ' GROUP BY wo.id ORDER BY wo.planned_date DESC'
+
+  const { results } = await c.env.DB.prepare(sql).bind(...params).all<{
+    id: number; name: string; operation_type: string; status: string
+    planned_date: string; actual_date: string | null
+    labor_cost: number; inv_cost: number; equipment_cost: number
+  }>()
+
+  const enriched = results.map(r => ({
+    ...r,
+    total_cost: r.labor_cost + r.inv_cost + r.equipment_cost,
+  }))
+  return c.json({ success: true, data: enriched })
+})
+
 // ── Work Order Templates ──────────────────────────────────────
 
 // GET /api/operations/templates

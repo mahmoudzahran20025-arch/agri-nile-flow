@@ -3,9 +3,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Leaf, TrendingUp, Package, Wheat, AlertTriangle, CheckCircle,
-  Target, Edit3, X, ChevronDown, ChevronUp, Minus,
+  Target, Edit3, X, ChevronDown, ChevronUp, Minus, ClipboardList, Loader2,
 } from 'lucide-react'
-import { inventoryApi, configApi, budgetsApi } from '../../api/client'
+import { inventoryApi, configApi, budgetsApi, operationsApi } from '../../api/client'
 
 // ─── Formatters ───────────────────────────────────────────────
 
@@ -230,6 +230,15 @@ export default function CostByFieldPage() {
     queryFn:  () => inventoryApi.costByField(seasonId ? Number(seasonId) : undefined) as Promise<FieldCost[]>,
   })
 
+  // ── Drill-down state ─────────────────────────────────────────
+  const [drillRow, setDrillRow] = useState<FieldCost | null>(null)
+
+  const { data: drillOrders = [], isFetching: drillLoading } = useQuery({
+    queryKey: ['operations', 'by-field', drillRow?.id, seasonId],
+    queryFn:  () => operationsApi.ordersByField(drillRow!.id, seasonId ? Number(seasonId) : undefined),
+    enabled:  !!drillRow,
+  })
+
   // ── Budget mutations ──────────────────────────────────────────
   const { mutate: upsertBudget, isPending: saving } = useMutation({
     mutationFn: (v: { field_id: number; season_id: number; budget_per_feddan: number }) =>
@@ -401,11 +410,7 @@ export default function CostByFieldPage() {
 
                 return (
                   <tr key={row.id}
-                    onClick={() => {
-                      const qs = new URLSearchParams({ field_id: String(row.id) })
-                      if (seasonId) qs.set('season_id', seasonId)
-                      navigate(`/inventory/movements?${qs.toString()}`)
-                    }}
+                    onClick={() => setDrillRow(row)}
                     className={`cursor-pointer transition-colors ${rowAlert ? 'bg-red-50/50 hover:bg-red-50' : 'hover:bg-slate-50'}`}
                   >
                     {/* Field */}
@@ -514,8 +519,118 @@ export default function CostByFieldPage() {
               تجاوز الحد (&gt; 15%)
             </span>
             <span className="mr-auto text-slate-400 italic">
-              اضغط على خلية الميزانية لضبط الهدف
+              اضغط على صف للاطلاع على تفاصيل أوامر العمل
             </span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Work Order Drill-Down Drawer ─────────────────────── */}
+      {drillRow && (
+        <div className="fixed inset-0 z-50 flex">
+          {/* Backdrop */}
+          <div className="flex-1 bg-black/30" onClick={() => setDrillRow(null)} />
+
+          {/* Panel */}
+          <div className="w-full max-w-md bg-white shadow-2xl flex flex-col h-full overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+              <div>
+                <p className="font-bold text-slate-800 text-base flex items-center gap-2">
+                  <ClipboardList size={16} className="text-brand-600" />
+                  {drillRow.field_name}
+                </p>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  {drillRow.code} · {drillRow.season_name ?? 'كل المواسم'}
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => {
+                    const qs = new URLSearchParams({ field_id: String(drillRow.id) })
+                    if (seasonId) qs.set('season_id', seasonId)
+                    navigate(`/inventory/movements?${qs.toString()}`)
+                  }}
+                  className="text-xs text-brand-600 underline hover:opacity-75"
+                >
+                  حركات المخزون
+                </button>
+                <button onClick={() => setDrillRow(null)} className="p-1 rounded hover:bg-slate-100 text-slate-500">
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            {/* Cost summary */}
+            <div className="grid grid-cols-2 gap-3 px-5 py-3 bg-slate-50 border-b border-slate-100 text-xs">
+              <div>
+                <p className="text-slate-400">إجمالي التكاليف</p>
+                <p className="font-bold text-red-600 text-sm">{egp(drillRow.total_cost ?? drillRow.total_consumed)}</p>
+              </div>
+              <div>
+                <p className="text-slate-400">تكلفة الفدان</p>
+                <p className="font-bold text-brand-700 text-sm">{egp(drillRow.cost_per_feddan)}</p>
+              </div>
+              {drillRow.total_consumed > 0 && (
+                <div><p className="text-slate-400">مخزون</p><p className="font-semibold text-violet-700">{egp(drillRow.total_consumed)}</p></div>
+              )}
+              {drillRow.labor_cost > 0 && (
+                <div><p className="text-slate-400">عمالة</p><p className="font-semibold text-blue-600">{egp(drillRow.labor_cost)}</p></div>
+              )}
+              {drillRow.equipment_cost > 0 && (
+                <div><p className="text-slate-400">معدات</p><p className="font-semibold text-purple-600">{egp(drillRow.equipment_cost)}</p></div>
+              )}
+              {drillRow.cash_cost > 0 && (
+                <div><p className="text-slate-400">نقدي مباشر</p><p className="font-semibold text-sky-600">{egp(drillRow.cash_cost)}</p></div>
+              )}
+            </div>
+
+            {/* Work orders list */}
+            <div className="flex-1 overflow-y-auto px-5 py-3">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
+                أوامر العمل ({drillOrders.length})
+              </p>
+
+              {drillLoading ? (
+                <div className="flex justify-center py-8"><Loader2 size={20} className="animate-spin text-slate-400" /></div>
+              ) : drillOrders.length === 0 ? (
+                <p className="text-xs text-slate-400 text-center py-8">لا توجد أوامر عمل مرتبطة بهذا الحقل</p>
+              ) : (
+                <div className="space-y-2">
+                  {drillOrders.map(wo => (
+                    <div
+                      key={wo.id}
+                      className="border border-slate-200 rounded-xl px-4 py-3 hover:border-brand-300 cursor-pointer transition-colors"
+                      onClick={() => navigate(`/operations?id=${wo.id}`)}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="font-semibold text-slate-800 text-sm truncate">{wo.name}</p>
+                          <p className="text-xs text-slate-400 mt-0.5">
+                            {wo.operation_type} · {wo.planned_date}
+                          </p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="font-bold text-red-600 text-sm">{egp(wo.total_cost)}</p>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${
+                            wo.status === 'costed' ? 'bg-emerald-100 text-emerald-700'
+                            : wo.status === 'done'   ? 'bg-blue-100 text-blue-700'
+                            : 'bg-slate-100 text-slate-500'
+                          }`}>{wo.status}</span>
+                        </div>
+                      </div>
+                      {(wo.inv_cost > 0 || wo.labor_cost > 0 || wo.equipment_cost > 0) && (
+                        <div className="flex gap-3 mt-2 text-[10px] text-slate-500">
+                          {wo.inv_cost      > 0 && <span>مخزون: {egp(wo.inv_cost)}</span>}
+                          {wo.labor_cost    > 0 && <span>عمالة: {egp(wo.labor_cost)}</span>}
+                          {wo.equipment_cost > 0 && <span>معدات: {egp(wo.equipment_cost)}</span>}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

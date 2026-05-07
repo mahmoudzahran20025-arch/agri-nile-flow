@@ -64,7 +64,7 @@ function HarvestForm({ initial, fields, seasons, onSubmit, loading, onClose }: H
     notes:         initial?.notes ?? '',
   })
 
-  type CostEstimate = { materials_cost: number; labor_cost: number; land_rent: number; total_cost: number; note: string }
+  type CostEstimate = { materials_cost: number; labor_cost: number; equipment_cost: number; cash_cost: number; land_rent: number; total_cost: number; note: string }
   const [costEst, setCostEst]       = useState<CostEstimate | null>(null)
   const [costLoading, setCostLoading] = useState(false)
 
@@ -208,7 +208,7 @@ function HarvestForm({ initial, fields, seasons, onSubmit, loading, onClose }: H
                 className="flex items-center gap-1 text-xs text-teal-700 bg-teal-50 border border-teal-200 rounded-md px-2 py-0.5 hover:bg-teal-100 disabled:opacity-50"
               >
                 {costLoading ? <Loader2 size={10} className="animate-spin" /> : <Calculator size={10} />}
-                احسب من النظام
+                استيراد التكاليف المحسوبة
               </button>
             )}
           </div>
@@ -241,6 +241,18 @@ function HarvestForm({ initial, fields, seasons, onSubmit, loading, onClose }: H
               <p className="text-gray-400">إيجار أرض</p>
               <p className="font-bold text-gray-800">{fmtMoney(costEst.land_rent)} ج.م</p>
             </div>
+            {costEst.equipment_cost > 0 && (
+              <div className="bg-white rounded-lg p-2 border border-purple-100">
+                <p className="text-gray-400">معدات</p>
+                <p className="font-bold text-purple-700">{fmtMoney(costEst.equipment_cost)} ج.م</p>
+              </div>
+            )}
+            {costEst.cash_cost > 0 && (
+              <div className="bg-white rounded-lg p-2 border border-blue-100">
+                <p className="text-gray-400">مصاريف مباشرة</p>
+                <p className="font-bold text-blue-700">{fmtMoney(costEst.cash_cost)} ج.م</p>
+              </div>
+            )}
           </div>
           <div className="flex justify-between items-center pt-0.5">
             <span className="text-teal-700 font-bold">الإجمالي: {fmtMoney(costEst.total_cost)} ج.م</span>
