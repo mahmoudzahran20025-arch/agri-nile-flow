@@ -377,6 +377,29 @@ config.post('/wip/:id/assign', async (c) => {
   return c.json({ success: true, data: { id, status: 'carried', to_season_id } })
 })
 
+// ── POST /config/wip/carry-forward — trigger WIP carry-forward for a season ──
+// Wraps FinanceCore.carryForwardWIP; safe to call multiple times (idempotent).
+config.post('/wip/carry-forward', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const { season_id } = await c.req.json<{ season_id: number }>()
+  if (!season_id) return c.json({ success: false, error: 'season_id مطلوب' }, 400)
+
+  const season = await c.env.DB.prepare(
+    'SELECT id, name FROM seasons WHERE id = ? AND company_id = ?'
+  ).bind(season_id, company_id).first<{ id: number; name: string }>()
+  if (!season) return c.json({ success: false, error: 'الموسم غير موجود' }, 404)
+
+  try {
+    const entries = await FinanceCore.carryForwardWIP(c.env.DB, {
+      company_id, season_id, user_id: userId,
+    })
+    return c.json({ success: true, data: { entries_created: entries.length, entries } })
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return c.json({ success: false, error: msg }, 500)
+  }
+})
+
 // ── GL Integration Settings (Modular Control) ───────────────
 
 config.get('/gl-integrations', async (c) => {

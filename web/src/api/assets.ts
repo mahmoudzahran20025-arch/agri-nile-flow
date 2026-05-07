@@ -11,6 +11,7 @@ export interface FixedAsset {
   useful_life_months: number
   depreciation_method: 'straight_line' | 'declining_balance'
   field_id: number | null
+  season_id: number | null
   is_active: number
   notes: string | null
   created_at: string
@@ -49,6 +50,7 @@ export const assetsApi = {
     useful_life_months?: number
     depreciation_method?: string
     field_id?: number
+    season_id?: number
     notes?: string
   }) =>
     unwrap(api.post<{ id: number }>('/assets', body)),

@@ -435,6 +435,16 @@ export default function SeasonPnLPage() {
                 pctOfRev={revenue > 0 ? (data.costs.payroll / revenue) * 100 : undefined}
               />
             )}
+            {(data.costs.depreciation ?? 0) > 0 && (
+              <WaterfallRow
+                icon={<TrendingDown size={16} className="text-slate-500" />}
+                label="إهلاك الأصول الثابتة"
+                sub="أصول مرتبطة بهذا الموسم"
+                value={data.costs.depreciation}
+                variant="cost"
+                pctOfRev={revenue > 0 ? (data.costs.depreciation / revenue) * 100 : undefined}
+              />
+            )}
 
             {/* Subtotal costs */}
             <WaterfallRow

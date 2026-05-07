@@ -55,11 +55,12 @@ async function postMonthlyDepreciation(
   opts: { company_id: number; period_year: number; period_month: number; user_id: number },
 ): Promise<Array<{ asset_id: number; asset_name: string; depreciation_amount: number; entry_id: number | null }>> {
   const { results: assets } = await db.prepare(
-    `SELECT id, name, cost, salvage_value, useful_life_months
+    `SELECT id, name, cost, salvage_value, useful_life_months, field_id, center_code, season_id
      FROM fixed_assets
      WHERE company_id = ? AND is_active = 1 AND useful_life_months > 0`
   ).bind(opts.company_id).all<{
     id: number; name: string; cost: number; salvage_value: number | null; useful_life_months: number
+    field_id: number | null; center_code: number | null; season_id: number | null
   }>()
 
   if (!assets.length) return []
@@ -85,8 +86,9 @@ async function postMonthlyDepreciation(
       created_by:    opts.user_id,
       payload:       { asset_id: asset.id, period_year: opts.period_year, period_month: opts.period_month, amount: depAmount },
       lines: [
-        { account_code: depExpAcc,   debit: depAmount, credit: 0,          description: `إهلاك: ${asset.name}`,           rule_slot: 'expense',                  source_ledger: 'manual' as const, source_record_id: asset.id },
-        { account_code: accumDepAcc, debit: 0,         credit: depAmount,  description: `إهلاك متراكم: ${asset.name}`,   rule_slot: 'accumulated_depreciation', source_ledger: 'manual' as const, source_record_id: asset.id },
+        // field_id/season_id/center_code on the expense line so it rolls up into season P&L per-field
+        { account_code: depExpAcc,   debit: depAmount, credit: 0,         description: `إهلاك: ${asset.name}`,         rule_slot: 'expense',                  source_ledger: 'manual' as const, source_record_id: asset.id, center_code: asset.center_code ?? undefined, season_id: asset.season_id ?? undefined, field_id: asset.field_id ?? undefined },
+        { account_code: accumDepAcc, debit: 0,         credit: depAmount, description: `إهلاك متراكم: ${asset.name}`, rule_slot: 'accumulated_depreciation', source_ledger: 'manual' as const, source_record_id: asset.id },
       ],
     })
     out.push({ asset_id: asset.id, asset_name: asset.name, depreciation_amount: depAmount, entry_id: entryId })

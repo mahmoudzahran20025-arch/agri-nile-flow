@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { assetsApi, type FixedAsset } from '../../api/assets'
+import { configApi, fieldsApi } from '../../api/client'
 import { ChevronRight, Play, PlusCircle } from 'lucide-react'
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -23,14 +24,23 @@ function AddAssetForm({ onClose }: { onClose: () => void }) {
     acquisition_date: new Date().toISOString().slice(0, 10),
     cost: '', salvage_value: '0', useful_life_months: '60',
     depreciation_method: 'straight_line', notes: '',
+    season_id: '', field_id: '',
+  })
+
+  const { data: seasons = [] } = useQuery({ queryKey: ['seasons'], queryFn: configApi.seasons })
+  const { data: fields  = [] } = useQuery({
+    queryKey: ['fields-dropdown', form.season_id],
+    queryFn:  () => fieldsApi.list(form.season_id ? { season_id: Number(form.season_id) } : {}),
   })
 
   const mut = useMutation({
     mutationFn: () => assetsApi.create({
       ...form,
-      cost: parseFloat(form.cost) || 0,
-      salvage_value: parseFloat(form.salvage_value) || 0,
-      useful_life_months: parseInt(form.useful_life_months) || 60,
+      cost:                parseFloat(form.cost) || 0,
+      salvage_value:       parseFloat(form.salvage_value) || 0,
+      useful_life_months:  parseInt(form.useful_life_months) || 60,
+      season_id:           form.season_id ? Number(form.season_id) : undefined,
+      field_id:            form.field_id  ? Number(form.field_id)  : undefined,
     }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['assets'] }); onClose() },
   })
@@ -83,6 +93,24 @@ function AddAssetForm({ onClose }: { onClose: () => void }) {
             <select value={form.depreciation_method} onChange={e => set('depreciation_method', e.target.value)} className="w-full border rounded px-2 py-1.5">
               <option value="straight_line">القسط الثابت</option>
               <option value="declining_balance">القسط المتناقص</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">الموسم (اختياري)</label>
+            <select value={form.season_id} onChange={e => { set('season_id', e.target.value); set('field_id', '') }} className="w-full border rounded px-2 py-1.5">
+              <option value="">— بدون موسم —</option>
+              {(seasons as Array<{ id: number; name: string }>).map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">الحقل (اختياري)</label>
+            <select value={form.field_id} onChange={e => set('field_id', e.target.value)} className="w-full border rounded px-2 py-1.5">
+              <option value="">— بدون حقل —</option>
+              {(fields as Array<{ id: number; name: string; code: string }>).map(f => (
+                <option key={f.id} value={f.id}>{f.code} — {f.name}</option>
+              ))}
             </select>
           </div>
           <div className="col-span-2">

@@ -300,6 +300,7 @@ season.get('/season-pnl', async (c) => {
     opsSupCostRow,
     opsRentCostRow,
     opsPayrollCostRow,
+    opsDepreciationRow,
     // ── Per-field detail (ops-enriched with GL where available) ───────────
     byField,
   ] = await Promise.all([
@@ -439,6 +440,14 @@ season.get('/season-pnl', async (c) => {
       WHERE company_id=? AND season_id=? AND status IN ('approved','paid')
     `).bind(company_id, seasonId).first<{ total: number }>(),
 
+    // Depreciation allocated to this season (assets with season_id = seasonId)
+    c.env.DB.prepare(`
+      SELECT COALESCE(SUM(ds.amount),0) AS total
+      FROM depreciation_schedules ds
+      JOIN fixed_assets fa ON fa.id = ds.asset_id AND fa.company_id = ds.company_id
+      WHERE ds.company_id=? AND fa.season_id=? AND ds.status='posted'
+    `).bind(company_id, seasonId).first<{ total: number }>(),
+
     // Per-field detail: ops revenue + GL cost where available, ops cost as fallback
     c.env.DB.prepare(`
       SELECT
@@ -512,8 +521,9 @@ season.get('/season-pnl', async (c) => {
   const opsCashCost      = opsCashCostRow?.total      ?? 0
   const opsSupCost       = opsSupCostRow?.total       ?? 0
   const opsRentCost      = opsRentCostRow?.total      ?? 0
-  const opsPayroll       = opsPayrollCostRow?.total   ?? 0
-  const opsTotalCost     = opsInvCost + opsLaborCost + opsEquipmentCost + opsCashCost + opsSupCost + opsRentCost + opsPayroll
+  const opsPayroll       = opsPayrollCostRow?.total       ?? 0
+  const opsDepreciation  = opsDepreciationRow?.total      ?? 0
+  const opsTotalCost     = opsInvCost + opsLaborCost + opsEquipmentCost + opsCashCost + opsSupCost + opsRentCost + opsPayroll + opsDepreciation
   const opsRevenue    = opsRevenueRow?.contracts_value ?? 0
 
   // ── Per-field enrichment with GL data ────────────────────────────────────
@@ -584,6 +594,7 @@ season.get('/season-pnl', async (c) => {
           supplier_credit: opsSupCost,
           land_rent:       opsRentCost,
           payroll:         opsPayroll,
+          depreciation:    opsDepreciation,
           total:           opsTotalCost,
         },
         net_margin:    opsRevenue - opsTotalCost,

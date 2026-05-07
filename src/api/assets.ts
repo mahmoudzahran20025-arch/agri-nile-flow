@@ -55,6 +55,7 @@ assets.post('/', permissionGuard('admin', 'write'), async (c) => {
     depreciation_method?: string
     center_code?: number | null
     field_id?: number | null
+    season_id?: number | null
     notes?: string
   }>()
 
@@ -64,8 +65,8 @@ assets.post('/', permissionGuard('admin', 'write'), async (c) => {
 
   const result = await c.env.DB.prepare(`
     INSERT INTO fixed_assets
-    (company_id, asset_code, name, category, acquisition_date, cost, salvage_value, useful_life_months, depreciation_method, center_code, field_id, notes, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (company_id, asset_code, name, category, acquisition_date, cost, salvage_value, useful_life_months, depreciation_method, center_code, field_id, season_id, notes, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     company_id,
     body.asset_code,
@@ -77,7 +78,8 @@ assets.post('/', permissionGuard('admin', 'write'), async (c) => {
     body.useful_life_months || 60,
     body.depreciation_method || 'straight_line',
     body.center_code || null,
-    body.field_id || null,
+    body.field_id    || null,
+    body.season_id   || null,
     body.notes || null,
     userId
   ).run()
