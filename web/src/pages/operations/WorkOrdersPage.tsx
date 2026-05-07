@@ -16,7 +16,7 @@ interface WorkOrder {
   status: 'pending' | 'in_progress' | 'done' | 'costed' | 'cancelled'
   field_name?: string; field_id?: number; season_name?: string
   area_feddan?: number; notes?: string
-  labor_cost?: number; inventory_cost?: number
+  labor_cost?: number; inventory_cost?: number; equipment_cost?: number
 }
 interface WorkTask {
   id: number; task_date: string; description: string; employee_name?: string
@@ -26,11 +26,17 @@ interface InventoryLine {
   item_code: number; item_name?: string; unit?: string
   qty_consumed: number; cost_consumed: number; movement_count: number
 }
+interface EquipmentLine {
+  id: number; equipment_name: string; task_date: string
+  hours_worked: number; cost_per_hour: number; total_cost: number; notes?: string | null
+}
 interface OrderDetail extends WorkOrder {
   tasks: WorkTask[]
   inventory: InventoryLine[]
+  equipment: EquipmentLine[]
   labor_cost: number
   inventory_cost: number
+  equipment_cost: number
   total_cost: number
 }
 
@@ -110,60 +116,86 @@ function StatusBadge({ status }: { status: WorkOrder['status'] }) {
 }
 
 // ── Cost Breakdown ────────────────────────────────────────────
-function CostBreakdown({ detail }: { detail: OrderDetail }) {
-  const [tab, setTab] = useState<'labor' | 'inventory'>('labor')
+function CostBreakdown({
+  detail, canEdit, onAddEquipment,
+}: {
+  detail: OrderDetail
+  canEdit: boolean
+  onAddEquipment: () => void
+}) {
+  const [tab, setTab] = useState<'labor' | 'inventory' | 'equipment'>('labor')
   const grandTotal    = detail.total_cost
   const costPerFeddan = detail.area_feddan && detail.area_feddan > 0
     ? grandTotal / detail.area_feddan : null
 
+  const pctLabor     = grandTotal > 0 ? (detail.labor_cost     / grandTotal) * 100 : 0
+  const pctInventory = grandTotal > 0 ? (detail.inventory_cost / grandTotal) * 100 : 0
+  const pctEquipment = grandTotal > 0 ? (detail.equipment_cost / grandTotal) * 100 : 0
+
   return (
     <div className="space-y-3">
-      {/* Summary KPIs */}
-      <div className="grid grid-cols-3 gap-2">
+
+      {/* ── Summary KPIs ──────────────────────────────────── */}
+      <div className="grid grid-cols-4 gap-2">
         <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-center">
-          <p className="text-xs text-slate-400 mb-0.5">عمالة</p>
+          <p className="text-[10px] text-slate-400 mb-0.5">عمالة</p>
           <p className="text-sm font-bold text-slate-700">{egp(detail.labor_cost)}</p>
+          <p className="text-[10px] text-slate-400 mt-0.5">{pctLabor.toFixed(0)}%</p>
         </div>
         <div className="rounded-xl bg-orange-50 border border-orange-100 px-3 py-2.5 text-center">
-          <p className="text-xs text-orange-500 mb-0.5">مدخلات</p>
+          <p className="text-[10px] text-orange-400 mb-0.5">مدخلات</p>
           <p className="text-sm font-bold text-orange-700">{egp(detail.inventory_cost)}</p>
+          <p className="text-[10px] text-orange-400 mt-0.5">{pctInventory.toFixed(0)}%</p>
+        </div>
+        <div className="rounded-xl bg-violet-50 border border-violet-100 px-3 py-2.5 text-center">
+          <p className="text-[10px] text-violet-400 mb-0.5">معدات</p>
+          <p className="text-sm font-bold text-violet-700">{egp(detail.equipment_cost)}</p>
+          <p className="text-[10px] text-violet-400 mt-0.5">{pctEquipment.toFixed(0)}%</p>
         </div>
         <div className="rounded-xl bg-brand-50 border border-brand-200 px-3 py-2.5 text-center">
-          <p className="text-xs text-brand-500 mb-0.5">الإجمالي</p>
+          <p className="text-[10px] text-brand-500 mb-0.5">الإجمالي</p>
           <p className="text-sm font-bold text-brand-700">{egp(grandTotal)}</p>
         </div>
       </div>
 
+      {/* ── Cost composition bar ──────────────────────────── */}
+      {grandTotal > 0 && (
+        <div className="h-2.5 rounded-full overflow-hidden flex gap-0.5 bg-slate-100">
+          {pctLabor     > 0 && <div className="bg-slate-400 h-full rounded-l-full transition-all" style={{ width: `${pctLabor}%` }} title={`عمالة ${pctLabor.toFixed(0)}%`} />}
+          {pctInventory > 0 && <div className="bg-orange-400 h-full transition-all"                style={{ width: `${pctInventory}%` }} title={`مدخلات ${pctInventory.toFixed(0)}%`} />}
+          {pctEquipment > 0 && <div className="bg-violet-500 h-full rounded-r-full transition-all" style={{ width: `${pctEquipment}%` }} title={`معدات ${pctEquipment.toFixed(0)}%`} />}
+        </div>
+      )}
+
+      {/* ── Cost per feddan ───────────────────────────────── */}
       {costPerFeddan != null && (
         <div className="flex items-center gap-2 rounded-xl bg-emerald-50 border border-emerald-100 px-4 py-2.5">
           <TrendingUp size={14} className="text-emerald-600 shrink-0" />
           <span className="text-sm text-emerald-700">
             تكلفة الفدان:
-            <strong className="mr-1">{egp(costPerFeddan)}</strong>
-            <span className="text-emerald-500 text-xs">/ {num(detail.area_feddan, 1)} فدان</span>
+            <strong className="mr-1 text-emerald-800">{egp(costPerFeddan)}</strong>
+            <span className="text-emerald-500 text-xs">على {num(detail.area_feddan, 1)} فدان</span>
           </span>
         </div>
       )}
 
-      {/* Tab bar */}
+      {/* ── Tab bar ───────────────────────────────────────── */}
       <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1 w-fit">
-        {([
-          { k: 'labor' as const,     l: 'العمالة',     icon: <Users    size={12} /> },
-          { k: 'inventory' as const, l: 'المدخلات',    icon: <Package  size={12} /> },
-        ]).map(({ k, l, icon }) => (
-          <button
-            key={k}
-            onClick={() => setTab(k)}
+        {[
+          { k: 'labor'     as const, l: `عمالة (${detail.tasks.length})`,         icon: <Users   size={12} /> },
+          { k: 'inventory' as const, l: `مدخلات (${detail.inventory.length})`,    icon: <Package size={12} /> },
+          { k: 'equipment' as const, l: `معدات (${detail.equipment.length})`,     icon: <Wrench  size={12} /> },
+        ].map(({ k, l, icon }) => (
+          <button key={k} onClick={() => setTab(k)}
             className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg transition-all ${
               tab === k ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
+            }`}>
             {icon}{l}
           </button>
         ))}
       </div>
 
-      {/* Labor tab */}
+      {/* ── Labor tab ─────────────────────────────────────── */}
       {tab === 'labor' && (
         detail.tasks.length === 0 ? (
           <p className="text-sm text-slate-400 text-center py-4">لا توجد مهام عمالة مسجلة</p>
@@ -180,13 +212,13 @@ function CostBreakdown({ detail }: { detail: OrderDetail }) {
               <tbody className="divide-y divide-slate-100">
                 {detail.tasks.map(t => (
                   <tr key={t.id} className="hover:bg-slate-50">
-                    <td className="py-2 px-3 text-slate-500">{t.task_date}</td>
+                    <td className="py-2 px-3 text-slate-500 whitespace-nowrap">{t.task_date}</td>
                     <td className="py-2 px-3 font-medium">{t.description}</td>
                     <td className="py-2 px-3 text-slate-500">{t.employee_name ?? '—'}</td>
                     <td className="py-2 px-3">{t.quantity ? `${num(t.quantity, 1)} ${t.unit ?? ''}` : '—'}</td>
                     <td className="py-2 px-3 font-bold text-brand-700">{egp(t.total_cost)}</td>
                     <td className="py-2 px-3">
-                      <DeleteTaskBtn taskId={t.id} />
+                      {canEdit && <DeleteTaskBtn taskId={t.id} />}
                     </td>
                   </tr>
                 ))}
@@ -195,7 +227,7 @@ function CostBreakdown({ detail }: { detail: OrderDetail }) {
                 <tr>
                   <td colSpan={4} className="py-2 px-3 font-semibold text-slate-600">الإجمالي</td>
                   <td className="py-2 px-3 font-bold text-brand-700">{egp(detail.labor_cost)}</td>
-                  <td></td>
+                  <td />
                 </tr>
               </tfoot>
             </table>
@@ -203,13 +235,13 @@ function CostBreakdown({ detail }: { detail: OrderDetail }) {
         )
       )}
 
-      {/* Inventory tab */}
+      {/* ── Inventory tab ─────────────────────────────────── */}
       {tab === 'inventory' && (
         detail.inventory.length === 0 ? (
           <div className="text-center py-6 space-y-1">
             <Package size={28} className="mx-auto text-slate-300" />
             <p className="text-sm text-slate-400">لا توجد مدخلات مخزنية مرتبطة</p>
-            <p className="text-xs text-slate-300">اربط حركات الصرف بهذا الأمر عند إنشاء حركة مخزنية</p>
+            <p className="text-xs text-slate-300">اربط حركات الصرف بهذا الأمر عند تسجيل حركة مخزنية</p>
           </div>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -241,6 +273,80 @@ function CostBreakdown({ detail }: { detail: OrderDetail }) {
           </div>
         )
       )}
+
+      {/* ── Equipment tab ─────────────────────────────────── */}
+      {tab === 'equipment' && (
+        <div className="space-y-2">
+          {canEdit && (
+            <div className="flex justify-end">
+              <button onClick={onAddEquipment}
+                className="flex items-center gap-1.5 text-xs text-violet-700 hover:bg-violet-50 border border-violet-200 rounded-lg px-3 py-1.5 transition-colors font-medium">
+                <Plus size={12} /> تسجيل تشغيل معدة
+              </button>
+            </div>
+          )}
+          {detail.equipment.length === 0 ? (
+            <div className="text-center py-6 space-y-1">
+              <Wrench size={28} className="mx-auto text-slate-300" />
+              <p className="text-sm text-slate-400">لا توجد معدات مسجلة لهذا الأمر</p>
+              {canEdit && (
+                <button onClick={onAddEquipment}
+                  className="mt-2 text-xs text-violet-600 hover:text-violet-800 underline underline-offset-2">
+                  سجّل أول عملية تشغيل
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50">
+                  <tr>
+                    {['التاريخ','المعدة','الساعات','تكلفة/ساعة','الإجمالي','ملاحظات',''].map(h => (
+                      <th key={h} className="py-2 px-3 text-right text-slate-500 font-semibold">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {detail.equipment.map(eq => (
+                    <tr key={eq.id} className="hover:bg-violet-50/30">
+                      <td className="py-2 px-3 text-slate-500 whitespace-nowrap">{eq.task_date}</td>
+                      <td className="py-2 px-3 font-semibold text-slate-800 flex items-center gap-1.5">
+                        <Wrench size={11} className="text-violet-400 shrink-0" />
+                        {eq.equipment_name}
+                      </td>
+                      <td className="py-2 px-3 tabular-nums">
+                        <span className="font-medium text-violet-700">{num(eq.hours_worked, 1)}</span>
+                        <span className="text-slate-400 mr-0.5">س</span>
+                      </td>
+                      <td className="py-2 px-3 tabular-nums text-slate-600">{egp(eq.cost_per_hour)}/س</td>
+                      <td className="py-2 px-3 font-bold text-violet-700">{egp(eq.total_cost)}</td>
+                      <td className="py-2 px-3 text-slate-400 max-w-[100px] truncate" title={eq.notes ?? ''}>
+                        {eq.notes ?? '—'}
+                      </td>
+                      <td className="py-2 px-3">
+                        {canEdit && <DeleteEquipmentBtn equipmentId={eq.id} />}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-slate-50 border-t-2 border-slate-200">
+                  <tr>
+                    <td colSpan={2} className="py-2 px-3 font-semibold text-slate-600">
+                      الإجمالي ({detail.equipment.length} عملية)
+                    </td>
+                    <td className="py-2 px-3 tabular-nums font-semibold text-violet-700">
+                      {num(detail.equipment.reduce((s, e) => s + e.hours_worked, 0), 1)} س
+                    </td>
+                    <td />
+                    <td className="py-2 px-3 font-bold text-violet-700">{egp(detail.equipment_cost)}</td>
+                    <td colSpan={2} />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -263,6 +369,25 @@ function DeleteTaskBtn({ taskId }: { taskId: number }) {
   )
 }
 
+// ── Delete Equipment Button ───────────────────────────────────
+function DeleteEquipmentBtn({ equipmentId }: { equipmentId: number }) {
+  const qc = useQueryClient()
+  const del = useMutation({
+    mutationFn: () => operationsApi.deleteEquipment(equipmentId),
+    onSuccess:  () => qc.invalidateQueries({ queryKey: ['work-order'] }),
+  })
+  return (
+    <button
+      onClick={() => del.mutate()}
+      disabled={del.isPending}
+      className="p-1 text-red-300 hover:text-red-500 transition-colors rounded disabled:opacity-40"
+      title="حذف سطر المعدة"
+    >
+      <Trash2 size={12} />
+    </button>
+  )
+}
+
 // ── Main Page ─────────────────────────────────────────────────
 export default function WorkOrdersPage() {
   const { canWrite } = usePermission()
@@ -271,8 +396,9 @@ export default function WorkOrdersPage() {
   const [filterStatus, setFilterStatus] = useState('')
   const [selectedId,   setSelectedId]   = useState<number | null>(null)
   const [panelOpen,    setPanelOpen]     = useState(false)
-  const [openNew,      setOpenNew]       = useState(false)
-  const [openTask,     setOpenTask]      = useState(false)
+  const [openNew,        setOpenNew]        = useState(false)
+  const [openTask,       setOpenTask]       = useState(false)
+  const [openEquipment,  setOpenEquipment]  = useState(false)
   const [confirmCosted, setConfirmCosted] = useState(false)
   const [actualDate,   setActualDate]    = useState('')
   const [err, setErr] = useState('')
@@ -282,6 +408,9 @@ export default function WorkOrdersPage() {
   })
   const [taskForm, setTF] = useState({
     task_date: '', description: '', employee_id: '', quantity: '', unit: '', unit_cost: '', notes: '',
+  })
+  const [equipForm, setEF] = useState({
+    equipment_name: '', task_date: '', hours_worked: '', cost_per_hour: '', notes: '',
   })
 
   // ── Queries ─────────────────────────────────────────────────
@@ -397,6 +526,23 @@ export default function WorkOrdersPage() {
     },
   })
 
+  const addEquipment = useMutation({
+    mutationFn: () => operationsApi.addEquipment(selectedId!, {
+      equipment_name: equipForm.equipment_name.trim(),
+      task_date:      equipForm.task_date,
+      hours_worked:   Number(equipForm.hours_worked),
+      cost_per_hour:  Number(equipForm.cost_per_hour),
+      notes:          equipForm.notes || undefined,
+    }),
+    onSuccess: (res: { success: boolean; error?: string }) => {
+      if (!(res as { success: boolean }).success) { setErr((res as { error?: string }).error ?? 'خطأ'); return }
+      qc.invalidateQueries({ queryKey: ['work-order', selectedId] })
+      setOpenEquipment(false)
+      setEF({ equipment_name: '', task_date: '', hours_worked: '', cost_per_hour: '', notes: '' })
+      setErr('')
+    },
+  })
+
   const handleTransition = (order: WorkOrder) => {
     const action = NEXT_ACTION[order.status]
     if (!action) return
@@ -495,7 +641,7 @@ export default function WorkOrdersPage() {
         <div className="grid gap-3">
           {orders.map(order => {
             const action    = NEXT_ACTION[order.status]
-            const totalCost = (order.labor_cost ?? 0) + (order.inventory_cost ?? 0)
+            const totalCost = (order.labor_cost ?? 0) + (order.inventory_cost ?? 0) + (order.equipment_cost ?? 0)
             return (
               <div
                 key={order.id}
@@ -630,7 +776,11 @@ export default function WorkOrdersPage() {
             )}
 
             {/* Cost breakdown */}
-            <CostBreakdown detail={detail} />
+            <CostBreakdown
+              detail={detail}
+              canEdit={canWrite('operations') && !['costed', 'cancelled'].includes(detail.status)}
+              onAddEquipment={() => { setOpenEquipment(true); setErr('') }}
+            />
           </div>
         )}
       </SidePanel>
@@ -651,6 +801,10 @@ export default function WorkOrdersPage() {
               <div className="flex justify-between">
                 <span className="text-slate-500">تكلفة المدخلات</span>
                 <span className="font-medium">{egp(detail.inventory_cost)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">تكلفة المعدات</span>
+                <span className="font-medium">{egp(detail.equipment_cost)}</span>
               </div>
               <div className="flex justify-between border-t pt-2">
                 <span className="font-bold">الإجمالي</span>
@@ -741,6 +895,69 @@ export default function WorkOrdersPage() {
             disabled={createOrder.isPending || !form.name || !form.operation_type || !form.planned_date}
           >
             {createOrder.isPending ? 'جاري الحفظ...' : 'إنشاء أمر العمل'}
+          </button>
+        </div>
+      </Modal>
+
+      {/* ── Add Equipment Modal ────────────────────────────── */}
+      <Modal open={openEquipment} onClose={() => { setOpenEquipment(false); setErr('') }} title="تسجيل تشغيل معدة" size="md">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="col-span-2">
+            <label className="label">اسم المعدة <span className="text-red-500">*</span></label>
+            <input className="input" value={equipForm.equipment_name}
+              onChange={e => setEF(p => ({ ...p, equipment_name: e.target.value }))}
+              placeholder="جرار 75 حصان / ضخة ري / حصادة" />
+          </div>
+          <div>
+            <label className="label">تاريخ التشغيل <span className="text-red-500">*</span></label>
+            <input className="input" type="date" value={equipForm.task_date}
+              onChange={e => setEF(p => ({ ...p, task_date: e.target.value }))} />
+          </div>
+          <div>
+            <label className="label">عدد الساعات <span className="text-red-500">*</span></label>
+            <input className="input" type="number" min="0.5" step="0.5"
+              value={equipForm.hours_worked}
+              onChange={e => setEF(p => ({ ...p, hours_worked: e.target.value }))}
+              placeholder="2" />
+          </div>
+          <div>
+            <label className="label">تكلفة الساعة (ج.م) <span className="text-red-500">*</span></label>
+            <input className="input" type="number" min="0" step="0.01"
+              value={equipForm.cost_per_hour}
+              onChange={e => setEF(p => ({ ...p, cost_per_hour: e.target.value }))}
+              placeholder="150" />
+          </div>
+          <div>
+            <label className="label">الإجمالي التقديري</label>
+            <div className="input bg-slate-50 text-slate-500 font-medium cursor-default">
+              {equipForm.hours_worked && equipForm.cost_per_hour
+                ? egp(Number(equipForm.hours_worked) * Number(equipForm.cost_per_hour))
+                : '—'}
+            </div>
+          </div>
+          <div className="col-span-2">
+            <label className="label">ملاحظات</label>
+            <input className="input" value={equipForm.notes}
+              onChange={e => setEF(p => ({ ...p, notes: e.target.value }))}
+              placeholder="وصف إضافي اختياري" />
+          </div>
+        </div>
+        {err && <p className="text-red-600 text-sm mt-3">{err}</p>}
+        <div className="flex justify-end gap-3 mt-6">
+          <button className="btn-secondary" onClick={() => { setOpenEquipment(false); setErr('') }}>إلغاء</button>
+          <button
+            className="btn-primary gap-2"
+            onClick={() => addEquipment.mutate()}
+            disabled={
+              addEquipment.isPending ||
+              !equipForm.equipment_name ||
+              !equipForm.task_date ||
+              !equipForm.hours_worked ||
+              Number(equipForm.hours_worked) <= 0
+            }
+          >
+            <Wrench size={14} />
+            {addEquipment.isPending ? 'جاري الحفظ...' : 'تسجيل التشغيل'}
           </button>
         </div>
       </Modal>

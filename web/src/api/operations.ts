@@ -25,6 +25,12 @@ export const operationsApi = {
   addTask:     (orderId: number, body: unknown) =>
     api.post(`/operations/orders/${orderId}/tasks`, body),
   deleteTask:  (id: number) => api.delete(`/operations/tasks/${id}`),
+
+  addEquipment: (orderId: number, body: {
+    equipment_name: string; task_date: string
+    hours_worked: number; cost_per_hour: number; notes?: string
+  }) => api.post(`/operations/orders/${orderId}/equipment`, body),
+  deleteEquipment: (id: number) => api.delete(`/operations/equipment/${id}`),
   summary:     (season_id?: number) =>
     unwrap(api.get<unknown[]>(`/operations/summary${season_id ? `?season_id=${season_id}` : ''}`)),
 

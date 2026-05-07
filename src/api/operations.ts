@@ -34,7 +34,8 @@ operations.get('/orders', async (c) => {
                f.name AS field_name, f.area_feddan,
                s.name AS season_name,
                COALESCE(SUM(wt.quantity * wt.unit_cost), 0) AS labor_cost,
-               COALESCE(im_costs.inv_cost, 0)                AS inventory_cost
+               COALESCE(im_costs.inv_cost, 0)                AS inventory_cost,
+               COALESCE(eq_costs.eq_cost, 0)                 AS equipment_cost
              FROM work_orders wo
              LEFT JOIN fields f ON f.id = wo.field_id AND f.company_id = wo.company_id
              LEFT JOIN seasons s ON s.id = wo.season_id AND s.company_id = wo.company_id
@@ -45,8 +46,14 @@ operations.get('/orders', async (c) => {
                WHERE company_id = ? AND work_order_id IS NOT NULL
                GROUP BY work_order_id
              ) im_costs ON im_costs.work_order_id = wo.id
+             LEFT JOIN (
+               SELECT work_order_id, SUM(total_cost) AS eq_cost
+               FROM work_order_equipment
+               WHERE company_id = ?
+               GROUP BY work_order_id
+             ) eq_costs ON eq_costs.work_order_id = wo.id
              WHERE wo.company_id = ?`
-  const params: unknown[] = [company_id, company_id]
+  const params: unknown[] = [company_id, company_id, company_id]
 
   if (season_id) { sql += ' AND wo.season_id = ?'; params.push(Number(season_id)) }
   if (field_id)  { sql += ' AND wo.field_id = ?';  params.push(Number(field_id)) }
@@ -72,7 +79,7 @@ operations.get('/orders', async (c) => {
   return c.json({ success: true, data: results, total: countRow?.n ?? 0, page, page_size: size })
 })
 
-// GET /api/operations/orders/:id  (with tasks + inventory consumed)
+// GET /api/operations/orders/:id  (with tasks + inventory + equipment consumed)
 operations.get('/orders/:id', async (c) => {
   const { company_id } = getUser(c)
   const id = Number(c.req.param('id'))
@@ -92,7 +99,6 @@ operations.get('/orders/:id', async (c) => {
      WHERE wt.work_order_id = ? AND wt.company_id = ? ORDER BY wt.task_date`
   ).bind(id, company_id).all()
 
-  // Inventory consumed linked to this work order
   const { results: inventory } = await c.env.DB.prepare(
     `SELECT im.item_code, i.name AS item_name, i.unit,
             SUM(im.qty_out)    AS qty_consumed,
@@ -100,13 +106,22 @@ operations.get('/orders/:id', async (c) => {
             COUNT(*)           AS movement_count
      FROM inventory_movements im
      LEFT JOIN items i ON i.code = im.item_code AND i.company_id = im.company_id
-     WHERE im.work_order_id = ? AND im.company_id = ? AND im.movement_type = 'صرف'
+     WHERE im.work_order_id = ? AND im.company_id = ?
+       AND im.movement_type IN ('ISSUE','TRANSFER_OUT','COGS_ADJUSTMENT','PRODUCTION_INPUT','ADJUSTMENT_LOSS')
      GROUP BY im.item_code
      ORDER BY cost_consumed DESC`
   ).bind(id, company_id).all()
 
+  const { results: equipment } = await c.env.DB.prepare(
+    `SELECT id, equipment_name, task_date, hours_worked, cost_per_hour, total_cost, notes
+     FROM work_order_equipment
+     WHERE work_order_id = ? AND company_id = ?
+     ORDER BY task_date, id`
+  ).bind(id, company_id).all()
+
   const laborCost     = tasks.reduce((s: number, t: Record<string, unknown>) => s + ((Number(t.quantity) || 0) * (Number(t.unit_cost) || 0)), 0)
   const inventoryCost = inventory.reduce((s: number, r: Record<string, unknown>) => s + (Number(r.cost_consumed) || 0), 0)
+  const equipmentCost = equipment.reduce((s: number, r: Record<string, unknown>) => s + (Number(r.total_cost) || 0), 0)
 
   return c.json({
     success: true,
@@ -114,9 +129,11 @@ operations.get('/orders/:id', async (c) => {
       ...order,
       tasks,
       inventory,
+      equipment,
       labor_cost:     laborCost,
       inventory_cost: inventoryCost,
-      total_cost:     laborCost + inventoryCost,
+      equipment_cost: equipmentCost,
+      total_cost:     laborCost + inventoryCost + equipmentCost,
     },
   })
 })
@@ -178,7 +195,13 @@ operations.patch('/orders/:id/status', async (c) => {
         'SELECT SUM(quantity * unit_cost) AS total_cost FROM work_tasks WHERE work_order_id = ?'
       ).bind(id).first<{ total_cost: number }>()
 
-      const totalCost = tasks?.total_cost ?? 0
+      const eqRow = await c.env.DB.prepare(
+        'SELECT SUM(total_cost) AS total_cost FROM work_order_equipment WHERE work_order_id = ? AND company_id = ?'
+      ).bind(id, company_id).first<{ total_cost: number }>()
+
+      const laborCost     = tasks?.total_cost ?? 0
+      const equipmentCost = eqRow?.total_cost ?? 0
+      const totalCost     = laborCost + equipmentCost
 
       if (totalCost > 0) {
         await FinanceCore.resolveWorkOrderLabor(c.env.DB, {
@@ -186,7 +209,7 @@ operations.patch('/orders/:id/status', async (c) => {
           ref_id: id,
           amount: totalCost,
           date: actual_date ?? order?.actual_date ?? new Date().toISOString().slice(0, 10),
-          description: `تكلفة عمالة ميدانية: أمر عمل #${id}`,
+          description: `تكلفة عمليات ميدانية (عمالة + معدات): أمر عمل #${id}`,
           created_by: userId,
           center_code: order?.center_code ?? undefined,
           season_id: order?.season_id,
@@ -249,6 +272,59 @@ operations.delete('/tasks/:id', async (c) => {
   const { company_id } = getUser(c)
   const id = Number(c.req.param('id'))
   await c.env.DB.prepare('DELETE FROM work_tasks WHERE id = ? AND company_id = ?').bind(id, company_id).run()
+  return c.json({ success: true, data: null })
+})
+
+// ── Equipment Lines ──────────────────────────────────────────
+
+// POST /api/operations/orders/:id/equipment
+operations.post('/orders/:id/equipment', async (c) => {
+  const { company_id } = getUser(c)
+  const orderId = Number(c.req.param('id'))
+
+  const order = await c.env.DB.prepare(
+    'SELECT status FROM work_orders WHERE id = ? AND company_id = ?'
+  ).bind(orderId, company_id).first<{ status: string }>()
+  if (!order) return c.json({ success: false, error: 'أمر العمل غير موجود' }, 404)
+  if (['costed', 'cancelled'].includes(order.status)) {
+    return c.json({ success: false, error: 'لا يمكن إضافة معدات لأمر عمل مغلق أو ملغى' }, 422)
+  }
+
+  const b = await c.req.json<{
+    equipment_name: string
+    task_date: string
+    hours_worked: number
+    cost_per_hour: number
+    notes?: string
+  }>()
+
+  if (!b.equipment_name?.trim() || !b.task_date) {
+    return c.json({ success: false, error: 'اسم المعدة والتاريخ مطلوبان' }, 400)
+  }
+  if (!Number.isFinite(b.hours_worked) || b.hours_worked <= 0) {
+    return c.json({ success: false, error: 'عدد الساعات يجب أن يكون أكبر من صفر' }, 400)
+  }
+  if (!Number.isFinite(b.cost_per_hour) || b.cost_per_hour < 0) {
+    return c.json({ success: false, error: 'التكلفة / ساعة يجب أن تكون صفر أو أكثر' }, 400)
+  }
+
+  const result = await c.env.DB.prepare(
+    `INSERT INTO work_order_equipment
+     (work_order_id, company_id, equipment_name, task_date, hours_worked, cost_per_hour, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(orderId, company_id, b.equipment_name.trim(), b.task_date,
+         b.hours_worked, b.cost_per_hour, b.notes ?? null).run()
+
+  return c.json({ success: true, data: { id: result.meta.last_row_id } }, 201)
+})
+
+// DELETE /api/operations/equipment/:id
+operations.delete('/equipment/:id', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  await c.env.DB.prepare(
+    'DELETE FROM work_order_equipment WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).run()
   return c.json({ success: true, data: null })
 })
 
