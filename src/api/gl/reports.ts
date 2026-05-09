@@ -39,13 +39,22 @@ function buildDescendants(accounts: { code: string; parent_code: string | null }
 // GET /api/gl/ledger/:account?
 reports.get('/ledger/:account?', async (c) => {
   const { company_id } = getUser(c)
-  const account = c.req.param('account') ?? c.req.query('account')
+  const accountCode = c.req.param('account') ?? c.req.query('account')
   const start = c.req.query('start')
   const end = c.req.query('end')
   const center = c.req.query('center')
   const leafOnly = c.req.query('leaf') === '1'
+  const page = parseInt(c.req.query('page') || '1', 10)
+  const size = parseInt(c.req.query('size') || '100', 10)
 
-  if (!account) return c.json({ success: false, error: 'account (code) required' }, 400)
+  if (!accountCode) return c.json({ success: false, error: 'account (code) required' }, 400)
+
+  // Fetch account details
+  const account = await c.env.DB.prepare(
+    'SELECT code, name, account_type, normal_balance, is_header FROM chart_of_accounts WHERE company_id = ? AND code = ?'
+  ).bind(company_id, accountCode).first()
+
+  if (!account) return c.json({ success: false, error: 'Account not found' }, 404)
 
   const fromClause = `
     FROM journal_entry_lines l
@@ -55,7 +64,7 @@ reports.get('/ledger/:account?', async (c) => {
     LEFT JOIN fields f ON f.id = l.field_id
     WHERE l.company_id = ? AND l.account_code ${leafOnly ? '=' : 'LIKE'} ? AND e.is_posted = 1
   `
-  const binds: unknown[] = [company_id, leafOnly ? account : `${account}%`]
+  const binds: unknown[] = [company_id, leafOnly ? accountCode : `${accountCode}%`]
 
   if (start) { binds.push(start) }
   if (end)   { binds.push(end) }
@@ -66,31 +75,39 @@ reports.get('/ledger/:account?', async (c) => {
   if (center) { binds.push(Number(center)) }
   const centerWhere = center ? ' AND l.center_code = ?' : ''
 
+  // Total count for pagination
+  const countRow = await c.env.DB.prepare(`SELECT COUNT(*) as count ${fromClause} ${dateWhere} ${centerWhere}`).bind(...binds).first<{ count: number }>()
+  const total = countRow?.count ?? 0
+  const totalPages = Math.ceil(total / size)
+
+  const offset = (page - 1) * size
+
   const sql = `
     SELECT
       l.id,
       l.entry_id,
+      l.account_code,
       e.entry_date,
       e.entry_number,
-      e.description AS entry_description,
+      e.description AS entry_desc,
       e.ref_type,
       e.ref_id,
       l.debit,
       l.credit,
-      l.description AS line_description,
+      l.description AS narration,
       l.center_code,
       COALESCE(cc.name_ar, cc.name_en) AS center_name,
       l.season_id,
       s.name AS season_name,
       l.field_id,
       f.name AS field_name,
-      SUM(l.debit) OVER (ORDER BY e.entry_date, l.id) AS running_debit,
-      SUM(l.credit) OVER (ORDER BY e.entry_date, l.id) AS running_credit
+      CASE WHEN (SELECT id FROM business_events WHERE source_module = e.ref_type AND source_id = e.ref_id LIMIT 1) IS NOT NULL THEN 1 ELSE 0 END as has_trace
     ${fromClause} ${dateWhere} ${centerWhere}
     ORDER BY e.entry_date, l.id
+    LIMIT ? OFFSET ?
   `
 
-  const rows = await c.env.DB.prepare(sql).bind(...binds).all()
+  const rows = await c.env.DB.prepare(sql).bind(...binds, size, offset).all()
 
   let openingDr = 0, openingCr = 0
   if (start) {
@@ -100,18 +117,39 @@ reports.get('/ledger/:account?', async (c) => {
        JOIN journal_entries e ON e.id = l.entry_id
        WHERE l.company_id = ? AND l.account_code ${leafOnly ? '=' : 'LIKE'} ?
          AND e.is_posted = 1 AND e.entry_date < ? ${centerWhere}`
-    ).bind(company_id, leafOnly ? account : `${account}%`, start, ...(center ? [Number(center)] : [])).first<{ dr: number | null; cr: number | null }>()
+    ).bind(company_id, leafOnly ? accountCode : `${accountCode}%`, start, ...(center ? [Number(center)] : [])).first<{ dr: number | null; cr: number | null }>()
     openingDr = op?.dr ?? 0
     openingCr = op?.cr ?? 0
   }
 
+  const openingBalance = account.normal_balance === 'credit' ? openingCr - openingDr : openingDr - openingCr
+
+  // Compute running balance
+  let running = openingBalance
+  const lines = rows.results.map((r: any) => {
+    const dr = r.debit ?? 0
+    const cr = r.credit ?? 0
+    running += account.normal_balance === 'credit' ? (cr - dr) : (dr - cr)
+    return {
+      ...r,
+      has_trace: !!r.has_trace,
+      running_balance: running
+    }
+  })
+
+  // Notice we return these properties directly at the top level
+  // because `unwrap` inside glApi.ledger handles it depending on structure.
   return c.json({
     success: true,
-    account,
-    leaf_only: leafOnly,
-    date_range: { start, end },
-    opening: { debit: openingDr, credit: openingCr, net: openingDr - openingCr },
-    lines: rows.results,
+    data: {
+      account,
+      lines,
+      total,
+      page,
+      size,
+      total_pages: totalPages,
+      opening_balance: openingBalance,
+    }
   })
 })
 

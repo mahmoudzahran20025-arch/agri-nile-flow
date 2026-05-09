@@ -10,7 +10,8 @@ import { operationsApi, fieldsApi, configApi, type WOTemplate, type WOTemplateTa
 import Modal from '../../components/ui/Modal'
 
 // ── Operation type config ─────────────────────────────────────
-const OP_TYPES = ['ري', 'تسميد', 'رش', 'حصاد', 'حراثة', 'زراعة', 'أخرى'] as const
+// OP_TYPES are loaded from the database via GET /config/operation_types
+// OP_CFG provides display styling; falls back to DEFAULT_CFG for custom types
 
 const OP_CFG: Record<string, {
   label: string; accent: string; bg: string; border: string; dot: string; light: string
@@ -380,6 +381,9 @@ function CreateTemplateModal({ onClose, onSuccess }: { onClose: () => void; onSu
   const [tasks, setTasks]     = useState<NewTask[]>([{ task_name: '', estimated_hours: '' }])
   const addTaskRef = useRef<HTMLInputElement>(null)
 
+  const { data: opTypesData = [] } = useQuery({ queryKey: ['operation-types'], queryFn: configApi.operationTypes })
+  const opTypes = (opTypesData as { id: number; name: string; is_active: number }[]).filter(t => t.is_active === 1)
+
   const createMut = useMutation({
     mutationFn: () => operationsApi.createTemplate({
       name, operation_type: opType, description: desc || undefined,
@@ -416,7 +420,7 @@ function CreateTemplateModal({ onClose, onSuccess }: { onClose: () => void; onSu
               value={opType}
               onChange={e => setOpType(e.target.value)}
             >
-              {OP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              {opTypes.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
             </select>
           </div>
           <div>

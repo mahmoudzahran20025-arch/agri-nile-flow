@@ -425,6 +425,20 @@ periods.post('/:id/wip-flush', async (c) => {
   if (!period) return c.json({ success: false, error: 'الفترة غير موجودة' }, 404)
   if (period.is_closed) return c.json({ success: false, error: 'لا يمكن تسوية WIP في فترة مغلقة' }, 409)
 
+  // Idempotency guard: one posted WIP flush per (period, season)
+  const existingFlush = await c.env.DB.prepare(
+    `SELECT id FROM journal_entries
+     WHERE company_id = ? AND period_id = ? AND ref_type = 'wip_flush' AND ref_id = ? AND is_posted = 1
+     LIMIT 1`
+  ).bind(company_id, periodId, b.season_id).first<{ id: number }>()
+  if (existingFlush?.id) {
+    return c.json({
+      success: false,
+      error: 'تم تنفيذ تسوية WIP لهذا الموسم داخل نفس الفترة مسبقا',
+      data: { entry_id: existingFlush.id },
+    }, 409)
+  }
+
   // Resolve WIP account from inventory_posting_rules (first active row)
   const wipRow = await c.env.DB.prepare(
     `SELECT wip_account FROM inventory_posting_rules
@@ -469,17 +483,7 @@ periods.post('/:id/wip-flush', async (c) => {
     company_id, b.season_id,
   ).first<{ net_balance: number }>()
 
-  // Fallback: sum ALL WIP-account postings if above returns 0 (coarse flush)
   let wipAmount = wipBalRow?.net_balance ?? 0
-  if (wipAmount <= 0) {
-    const allWipRow = await c.env.DB.prepare(`
-      SELECT COALESCE(SUM(jel.debit),0) - COALESCE(SUM(jel.credit),0) AS net_balance
-      FROM journal_entry_lines jel
-      JOIN journal_entries je ON je.id = jel.entry_id
-      WHERE je.company_id=? AND je.is_posted=1 AND jel.account_code=?
-    `).bind(company_id, wipRow.wip_account).first<{ net_balance: number }>()
-    wipAmount = allWipRow?.net_balance ?? 0
-  }
 
   if (wipAmount <= 0) {
     return c.json({
@@ -492,9 +496,9 @@ periods.post('/:id/wip-flush', async (c) => {
   const memo = b.memo ?? `تسوية WIP → تكلفة البضاعة المباعة — الموسم ${b.season_id} / الفترة ${period.name}`
   const jeResult = await c.env.DB.prepare(`
     INSERT INTO journal_entries
-      (company_id, period_id, entry_date, description, ref_type, is_posted, created_by)
-    VALUES (?, ?, ?, ?, 'wip_flush', 1, ?)`
-  ).bind(company_id, periodId, period.end_date, memo, userId).run()
+      (company_id, period_id, entry_date, description, ref_type, ref_id, is_posted, created_by)
+    VALUES (?, ?, ?, ?, 'wip_flush', ?, 1, ?)`
+  ).bind(company_id, periodId, period.end_date, memo, b.season_id, userId).run()
   const jeId = jeResult.meta.last_row_id as number
 
   // Dr COGS

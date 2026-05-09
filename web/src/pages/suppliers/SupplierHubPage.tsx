@@ -10,7 +10,7 @@ import APAgingPage        from '../treasury/APAgingPage'
 import SuppliersBalancePage from '../reports/SuppliersBalancePage'
 import { reportsApi } from '../../api/client'
 import { assetsApi } from '../../api/assets'
-import type { FixedAsset, DepreciationScheduleRow } from '../../api/assets'
+import type { DepreciationScheduleRow } from '../../api/assets'
 import { useToast } from '../../contexts/ToastContext'
 
 // ── Depreciation Schedule sub-panel ──────────────────────────
@@ -89,12 +89,11 @@ function FixedAssetsPanel() {
   const qc = useQueryClient()
   const { toast } = useToast()
 
-  const { data: assetsRaw, isLoading } = useQuery({
+  const { data: assets, isLoading } = useQuery({
     queryKey: ['fixed-assets'],
     queryFn:  assetsApi.list,
   })
-
-  const assets = (assetsRaw as unknown as { data: FixedAsset[] } | null)?.data ?? []
+  const assetList = assets ?? []
 
   const runDepreciation = useMutation({
     mutationFn: assetsApi.runDepreciation,
@@ -111,8 +110,8 @@ function FixedAssetsPanel() {
     return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
   }
 
-  const totalCost   = assets.reduce((s, a) => s + a.cost, 0)
-  const activeCount = assets.filter(a => a.is_active === 1).length
+  const totalCost   = assetList.reduce((s, a) => s + a.cost, 0)
+  const activeCount = assetList.filter(a => a.is_active === 1).length
 
   if (isLoading) return <div className="py-10 text-center text-slate-400 text-sm">جار التحميل…</div>
 
@@ -126,7 +125,7 @@ function FixedAssetsPanel() {
         </div>
         <button
           onClick={() => runDepreciation.mutate()}
-          disabled={runDepreciation.isPending || assets.length === 0}
+          disabled={runDepreciation.isPending || assetList.length === 0}
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 disabled:opacity-40 text-white text-sm font-semibold transition-colors"
         >
           <Play size={13} />
@@ -150,14 +149,14 @@ function FixedAssetsPanel() {
             </tr>
           </thead>
           <tbody>
-            {assets.length === 0 && (
+            {assetList.length === 0 && (
               <tr>
                 <td colSpan={7} className="px-3 py-10 text-center text-slate-400">
                   لا توجد أصول ثابتة مسجّلة — سيتم إنشاؤها تلقائياً عند تسجيل فاتورة معدات
                 </td>
               </tr>
             )}
-            {assets.map(asset => (
+            {assetList.map(asset => (
               <>
                 <tr
                   key={asset.id}

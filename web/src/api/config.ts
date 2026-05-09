@@ -19,6 +19,7 @@ export const configApi = {
   accounts:       () => unwrap(api.get('/config/accounts')),
   expenseTypes:   () => unwrap(api.get('/config/expense_types')),
   equipmentTypes: () => unwrap(api.get('/config/equipment_types')),
+  operationTypes: () => unwrap(api.get<{ id: number; name: string; sort_order: number; is_active: number }[]>('/config/operation_types')),
   companies:      () => unwrap(api.get('/config/companies')),
 
   integrations:      () =>

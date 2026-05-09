@@ -105,6 +105,7 @@ export const inventoryApi = {
     size?: number
     search?: string
     filter_status?: 'all' | 'missing_ppg' | 'missing_ipg' | 'below_reorder'
+    catalog_status?: 'all' | 'catalog_only' | 'moved_zero_balance' | 'in_stock'
   }): Promise<{
     data: Array<{
       code:                    number
@@ -119,6 +120,8 @@ export const inventoryApi = {
       total_qty:               number
       total_value:             number
       warehouse_count:         number
+      catalog_status:          string
+      movement_count:          number
     }>
     total:      number
     page:       number
@@ -130,6 +133,7 @@ export const inventoryApi = {
     if (params?.size)          q.set('size',          String(params.size))
     if (params?.search)        q.set('search',        params.search)
     if (params?.filter_status) q.set('filter_status', params.filter_status)
+    if (params?.catalog_status) q.set('catalog_status', params.catalog_status)
     const qs = q.toString()
     // Backend returns pagination fields (total, page, page_count) at top level
     // alongside data[], so we bypass unwrap and return the full response body.
@@ -141,6 +145,7 @@ export const inventoryApi = {
         prod_posting_group_code: string | null; inv_posting_group_code: string | null
         standard_cost: number | null; reorder_threshold: number | null
         category_name: string | null; total_qty: number; total_value: number; warehouse_count: number
+        catalog_status: string; movement_count: number
       }>
       total: number; page: number; page_size: number; page_count: number
     }

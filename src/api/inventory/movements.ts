@@ -45,6 +45,17 @@ function mapToTransactionType(movementType: string): string {
   return MAP[movementType] ?? movementType
 }
 
+async function validateActiveCenterCode(
+  db: Env['DB'],
+  companyId: number,
+  centerCode: number,
+): Promise<boolean> {
+  const row = await db.prepare(
+    'SELECT 1 AS ok FROM cost_centers WHERE company_id = ? AND CAST(code AS INTEGER) = ? AND is_active = 1 LIMIT 1'
+  ).bind(companyId, centerCode).first<{ ok: number }>()
+  return !!row
+}
+
 // ── GET /movements ────────────────────────────────────────────
 
 movements.get('/movements', permissionGuard('inventory', 'read'), async (c) => {
@@ -153,6 +164,12 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     const field = await c.env.DB.prepare("SELECT center_code FROM fields WHERE id = ? AND company_id = ?")
       .bind(b.field_id, company_id).first<{ center_code: number }>()
     if (field?.center_code) centerCode = field.center_code
+  }
+  if (centerCode != null) {
+    const isValidCenter = await validateActiveCenterCode(c.env.DB, company_id, centerCode)
+    if (!isValidCenter) {
+      return c.json({ success: false, error: 'مركز التكلفة غير موجود أو غير نشط' }, 422)
+    }
   }
 
   // Use readInventoryBalance — heals stale snapshots automatically before returning.
@@ -362,6 +379,12 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     const field = await c.env.DB.prepare("SELECT center_code FROM fields WHERE id = ? AND company_id = ?")
       .bind(b.field_id, company_id).first<{ center_code: number }>()
     if (field?.center_code) centerCode = field.center_code
+  }
+  if (centerCode != null) {
+    const isValidCenter = await validateActiveCenterCode(c.env.DB, company_id, centerCode)
+    if (!isValidCenter) {
+      return c.json({ success: false, error: 'مركز التكلفة غير موجود أو غير نشط' }, 422)
+    }
   }
 
   // Idempotency guard: reject before any inserts if document already exists.

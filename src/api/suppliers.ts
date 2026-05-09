@@ -668,7 +668,9 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
           center_code: b.center_code ?? null,
           document_type: b.document_type ?? null,
           document_number: b.document_number ?? null,
-          notes: b.notes ?? null,
+          notes: b.notes
+            ? `${b.notes} | [MIRROR_SUPPLIER_PAYMENT]`
+            : '[MIRROR_SUPPLIER_PAYMENT]',
           status: 'posted',
           skipSupplierMirror: true,
           skipGlPosting: true,
@@ -836,7 +838,9 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
         center_code: txn.center_code ?? null,
         document_type: txn.document_type ?? null,
         document_number: txn.document_number ?? null,
-        notes: txn.notes ?? null,
+        notes: txn.notes
+          ? `${txn.notes} | [MIRROR_SUPPLIER_PAYMENT]`
+          : '[MIRROR_SUPPLIER_PAYMENT]',
         status: 'posted',
         skipSupplierMirror: true,
         skipGlPosting: true,

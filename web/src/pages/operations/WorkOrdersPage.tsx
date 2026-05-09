@@ -4,7 +4,9 @@ import {
   Wrench, Plus, Trash2, Clock, PlayCircle, CheckCircle, DollarSign,
   XCircle, Leaf, Package, Users, TrendingUp, ChevronRight, ArrowLeft,
 } from 'lucide-react'
-import { operationsApi, fieldsApi, configApi, employeesApi } from '../../api/client'
+import { operationsApi, fieldsApi, configApi, employeesApi, suppliersApi } from '../../api/client'
+import { assetsApi } from '../../api/assets'
+import type { FixedAsset } from '../../api/assets'
 import Modal from '../../components/ui/Modal'
 import SidePanel from '../../components/ui/SidePanel'
 import { usePermission } from '../../hooks/usePermission'
@@ -30,6 +32,17 @@ interface EquipmentLine {
   id: number; equipment_name: string; task_date: string
   hours_worked: number; cost_per_hour: number; total_cost: number; notes?: string | null
 }
+interface CostCenterOption {
+  code: number | string
+  name_ar?: string
+  name?: string
+  is_active?: number
+}
+interface SupplierOption {
+  code: number
+  name: string
+  is_active?: number
+}
 interface OrderDetail extends WorkOrder {
   tasks: WorkTask[]
   inventory: InventoryLine[]
@@ -41,7 +54,7 @@ interface OrderDetail extends WorkOrder {
 }
 
 // ── Constants ────────────────────────────────────────────────
-const OP_TYPES = ['ري', 'تسميد', 'رش', 'حصاد', 'حراثة', 'زراعة', 'أخرى']
+// OP_TYPES are loaded from the database via GET /config/operation_types
 
 const LIFECYCLE: { key: WorkOrder['status']; label: string; icon: React.ReactNode; color: string }[] = [
   { key: 'pending',     label: 'معلق',       icon: <Clock        size={14} />, color: 'text-amber-600  bg-amber-50  border-amber-200'  },
@@ -404,13 +417,14 @@ export default function WorkOrdersPage() {
   const [err, setErr] = useState('')
 
   const [form, setForm] = useState({
-    name: '', operation_type: '', planned_date: '', field_id: '', season_id: '', area_feddan: '', notes: '',
+    name: '', operation_type: '', planned_date: '', field_id: '', season_id: '', center_code: '', area_feddan: '', notes: '',
   })
   const [taskForm, setTF] = useState({
     task_date: '', description: '', employee_id: '', quantity: '', unit: '', unit_cost: '', notes: '',
   })
   const [equipForm, setEF] = useState({
-    equipment_name: '', task_date: '', hours_worked: '', cost_per_hour: '', notes: '',
+    equipment_name: '', task_date: '', hours_worked: '', cost_per_hour: '',
+    equipment_usage_mode: 'rental' as 'owned' | 'rental', fixed_asset_id: '', supplier_code: '', notes: '',
   })
 
   // ── Queries ─────────────────────────────────────────────────
@@ -430,6 +444,18 @@ export default function WorkOrdersPage() {
   const { data: fields = []    } = useQuery({ queryKey: ['fields'],    queryFn: () => fieldsApi.list()    })
   const { data: seasons = []   } = useQuery({ queryKey: ['seasons'],   queryFn: configApi.seasons        })
   const { data: employees = [] } = useQuery({ queryKey: ['employees'], queryFn: () => employeesApi.list() })
+  const { data: costCenters = [] } = useQuery({ queryKey: ['cost-centers'], queryFn: configApi.costCenters })
+  const { data: fixedAssets = [] } = useQuery({ queryKey: ['fixed-assets'], queryFn: assetsApi.list })
+  const { data: suppliersData } = useQuery({ queryKey: ['suppliers-options'], queryFn: () => suppliersApi.list({ page: 1, size: 300 }) })
+  const { data: opTypesData = [] } = useQuery({ queryKey: ['operation-types'], queryFn: configApi.operationTypes })
+  const opTypes = (opTypesData as { id: number; name: string; is_active: number }[]).filter(t => t.is_active === 1)
+
+  const activeCostCenters = (costCenters as CostCenterOption[])
+    .filter(c => c.is_active !== 0)
+  const activeAssets = (fixedAssets as FixedAsset[])
+    .filter(a => a.is_active === 1)
+  const supplierOptions = (((suppliersData as { data?: SupplierOption[] } | undefined)?.data) ?? [])
+    .filter(s => s.is_active !== 0)
 
   // ── Mutations ────────────────────────────────────────────────
   const createOrder = useMutation({
@@ -439,6 +465,7 @@ export default function WorkOrdersPage() {
       planned_date:   form.planned_date,
       field_id:       form.field_id    ? Number(form.field_id)    : undefined,
       season_id:      form.season_id   ? Number(form.season_id)   : undefined,
+      center_code:    form.center_code ? Number(form.center_code) : undefined,
       area_feddan:    form.area_feddan ? Number(form.area_feddan) : undefined,
       notes:          form.notes || undefined,
     }),
@@ -446,7 +473,7 @@ export default function WorkOrdersPage() {
       if (!res.success) { setErr((res as { error?: string }).error ?? 'خطأ'); return }
       qc.invalidateQueries({ queryKey: ['work-orders'] })
       setOpenNew(false)
-      setForm({ name: '', operation_type: '', planned_date: '', field_id: '', season_id: '', area_feddan: '', notes: '' })
+      setForm({ name: '', operation_type: '', planned_date: '', field_id: '', season_id: '', center_code: '', area_feddan: '', notes: '' })
       setErr('')
     },
   })
@@ -532,13 +559,23 @@ export default function WorkOrdersPage() {
       task_date:      equipForm.task_date,
       hours_worked:   Number(equipForm.hours_worked),
       cost_per_hour:  Number(equipForm.cost_per_hour),
+      equipment_usage_mode: equipForm.equipment_usage_mode,
+      fixed_asset_id: equipForm.equipment_usage_mode === 'owned' && equipForm.fixed_asset_id
+        ? Number(equipForm.fixed_asset_id)
+        : undefined,
+      supplier_code: equipForm.equipment_usage_mode === 'rental' && equipForm.supplier_code
+        ? Number(equipForm.supplier_code)
+        : undefined,
       notes:          equipForm.notes || undefined,
     }),
     onSuccess: (res: { success: boolean; error?: string }) => {
       if (!(res as { success: boolean }).success) { setErr((res as { error?: string }).error ?? 'خطأ'); return }
       qc.invalidateQueries({ queryKey: ['work-order', selectedId] })
       setOpenEquipment(false)
-      setEF({ equipment_name: '', task_date: '', hours_worked: '', cost_per_hour: '', notes: '' })
+      setEF({
+        equipment_name: '', task_date: '', hours_worked: '', cost_per_hour: '',
+        equipment_usage_mode: 'rental', fixed_asset_id: '', supplier_code: '', notes: '',
+      })
       setErr('')
     },
   })
@@ -846,7 +883,7 @@ export default function WorkOrdersPage() {
             <select className="input" value={form.operation_type}
               onChange={e => setForm(p => ({ ...p, operation_type: e.target.value }))}>
               <option value="">— اختر —</option>
-              {OP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              {opTypes.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
             </select>
           </div>
           <div>
@@ -857,7 +894,15 @@ export default function WorkOrdersPage() {
           <div>
             <label className="label">القطعة / الحقل</label>
             <select className="input" value={form.field_id}
-              onChange={e => setForm(p => ({ ...p, field_id: e.target.value }))}>
+              onChange={e => {
+                const nextFieldId = e.target.value
+                const selectedField = (fields as Array<{ id: number; center_code?: number | null }>).find(f => String(f.id) === nextFieldId)
+                setForm(p => ({
+                  ...p,
+                  field_id: nextFieldId,
+                  center_code: selectedField?.center_code ? String(selectedField.center_code) : p.center_code,
+                }))
+              }}>
               <option value="">— اختر —</option>
               {(fields as { id: number; name: string; area_feddan: number }[]).map(f => (
                 <option key={f.id} value={f.id}>{f.name} ({f.area_feddan} فدان)</option>
@@ -871,6 +916,18 @@ export default function WorkOrdersPage() {
               <option value="">— اختر —</option>
               {(seasons as { id: number; name: string }[]).map(s => (
                 <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">مركز التكلفة</label>
+            <select className="input" value={form.center_code}
+              onChange={e => setForm(p => ({ ...p, center_code: e.target.value }))}>
+              <option value="">— تلقائي من الحقل —</option>
+              {activeCostCenters.map(c => (
+                <option key={String(c.code)} value={String(c.code)}>
+                  {c.name_ar ?? c.name ?? c.code}
+                </option>
               ))}
             </select>
           </div>
@@ -902,6 +959,60 @@ export default function WorkOrdersPage() {
       {/* ── Add Equipment Modal ────────────────────────────── */}
       <Modal open={openEquipment} onClose={() => { setOpenEquipment(false); setErr('') }} title="تسجيل تشغيل معدة" size="md">
         <div className="grid grid-cols-2 gap-4">
+          {/* Usage mode toggle */}
+          <div className="col-span-2">
+            <label className="label">نوع الاستخدام <span className="text-red-500">*</span></label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setEF(p => ({ ...p, equipment_usage_mode: 'rental', fixed_asset_id: '' }))}
+                className={`flex-1 py-2 rounded-xl border text-sm font-semibold transition-all ${
+                  equipForm.equipment_usage_mode === 'rental'
+                    ? 'bg-brand-600 text-white border-brand-600 shadow'
+                    : 'bg-white text-slate-600 border-slate-200 hover:border-brand-300'
+                }`}
+              >
+                إيجار / خارجي
+              </button>
+              <button
+                type="button"
+                onClick={() => setEF(p => ({ ...p, equipment_usage_mode: 'owned', supplier_code: '' }))}
+                className={`flex-1 py-2 rounded-xl border text-sm font-semibold transition-all ${
+                  equipForm.equipment_usage_mode === 'owned'
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow'
+                    : 'bg-white text-slate-600 border-slate-200 hover:border-emerald-300'
+                }`}
+              >
+                ملكية / أصل ثابت
+              </button>
+            </div>
+          </div>
+
+          {/* Conditional: owned → fixed asset picker; rental → supplier picker */}
+          {equipForm.equipment_usage_mode === 'owned' ? (
+            <div className="col-span-2">
+              <label className="label">الأصل الثابت <span className="text-red-500">*</span></label>
+              <select className="input" value={equipForm.fixed_asset_id}
+                onChange={e => setEF(p => ({ ...p, fixed_asset_id: e.target.value }))}>
+                <option value="">— اختر أصل ثابت —</option>
+                {activeAssets.map(a => (
+                  <option key={a.id} value={a.id}>{a.name}</option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="col-span-2">
+              <label className="label">المورد / المقاول</label>
+              <select className="input" value={equipForm.supplier_code}
+                onChange={e => setEF(p => ({ ...p, supplier_code: e.target.value }))}>
+                <option value="">— اختياري —</option>
+                {supplierOptions.map(s => (
+                  <option key={s.code} value={s.code}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div className="col-span-2">
             <label className="label">اسم المعدة <span className="text-red-500">*</span></label>
             <input className="input" value={equipForm.equipment_name}
@@ -953,7 +1064,8 @@ export default function WorkOrdersPage() {
               !equipForm.equipment_name ||
               !equipForm.task_date ||
               !equipForm.hours_worked ||
-              Number(equipForm.hours_worked) <= 0
+              Number(equipForm.hours_worked) <= 0 ||
+              (equipForm.equipment_usage_mode === 'owned' && !equipForm.fixed_asset_id)
             }
           >
             <Wrench size={14} />

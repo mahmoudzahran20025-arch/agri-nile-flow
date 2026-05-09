@@ -92,8 +92,13 @@ function AddAssetForm({ onClose }: { onClose: () => void }) {
             <label className="block text-xs text-gray-500 mb-1">طريقة الإهلاك</label>
             <select value={form.depreciation_method} onChange={e => set('depreciation_method', e.target.value)} className="w-full border rounded px-2 py-1.5">
               <option value="straight_line">القسط الثابت</option>
-              <option value="declining_balance">القسط المتناقص</option>
+              <option value="declining_balance" disabled title="غير متاح حالياً">
+                القسط المتناقص (غير متاح حالياً)
+              </option>
             </select>
+            <p className="mt-1 text-[11px] text-amber-700" title="سيتم تفعيله بعد اكتمال منطق الحساب في الباك إند">
+              القسط المتناقص غير متاح حالياً.
+            </p>
           </div>
           <div>
             <label className="block text-xs text-gray-500 mb-1">الموسم (اختياري)</label>
@@ -200,7 +205,7 @@ export default function FixedAssetsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['assets'] }),
   })
 
-  const assets = data?.assets ?? []
+  const assets = data ?? []
   const totalCost = assets.reduce((s, a) => s + a.cost, 0)
 
   return (

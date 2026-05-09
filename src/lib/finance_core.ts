@@ -216,10 +216,24 @@ async function postHarvestLedger(
      WHERE company_id = ? AND ref_type IN ('harvest_cost','harvest_revenue') AND ref_id = ?`
   ).bind(opts.company_id, opts.harvest_id).run()
 
+  const cropAccountRow = await db.prepare(
+    `SELECT m.account_code
+     FROM crop_account_mappings m
+     JOIN chart_of_accounts a
+       ON a.company_id = m.company_id
+      AND a.code = m.account_code
+      AND a.is_active = 1
+     WHERE m.company_id = ?
+       AND m.is_active = 1
+       AND TRIM(m.crop_label) = TRIM(?)
+     LIMIT 1`
+  ).bind(opts.company_id, opts.crop_name).first<{ account_code: string }>()
+
   const revenueAcc   = await resolveControlAccount(db, opts.company_id, 'revenue_crops')
                     ?? await resolveControlAccount(db, opts.company_id, 'revenue_default')
                     ?? '4100'
-  const cosAcc       = await resolveControlAccount(db, opts.company_id, 'cost_of_goods')
+  const cosAcc       = cropAccountRow?.account_code
+                    ?? await resolveControlAccount(db, opts.company_id, 'cost_of_goods')
                     ?? await resolveControlAccount(db, opts.company_id, 'expense_default')
                     ?? '5100'
   const inventoryAcc = await resolveControlAccount(db, opts.company_id, 'inventory') ?? '1300'

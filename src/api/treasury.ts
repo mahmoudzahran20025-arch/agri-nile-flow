@@ -18,6 +18,13 @@ treasury.use('*', authMiddleware)
 // RBAC: Treasury posting and partner cash operations are finance-restricted.
 treasury.use('*', roleGuard(['super_admin', 'company_admin', 'accountant']))
 
+async function ensureActiveCenterCode(db: Env['DB'], company_id: number, center_code: number): Promise<boolean> {
+  const row = await db.prepare(
+    'SELECT 1 AS ok FROM cost_centers WHERE company_id = ? AND CAST(code AS INTEGER) = ? AND is_active = 1 LIMIT 1'
+  ).bind(company_id, center_code).first<{ ok: number }>()
+  return !!row?.ok
+}
+
 const transactionSchema = z.object({
   transaction_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'التاريخ يجب أن يكون بصيغة YYYY-MM-DD'),
   direction: z.enum(['د', 'م'], { message: "الاتجاه يجب أن يكون 'د' (دائن/وارد) أو 'م' (مدين/صادر)" }),
@@ -139,6 +146,12 @@ treasury.post('/transactions', zValidator('json', transactionSchema), async (c) 
   if (b.status === 'posted' && (b.season_id == null || b.center_code == null)) {
     return c.json({ success: false, error: 'الموسم ومركز التكلفة مطلوبان عند الترحيل' }, 422)
   }
+  if (b.status === 'posted' && b.center_code != null) {
+    const validCenter = await ensureActiveCenterCode(c.env.DB, company_id, b.center_code)
+    if (!validCenter) {
+      return c.json({ success: false, error: 'مركز التكلفة غير صالح أو غير نشط' }, 422)
+    }
+  }
   // Outflow without supplier/partner linkage must specify an expense_code for proper GL classification
   if (b.status === 'posted' && b.direction === 'م' && b.supplier_code == null && b.partner_id == null && b.expense_code == null) {
     return c.json({ success: false, error: 'بند المصروف مطلوب للصرف بدون مورد أو شريك' }, 422)
@@ -174,6 +187,19 @@ treasury.post('/transactions', zValidator('json', transactionSchema), async (c) 
  treasury.patch('/transactions/:id/post', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
+
+  const draft = await c.env.DB.prepare(
+    'SELECT season_id, center_code FROM cash_transactions WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ season_id: number | null; center_code: number | null }>()
+
+  if (!draft) return c.json({ success: false, error: 'الحركة غير موجودة' }, 404)
+  if (draft.season_id == null || draft.center_code == null) {
+    return c.json({ success: false, error: 'الموسم ومركز التكلفة مطلوبان عند الترحيل' }, 422)
+  }
+  const validCenter = await ensureActiveCenterCode(c.env.DB, company_id, draft.center_code)
+  if (!validCenter) {
+    return c.json({ success: false, error: 'مركز التكلفة غير صالح أو غير نشط' }, 422)
+  }
 
   try {
     const result = await FinanceCore.postCashMovement(c.env.DB, company_id, id, userId)
@@ -241,6 +267,11 @@ treasury.post('/partners', async (c) => {
         success: false,
         error: 'الموسم ومركز التكلفة مطلوبان عند إدخال رأس مال مرحّل'
       }, 422)
+    }
+
+    const validCenter = await ensureActiveCenterCode(c.env.DB, company_id, b.center_code)
+    if (!validCenter) {
+      return c.json({ success: false, error: 'مركز التكلفة غير صالح أو غير نشط' }, 422)
     }
 
     const periodId = await getOpenPeriod(c.env.DB, company_id, txDate)

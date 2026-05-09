@@ -34,7 +34,11 @@ export const operationsApi = {
 
   addEquipment: (orderId: number, body: {
     equipment_name: string; task_date: string
-    hours_worked: number; cost_per_hour: number; notes?: string
+    hours_worked: number; cost_per_hour: number
+    equipment_usage_mode?: 'owned' | 'rental'
+    fixed_asset_id?: number | null
+    supplier_code?: number | null
+    notes?: string
   }) => api.post(`/operations/orders/${orderId}/equipment`, body),
   deleteEquipment: (id: number) => api.delete(`/operations/equipment/${id}`),
   summary:     (season_id?: number) =>

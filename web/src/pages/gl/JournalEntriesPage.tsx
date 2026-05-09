@@ -211,66 +211,89 @@ export default function JournalEntriesPage() {
   ];
 
   const rightSlot = (
-    <div className="flex items-center gap-2 overflow-x-auto pb-1 max-w-[800px] no-scrollbar">
-      <div className="flex items-center gap-2 shrink-0">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+    <div className="flex items-center gap-3 overflow-x-auto pb-2 pt-1 px-1 flex-1 justify-end no-scrollbar">
+      <div className="flex items-center gap-3 shrink-0">
+        
+        {/* Search */}
+        <div className="relative group">
+          <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400 group-focus-within:text-indigo-500 transition-colors">
+            <Search size={14} />
+          </div>
           <input
             type="text"
-            className="input pl-8 h-8 text-[12px] w-40 bg-white"
-            placeholder="الوصف أو الرقم..."
+            className="block w-[220px] pl-9 pr-8 py-2 text-[12px] font-medium bg-slate-50/80 border border-slate-200/80 rounded-xl text-slate-800 placeholder:text-slate-400 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 focus:bg-white transition-all shadow-sm"
+            placeholder="Search descriptions or #..."
             value={search}
             onChange={e => { setSearch(e.target.value); setPage(1); }}
           />
           {search && (
             <button
               onClick={() => { setSearch(''); setPage(1); }}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-600 transition-colors"
             >
-              <XCircle size={12} />
+              <XCircle size={14} />
             </button>
           )}
         </div>
 
-        <div className="h-4 w-[1px] bg-slate-200" />
+        <div className="h-6 w-[1px] bg-slate-200" />
 
-        <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2 h-8">
-          <Calendar size={13} className="text-slate-400" />
+        {/* Date Range */}
+        <div className="flex items-center gap-2 bg-slate-50/80 border border-slate-200/80 rounded-xl px-3 py-1.5 shadow-sm hover:bg-white hover:border-slate-300 transition-all">
+          <Calendar size={14} className="text-indigo-400" />
           <input
             type="date"
-            className="bg-transparent border-none p-0 text-[11px] focus:ring-0 w-24"
+            className="bg-transparent border-none p-0 text-[12px] font-semibold text-slate-700 focus:ring-0 w-28 cursor-pointer"
             value={startDate}
             onChange={e => { setStartDate(e.target.value); setPage(1); }}
           />
-          <span className="text-slate-300">→</span>
+          <span className="text-slate-300 text-[10px] font-black tracking-widest">TO</span>
           <input
             type="date"
-            className="bg-transparent border-none p-0 text-[11px] focus:ring-0 w-24"
+            className="bg-transparent border-none p-0 text-[12px] font-semibold text-slate-700 focus:ring-0 w-28 cursor-pointer"
             value={endDate}
             onChange={e => { setEndDate(e.target.value); setPage(1); }}
           />
         </div>
 
-        <div className="h-4 w-[1px] bg-slate-200" />
+        <div className="h-6 w-[1px] bg-slate-200" />
 
-        <select className="input h-8 text-[11px] py-1 w-28 bg-white" value={sourceFilter} onChange={e => { setSourceFilter(e.target.value); setPage(1); }}>
-          <option value="">كل المصادر</option>
-          <option value="business_event">Business Event</option>
-          <option value="cash_transaction">Cash (Treasury)</option>
-          <option value="supplier_transaction">Supplier (A/P)</option>
-          <option value="inventory_movement">Inventory</option>
-          <option value="manual">Manual</option>
-        </select>
+        {/* Selects */}
+        <div className="flex items-center gap-2">
+          <select 
+            className="text-[12px] py-2 pl-3 pr-8 bg-slate-50/80 border border-slate-200/80 rounded-xl text-slate-700 font-semibold focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 focus:bg-white appearance-none shadow-sm cursor-pointer hover:border-slate-300 transition-all"
+            value={sourceFilter} 
+            onChange={e => { setSourceFilter(e.target.value); setPage(1); }}
+            style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\' stroke-width=\'2.5\' stroke=\'%2364748b\'%3E%3Cpath stroke-linecap=\'round\' stroke-linejoin=\'round\' d=\'M19 9l-7 7-7-7\' /%3E%3C/svg%3E")', backgroundPosition: 'right 0.6rem center', backgroundSize: '1em 1em', backgroundRepeat: 'no-repeat' }}
+          >
+            <option value="">All Sources</option>
+            <option value="business_event">Business Event</option>
+            <option value="cash_transaction">Cash (Treasury)</option>
+            <option value="supplier_transaction">Supplier (A/P)</option>
+            <option value="inventory_movement">Inventory</option>
+            <option value="manual">Manual</option>
+          </select>
 
-        <select className="input h-8 text-[11px] py-1 w-32 bg-white" value={expenseFilter} onChange={e => { setExpenseFilter(e.target.value); setPage(1); }}>
-          <option value="">بند المصروف</option>
-          {expenseTypes.map(et => <option key={et.code} value={et.code}>{et.name}</option>)}
-        </select>
+          <select 
+            className="text-[12px] py-2 pl-3 pr-8 bg-slate-50/80 border border-slate-200/80 rounded-xl text-slate-700 font-semibold focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 focus:bg-white appearance-none shadow-sm cursor-pointer hover:border-slate-300 transition-all"
+            value={expenseFilter} 
+            onChange={e => { setExpenseFilter(e.target.value); setPage(1); }}
+            style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\' stroke-width=\'2.5\' stroke=\'%2364748b\'%3E%3Cpath stroke-linecap=\'round\' stroke-linejoin=\'round\' d=\'M19 9l-7 7-7-7\' /%3E%3C/svg%3E")', backgroundPosition: 'right 0.6rem center', backgroundSize: '1em 1em', backgroundRepeat: 'no-repeat' }}
+          >
+            <option value="">Expense Type</option>
+            {expenseTypes.map(et => <option key={et.code} value={et.code}>{et.name}</option>)}
+          </select>
 
-        <select className="input h-8 text-[11px] py-1 w-28 bg-white" value={centerFilter} onChange={e => { setCenterFilter(e.target.value); setPage(1); }}>
-          <option value="">مركز التكلفة</option>
-          {costCenters.map(cc => <option key={cc.code} value={cc.code}>{cc.name}</option>)}
-        </select>
+          <select 
+            className="text-[12px] py-2 pl-3 pr-8 bg-slate-50/80 border border-slate-200/80 rounded-xl text-slate-700 font-semibold focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 focus:bg-white appearance-none shadow-sm cursor-pointer hover:border-slate-300 transition-all"
+            value={centerFilter} 
+            onChange={e => { setCenterFilter(e.target.value); setPage(1); }}
+            style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\' stroke-width=\'2.5\' stroke=\'%2364748b\'%3E%3Cpath stroke-linecap=\'round\' stroke-linejoin=\'round\' d=\'M19 9l-7 7-7-7\' /%3E%3C/svg%3E")', backgroundPosition: 'right 0.6rem center', backgroundSize: '1em 1em', backgroundRepeat: 'no-repeat' }}
+          >
+            <option value="">Cost Center</option>
+            {costCenters.map(cc => <option key={cc.code} value={cc.code}>{cc.name}</option>)}
+          </select>
+        </div>
 
         {(search || startDate || endDate || sourceFilter || expenseFilter || centerFilter || fyFilter) && (
           <button
@@ -278,9 +301,9 @@ export default function JournalEntriesPage() {
               setSearch(''); setStartDate(''); setEndDate('');
               setSourceFilter(''); setExpenseFilter(''); setCenterFilter(''); setFyFilter(''); setPage(1);
             }}
-            className="flex items-center gap-1 text-[11px] text-red-500 hover:text-red-700 font-medium ml-1 whitespace-nowrap"
+            className="flex items-center gap-1.5 px-3 py-2 text-[12px] font-bold text-red-500 bg-red-50 hover:bg-red-100 hover:text-red-700 rounded-xl transition-all shadow-sm ml-1"
           >
-            <Filter size={12} /> مسح الكل
+            <Filter size={14} /> Clear
           </button>
         )}
       </div>
@@ -331,8 +354,8 @@ export default function JournalEntriesPage() {
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 overflow-hidden flex relative">
-        <div className={`flex-1 p-6 overflow-hidden flex flex-col transition-all duration-300 ${selectedId ? 'pl-4' : ''}`}>
+      <div className="flex-1 min-h-0 flex relative">
+        <div className={`flex-1 p-6 min-h-0 flex flex-col transition-all duration-300 ${selectedId ? 'pl-4 pr-4' : ''}`}>
           <DataTable
             columns={columns}
             data={entries}
@@ -350,7 +373,7 @@ export default function JournalEntriesPage() {
 
         {/* Side Panel for Detail */}
         {selectedId && (
-          <div className="w-[450px] bg-white border-r border-slate-200 flex flex-col shrink-0 transition-transform shadow-xl z-20">
+          <div className="w-[450px] bg-white border-l border-slate-200 flex flex-col shrink-0 shadow-[-10px_0_30px_-15px_rgba(0,0,0,0.1)] z-20 h-full relative">
             <div className="p-4 border-b border-slate-100 flex items-start justify-between bg-slate-50">
               <div>
                 <h3 className="font-bold text-[14px] text-slate-800 flex items-center gap-2">

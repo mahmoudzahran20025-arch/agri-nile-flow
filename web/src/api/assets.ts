@@ -38,7 +38,7 @@ export interface DepreciationRunResult {
 
 export const assetsApi = {
   list: () =>
-    unwrap(api.get<{ assets: FixedAsset[] }>('/assets')),
+    unwrap(api.get<FixedAsset[]>('/assets')),
 
   create: (body: {
     asset_code: string

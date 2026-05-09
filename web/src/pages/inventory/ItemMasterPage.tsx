@@ -39,6 +39,40 @@ interface ItemMaster {
   total_qty:               number
   total_value:             number
   warehouse_count:         number
+  catalog_status:          string
+  movement_count:          number
+}
+
+// ─── Catalog Status Badge ────────────────────────────────────────────────────
+function CatalogStatusBadge({ status, moveCount }: { status: string; moveCount: number }) {
+  const badges: Record<string, { bg: string; text: string; label: string; icon: string }> = {
+    catalog_only: {
+      bg: 'bg-slate-50',
+      text: 'text-slate-600 border-slate-200',
+      label: 'مرجعي',
+      icon: '📋',
+    },
+    moved_zero_balance: {
+      bg: 'bg-amber-50',
+      text: 'text-amber-700 border-amber-200',
+      label: 'صفر الرصيد',
+      icon: '⚠️',
+    },
+    in_stock: {
+      bg: 'bg-green-50',
+      text: 'text-green-700 border-green-200',
+      label: 'في المخزون',
+      icon: '✓',
+    },
+  }
+  const badge = badges[status] || badges.catalog_only
+  return (
+    <span className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-semibold border ${badge.text} ${badge.bg}`}>
+      <span>{badge.icon}</span>
+      {badge.label}
+      {moveCount > 0 && <span className="text-xs opacity-60">({moveCount})</span>}
+    </span>
+  )
 }
 
 // ─── PPG / IPG Badge ─────────────────────────────────────────────────────────
@@ -225,6 +259,7 @@ export default function ItemMasterPage() {
     if (risk === 'below_reorder') return 'below_reorder'
     return 'all'
   })
+  const [catalogStatus, setCatalogStatus] = useState<'all' | 'catalog_only' | 'moved_zero_balance' | 'in_stock'>('all')
   const [page, setPage] = useState(1)
 
   const [editItem,      setEditItem]      = useState<ItemMaster | null>(null)
@@ -237,12 +272,13 @@ export default function ItemMasterPage() {
   }, [])
 
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ['inventory', 'items-master', page, search, filterStatus],
+    queryKey: ['inventory', 'items-master', page, search, filterStatus, catalogStatus],
     queryFn:  () => inventoryApi.itemsMaster({
       page,
       size: PAGE_SIZE,
       search:        search || undefined,
       filter_status: filterStatus === 'all' ? undefined : filterStatus,
+      catalog_status: catalogStatus === 'all' ? undefined : catalogStatus,
     }),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
@@ -261,6 +297,11 @@ export default function ItemMasterPage() {
 
   const changeFilter = (f: typeof filterStatus) => {
     setFilterStatus(f)
+    setPage(1)
+  }
+
+  const changeCatalogFilter = (s: typeof catalogStatus) => {
+    setCatalogStatus(s)
     setPage(1)
   }
 
@@ -362,6 +403,23 @@ export default function ItemMasterPage() {
           ))}
         </div>
 
+        <span className="text-sm text-slate-400">|</span>
+
+        <div className="flex gap-1 flex-wrap">
+          {([
+            ['all',               'الكل'],
+            ['catalog_only',      '📋 مرجعي'],
+            ['moved_zero_balance','⚠️ صفر'],
+            ['in_stock',          '✓ في المخزون'],
+          ] as const).map(([val, label]) => (
+            <button key={val}
+              onClick={() => changeCatalogFilter(val as typeof catalogStatus)}
+              className={`btn text-xs px-3 ${catalogStatus === val ? 'btn-primary' : 'btn-secondary'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
         <span className="text-sm text-slate-400 ml-auto">
           {total} صنف {isFetching && !isLoading ? '·  جاري التحديث...' : ''}
         </span>
@@ -381,7 +439,7 @@ export default function ItemMasterPage() {
             <table className="w-full text-sm">
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
-                  {['الصنف', 'الوحدة', 'مجموعة PPG', 'مجموعة IPG', 'الرصيد', 'القيمة', 'تكلفة معيارية', ''].map(h => (
+                  {['الصنف', 'الوحدة', 'الحالة', 'مجموعة PPG', 'مجموعة IPG', 'الرصيد', 'القيمة', 'تكلفة معيارية', ''].map(h => (
                     <th key={h} className="px-4 py-2.5 text-xs font-semibold text-slate-500 text-right whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -407,6 +465,7 @@ export default function ItemMasterPage() {
                           <p className="text-xs text-slate-400 mt-0.5">كود: {item.code} · {item.category_name ?? '—'}</p>
                         </td>
                         <td className="px-4 py-3 text-slate-500">{item.unit ?? '—'}</td>
+                        <td className="px-4 py-3"><CatalogStatusBadge status={item.catalog_status} moveCount={item.movement_count} /></td>
                         <td className="px-4 py-3"><GroupBadge code={item.prod_posting_group_code} type="PPG" /></td>
                         <td className="px-4 py-3"><GroupBadge code={item.inv_posting_group_code} type="IPG" /></td>
                         <td className="px-4 py-3 font-medium text-slate-700">{NUM(item.total_qty)} {item.unit ?? ''}</td>
@@ -435,7 +494,7 @@ export default function ItemMasterPage() {
                       </tr>
                       {isExpanded && (
                         <tr className="bg-slate-50/70">
-                          <td colSpan={8} className="px-6 py-3">
+                          <td colSpan={9} className="px-6 py-3">
                             <div className="grid grid-cols-3 gap-4 text-sm">
                               <div>
                                 <p className="text-slate-400 text-xs mb-1">حد إعادة الطلب</p>

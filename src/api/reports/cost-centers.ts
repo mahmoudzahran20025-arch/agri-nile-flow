@@ -167,7 +167,7 @@ costCenters.get('/cost-centers/:code/detail', async (c) => {
 
   // Center info
   const center = await c.env.DB.prepare(
-    'SELECT code, name FROM cost_centers WHERE code = ? AND company_id = ?'
+    "SELECT code, COALESCE(name_ar, name_en, CAST(code AS TEXT)) AS name FROM cost_centers WHERE code = ? AND company_id = ?"
   ).bind(centerCode, company_id).first<{ code: number; name: string }>()
 
   if (!center) return c.json({ success: false, error: 'مركز التكلفة غير موجود' }, 404)

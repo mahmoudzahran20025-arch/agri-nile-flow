@@ -20,23 +20,44 @@ export async function resolveInventoryMovement(
     date: string
     item_name: string
     created_by?: number
-    // Optional context fields passed through to payload
     center_code?: number
+    season_id?: number
+    field_id?: number
     supplier_code?: number | string
     payment_method?: string
     work_order_id?: number
   },
 ): Promise<number | null> {
+  // Resolve IPG/PPG from DB so the posting_engine cascade uses Steps 1-7, not always Step 8.
+  const [itemRow, warehouseRow] = await Promise.all([
+    db.prepare(
+      'SELECT prod_posting_group_code, inv_posting_group_code FROM items WHERE company_id = ? AND code = ? LIMIT 1'
+    ).bind(opts.company_id, opts.item_code).first<{ prod_posting_group_code: string | null; inv_posting_group_code: string | null }>(),
+    db.prepare(
+      'SELECT inv_posting_group_code FROM warehouses WHERE company_id = ? AND name = ? AND is_active = 1 LIMIT 1'
+    ).bind(opts.company_id, opts.warehouse).first<{ inv_posting_group_code: string | null }>(),
+  ])
+
+  // Warehouse IPG takes precedence over item-level IPG (warehouse is the physical location context)
+  const ipg = warehouseRow?.inv_posting_group_code ?? itemRow?.inv_posting_group_code ?? null
+  const ppg = itemRow?.prod_posting_group_code ?? null
+
   const blueprint = await peResolveInventory(
     db,
     opts.company_id,
-    null,
-    null,
+    ipg,
+    ppg,
     opts.value,
     opts.movement_type,
   )
   if (blueprint.isBlocked || !blueprint.lines.length) {
     throw new Error(`INVENTORY_MOVEMENT_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
+  }
+
+  const dims = {
+    center_code: opts.center_code,
+    season_id:   opts.season_id,
+    field_id:    opts.field_id,
   }
 
   return postFromBusinessEvent(db, {
@@ -47,16 +68,20 @@ export async function resolveInventoryMovement(
     event_date:    opts.date,
     description:   `${opts.movement_type} مخزني | ${opts.item_name} | ${opts.warehouse}`,
     created_by:    opts.created_by,
-    payload:       { item_code: opts.item_code, warehouse: opts.warehouse, movement_type: opts.movement_type, value: opts.value, item_name: opts.item_name },
+    payload:       {
+      item_code: opts.item_code, warehouse: opts.warehouse, movement_type: opts.movement_type,
+      value: opts.value, item_name: opts.item_name, ipg, ppg,
+    },
     trace:         blueprint.trace ?? null,
     lines:         blueprint.lines.map((l) => ({
-      account_code:  l.account_code!,
-      debit:         l.debit ?? 0,
-      credit:        l.credit ?? 0,
-      description:   l.description ?? `${opts.movement_type} مخزني | ${opts.item_name}`,
-      rule_slot:     l.rule_slot,
-      source_ledger: 'inventory' as const,
+      account_code:    l.account_code!,
+      debit:           l.debit ?? 0,
+      credit:          l.credit ?? 0,
+      description:     l.description ?? `${opts.movement_type} مخزني | ${opts.item_name}`,
+      rule_slot:       l.rule_slot,
+      source_ledger:   'inventory' as const,
       source_record_id: opts.ref_id,
+      ...dims,
     })),
   })
 }
@@ -74,14 +99,33 @@ export async function resolveInventoryTransfer(
     date: string
     item_name: string
     created_by?: number
+    center_code?: number
+    season_id?: number
+    field_id?: number
   },
 ): Promise<number | null> {
+  const [itemRow, srcRow, dstRow] = await Promise.all([
+    db.prepare(
+      'SELECT prod_posting_group_code FROM items WHERE company_id = ? AND code = ? LIMIT 1'
+    ).bind(opts.company_id, opts.item_code).first<{ prod_posting_group_code: string | null }>(),
+    db.prepare(
+      'SELECT inv_posting_group_code FROM warehouses WHERE company_id = ? AND name = ? AND is_active = 1 LIMIT 1'
+    ).bind(opts.company_id, opts.from_warehouse).first<{ inv_posting_group_code: string | null }>(),
+    db.prepare(
+      'SELECT inv_posting_group_code FROM warehouses WHERE company_id = ? AND name = ? AND is_active = 1 LIMIT 1'
+    ).bind(opts.company_id, opts.to_warehouse).first<{ inv_posting_group_code: string | null }>(),
+  ])
+
+  const ppg    = itemRow?.prod_posting_group_code ?? null
+  const srcIpg = srcRow?.inv_posting_group_code ?? null
+  const dstIpg = dstRow?.inv_posting_group_code ?? null
+
   const blueprint = await peResolveTransfer(
     db,
     opts.company_id,
-    null,
-    null,
-    null,
+    srcIpg,
+    dstIpg,
+    ppg,
     opts.value,
   )
   if (blueprint.isBlocked || !blueprint.lines.length) {
@@ -96,16 +140,23 @@ export async function resolveInventoryTransfer(
     event_date:    opts.date,
     description:   `تحويل مخزني | ${opts.item_name} | ${opts.from_warehouse} → ${opts.to_warehouse}`,
     created_by:    opts.created_by,
-    payload:       { item_code: opts.item_code, from_warehouse: opts.from_warehouse, to_warehouse: opts.to_warehouse, quantity: opts.quantity, value: opts.value },
+    payload:       {
+      item_code: opts.item_code, from_warehouse: opts.from_warehouse,
+      to_warehouse: opts.to_warehouse, quantity: opts.quantity, value: opts.value,
+      src_ipg: srcIpg, dst_ipg: dstIpg, ppg,
+    },
     trace:         blueprint.trace ?? null,
     lines:         blueprint.lines.map((l) => ({
-      account_code:  l.account_code!,
-      debit:         l.debit ?? 0,
-      credit:        l.credit ?? 0,
-      description:   l.description ?? `تحويل مخزني | ${opts.item_name}`,
-      rule_slot:     l.rule_slot,
-      source_ledger: 'inventory' as const,
+      account_code:    l.account_code!,
+      debit:           l.debit ?? 0,
+      credit:          l.credit ?? 0,
+      description:     l.description ?? `تحويل مخزني | ${opts.item_name}`,
+      rule_slot:       l.rule_slot,
+      source_ledger:   'inventory' as const,
       source_record_id: opts.ref_id,
+      center_code:     opts.center_code,
+      season_id:       opts.season_id,
+      field_id:        opts.field_id,
     })),
   })
 }

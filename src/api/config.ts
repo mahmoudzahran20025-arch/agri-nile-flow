@@ -13,7 +13,9 @@ function masterRoutes(
   table: string,
   pkField: string,
   requiredFields: string[],
+  opts?: { nameField?: string },
 ) {
+  const nameField = opts?.nameField ?? 'name'
   // GET list
   app.get(`/${table}`, async (c) => {
     const { company_id } = getUser(c)
@@ -51,16 +53,71 @@ function masterRoutes(
 
     if (!name) return c.json({ success: false, error: 'الاسم مطلوب' }, 400)
     await c.env.DB
-      .prepare(`UPDATE ${table} SET name = ? WHERE ${pkField} = ? AND company_id = ?`)
+      .prepare(`UPDATE ${table} SET ${nameField} = ? WHERE ${pkField} = ? AND company_id = ?`)
       .bind(name, code, company_id).run()
 
     return c.json({ success: true, data: null })
   })
 }
 
-masterRoutes(config, 'cost_centers',  'code', ['code', 'name'])
+masterRoutes(config, 'cost_centers',  'code', ['code', 'name_ar'], { nameField: 'name_ar' })
 masterRoutes(config, 'accounts',      'code', ['code', 'name'])
 masterRoutes(config, 'sub_locations', 'code', ['code', 'name'])
+
+// ── Operation Types CRUD ─────────────────────────────────────
+config.get('/operation_types', async (c) => {
+  const { company_id } = getUser(c)
+  const { results } = await c.env.DB
+    .prepare('SELECT id, name, sort_order, is_active FROM operation_types WHERE company_id = ? ORDER BY sort_order, name')
+    .bind(company_id).all()
+  return c.json({ success: true, data: results })
+})
+
+config.post('/operation_types', async (c) => {
+  const { company_id } = getUser(c)
+  const b = await c.req.json<{ name: string; sort_order?: number }>()
+  if (!b.name?.trim()) return c.json({ success: false, error: 'الاسم مطلوب' }, 400)
+  const sort = b.sort_order ?? 0
+  try {
+    const row = await c.env.DB
+      .prepare('INSERT INTO operation_types (company_id, name, sort_order) VALUES (?, ?, ?) RETURNING id, name, sort_order, is_active')
+      .bind(company_id, b.name.trim(), sort).first()
+    return c.json({ success: true, data: row }, 201)
+  } catch {
+    return c.json({ success: false, error: 'الاسم موجود بالفعل' }, 409)
+  }
+})
+
+config.patch('/operation_types/:id', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const b = await c.req.json<{ name?: string; sort_order?: number; is_active?: number }>()
+  if (!id) return c.json({ success: false, error: 'id غير صالح' }, 400)
+
+  const parts: string[] = []
+  const vals: unknown[]  = []
+  if (b.name        !== undefined) { parts.push('name = ?');       vals.push(b.name.trim()) }
+  if (b.sort_order  !== undefined) { parts.push('sort_order = ?'); vals.push(b.sort_order)  }
+  if (b.is_active   !== undefined) { parts.push('is_active = ?');  vals.push(b.is_active)   }
+  if (parts.length === 0) return c.json({ success: false, error: 'لا يوجد حقل للتحديث' }, 400)
+
+  vals.push(id, company_id)
+  await c.env.DB
+    .prepare(`UPDATE operation_types SET ${parts.join(', ')} WHERE id = ? AND company_id = ?`)
+    .bind(...vals).run()
+  return c.json({ success: true, data: null })
+})
+
+config.delete('/operation_types/:id', async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  if (!id) return c.json({ success: false, error: 'id غير صالح' }, 400)
+  // Soft-delete: mark inactive so existing work orders retain their type string
+  await c.env.DB
+    .prepare('UPDATE operation_types SET is_active = 0 WHERE id = ? AND company_id = ?')
+    .bind(id, company_id).run()
+  return c.json({ success: true, data: null })
+})
 
 // Custom Expense Types routes to support gl_account_code
 config.get('/expense_types', async (c) => {

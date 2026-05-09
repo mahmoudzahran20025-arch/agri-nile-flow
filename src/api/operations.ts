@@ -143,15 +143,34 @@ operations.post('/orders', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const b = await c.req.json<{
     name: string; operation_type: string; planned_date: string
-    season_id?: number; field_id?: number; area_feddan?: number; notes?: string
+    season_id?: number; field_id?: number; center_code?: number; area_feddan?: number; notes?: string
   }>()
   if (!b.name || !b.operation_type || !b.planned_date) {
     return c.json({ success: false, error: 'الاسم والنوع والتاريخ مطلوبة' }, 400)
   }
+
+  // Prefer explicit center_code from form; otherwise inherit from selected field.
+  let resolvedCenterCode: number | null = b.center_code ?? null
+  if (resolvedCenterCode == null && b.field_id != null) {
+    const fieldRow = await c.env.DB.prepare(
+      'SELECT center_code FROM fields WHERE id = ? AND company_id = ?'
+    ).bind(b.field_id, company_id).first<{ center_code: number | null }>()
+    resolvedCenterCode = fieldRow?.center_code ?? null
+  }
+
+  if (resolvedCenterCode != null) {
+    const validCenter = await c.env.DB.prepare(
+      'SELECT 1 AS ok FROM cost_centers WHERE company_id = ? AND CAST(code AS INTEGER) = ? AND is_active = 1 LIMIT 1'
+    ).bind(company_id, resolvedCenterCode).first<{ ok: number }>()
+    if (!validCenter) {
+      return c.json({ success: false, error: 'مركز التكلفة غير موجود أو غير نشط' }, 422)
+    }
+  }
+
   const result = await c.env.DB.prepare(
-    `INSERT INTO work_orders (company_id, season_id, field_id, name, operation_type,
-     planned_date, area_feddan, notes, created_by) VALUES (?,?,?,?,?,?,?,?,?)`
-  ).bind(company_id, b.season_id ?? null, b.field_id ?? null, b.name, b.operation_type,
+    `INSERT INTO work_orders (company_id, season_id, field_id, center_code, name, operation_type,
+     planned_date, area_feddan, notes, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)`
+  ).bind(company_id, b.season_id ?? null, b.field_id ?? null, resolvedCenterCode, b.name, b.operation_type,
      b.planned_date, b.area_feddan ?? null, b.notes ?? null, userId).run()
 
   void logAudit(c.env.DB, {
@@ -191,30 +210,50 @@ operations.patch('/orders/:id/status', async (c) => {
         'SELECT center_code, actual_date, season_id, field_id FROM work_orders WHERE id = ? AND company_id = ?'
       ).bind(id, company_id).first<{ center_code: number; actual_date: string; season_id: number | null; field_id: number | null }>()
 
+      let centerCode = order?.center_code ?? null
+      if (centerCode == null && order?.field_id != null) {
+        const fieldRow = await c.env.DB.prepare(
+          'SELECT center_code FROM fields WHERE id = ? AND company_id = ?'
+        ).bind(order.field_id, company_id).first<{ center_code: number | null }>()
+        centerCode = fieldRow?.center_code ?? null
+      }
+
       const tasks = await c.env.DB.prepare(
         'SELECT SUM(quantity * unit_cost) AS total_cost FROM work_tasks WHERE work_order_id = ?'
       ).bind(id).first<{ total_cost: number }>()
 
       const eqRow = await c.env.DB.prepare(
-        'SELECT SUM(total_cost) AS total_cost FROM work_order_equipment WHERE work_order_id = ? AND company_id = ?'
+        `SELECT SUM(total_cost) AS total_cost
+         FROM work_order_equipment
+         WHERE work_order_id = ? AND company_id = ? AND journal_entry_id IS NULL`
       ).bind(id, company_id).first<{ total_cost: number }>()
 
-      const laborCost     = tasks?.total_cost ?? 0
-      const equipmentCost = eqRow?.total_cost ?? 0
-      const totalCost     = laborCost + equipmentCost
+      const laborCost        = tasks?.total_cost ?? 0
+      const equipmentUnposted = eqRow?.total_cost ?? 0
+      const totalCost         = laborCost + equipmentUnposted
 
       if (totalCost > 0) {
-        await FinanceCore.resolveWorkOrderLabor(c.env.DB, {
+        const entryId = await FinanceCore.resolveWorkOrderLabor(c.env.DB, {
           company_id,
           ref_id: id,
           amount: totalCost,
           date: actual_date ?? order?.actual_date ?? new Date().toISOString().slice(0, 10),
-          description: `تكلفة عمليات ميدانية (عمالة + معدات): أمر عمل #${id}`,
+          description: equipmentUnposted > 0
+            ? `تكلفة عمليات ميدانية (عمالة + معدات غير مُرحّلة): أمر عمل #${id}`
+            : `تكلفة عمليات ميدانية (عمالة): أمر عمل #${id}`,
           created_by: userId,
-          center_code: order?.center_code ?? undefined,
+          center_code: centerCode ?? undefined,
           season_id: order?.season_id,
           field_id: order?.field_id,
         })
+
+        if (equipmentUnposted > 0 && entryId) {
+          await c.env.DB.prepare(
+            `UPDATE work_order_equipment
+             SET journal_entry_id = ?
+             WHERE work_order_id = ? AND company_id = ? AND journal_entry_id IS NULL`
+          ).bind(entryId, id, company_id).run()
+        }
       }
     } catch (e: any) {
       return c.json({ success: false, error: `فشل ترحيل التكاليف: ${e.message}` }, 400)
@@ -279,12 +318,19 @@ operations.delete('/tasks/:id', async (c) => {
 
 // POST /api/operations/orders/:id/equipment
 operations.post('/orders/:id/equipment', async (c) => {
-  const { company_id } = getUser(c)
+  const { company_id, sub: userId } = getUser(c)
   const orderId = Number(c.req.param('id'))
 
   const order = await c.env.DB.prepare(
-    'SELECT status FROM work_orders WHERE id = ? AND company_id = ?'
-  ).bind(orderId, company_id).first<{ status: string }>()
+    `SELECT status, center_code, season_id, field_id
+     FROM work_orders
+     WHERE id = ? AND company_id = ?`
+  ).bind(orderId, company_id).first<{
+    status: string
+    center_code: number | null
+    season_id: number | null
+    field_id: number | null
+  }>()
   if (!order) return c.json({ success: false, error: 'أمر العمل غير موجود' }, 404)
   if (['costed', 'cancelled'].includes(order.status)) {
     return c.json({ success: false, error: 'لا يمكن إضافة معدات لأمر عمل مغلق أو ملغى' }, 422)
@@ -295,6 +341,9 @@ operations.post('/orders/:id/equipment', async (c) => {
     task_date: string
     hours_worked: number
     cost_per_hour: number
+    equipment_usage_mode?: 'owned' | 'rental'
+    fixed_asset_id?: number | null
+    supplier_code?: number | null
     notes?: string
   }>()
 
@@ -308,20 +357,75 @@ operations.post('/orders/:id/equipment', async (c) => {
     return c.json({ success: false, error: 'التكلفة / ساعة يجب أن تكون صفر أو أكثر' }, 400)
   }
 
+  const usageMode = b.equipment_usage_mode ?? 'rental'
+  if (!['owned', 'rental'].includes(usageMode)) {
+    return c.json({ success: false, error: 'نوع استخدام المعدة يجب أن يكون owned أو rental' }, 400)
+  }
+  if (usageMode === 'owned' && b.fixed_asset_id == null) {
+    return c.json({ success: false, error: 'عند اختيار owned يجب تحديد الأصل الثابت' }, 422)
+  }
+  if (usageMode === 'owned' && b.fixed_asset_id != null) {
+    const asset = await c.env.DB.prepare(
+      'SELECT id FROM fixed_assets WHERE id = ? AND company_id = ? AND is_active = 1 LIMIT 1'
+    ).bind(b.fixed_asset_id, company_id).first<{ id: number }>()
+    if (!asset) return c.json({ success: false, error: 'الأصل الثابت المحدد غير موجود أو غير نشط' }, 422)
+  }
+
   const result = await c.env.DB.prepare(
     `INSERT INTO work_order_equipment
-     (work_order_id, company_id, equipment_name, task_date, hours_worked, cost_per_hour, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+     (work_order_id, company_id, equipment_name, task_date, hours_worked, cost_per_hour,
+      equipment_usage_mode, fixed_asset_id, supplier_code, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(orderId, company_id, b.equipment_name.trim(), b.task_date,
-         b.hours_worked, b.cost_per_hour, b.notes ?? null).run()
+         b.hours_worked, b.cost_per_hour, usageMode, b.fixed_asset_id ?? null,
+         b.supplier_code ?? null, b.notes ?? null).run()
 
-  return c.json({ success: true, data: { id: result.meta.last_row_id } }, 201)
+  const equipmentId = Number(result.meta.last_row_id)
+  const equipmentCost = Math.round(b.hours_worked * b.cost_per_hour * 100) / 100
+
+  if (equipmentCost > 0) {
+    try {
+      const entryId = await FinanceCore.resolveWorkOrderLabor(c.env.DB, {
+        company_id,
+        ref_id: equipmentId,
+        amount: equipmentCost,
+        date: b.task_date,
+        description: `تشغيل معدة: ${b.equipment_name.trim()} | أمر عمل #${orderId}`,
+        created_by: userId,
+        center_code: order?.center_code ?? undefined,
+        season_id: order?.season_id,
+        field_id: order?.field_id,
+      })
+
+      if (entryId) {
+        await c.env.DB.prepare(
+          'UPDATE work_order_equipment SET journal_entry_id = ? WHERE id = ? AND company_id = ?'
+        ).bind(entryId, equipmentId, company_id).run()
+      }
+    } catch (e: any) {
+      await c.env.DB.prepare(
+        'DELETE FROM work_order_equipment WHERE id = ? AND company_id = ?'
+      ).bind(equipmentId, company_id).run()
+      return c.json({ success: false, error: `فشل ترحيل تكلفة المعدة: ${e.message}` }, 400)
+    }
+  }
+
+  return c.json({ success: true, data: { id: equipmentId } }, 201)
 })
 
 // DELETE /api/operations/equipment/:id
 operations.delete('/equipment/:id', async (c) => {
   const { company_id } = getUser(c)
   const id = Number(c.req.param('id'))
+
+  const row = await c.env.DB.prepare(
+    'SELECT journal_entry_id FROM work_order_equipment WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ journal_entry_id: number | null }>()
+  if (!row) return c.json({ success: false, error: 'سطر المعدة غير موجود' }, 404)
+  if (row.journal_entry_id) {
+    return c.json({ success: false, error: 'لا يمكن حذف سطر معدة مُرحّل محاسبيًا' }, 422)
+  }
+
   await c.env.DB.prepare(
     'DELETE FROM work_order_equipment WHERE id = ? AND company_id = ?'
   ).bind(id, company_id).run()
@@ -361,7 +465,7 @@ operations.get('/orders/by-field', async (c) => {
     SELECT
       wo.id, wo.name, wo.operation_type, wo.status, wo.planned_date, wo.actual_date,
       COALESCE(SUM(wt.quantity * wt.unit_cost), 0) AS labor_cost,
-      COALESCE((SELECT SUM(im.total_cost) FROM inventory_movements im WHERE im.work_order_id = wo.id), 0) AS inv_cost,
+      COALESCE((SELECT SUM(COALESCE(im.value_out, 0)) FROM inventory_movements im WHERE im.work_order_id = wo.id), 0) AS inv_cost,
       COALESCE((SELECT SUM(woe.total_cost) FROM work_order_equipment woe WHERE woe.work_order_id = wo.id), 0) AS equipment_cost
     FROM work_orders wo
     LEFT JOIN work_tasks wt ON wt.work_order_id = wo.id

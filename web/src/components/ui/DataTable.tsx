@@ -84,7 +84,7 @@ export default function DataTable<T>({
 
   return (
     <div className="bg-white rounded border border-slate-200 overflow-hidden shadow-sm flex flex-col h-full">
-      <div className="overflow-x-auto flex-1 relative" style={{ WebkitOverflowScrolling: 'touch' }}>
+      <div className="overflow-auto flex-1 relative" style={{ WebkitOverflowScrolling: 'touch' }}>
         <table className="w-full text-[12px]">
           <thead className="sticky top-0 z-10">
             <tr className="bg-[#f8fafc] border-b border-slate-200">

@@ -14,7 +14,7 @@ function parsePositiveInt(raw: string | undefined, fallback: number, min: number
   return Math.min(max, Math.max(min, Math.trunc(value)))
 }
 
-// GET /api/gl/entries
+// GET /api/gl/entries (with module-specific views support)
 entries.get('/', async (c) => {
   const { company_id } = getUser(c)
   const page      = parsePositiveInt(c.req.query('page'), 1, 1, 100_000)
@@ -22,15 +22,25 @@ entries.get('/', async (c) => {
   const offset    = (page - 1) * size
   const start     = c.req.query('start')
   const end       = c.req.query('end')
-  const ref_type  = c.req.query('ref_type')
+  const module    = c.req.query('module') // 'supplier' | 'inventory' | 'cash'
   const search    = c.req.query('search')
+
+  // Determine source table/view based on module filter
+  let sourceTable = 'journal_entries e'
+  if (module === 'supplier') {
+    sourceTable = 'vw_supplier_entries e'
+  } else if (module === 'inventory') {
+    sourceTable = 'vw_inventory_entries e'
+  } else if (module === 'cash') {
+    sourceTable = 'vw_cash_entries e'
+  }
 
   let where = 'WHERE e.company_id = ?'
   const p: unknown[] = [company_id]
-  if (start)    { where += ' AND e.entry_date >= ?'; p.push(start) }
-  if (end)      { where += ' AND e.entry_date <= ?'; p.push(end) }
-  if (ref_type) { where += ' AND e.ref_type = ?';   p.push(ref_type) }
-  if (search)   {
+  if (start) { where += ' AND e.entry_date >= ?'; p.push(start) }
+  if (end) { where += ' AND e.entry_date <= ?'; p.push(end) }
+
+  if (search) {
     where += ' AND (e.description LIKE ? OR e.entry_number LIKE ? OR CAST(e.id AS TEXT) LIKE ?)'
     const s = `%${search}%`
     p.push(s, s, s)
@@ -44,13 +54,13 @@ entries.get('/', async (c) => {
               (SELECT rev.id FROM journal_entries rev
                WHERE rev.ref_type = 'reversal' AND rev.ref_id = e.id AND rev.company_id = e.company_id
                LIMIT 1) AS reversal_entry_id
-       FROM journal_entries e
+       FROM ${sourceTable}
        LEFT JOIN financial_periods fp ON fp.id = e.period_id
        ${where}
        ORDER BY e.entry_date DESC, e.id DESC
        LIMIT ? OFFSET ?`
     ).bind(...p, size, offset).all(),
-    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM journal_entries e ${where}`)
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM ${sourceTable} ${where}`)
       .bind(...p).first<{n:number}>(),
   ])
 

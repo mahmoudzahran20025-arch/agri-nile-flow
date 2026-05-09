@@ -141,72 +141,68 @@ governance.post('/gl-preview', permissionGuard('inventory', 'read'), async (c) =
 
 // ── GET /items-master ────────────────────────────────────────────────────────
 // Paginated items list with accounting fields + balance totals from snapshot.
-// Query params: page (default 1), size (default 50, max 200), search, filter_status
+// Query params: page (default 1), size (default 50, max 200), search, filter_status, catalog_status
+// filter_status: 'all' | 'missing_ppg' | 'missing_ipg' | 'below_reorder'
+// catalog_status: 'all' | 'catalog_only' | 'moved_zero_balance' | 'in_stock'
 
 governance.get('/items-master', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
-  const page   = Math.max(1, Number(c.req.query('page') ?? 1))
-  const size   = Math.min(200, Math.max(1, Number(c.req.query('size') ?? 50)))
-  const search = (c.req.query('search') ?? '').trim()
-  // filter_status: 'all' | 'missing_ppg' | 'missing_ipg' | 'below_reorder'
-  const filterStatus = c.req.query('filter_status') ?? 'all'
-  const offset = (page - 1) * size
+  const page            = Math.max(1, Number(c.req.query('page') ?? 1))
+  const size            = Math.min(200, Math.max(1, Number(c.req.query('size') ?? 50)))
+  const search          = (c.req.query('search') ?? '').trim()
+  const filterStatus    = c.req.query('filter_status') ?? 'all'
+  const catalogStatus   = c.req.query('catalog_status') ?? 'all'
+  const offset          = (page - 1) * size
 
-  const conditions: string[] = ['i.company_id = ?']
+  const conditions: string[] = ['v.company_id = ?']
   const binds: unknown[] = [company_id]
 
   if (search) {
-    conditions.push(`(i.name LIKE ? OR CAST(i.code AS TEXT) LIKE ?)`)
+    conditions.push(`(v.name LIKE ? OR CAST(v.code AS TEXT) LIKE ?)`)
     binds.push(`%${search}%`, `%${search}%`)
   }
+
   if (filterStatus === 'missing_ppg') {
-    conditions.push(`i.prod_posting_group_code IS NULL`)
+    conditions.push(`v.prod_posting_group_code IS NULL`)
   } else if (filterStatus === 'missing_ipg') {
-    conditions.push(`i.inv_posting_group_code IS NULL`)
+    conditions.push(`v.inv_posting_group_code IS NULL`)
   } else if (filterStatus === 'below_reorder') {
-    conditions.push(`i.reorder_threshold > 0 AND COALESCE(ib_agg.total_qty, 0) < i.reorder_threshold`)
+    conditions.push(`v.reorder_threshold > 0 AND v.balance_qty < v.reorder_threshold`)
+  }
+
+  if (catalogStatus !== 'all') {
+    conditions.push(`v.catalog_status = ?`)
+    binds.push(catalogStatus)
   }
 
   const where = conditions.join(' AND ')
 
-  // Count total for pagination metadata
+  // Count total for pagination metadata (using vw_item_catalog_status)
   const countRow = await c.env.DB.prepare(
     `SELECT COUNT(*) AS total
-     FROM items i
-     LEFT JOIN (
-       SELECT item_code, SUM(balance_qty) AS total_qty
-       FROM inventory_balances WHERE company_id = ?
-       GROUP BY item_code
-     ) ib_agg ON ib_agg.item_code = i.code
+     FROM vw_item_catalog_status v
      WHERE ${where}`
-  ).bind(company_id, ...binds).first<{ total: number }>()
+  ).bind(...binds).first<{ total: number }>()
 
   const total = countRow?.total ?? 0
 
-  // Use inventory_balances snapshot (O(1) per item, no full movement scan)
+  // Use vw_item_catalog_status VIEW for consistent catalog classification
   const { results } = await c.env.DB.prepare(
     `SELECT
-       i.code, i.name, i.unit, i.category_id,
-       i.prod_posting_group_code, i.inv_posting_group_code,
-       i.standard_cost, i.reorder_threshold,
-       cat.name AS category_name,
-       COALESCE(ib_agg.total_qty,   0) AS total_qty,
-       COALESCE(ib_agg.total_value, 0) AS total_value,
-       COALESCE(ib_agg.wh_count,    0) AS warehouse_count
-     FROM items i
-     LEFT JOIN item_categories cat ON cat.id = i.category_id
-     LEFT JOIN (
-       SELECT item_code,
-              SUM(balance_qty)        AS total_qty,
-              SUM(balance_value)      AS total_value,
-              COUNT(DISTINCT warehouse) AS wh_count
-       FROM inventory_balances WHERE company_id = ?
-       GROUP BY item_code
-     ) ib_agg ON ib_agg.item_code = i.code
+       v.code, v.name, v.unit, v.category_id,
+       v.prod_posting_group_code, v.inv_posting_group_code,
+       v.standard_cost, v.reorder_threshold,
+       v.category_name,
+       v.balance_qty      AS total_qty,
+       v.balance_value    AS total_value,
+       v.warehouse_count,
+       v.catalog_status,
+       v.movement_count
+     FROM vw_item_catalog_status v
      WHERE ${where}
-     ORDER BY i.name
+     ORDER BY v.name
      LIMIT ? OFFSET ?`
-  ).bind(company_id, ...binds, size, offset).all()
+  ).bind(...binds, size, offset).all()
 
   return c.json({
     success: true,

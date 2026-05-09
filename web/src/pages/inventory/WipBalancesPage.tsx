@@ -197,7 +197,6 @@ export default function WipBalancesPage() {
                     <td className="p-3">
                       {b.status === 'pending' && (
                         <AssignSeasonCell
-                          wipId={b.id}
                           seasons={seasons as Array<{ id: number; name: string }>}
                           onAssign={(to) => assignMut.mutate({ id: b.id, to_season_id: to })}
                           saving={assignMut.isPending}
@@ -223,9 +222,8 @@ export default function WipBalancesPage() {
 }
 
 function AssignSeasonCell({
-  wipId, seasons, onAssign, saving,
+  seasons, onAssign, saving,
 }: {
-  wipId: number
   seasons: Array<{ id: number; name: string }>
   onAssign: (seasonId: number) => void
   saving: boolean
