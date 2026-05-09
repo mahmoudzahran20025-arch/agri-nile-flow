@@ -13,6 +13,19 @@
 import type { D1Database } from '@cloudflare/workers-types'
 import { resolveControlAccount } from './posting_engine'
 
+async function requireControlAccount(
+  db: D1Database,
+  companyId: number,
+  keys: string[],
+  context: string,
+): Promise<string> {
+  for (const key of keys) {
+    const code = await resolveControlAccount(db, companyId, key)
+    if (code) return code
+  }
+  throw new Error(`COA_CONTROL_UNRESOLVED: ${context}. Missing active mapping for keys [${keys.join(', ')}].`)
+}
+
 // Import all modules from the finance directory
 import {
   // Business Events
@@ -65,8 +78,8 @@ async function postMonthlyDepreciation(
 
   if (!assets.length) return []
 
-  const depExpAcc   = await resolveControlAccount(db, opts.company_id, 'depreciation_expense') ?? '5503'
-  const accumDepAcc = await resolveControlAccount(db, opts.company_id, 'accumulated_depreciation') ?? '2203'
+  const depExpAcc   = await requireControlAccount(db, opts.company_id, ['depreciation_expense'], 'Monthly depreciation debit account')
+  const accumDepAcc = await requireControlAccount(db, opts.company_id, ['accumulated_depreciation'], 'Monthly depreciation credit account')
   const month       = String(opts.period_month).padStart(2, '0')
   const entryDate   = `${opts.period_year}-${month}-28`
 
@@ -127,8 +140,8 @@ async function carryForwardWIP(
 
   if (!unharvestedFields.length) return []
 
-  const wipAcc    = await resolveControlAccount(db, opts.company_id, 'wip_asset')  ?? '1302'
-  const contraAcc = await resolveControlAccount(db, opts.company_id, 'wip_contra') ?? '3001'
+  const wipAcc    = await requireControlAccount(db, opts.company_id, ['wip_asset'], 'WIP carryforward debit account')
+  const contraAcc = await requireControlAccount(db, opts.company_id, ['wip_contra'], 'WIP carryforward credit account')
 
   const out: Array<{ field_id: number; crop_name: string; cost_balance: number }> = []
 
@@ -229,15 +242,16 @@ async function postHarvestLedger(
      LIMIT 1`
   ).bind(opts.company_id, opts.crop_name).first<{ account_code: string }>()
 
-  const revenueAcc   = await resolveControlAccount(db, opts.company_id, 'revenue_crops')
-                    ?? await resolveControlAccount(db, opts.company_id, 'revenue_default')
-                    ?? '4100'
+  const revenueAcc = await requireControlAccount(
+    db,
+    opts.company_id,
+    ['revenue_crops', 'revenue_default'],
+    'Harvest revenue account',
+  )
   const cosAcc       = cropAccountRow?.account_code
-                    ?? await resolveControlAccount(db, opts.company_id, 'cost_of_goods')
-                    ?? await resolveControlAccount(db, opts.company_id, 'expense_default')
-                    ?? '5100'
-  const inventoryAcc = await resolveControlAccount(db, opts.company_id, 'inventory') ?? '1300'
-  const arAcc        = await resolveControlAccount(db, opts.company_id, 'accounts_receivable') ?? '1200'
+                    ?? await requireControlAccount(db, opts.company_id, ['cost_of_goods', 'expense_default'], 'Harvest COGS account')
+  const inventoryAcc = await requireControlAccount(db, opts.company_id, ['inventory'], 'Harvest inventory account')
+  const arAcc        = await requireControlAccount(db, opts.company_id, ['accounts_receivable'], 'Harvest receivable account')
   const desc         = `حصاد: ${opts.crop_name} — ${opts.field_name}`
   const payload      = { harvest_id: opts.harvest_id, crop_name: opts.crop_name, field_id: opts.field_id, season_id: opts.season_id, center_code: opts.center_code }
 

@@ -456,14 +456,14 @@ export async function resolveHarvestMovement(
   )
 
   const finishedGoodsAcc = invResult.row.finished_goods_account ?? await resolveControlAccount(db, company_id, 'FINISHED_GOODS')
-  const wipAcc = invResult.row.wip_account ?? await resolveControlAccount(db, company_id, 'WIP_ACCOUNT')
+  const wipAcc = invResult.row.wip_account ?? await resolveControlAccount(db, company_id, 'wip_asset')
 
   const errors: string[] = []
   if (!finishedGoodsAcc) {
     errors.push(`PG-HRV-001: finished_goods_account is NULL for IPG="${invResult.row.inv_posting_group_code ?? 'DEFAULT'}" x PPG="${invResult.row.prod_posting_group_code ?? 'DEFAULT'}" and no FINISHED_GOODS control rule is active.`)
   }
   if (!wipAcc) {
-    errors.push(`PG-HRV-002: wip_account is NULL for IPG="${invResult.row.inv_posting_group_code ?? 'DEFAULT'}" x PPG="${invResult.row.prod_posting_group_code ?? 'DEFAULT'}" and no WIP_ACCOUNT control rule is active.`)
+    errors.push(`PG-HRV-002: wip_account is NULL for IPG="${invResult.row.inv_posting_group_code ?? 'DEFAULT'}" x PPG="${invResult.row.prod_posting_group_code ?? 'DEFAULT'}" and no 'wip_asset' control rule is active.`)
   }
   if (errors.length > 0) return blocked(errors, warnings)
 

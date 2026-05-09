@@ -2,6 +2,8 @@
 import type { Env } from '../../types'
 import { authMiddleware, getUser, roleGuard } from '../../middleware/auth'
 import { logAudit } from '../../lib/audit'
+import { resolveControlAccount } from '../../lib/posting_engine'
+import { postFromBusinessEvent } from '../../lib/finance/business_events'
 
 const periods = new Hono<{ Bindings: Env }>()
 periods.use('*', authMiddleware)
@@ -439,28 +441,23 @@ periods.post('/:id/wip-flush', async (c) => {
     }, 409)
   }
 
-  // Resolve WIP account from inventory_posting_rules (first active row)
-  const wipRow = await c.env.DB.prepare(
-    `SELECT wip_account FROM inventory_posting_rules
-     WHERE company_id=? AND wip_account IS NOT NULL AND is_active=1 LIMIT 1`
-  ).bind(company_id).first<{ wip_account: string }>()
-  if (!wipRow?.wip_account) {
-    return c.json({ success: false, error: 'لا يوجد حساب WIP مُعرَّف في إعدادات الترحيل' }, 422)
+  // Resolve accounts via the authoritative control-account cascade
+  // (posting_rules control slots → DB-configured fallbacks; no hardcoded magic numbers)
+  const [wipAcc, cogsAcc] = await Promise.all([
+    resolveControlAccount(c.env.DB, company_id, 'wip_asset'),
+    resolveControlAccount(c.env.DB, company_id, 'cost_of_goods'),
+  ])
+  if (!wipAcc) {
+    return c.json({ success: false, error: 'لا يوجد حساب WIP مُعرَّف في إعدادات الترحيل (wip_asset)' }, 422)
   }
-
-  // Resolve COGS account from general_posting_setup (first active row)
-  const cogsRow = await c.env.DB.prepare(
-    `SELECT cogs_account FROM general_posting_setup
-     WHERE company_id=? AND cogs_account IS NOT NULL AND is_active=1 LIMIT 1`
-  ).bind(company_id).first<{ cogs_account: string }>()
-  if (!cogsRow?.cogs_account) {
-    return c.json({ success: false, error: 'لا يوجد حساب تكلفة البضاعة المباعة (COGS) مُعرَّف في إعدادات الترحيل' }, 422)
+  if (!cogsAcc) {
+    return c.json({ success: false, error: 'لا يوجد حساب تكلفة البضاعة المباعة (COGS) مُعرَّف في إعدادات الترحيل (cost_of_goods)' }, 422)
   }
 
   // Calculate net WIP balance for the season from GL (posted entries)
   const wipBalRow = await c.env.DB.prepare(`
     SELECT
-      COALESCE(SUM(jel.debit), 0)  - COALESCE(SUM(jel.credit), 0) AS net_balance
+      COALESCE(SUM(jel.debit), 0) - COALESCE(SUM(jel.credit), 0) AS net_balance
     FROM journal_entry_lines jel
     JOIN journal_entries je ON je.id = jel.entry_id
     WHERE je.company_id = ?
@@ -477,13 +474,13 @@ periods.post('/:id/wip-flush', async (c) => {
         SELECT id FROM cash_transactions WHERE company_id=? AND season_id=?
       )
   `).bind(
-    company_id, wipRow.wip_account,
+    company_id, wipAcc,
     company_id, b.season_id,
     company_id, b.season_id,
     company_id, b.season_id,
   ).first<{ net_balance: number }>()
 
-  let wipAmount = wipBalRow?.net_balance ?? 0
+  const wipAmount = wipBalRow?.net_balance ?? 0
 
   if (wipAmount <= 0) {
     return c.json({
@@ -492,34 +489,32 @@ periods.post('/:id/wip-flush', async (c) => {
     }, 409)
   }
 
-  // Create journal entry: Dr COGS / Cr WIP
   const memo = b.memo ?? `تسوية WIP → تكلفة البضاعة المباعة — الموسم ${b.season_id} / الفترة ${period.name}`
-  const jeResult = await c.env.DB.prepare(`
-    INSERT INTO journal_entries
-      (company_id, period_id, entry_date, description, ref_type, ref_id, is_posted, created_by)
-    VALUES (?, ?, ?, ?, 'wip_flush', ?, 1, ?)`
-  ).bind(company_id, periodId, period.end_date, memo, b.season_id, userId).run()
-  const jeId = jeResult.meta.last_row_id as number
 
-  // Dr COGS
-  await c.env.DB.prepare(`
-    INSERT INTO journal_entry_lines (entry_id, account_code, debit, credit, description)
-    VALUES (?, ?, ?, 0, ?)`
-  ).bind(jeId, cogsRow.cogs_account, wipAmount, memo).run()
-
-  // Cr WIP
-  await c.env.DB.prepare(`
-    INSERT INTO journal_entry_lines (entry_id, account_code, debit, credit, description)
-    VALUES (?, ?, 0, ?, ?)`
-  ).bind(jeId, wipRow.wip_account, wipAmount, memo).run()
+  // Post via business-events pipeline: period lock, idempotency, validateAccounts,
+  // posting_rule_resolutions log, source_documents bridge — all enforced automatically.
+  const jeId = await postFromBusinessEvent(c.env.DB, {
+    company_id,
+    event_type:    'wip_flush',
+    source_module: 'periods',
+    source_id:     b.season_id,
+    event_date:    period.end_date,
+    description:   memo,
+    created_by:    userId,
+    payload:       { season_id: b.season_id, period_id: periodId, wip_account: wipAcc, cogs_account: cogsAcc, amount: wipAmount },
+    lines: [
+      { account_code: cogsAcc, debit: wipAmount, credit: 0,          description: memo, rule_slot: 'cogs',      source_ledger: 'manual' as const, source_record_id: b.season_id },
+      { account_code: wipAcc,  debit: 0,         credit: wipAmount,  description: memo, rule_slot: 'wip_asset', source_ledger: 'manual' as const, source_record_id: b.season_id },
+    ],
+  })
 
   void logAudit(c.env.DB, {
-    user_id: userId, company_id, action: 'CREATE', table_name: 'journal_entries', record_id: jeId,
-    new_value: { type: 'wip_flush', season_id: b.season_id, amount: wipAmount, wip_account: wipRow.wip_account, cogs_account: cogsRow.cogs_account },
+    user_id: userId, company_id, action: 'CREATE', table_name: 'journal_entries', record_id: jeId ?? 0,
+    new_value: { type: 'wip_flush', season_id: b.season_id, amount: wipAmount, wip_account: wipAcc, cogs_account: cogsAcc },
   })
   return c.json({
     success: true,
-    data: { entry_id: jeId, wip_account: wipRow.wip_account, cogs_account: cogsRow.cogs_account, amount: wipAmount },
+    data: { entry_id: jeId, wip_account: wipAcc, cogs_account: cogsAcc, amount: wipAmount },
   }, 201)
 })
 

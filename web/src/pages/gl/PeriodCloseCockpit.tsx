@@ -624,9 +624,13 @@ export default function PeriodCloseCockpit() {
             </p>
           )}
           {wipFlushMut.isSuccess && (
-            <p className="text-[12px] text-emerald-700 font-semibold">
-              تمت التسوية بنجاح — رقم القيد: #{wipFlushMut.data?.entry_id} — المبلغ: {wipFlushMut.data?.amount.toLocaleString('ar-EG')}
-            </p>
+            <div className="text-[12px] text-emerald-700 space-y-0.5">
+              <p className="font-semibold">تمت التسوية بنجاح</p>
+              <p>رقم القيد: <strong>#{wipFlushMut.data?.entry_id}</strong> · المبلغ: {wipFlushMut.data?.amount?.toLocaleString('ar-EG')} ج.م</p>
+              <p className="text-gray-500 font-mono text-[11px]">
+                DR {wipFlushMut.data?.cogs_account} / CR {wipFlushMut.data?.wip_account}
+              </p>
+            </div>
           )}
         </div>
         <div className="flex justify-end gap-3 mt-6">

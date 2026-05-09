@@ -54,6 +54,55 @@ export interface SystemIntegrityScoreResult {
   }
 }
 
+export interface GlEngineHealthResult {
+  success: true
+  data: {
+    status: 'healthy' | 'attention'
+    summary: {
+      unbalanced_journal_entries: number
+      empty_posted_entries: number
+      header_account_postings: number
+      posted_cash_missing_journal: number
+      posted_supplier_missing_journal: number
+      inventory_ghost_posted: number
+      inventory_failed: number
+      inventory_outbox_stuck: number
+      inventory_outbox_failed: number
+      recent_workflow_failures: number
+    }
+    details: {
+      recent_failures: Array<{
+        id: number
+        endpoint: string
+        method: string
+        error_message: string
+        created_at: string
+      }>
+      cash_missing_journal: Array<{
+        id: number
+        transaction_date: string
+        narration: string
+        amount: number
+        financial_account_id: number | null
+      }>
+      supplier_missing_journal: Array<{
+        id: number
+        transaction_date: string
+        notes: string | null
+        amount: number
+        supplier_code: number | null
+      }>
+      inventory_inconsistencies: Array<{
+        id: number
+        movement_date: string
+        movement_type: string
+        gl_posting_status: string
+        gl_posting_error: string | null
+      }>
+    }
+  }
+}
+
 export interface FinancialPeriod {
   id: number
   company_id: number
@@ -430,6 +479,7 @@ export const glApi = {
     unwrap(api.get<IntegrityCheckV2Result>(`/gl/integrity-check?detailed=${detailed ? '1' : '0'}`)),
   systemIntegrityScore: () => unwrap(api.get<SystemIntegrityScoreResult>('/gl/system-integrity-score')),
   integrityScore: () => unwrap(api.get<SystemIntegrityScoreResult>('/gl/system-integrity-score')),
+  engineHealth: () => unwrap(api.get<GlEngineHealthResult>('/gl/engine-health')),
   recomputeIntegrityScore: () => unwrap(api.post<SystemIntegrityScoreResult>('/gl/system-integrity-score/recompute', {})),
 
   auditLog: (p?: { page?: number; size?: number; table?: string; action?: string; from?: string; to?: string }) =>

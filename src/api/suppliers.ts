@@ -3,7 +3,9 @@ import type { Env } from '../types'
 import { authMiddleware, getUser, roleGuard, permissionGuard } from '../middleware/auth'
 import { getOpenPeriod } from '../lib/gl'
 import { logAudit } from '../lib/audit'
+import { logFinancialWorkflowFailure } from '../lib/finance/workflow_policy'
 import { FinanceCore } from '../lib/finance_core'
+import { enforceDataQualityPolicy } from '../lib/data_quality'
 import { resolveControlAccount } from '../lib/posting_engine'
 
 const suppliers = new Hono<{ Bindings: Env }>()
@@ -539,6 +541,13 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
 
   const status = b.status ?? 'posted'
 
+  if (status === 'posted') {
+    const gate = await enforceDataQualityPolicy(c.env.DB, company_id, { mode: 'posted', module: 'suppliers' })
+    if (!gate.ok) {
+      return c.json({ success: false, error: gate.error, code: gate.code, details: gate.details }, gate.status ?? 409)
+    }
+  }
+
   if (status === 'posted' && (b.season_id == null || b.center_code == null)) {
     return c.json({ success: false, error: 'الموسم ومركز التكلفة مطلوبان عند الترحيل' }, 422)
   }
@@ -686,6 +695,21 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
       await c.env.DB.prepare(
         "UPDATE supplier_transactions SET status = 'draft' WHERE id = ?"
       ).bind(txnId).run()
+      await logFinancialWorkflowFailure(c.env.DB, {
+        company_id,
+        user_id: userId,
+        module: 'suppliers',
+        stage: 'post_supplier_transaction',
+        table_name: 'supplier_transactions',
+        record_id: txnId,
+        error: e,
+        context: {
+          supplier_code: code,
+          amount: b.amount,
+          entry_type: b.entry_type,
+          financial_account_id: b.financial_account_id ?? null,
+        },
+      })
       const message = e instanceof Error ? e.message : 'خطأ غير معروف'
       return c.json({
         success: false,
@@ -725,6 +749,11 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
   }
   if (!supplier.is_active) {
     return c.json({ success: false, error: 'المورد غير نشط ولا يمكن ترحيل حركة جديدة' }, 409)
+  }
+
+  const gate = await enforceDataQualityPolicy(c.env.DB, company_id, { mode: 'posted', module: 'suppliers' })
+  if (!gate.ok) {
+    return c.json({ success: false, error: gate.error, code: gate.code, details: gate.details }, gate.status ?? 409)
   }
 
   const txn = await c.env.DB
@@ -867,6 +896,21 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
       await c.env.DB.prepare('DELETE FROM fixed_assets WHERE id = ? AND company_id = ?')
         .bind(createdAssetId, company_id).run()
     }
+    await logFinancialWorkflowFailure(c.env.DB, {
+      company_id,
+      user_id: userId,
+      module: 'suppliers',
+      stage: 'commit_supplier_draft',
+      table_name: 'supplier_transactions',
+      record_id: id,
+      error: e,
+      context: {
+        supplier_code: code,
+        entry_type: txn.entry_type,
+        amount: txn.amount,
+        financial_account_id: txn.financial_account_id ?? null,
+      },
+    })
     const message = e instanceof Error ? e.message : 'خطأ غير معروف'
     return c.json({ success: false, error: `فشل ترحيل الحركة: ${message}` }, 400)
   }

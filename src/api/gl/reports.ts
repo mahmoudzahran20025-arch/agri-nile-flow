@@ -36,6 +36,168 @@ function buildDescendants(accounts: { code: string; parent_code: string | null }
 // GENERAL LEDGER
 // =============================================================================
 
+// GET /api/gl/engine-health
+reports.get('/engine-health', async (c) => {
+  const { company_id } = getUser(c)
+
+  const unbalanced = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS count
+     FROM (
+       SELECT l.entry_id
+       FROM journal_entry_lines l
+       JOIN journal_entries e ON e.id = l.entry_id AND e.company_id = l.company_id
+       WHERE e.company_id = ? AND e.is_posted = 1
+       GROUP BY l.entry_id
+       HAVING ABS(ROUND(SUM(COALESCE(l.debit, 0)) - SUM(COALESCE(l.credit, 0)), 2)) > 0.01
+     )`
+  ).bind(company_id).first<{ count: number }>()
+
+  const emptyEntries = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS count
+     FROM journal_entries e
+     WHERE e.company_id = ?
+       AND e.is_posted = 1
+       AND NOT EXISTS (
+         SELECT 1 FROM journal_entry_lines l
+         WHERE l.company_id = e.company_id AND l.entry_id = e.id
+       )`
+  ).bind(company_id).first<{ count: number }>()
+
+  const headerAccountPostings = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS count
+     FROM journal_entry_lines l
+     JOIN journal_entries e ON e.id = l.entry_id AND e.company_id = l.company_id AND e.is_posted = 1
+     JOIN chart_of_accounts a ON a.company_id = l.company_id AND a.code = l.account_code
+     WHERE l.company_id = ? AND COALESCE(a.is_header, 0) = 1`
+  ).bind(company_id).first<{ count: number }>()
+
+  const cashMissingJournal = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS count
+     FROM cash_transactions
+     WHERE company_id = ? AND status = 'posted' AND journal_entry_id IS NULL`
+  ).bind(company_id).first<{ count: number }>()
+
+  const supplierMissingJournal = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS count
+     FROM supplier_transactions
+     WHERE company_id = ? AND status = 'posted' AND journal_entry_id IS NULL`
+  ).bind(company_id).first<{ count: number }>()
+
+  const inventoryGhostPosted = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS count
+     FROM inventory_movements
+     WHERE company_id = ?
+       AND gl_posting_status = 'posted'
+       AND journal_entry_id IS NULL`
+  ).bind(company_id).first<{ count: number }>()
+
+  const inventoryFailed = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS count
+     FROM inventory_movements
+     WHERE company_id = ? AND gl_posting_status = 'failed'`
+  ).bind(company_id).first<{ count: number }>()
+
+  const stuckOutbox = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS count
+     FROM inventory_posting_outbox
+     WHERE company_id = ?
+       AND status IN ('pending', 'processing')
+       AND created_at <= datetime('now', '-15 minutes')`
+  ).bind(company_id).first<{ count: number }>()
+
+  const failedOutbox = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS count
+     FROM inventory_posting_outbox
+     WHERE company_id = ? AND status = 'failed'`
+  ).bind(company_id).first<{ count: number }>()
+
+  const recentFailures = await c.env.DB.prepare(
+    `SELECT id, endpoint, method, error_message, created_at
+     FROM system_error_logs
+     WHERE company_id = ? AND endpoint LIKE 'FINANCIAL_WORKFLOW:%'
+     ORDER BY created_at DESC, id DESC
+     LIMIT 20`
+  ).bind(company_id).all<{
+    id: number
+    endpoint: string
+    method: string
+    error_message: string
+    created_at: string
+  }>()
+
+  const inconsistentCash = await c.env.DB.prepare(
+    `SELECT id, transaction_date, narration, amount, financial_account_id
+     FROM cash_transactions
+     WHERE company_id = ? AND status = 'posted' AND journal_entry_id IS NULL
+     ORDER BY transaction_date DESC, id DESC
+     LIMIT 20`
+  ).bind(company_id).all<{
+    id: number
+    transaction_date: string
+    narration: string
+    amount: number
+    financial_account_id: number | null
+  }>()
+
+  const inconsistentSuppliers = await c.env.DB.prepare(
+    `SELECT id, transaction_date, notes, amount, supplier_code
+     FROM supplier_transactions
+     WHERE company_id = ? AND status = 'posted' AND journal_entry_id IS NULL
+     ORDER BY transaction_date DESC, id DESC
+     LIMIT 20`
+  ).bind(company_id).all<{
+    id: number
+    transaction_date: string
+    notes: string | null
+    amount: number
+    supplier_code: number | null
+  }>()
+
+  const inconsistentInventory = await c.env.DB.prepare(
+    `SELECT id, movement_date, movement_type, gl_posting_status, gl_posting_error
+     FROM inventory_movements
+     WHERE company_id = ?
+       AND (gl_posting_status = 'failed' OR (gl_posting_status = 'posted' AND journal_entry_id IS NULL))
+     ORDER BY movement_date DESC, id DESC
+     LIMIT 20`
+  ).bind(company_id).all<{
+    id: number
+    movement_date: string
+    movement_type: string
+    gl_posting_status: string
+    gl_posting_error: string | null
+  }>()
+
+  const summary = {
+    unbalanced_journal_entries: unbalanced?.count ?? 0,
+    empty_posted_entries: emptyEntries?.count ?? 0,
+    header_account_postings: headerAccountPostings?.count ?? 0,
+    posted_cash_missing_journal: cashMissingJournal?.count ?? 0,
+    posted_supplier_missing_journal: supplierMissingJournal?.count ?? 0,
+    inventory_ghost_posted: inventoryGhostPosted?.count ?? 0,
+    inventory_failed: inventoryFailed?.count ?? 0,
+    inventory_outbox_stuck: stuckOutbox?.count ?? 0,
+    inventory_outbox_failed: failedOutbox?.count ?? 0,
+    recent_workflow_failures: recentFailures.results.length,
+  }
+
+  const totalIssues = Object.values(summary).reduce((acc, value) => acc + value, 0)
+
+  return c.json({
+    success: true,
+    data: {
+      status: totalIssues === 0 ? 'healthy' : 'attention',
+      summary,
+      details: {
+        recent_failures: recentFailures.results,
+        cash_missing_journal: inconsistentCash.results,
+        supplier_missing_journal: inconsistentSuppliers.results,
+        inventory_inconsistencies: inconsistentInventory.results,
+      },
+    },
+  })
+})
+
 // GET /api/gl/ledger/:account?
 reports.get('/ledger/:account?', async (c) => {
   const { company_id } = getUser(c)

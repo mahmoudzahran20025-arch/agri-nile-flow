@@ -78,14 +78,47 @@ const checks = [
   ['items_ipg_pct', Number(control.min_items_ipg_pct || 100)],
 ]
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GUARD: Regression detection for cash_expense_pct outflow-only denominator
+// Ensures we never revert to all-rows calculation (policy protection)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const cash_all_rows = run(`
+  SELECT COUNT(*) total,
+    SUM(CASE WHEN expense_code IS NOT NULL THEN 1 ELSE 0 END) with_expense
+  FROM cash_transactions WHERE company_id=${COMPANY_ID}
+`)
+
+const cash_expense_pct_all_rows = pct(Number(cash_all_rows.with_expense || 0), Number(cash_all_rows.total || 0))
+const cash_expense_pct_outflow_only = coverage.cash_expense_pct
+
+// Guard: if all-rows is significantly higher, policy has regressed
+const regression_detected = cash_expense_pct_all_rows > (cash_expense_pct_outflow_only + 5.0)
+
 const failures = checks
   .map(([metric, min]) => ({ metric, min, actual: Number(coverage[metric]) }))
   .filter((x) => x.actual + 0.0001 < x.min)
+
+// Add regression as a failure if detected
+if (regression_detected) {
+  failures.push({
+    metric: 'cash_expense_pct_policy_regression',
+    min: 0, // This is a flag, not a threshold
+    actual: cash_expense_pct_all_rows,
+    detail: `Outflow-only=${cash_expense_pct_outflow_only}%, All-rows=${cash_expense_pct_all_rows}% (drift > 5% indicates possible policy revert)`,
+  })
+}
 
 console.log(JSON.stringify({
   generated_at: new Date().toISOString(),
   enforce_gates: Number(control.enforce_gates || 0),
   coverage,
+  policy_guards: {
+    cash_expense_pct_policy: 'outflow-only (direction=م)',
+    outflow_only_pct: cash_expense_pct_outflow_only,
+    all_rows_pct: cash_expense_pct_all_rows,
+    regression_detected,
+  },
   failures,
 }, null, 2))
 

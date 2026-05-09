@@ -5,6 +5,8 @@ import { getOpenPeriod } from '../../lib/gl'
 import { resolveMovementDirection } from '../../lib/posting_engine'
 import { FinanceCore } from '../../lib/finance_core'
 import { logAudit } from '../../lib/audit'
+import { logFinancialWorkflowFailure } from '../../lib/finance/workflow_policy'
+import { enforceDataQualityPolicy } from '../../lib/data_quality'
 import {
   enforceInventoryLockDate,
   enqueueInventoryPostingOutbox,
@@ -54,6 +56,53 @@ async function validateActiveCenterCode(
     'SELECT 1 AS ok FROM cost_centers WHERE company_id = ? AND CAST(code AS INTEGER) = ? AND is_active = 1 LIMIT 1'
   ).bind(companyId, centerCode).first<{ ok: number }>()
   return !!row
+}
+
+async function ensureOutboxQueued(
+  db: Env['DB'],
+  companyId: number,
+  eventType: 'inventory_movement' | 'inventory_transfer',
+  movementId: number,
+): Promise<void> {
+  const row = await db.prepare(
+    `SELECT id
+     FROM inventory_posting_outbox
+     WHERE company_id = ? AND event_type = ? AND movement_id = ?
+     ORDER BY id DESC
+     LIMIT 1`
+  ).bind(companyId, eventType, movementId)
+    .first<{ id: number }>()
+
+  if (!row?.id) {
+    throw new Error(`OUTBOX_ENQUEUE_FAILED:${eventType}:${movementId}`)
+  }
+}
+
+async function markMovementFinancialFailure(
+  db: Env['DB'],
+  companyId: number,
+  userId: number,
+  movementId: number,
+  reason: string,
+): Promise<void> {
+  await db.prepare(
+    `UPDATE inventory_movements
+     SET gl_posting_status = 'failed',
+         gl_posting_error = ?,
+         gl_posted_at = datetime('now')
+     WHERE id = ? AND company_id = ?`
+  ).bind(reason, movementId, companyId).run()
+
+  await logFinancialWorkflowFailure(db, {
+    company_id: companyId,
+    user_id: userId,
+    module: 'inventory',
+    stage: 'mark_inventory_financial_failure',
+    table_name: 'inventory_movements',
+    record_id: movementId,
+    error: reason,
+    context: { movement_id: movementId },
+  })
 }
 
 // ── GET /movements ────────────────────────────────────────────
@@ -282,6 +331,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
   // Movement ledger is committed and immutable; GL failure is always recoverable.
   const glValue = movementValue
   let glEntryId: number | null = null
+  let cashMirrorWarning: string | null = null
   if (glValue > 0) {
     const outboxPayload = {
       company_id, ref_id: movId,
@@ -292,6 +342,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
       supplier_code: b.supplier_code ?? null, work_order_id: b.work_order_id ?? null,
     }
     await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', movId, outboxPayload)
+    await ensureOutboxQueued(c.env.DB, company_id, 'inventory_movement', movId)
     await c.env.DB.prepare(
       'UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?'
     ).bind('pending', movId, company_id).run()
@@ -312,13 +363,27 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
         skipGlPosting: true, // GL already enqueued via inventory outbox; cash entry only
       })
     } catch (cashErr: any) {
-      // Non-fatal: inventory movement is committed. Log and surface via audit trail.
+      // Treat as financially failed until retried/reconciled; never return silent success.
       console.error(`[movements] cash mirror failed for movId=${movId}: ${cashErr?.message}`)
+      cashMirrorWarning = cashErr?.message ?? 'cash_mirror_failed'
+      await markMovementFinancialFailure(
+        c.env.DB,
+        company_id,
+        userId,
+        movId,
+        `CASH_MIRROR_FAILED:${cashMirrorWarning}`,
+      )
       void logAudit(c.env.DB, {
         user_id: userId, company_id, action: 'CREATE',
         table_name: 'cash_transactions', record_id: movId,
         new_value: { error: cashErr?.message, context: 'cash_mirror_on_grn' },
       })
+      return c.json({
+        success: false,
+        error: 'تم تسجيل الحركة المخزنية لكن فشل القيد/المرآة النقدية وتم تعليم الحركة كفشل مالي للمراجعة',
+        code: 'CASH_MIRROR_FAILED',
+        data: { movement_id: movId },
+      }, 409)
     }
   }
 
@@ -328,7 +393,16 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     new_value: { type: b.movement_type, item: b.item_code, warehouse: b.warehouse, qty: b.quantity, price: unitPrice, date: b.movement_date },
   })
 
-  return c.json({ success: true, data: { balance_qty: balQty, balance_value: balVal, gl_entry_id: glEntryId } }, 201)
+  return c.json({
+    success: true,
+    data: {
+      balance_qty: balQty,
+      balance_value: balVal,
+      gl_entry_id: glEntryId,
+      cash_mirror_warning: cashMirrorWarning,
+    },
+    warning: cashMirrorWarning ? 'تمت الحركة المخزنية لكن فشل تسجيل مرآة الخزينة' : undefined,
+  }, 201)
 })
 
 // ── POST /movements/batch ─────────────────────────────────────
@@ -359,6 +433,11 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
   }
   if (!isSupportedMovementType(b.movement_type)) {
     return c.json({ success: false, error: 'نوع حركة غير مدعوم' }, 400)
+  }
+
+  const gate = await enforceDataQualityPolicy(c.env.DB, company_id, { mode: 'bulk', module: 'inventory_batch' })
+  if (!gate.ok) {
+    return c.json({ success: false, error: gate.error, code: gate.code, details: gate.details }, gate.status ?? 409)
   }
 
   const batchDirection = resolveMovementDirection(b.movement_type)
@@ -531,6 +610,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
   if (deltaStmts.length > 0) await c.env.DB.batch(deltaStmts)
 
   let totalValue = 0
+  let cashMirrorWarning: string | null = null
   for (const ins of inserted) {
     const lr = lineResults.find(r => r.localId === ins.local_id)
     if (!lr) continue
@@ -555,11 +635,12 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
       center_code: centerCode ?? null, payment_method: b.payment_method ?? null,
       supplier_code: b.supplier_code ?? null, work_order_id: b.work_order_id ?? null,
     })
+    await ensureOutboxQueued(c.env.DB, company_id, 'inventory_movement', ins.id)
     await c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?')
       .bind('pending', ins.id, company_id).run()
   }
 
-  if ((b.movement_type === 'اضافة' || b.movement_type === 'GRN') && b.payment_method === 'cash' && totalValue > 0) {
+  if (b.movement_type === 'GRN' && b.payment_method === 'cash' && totalValue > 0) {
     try {
       await FinanceCore.recordCashMovement(c.env.DB, {
         company_id, userId,
@@ -575,11 +656,27 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
       })
     } catch (cashErr: any) {
       console.error(`[movements/batch] cash mirror failed: ${cashErr?.message}`)
+      cashMirrorWarning = cashErr?.message ?? 'cash_mirror_failed'
+      for (const ins of inserted) {
+        await markMovementFinancialFailure(
+          c.env.DB,
+          company_id,
+          userId,
+          ins.id,
+          `CASH_MIRROR_FAILED:${cashMirrorWarning}`,
+        )
+      }
       void logAudit(c.env.DB, {
         user_id: userId, company_id, action: 'CREATE',
         table_name: 'cash_transactions', record_id: 0,
         new_value: { error: cashErr?.message, context: 'cash_mirror_on_batch_grn', warehouse: b.warehouse },
       })
+      return c.json({
+        success: false,
+        error: 'تم تسجيل دفعة المخزون لكن فشل القيد/المرآة النقدية وتم تعليم الحركات كفشل مالي للمراجعة',
+        code: 'CASH_MIRROR_FAILED',
+        data: { movement_ids: inserted.map(r => r.id) },
+      }, 409)
     }
   }
 
@@ -591,7 +688,9 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
         item_code: lr.item_code, quantity: lr.quantity,
         balance_qty: lr.balQty, balance_value: lr.balVal,
       })),
+      cash_mirror_warning: cashMirrorWarning,
     },
+    warning: cashMirrorWarning ? 'تمت حركة الدفعة المخزنية لكن فشل تسجيل مرآة الخزينة' : undefined,
   }, 201)
 })
 
@@ -730,6 +829,7 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
       item_name: itemRow?.name ?? String(b.item_code), created_by: userId,
       target_movement_id: inId,
     })
+    await ensureOutboxQueued(c.env.DB, company_id, 'inventory_transfer', outId)
     await c.env.DB.batch([
       c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('pending', outId, company_id),
       c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('pending', inId, company_id),
@@ -887,6 +987,7 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
       item_name: itemRow?.name ?? String(ins.item_code), created_by: userId,
       target_movement_id: inId,
     })
+    await ensureOutboxQueued(c.env.DB, company_id, 'inventory_transfer', ins.id)
     await c.env.DB.batch([
       c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('pending', ins.id, company_id),
       c.env.DB.prepare('UPDATE inventory_movements SET gl_posting_status = ? WHERE id = ? AND company_id = ?').bind('pending', inId, company_id),

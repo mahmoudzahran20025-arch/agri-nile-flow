@@ -2,6 +2,49 @@ import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types'
 import { postAutoEntry } from '../gl'
 import type { RuleTrace } from '../posting_engine'
 
+const OPERATION_KEY_BY_EVENT_TYPE: Record<string, string> = {
+  supplier_invoice: 'SUPPLIER_INVOICE',
+  supplier_payment: 'SUPPLIER_PAYMENT',
+  sales_invoice: 'SALES_INVOICE',
+  sale_receipt: 'SALE_RECEIPT',
+  inventory_movement: 'INVENTORY_MOVEMENT',
+  purchase_receipt: 'INVENTORY_IN',
+  work_order_labor: 'PRODUCTION_CONSUMPTION',
+  harvest_cost: 'PRODUCTION_OUTPUT',
+  expense: 'CASH_EXPENSE',
+  cash_transaction: 'CASH_EXPENSE',
+}
+
+async function ensureDeterministicMatrixCoverage(
+  db: D1Database,
+  companyId: number,
+  eventType: string,
+): Promise<void> {
+  const operationKey = OPERATION_KEY_BY_EVENT_TYPE[eventType]
+  if (!operationKey) return
+
+  try {
+    const row = await db.prepare(
+      `SELECT id
+       FROM posting_operation_matrix
+       WHERE company_id = ? AND operation_key = ? AND is_active = 1
+       LIMIT 1`
+    ).bind(companyId, operationKey).first<{ id: number }>()
+
+    if (!row) {
+      throw new Error(
+        `POSTING_MATRIX_MISSING: event_type ${eventType} requires operation_key ${operationKey} in posting_operation_matrix.`
+      )
+    }
+  } catch (error: any) {
+    const msg = String(error?.message || error)
+    if (msg.includes('no such table: posting_operation_matrix')) {
+      throw new Error('POSTING_MATRIX_SCHEMA_MISSING: migration 0094_coa_governance_phase.sql must be applied.')
+    }
+    throw error
+  }
+}
+
 export interface EventBackedPostOpts {
   company_id: number
   event_type: string
@@ -126,12 +169,13 @@ async function linkJournalEntryToSource(
   }
 
   if (opts.event_type === 'depreciation') {
-    const periodYear = opts.payload?.period_year || opts.payload?.year
+    const periodYear  = opts.payload?.period_year  || opts.payload?.year
     const periodMonth = opts.payload?.period_month || opts.payload?.month
-    if (periodYear && periodMonth) {
+    const assetId     = opts.payload?.asset_id     ?? opts.source_id
+    if (periodYear && periodMonth && assetId) {
       stmts.push(
-        db.prepare('UPDATE depreciation_schedules SET journal_entry_id = ? WHERE company_id = ? AND period_year = ? AND period_month = ?')
-          .bind(entryId, opts.company_id, periodYear, periodMonth)
+        db.prepare('UPDATE depreciation_schedules SET journal_entry_id = ? WHERE company_id = ? AND asset_id = ? AND period_year = ? AND period_month = ?')
+          .bind(entryId, opts.company_id, assetId, periodYear, periodMonth)
       )
     }
   }
@@ -199,6 +243,8 @@ export async function postFromBusinessEvent(
 ): Promise<number | null> {
   const eventPayload = JSON.stringify(opts.payload)
   let eventId: number | null = null
+
+  await ensureDeterministicMatrixCoverage(db, opts.company_id, opts.event_type)
 
   // Reject posting into a locked GL period
   const lockedPeriod = await db.prepare(

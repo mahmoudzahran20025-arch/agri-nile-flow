@@ -251,8 +251,10 @@ export default function AddCashTransactionModal({ open, onClose, prefill, contex
         await qc.invalidateQueries({ queryKey: ['supplier-summary-mini', form.supplier_code] })
       }
       onClose()
-    } catch {
-      setError('حدث خطأ في الاتصال')
+    } catch (err: unknown) {
+      const msg = (err as Error)?.message ?? String(err)
+      // Surface actionable backend errors (e.g. CASH_EXPENSE_ACCOUNT_MISSING) verbatim
+      setError(msg || 'حدث خطأ في الاتصال')
     } finally {
       setSaving(false)
     }

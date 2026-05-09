@@ -40,6 +40,47 @@ export async function getOpenPeriod(db: D1Database, company_id: number, date: st
   return row?.id ?? null
 }
 
+async function validatePostingAccounts(
+  db: D1Database,
+  companyId: number,
+  lines: GLLine[],
+): Promise<void> {
+  const accountCodes = Array.from(
+    new Set(
+      lines
+        .map(l => (l.account_code ?? '').trim())
+        .filter(Boolean),
+    ),
+  )
+
+  if (accountCodes.length === 0) {
+    throw new Error('GL_NO_ACCOUNT_LINES: No valid account codes were provided.')
+  }
+
+  const placeholders = accountCodes.map(() => '?').join(',')
+  const { results } = await db.prepare(
+    `SELECT code, is_active, is_header
+     FROM chart_of_accounts
+     WHERE company_id = ? AND code IN (${placeholders})`
+  ).bind(companyId, ...accountCodes)
+    .all<{ code: string; is_active: number; is_header: number }>()
+
+  const byCode = new Map(results.map(r => [r.code, r]))
+
+  for (const code of accountCodes) {
+    const row = byCode.get(code)
+    if (!row) {
+      throw new Error(`GL_INVALID_ACCOUNT: account ${code} does not exist in chart_of_accounts.`)
+    }
+    if (row.is_active === 0) {
+      throw new Error(`GL_INACTIVE_ACCOUNT: account ${code} is inactive.`)
+    }
+    if (row.is_header === 1) {
+      throw new Error(`GL_HEADER_ACCOUNT_BLOCKED: account ${code} is a grouping/header account and cannot receive postings.`)
+    }
+  }
+}
+
 export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promise<number | null> {
   const totalDebit  = opts.lines.reduce((s, l) => s + l.debit, 0)
   const totalCredit = opts.lines.reduce((s, l) => s + l.credit, 0)
@@ -52,7 +93,10 @@ export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promis
     throw new Error(`GL_CLOSED_PERIOD: No open financial period found for date ${opts.entry_date}.`)
   }
 
+  await validatePostingAccounts(db, opts.company_id, opts.lines)
+
   try {
+    let entryId: number | null = null
 
     // Step 1: Insert the header to get the entry ID
     const entry = await db
@@ -63,7 +107,7 @@ export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promis
             opts.ref_type, opts.ref_id, opts.created_by ?? null,
             opts.posting_rule_trace ?? null).run()
 
-    const entryId = entry.meta.last_row_id
+    entryId = Number(entry.meta.last_row_id)
 
     // Step 2: Insert ALL lines atomically using db.batch()
     const lineStmts = opts.lines.map(l =>
@@ -78,7 +122,18 @@ export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promis
         l.source_ledger ?? 'manual', l.source_record_id ?? null
       )
     )
-    await db.batch(lineStmts)
+    try {
+      await db.batch(lineStmts)
+    } catch (lineErr: any) {
+      // Compensating cleanup: do not keep a header without a full, valid line set.
+      if (entryId) {
+        await db.prepare('DELETE FROM journal_entry_lines WHERE entry_id = ? AND company_id = ?')
+          .bind(entryId, opts.company_id).run()
+        await db.prepare('DELETE FROM journal_entries WHERE id = ? AND company_id = ?')
+          .bind(entryId, opts.company_id).run()
+      }
+      throw lineErr
+    }
 
     return entryId
   } catch (e: any) {

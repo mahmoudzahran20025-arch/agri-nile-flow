@@ -40,9 +40,9 @@ export async function resolveCashLedger(
       contraAcc = et.gl_account_code
       contraResolution = `expense_code:${opts.expense_code}(${et.name})`
     } else {
-      // expense_code exists in request but not found in expense_types — warn, don't silently skip
-      console.warn(`[cash.ts] expense_code=${opts.expense_code} not found in expense_types for company_id=${opts.company_id} — falling to control account`)
-      contraResolution = `expense_code:${opts.expense_code}:MISSING→fallback`
+      throw new Error(
+        `CASH_EXPENSE_ACCOUNT_MISSING: expense_code="${opts.expense_code}" not found in expense_types for company_id=${opts.company_id}. Configure a GL account for this expense type before posting.`
+      )
     }
   }
 

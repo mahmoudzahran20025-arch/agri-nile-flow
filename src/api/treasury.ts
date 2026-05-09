@@ -5,6 +5,7 @@ import { FinanceCore } from '../lib/finance_core'
 import { logAudit } from '../lib/audit'
 import { resolveControlAccount } from '../lib/posting_engine'
 import { getOpenPeriod } from '../lib/gl'
+import { enforceDataQualityPolicy } from '../lib/data_quality'
 
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
@@ -143,6 +144,13 @@ treasury.post('/transactions', zValidator('json', transactionSchema), async (c) 
   const { company_id, sub: userId } = getUser(c)
   const b = c.req.valid('json')
 
+  if (b.status === 'posted') {
+    const gate = await enforceDataQualityPolicy(c.env.DB, company_id, { mode: 'posted', module: 'treasury' })
+    if (!gate.ok) {
+      return c.json({ success: false, error: gate.error, code: gate.code, details: gate.details }, gate.status ?? 409)
+    }
+  }
+
   if (b.status === 'posted' && (b.season_id == null || b.center_code == null)) {
     return c.json({ success: false, error: 'الموسم ومركز التكلفة مطلوبان عند الترحيل' }, 422)
   }
@@ -187,6 +195,11 @@ treasury.post('/transactions', zValidator('json', transactionSchema), async (c) 
  treasury.patch('/transactions/:id/post', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
+
+  const gate = await enforceDataQualityPolicy(c.env.DB, company_id, { mode: 'posted', module: 'treasury' })
+  if (!gate.ok) {
+    return c.json({ success: false, error: gate.error, code: gate.code, details: gate.details }, gate.status ?? 409)
+  }
 
   const draft = await c.env.DB.prepare(
     'SELECT season_id, center_code FROM cash_transactions WHERE id = ? AND company_id = ?'
