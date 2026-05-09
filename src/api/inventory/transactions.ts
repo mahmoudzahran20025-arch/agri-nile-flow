@@ -159,7 +159,7 @@ transactions.get('/transactions/:id', permissionGuard('inventory', 'read'), asyn
 
   if (!header) return c.json({ success: false, error: 'المعاملة غير موجودة' }, 404)
 
-  const linesRes = await c.env.DB.prepare(
+  let linesRes = await c.env.DB.prepare(
     `SELECT im.id, im.item_code, i.name AS item_name, i.unit,
             im.warehouse, im.movement_type,
             im.quantity, im.unit_price,
@@ -172,6 +172,35 @@ transactions.get('/transactions/:id', permissionGuard('inventory', 'read'), asyn
      WHERE im.transaction_id = ? AND im.company_id = ?
      ORDER BY im.id ASC`
   ).bind(id, company_id).all()
+
+  // Historical imported rows often have inventory_transactions headers populated
+  // while inventory_movements.transaction_id remains NULL. Fall back to a natural
+  // document match so the drawer can still show the underlying lines.
+  if ((linesRes.results?.length ?? 0) === 0 && header.document_number != null) {
+    linesRes = await c.env.DB.prepare(
+      `SELECT im.id, im.item_code, i.name AS item_name, i.unit,
+              im.warehouse, im.movement_type,
+              im.quantity, im.unit_price,
+              im.qty_in, im.qty_out, im.balance_qty,
+              im.value_in, im.value_out, im.balance_value,
+              im.gl_posting_status, im.journal_entry_id,
+              im.movement_date, im.notes
+       FROM inventory_movements im
+       LEFT JOIN items i ON i.code = im.item_code AND i.company_id = im.company_id
+       WHERE im.company_id = ?
+         AND im.transaction_id IS NULL
+         AND CAST(im.document_number AS TEXT) = CAST(? AS TEXT)
+         AND im.movement_date = ?
+         AND im.warehouse = ?
+         AND (
+           CASE
+             WHEN im.movement_type IN ('TRANSFER_IN', 'TRANSFER_OUT') THEN 'TRANSFER'
+             ELSE im.movement_type
+           END
+         ) = ?
+       ORDER BY im.id ASC`
+    ).bind(company_id, header.document_number, header.movement_date, header.warehouse, header.transaction_type).all()
+  }
 
   return c.json({ success: true, data: { ...header, lines: linesRes.results } })
 })

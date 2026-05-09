@@ -85,19 +85,42 @@ treasury.get('/transactions', async (c) => {
 
   const [rows, cnt] = await Promise.all([
     c.env.DB.prepare(
-      `SELECT ct.id, ct.transaction_date, ct.direction, ct.document_number, ct.recipient_name,
-              ct.narration, ct.amount, ct.debit, ct.credit, ct.running_balance, ct.year, ct.month,
+      `WITH ledger AS (
+         SELECT ct0.id,
+                CASE
+                  WHEN ct0.status = 'posted' THEN
+                    SUM(
+                      CASE
+                        WHEN ct0.status = 'posted' AND ct0.direction = 'د' THEN ct0.amount
+                        WHEN ct0.status = 'posted' AND ct0.direction = 'م' THEN -ct0.amount
+                        ELSE 0
+                      END
+                    ) OVER (
+                      PARTITION BY COALESCE(ct0.financial_account_id, -1)
+                      ORDER BY ct0.transaction_date ASC, ct0.id ASC
+                      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    )
+                  ELSE NULL
+                END AS derived_running_balance
+         FROM cash_transactions ct0
+         WHERE ct0.company_id = ?
+       )
+      SELECT ct.id, ct.transaction_date, ct.direction, ct.document_number, ct.recipient_name,
+        ct.narration, ct.amount, ct.debit, ct.credit,
+        COALESCE(ct.running_balance, ledger.derived_running_balance) AS running_balance,
+        ct.year, ct.month,
               ct.notes, ct.status, ct.field_id, ct.center_code, ct.season_id, ct.document_type,
               ct.financial_account_id, ct.partner_id, ct.journal_entry_id,
               ct.supplier_code, ct.expense_code,
               s.name  AS supplier_name,
               et.name AS expense_name
        FROM cash_transactions ct
+       LEFT JOIN ledger         ON ledger.id = ct.id
        LEFT JOIN suppliers     s  ON s.code  = ct.supplier_code AND s.company_id = ct.company_id
        LEFT JOIN expense_types et ON et.code = ct.expense_code  AND et.company_id = ct.company_id
        WHERE ct.company_id = ? ${filters}
        ORDER BY ct.transaction_date ASC, ct.id ASC LIMIT ? OFFSET ?`
-    ).bind(company_id, ...filterBinds, size, offset).all(),
+    ).bind(company_id, company_id, ...filterBinds, size, offset).all(),
 
     c.env.DB.prepare(
       `SELECT COUNT(*) AS n FROM cash_transactions ct
@@ -131,12 +154,12 @@ treasury.get('/balance', async (c) => {
   }
 
   const row = await c.env.DB
-    .prepare(`SELECT running_balance FROM cash_transactions
-              ${where}
-              ORDER BY transaction_date DESC, id DESC LIMIT 1`)
-    .bind(...binds).first<{ running_balance: number }>()
+    .prepare(`SELECT COALESCE(SUM(CASE WHEN direction = 'د' THEN amount ELSE -amount END), 0) AS balance
+              FROM cash_transactions
+              ${where}`)
+    .bind(...binds).first<{ balance: number }>()
 
-  return c.json({ success: true, data: { balance: row?.running_balance ?? 0 } })
+  return c.json({ success: true, data: { balance: row?.balance ?? 0 } })
 })
 
 // POST /api/treasury/transactions

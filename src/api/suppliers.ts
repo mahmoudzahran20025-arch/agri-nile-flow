@@ -192,9 +192,19 @@ suppliers.get('/', permissionGuard('suppliers', 'read'), async (c) => {
   const [rowsResult, countResult, draftMeta] = await Promise.all([
     c.env.DB.prepare(
       `SELECT s.code, s.name, s.activity, s.is_active,
-              COALESCE(last_tx.balance_no_checks, 0)   AS current_balance,
-              COALESCE(last_tx.balance_with_checks, 0) AS current_balance_with_checks
+              COALESCE(tx_agg.total_credit, 0) AS total_credit,
+              COALESCE(tx_agg.total_debit, 0)  AS total_debit,
+              COALESCE(last_tx.balance_no_checks, COALESCE(tx_agg.total_credit, 0) - COALESCE(tx_agg.total_debit, 0), 0)   AS current_balance,
+              COALESCE(last_tx.balance_with_checks, COALESCE(tx_agg.total_credit, 0) - COALESCE(tx_agg.total_debit, 0), 0) AS current_balance_with_checks
        FROM suppliers s
+       LEFT JOIN (
+         SELECT supplier_code,
+                COALESCE(SUM(CASE WHEN status = 'posted' THEN credit ELSE 0 END), 0) AS total_credit,
+                COALESCE(SUM(CASE WHEN status = 'posted' THEN debit  ELSE 0 END), 0) AS total_debit
+         FROM supplier_transactions
+         WHERE company_id = ?
+         GROUP BY supplier_code
+       ) tx_agg ON tx_agg.supplier_code = s.code
        LEFT JOIN (
          SELECT supplier_code,
                 balance_no_checks,
@@ -210,7 +220,7 @@ suppliers.get('/', permissionGuard('suppliers', 'read'), async (c) => {
        WHERE s.company_id = ? ${where}
        ORDER BY ABS(COALESCE(last_tx.balance_no_checks, 0)) DESC
        LIMIT ? OFFSET ?`
-    ).bind(company_id, ...params, size, offset).all(),
+     ).bind(company_id, company_id, ...params, size, offset).all(),
 
     c.env.DB.prepare(
       `SELECT COUNT(*) AS total FROM suppliers s WHERE s.company_id = ? ${where}`
