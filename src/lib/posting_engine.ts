@@ -12,6 +12,7 @@
  */
 
 import type { D1Database } from '@cloudflare/workers-types'
+import { getFlag } from './hardening'
 
 // ── Public Types ──────────────────────────────────────────────────────────────
 
@@ -145,7 +146,16 @@ async function resolveGeneralSetup(
     [null,     ppg_code, 3],   // BPG wildcard
     [null,     null,     4],   // global default
   ]
+
+  const strictMode = await getFlag(db, company_id, 'strict_posting_mode')
+  const catchAllAllowed = await getFlag(db, company_id, 'catch_all_allowed', 1)
+
   for (const [b, p, step] of candidates) {
+    const isCatchAllCandidate = b == null && p == null
+    if (isCatchAllCandidate && strictMode && !catchAllAllowed) {
+      continue
+    }
+
     const row = await db
       .prepare(`SELECT id, bus_posting_group_code, prod_posting_group_code,
                   sales_account, purchases_account, cogs_account,
@@ -208,10 +218,18 @@ async function resolveInventorySetup(
     [null,     null,     4],
   ]
   const passes: Array<'specific' | 'wildcard'> = movementType ? ['specific', 'wildcard'] : ['wildcard']
+  const strictMode = await getFlag(db, company_id, 'strict_posting_mode')
+  const catchAllAllowed = await getFlag(db, company_id, 'catch_all_allowed', 1)
+
   for (const pass of passes) {
     const mt = pass === 'specific' ? movementType! : null
     for (const [i, p, baseStep] of dimCandidates) {
       const step = pass === 'specific' ? baseStep : baseStep + 4
+      const isCatchAllCandidate = i == null && p == null
+      if (isCatchAllCandidate && strictMode && !catchAllAllowed) {
+        continue
+      }
+
       const row = await db
         .prepare(`SELECT id, inv_posting_group_code, prod_posting_group_code, inventory_account, wip_account, finished_goods_account
                   FROM posting_rules

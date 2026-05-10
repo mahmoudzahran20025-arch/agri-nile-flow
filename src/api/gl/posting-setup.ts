@@ -9,12 +9,41 @@ import {
   resolveSupplierPayment   as peResolveSupplierPayment,
   resolveExpensePosting    as peResolveExpense,
   resolveSalesRevenue      as peResolveSalesRevenue,
-  clearPostingEngineCaches,
 } from '../../lib/posting_engine'
 
 const postingSetup = new Hono<{ Bindings: Env }>()
 postingSetup.use('*', authMiddleware)
 postingSetup.use('*', roleGuard(['super_admin', 'company_admin', 'accountant']))
+
+async function submitPostingRuleChangeForApproval(
+  db: Env['DB'],
+  opts: {
+    company_id: number
+    user_id: number
+    action: 'INSERT' | 'UPDATE' | 'ACTIVATE' | 'DEACTIVATE' | 'DELETE'
+    rule_id?: number
+    reason: string
+    old_values?: Record<string, unknown> | null
+    new_values: Record<string, unknown>
+  },
+): Promise<number> {
+  const result = await db.prepare(
+    `INSERT INTO posting_rules_audit
+     (company_id, rule_id, action, changed_by, changed_at, change_reason,
+      approval_status, old_values, new_values)
+     VALUES (?,?,?,?,datetime('now'),?,'pending',?,?)`
+  ).bind(
+    opts.company_id,
+    opts.rule_id ?? 0,
+    opts.action,
+    opts.user_id,
+    opts.reason,
+    JSON.stringify(opts.old_values ?? null),
+    JSON.stringify(opts.new_values),
+  ).run()
+
+  return Number(result.meta.last_row_id ?? 0)
+}
 
 const PG_TABLES = {
   business:  'business_posting_groups',
@@ -201,6 +230,7 @@ postingSetup.post('/posting-setup/general', async (c) => {
     sales_returns_account?: string | null
     purch_returns_account?: string | null
     expense_account?: string | null
+    change_reason?: string
   }>()
 
   const bpg = body.bus_posting_group_code?.toUpperCase() ?? null
@@ -213,21 +243,28 @@ postingSetup.post('/posting-setup/general', async (c) => {
     .bind(company_id, bpg, bpg, ppg, ppg).first()
   if (exists) return c.json({ success: false, error: `A setup row for BPG="${bpg ?? 'DEFAULT'}" × PPG="${ppg ?? 'DEFAULT'}" already exists.` }, 409)
 
-  const { meta } = await c.env.DB
-    .prepare(`INSERT INTO posting_rules
-              (company_id, rule_type, bus_posting_group_code, prod_posting_group_code,
-               sales_account, purchases_account, cogs_account,
-               sales_returns_account, purch_returns_account, expense_account,
-               priority, is_active, created_at, updated_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,100,1,datetime('now'),datetime('now'))`)
-    .bind(company_id, 'general', bpg, ppg,
-          body.sales_account ?? null, body.purchases_account ?? null, body.cogs_account ?? null,
-          body.sales_returns_account ?? null, body.purch_returns_account ?? null, body.expense_account ?? null)
-    .run()
+  const pendingId = await submitPostingRuleChangeForApproval(c.env.DB, {
+    company_id,
+    user_id: userId,
+    action: 'INSERT',
+    reason: body.change_reason?.trim() || 'Submitted from posting setup (general)',
+    new_values: {
+      rule_type: 'general',
+      bus_posting_group_code: bpg,
+      prod_posting_group_code: ppg,
+      sales_account: body.sales_account ?? null,
+      purchases_account: body.purchases_account ?? null,
+      cogs_account: body.cogs_account ?? null,
+      sales_returns_account: body.sales_returns_account ?? null,
+      purch_returns_account: body.purch_returns_account ?? null,
+      expense_account: body.expense_account ?? null,
+      priority: 100,
+      is_active: 1,
+    },
+  })
 
-  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'CREATE', table_name: 'posting_rules', new_value: { rule_type: 'general', bpg, ppg } })
-  clearPostingEngineCaches()
-  return c.json({ success: true, data: { id: meta.last_row_id } }, 201)
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'CREATE', table_name: 'posting_rules_audit', new_value: { pending_audit_id: pendingId, rule_type: 'general', bpg, ppg } })
+  return c.json({ success: true, pending_approval: true, data: { audit_id: pendingId } }, 202)
 })
 
 // PATCH /api/gl/posting-setup/general/:id
@@ -244,7 +281,7 @@ postingSetup.patch('/posting-setup/general/:id', async (c) => {
   const body = await c.req.json<{
     sales_account?: string | null; purchases_account?: string | null; cogs_account?: string | null
     sales_returns_account?: string | null; purch_returns_account?: string | null
-    expense_account?: string | null; is_active?: boolean
+    expense_account?: string | null; is_active?: boolean; change_reason?: string
   }>()
 
   const sets: string[] = []
@@ -257,13 +294,39 @@ postingSetup.patch('/posting-setup/general/:id', async (c) => {
   if (!sets.length) return c.json({ success: false, error: 'Nothing to update' }, 422)
   vals.push(rowId, company_id)
 
-  await c.env.DB
-    .prepare(`UPDATE posting_rules SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ? AND company_id = ? AND rule_type = 'general'`)
-    .bind(...vals).run()
+  const currentRow = await c.env.DB
+    .prepare(`SELECT id, rule_type, bus_posting_group_code, prod_posting_group_code,
+                     sales_account, purchases_account, cogs_account,
+                     sales_returns_account, purch_returns_account, expense_account,
+                     priority, is_active
+              FROM posting_rules
+              WHERE id = ? AND company_id = ? AND rule_type = 'general'`)
+    .bind(rowId, company_id).first<Record<string, unknown>>()
 
-  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPDATE', table_name: 'posting_rules', new_value: { id: rowId, rule_type: 'general', ...body } })
-  clearPostingEngineCaches()
-  return c.json({ success: true })
+  const newValues = {
+    id: rowId,
+    rule_type: 'general',
+    sales_account: body.sales_account,
+    purchases_account: body.purchases_account,
+    cogs_account: body.cogs_account,
+    sales_returns_account: body.sales_returns_account,
+    purch_returns_account: body.purch_returns_account,
+    expense_account: body.expense_account,
+    is_active: body.is_active === undefined ? undefined : (body.is_active ? 1 : 0),
+  }
+
+  const pendingId = await submitPostingRuleChangeForApproval(c.env.DB, {
+    company_id,
+    user_id: userId,
+    rule_id: rowId,
+    action: body.is_active === true ? 'ACTIVATE' : body.is_active === false ? 'DEACTIVATE' : 'UPDATE',
+    reason: body.change_reason?.trim() || 'Submitted from posting setup update (general)',
+    old_values: currentRow,
+    new_values: newValues,
+  })
+
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPDATE', table_name: 'posting_rules_audit', new_value: { pending_audit_id: pendingId, id: rowId, rule_type: 'general' } })
+  return c.json({ success: true, pending_approval: true, data: { audit_id: pendingId } }, 202)
 })
 
 // =============================================================================
@@ -290,6 +353,7 @@ postingSetup.post('/posting-setup/inventory', async (c) => {
     inventory_account?: string | null
     wip_account?: string | null
     finished_goods_account?: string | null
+    change_reason?: string
   }>()
 
   const ipg = body.inv_posting_group_code?.toUpperCase() ?? null
@@ -302,16 +366,25 @@ postingSetup.post('/posting-setup/inventory', async (c) => {
     .bind(company_id, ipg, ipg, ppg, ppg).first()
   if (exists) return c.json({ success: false, error: `A setup row for IPG="${ipg ?? 'DEFAULT'}" × PPG="${ppg ?? 'DEFAULT'}" already exists.` }, 409)
 
-  const { meta } = await c.env.DB
-    .prepare(`INSERT INTO posting_rules
-              (company_id, rule_type, inv_posting_group_code, prod_posting_group_code, inventory_account, wip_account, finished_goods_account, priority, is_active, created_at, updated_at)
-              VALUES (?,?,?,?,?,?,?,100,1,datetime('now'),datetime('now'))`)
-    .bind(company_id, 'inventory', ipg, ppg, body.inventory_account ?? null, body.wip_account ?? null, body.finished_goods_account ?? null)
-    .run()
+  const pendingId = await submitPostingRuleChangeForApproval(c.env.DB, {
+    company_id,
+    user_id: userId,
+    action: 'INSERT',
+    reason: body.change_reason?.trim() || 'Submitted from posting setup (inventory)',
+    new_values: {
+      rule_type: 'inventory',
+      inv_posting_group_code: ipg,
+      prod_posting_group_code: ppg,
+      inventory_account: body.inventory_account ?? null,
+      wip_account: body.wip_account ?? null,
+      finished_goods_account: body.finished_goods_account ?? null,
+      priority: 100,
+      is_active: 1,
+    },
+  })
 
-  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'CREATE', table_name: 'posting_rules', new_value: { rule_type: 'inventory', ipg, ppg } })
-  clearPostingEngineCaches()
-  return c.json({ success: true, data: { id: meta.last_row_id } }, 201)
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'CREATE', table_name: 'posting_rules_audit', new_value: { pending_audit_id: pendingId, rule_type: 'inventory', ipg, ppg } })
+  return c.json({ success: true, pending_approval: true, data: { audit_id: pendingId } }, 202)
 })
 
 // PATCH /api/gl/posting-setup/inventory/:id
@@ -325,7 +398,7 @@ postingSetup.patch('/posting-setup/inventory/:id', async (c) => {
     .bind(rowId, company_id).first()
   if (!existing) return c.json({ success: false, error: 'Not found' }, 404)
 
-  const body = await c.req.json<{ inventory_account?: string | null; wip_account?: string | null; finished_goods_account?: string | null; is_active?: boolean }>()
+  const body = await c.req.json<{ inventory_account?: string | null; wip_account?: string | null; finished_goods_account?: string | null; is_active?: boolean; change_reason?: string }>()
   const sets: string[] = []
   const vals: unknown[] = []
   if ('inventory_account' in body) { sets.push('inventory_account = ?'); vals.push(body.inventory_account ?? null) }
@@ -335,13 +408,35 @@ postingSetup.patch('/posting-setup/inventory/:id', async (c) => {
   if (!sets.length) return c.json({ success: false, error: 'Nothing to update' }, 422)
   vals.push(rowId, company_id)
 
-  await c.env.DB
-    .prepare(`UPDATE posting_rules SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ? AND company_id = ? AND rule_type = 'inventory'`)
-    .bind(...vals).run()
+  const currentRow = await c.env.DB
+    .prepare(`SELECT id, rule_type, inv_posting_group_code, prod_posting_group_code,
+                     inventory_account, wip_account, finished_goods_account,
+                     priority, is_active
+              FROM posting_rules
+              WHERE id = ? AND company_id = ? AND rule_type = 'inventory'`)
+    .bind(rowId, company_id).first<Record<string, unknown>>()
 
-  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPDATE', table_name: 'posting_rules', new_value: { id: rowId, rule_type: 'inventory', ...body } })
-  clearPostingEngineCaches()
-  return c.json({ success: true })
+  const newValues = {
+    id: rowId,
+    rule_type: 'inventory',
+    inventory_account: body.inventory_account,
+    wip_account: body.wip_account,
+    finished_goods_account: body.finished_goods_account,
+    is_active: body.is_active === undefined ? undefined : (body.is_active ? 1 : 0),
+  }
+
+  const pendingId = await submitPostingRuleChangeForApproval(c.env.DB, {
+    company_id,
+    user_id: userId,
+    rule_id: rowId,
+    action: body.is_active === true ? 'ACTIVATE' : body.is_active === false ? 'DEACTIVATE' : 'UPDATE',
+    reason: body.change_reason?.trim() || 'Submitted from posting setup update (inventory)',
+    old_values: currentRow,
+    new_values: newValues,
+  })
+
+  void logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPDATE', table_name: 'posting_rules_audit', new_value: { pending_audit_id: pendingId, id: rowId, rule_type: 'inventory' } })
+  return c.json({ success: true, pending_approval: true, data: { audit_id: pendingId } }, 202)
 })
 
 // =============================================================================
