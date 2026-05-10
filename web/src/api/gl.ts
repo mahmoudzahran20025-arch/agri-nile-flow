@@ -38,6 +38,109 @@ export interface IntegrityCheckV2Result {
   checks: IntegrityIssue[]
 }
 
+// ── Hardening / PostingMeta types ───────────────────────────────────────────
+
+export type CertificationStatus = 'certified' | 'degraded' | 'blocked'
+export type DataSource = 'gl_primary' | 'source_table_fallback'
+
+export interface PostingMeta {
+  certification_status: CertificationStatus
+  degraded_mode:        boolean
+  degraded_reason?:     string
+  data_source:          DataSource
+  strict_posting_active: boolean
+}
+
+export interface HardeningFlag {
+  flag_key:    string
+  flag_value:  number
+  description: string | null
+  set_by:      number | null
+  set_at:      string
+  expires_at:  string | null
+}
+
+export interface HardeningBaseline {
+  posting_success: {
+    total_events:    number
+    linked:          number
+    unlinked:        number
+    success_rate_pct: number
+  }
+  dimension_completeness: Array<{
+    source:     string
+    total:      number
+    has_center: number
+    has_season: number
+  }>
+  subledger_drift: { suppliers_with_drift: number }
+  rule_health: {
+    total_active_rules: number
+    catchall_rules:     number
+    ap_rule_active:     number
+    ap_rule_inactive:   number
+  }
+  hardening_flags: Record<string, boolean>
+}
+
+export interface AuditRecord {
+  id:              number
+  rule_id:         number
+  action:          string
+  changed_by:      number
+  changed_by_name: string | null
+  changed_at:      string
+  change_reason:   string
+  approval_status: 'pending' | 'approved' | 'rejected'
+  approved_by:     number | null
+  approved_at:     string | null
+  old_values:      string | null
+  new_values:      string | null
+}
+
+// ── Hardening API namespace (appended to glApi) ──────────────────────────────
+export const hardeningApi = {
+  flags: () =>
+    unwrap(api.get<{ success: true; data: HardeningFlag[] }>('/gl/hardening/flags')),
+
+  setFlag: (key: string, value: 0 | 1, reason: string, expires_at?: string) =>
+    unwrap(api.patch<{ success: true; data: { key: string; old_value: number; new_value: number } }>(
+      `/gl/hardening/flags/${key}`,
+      { value, reason, expires_at }
+    )),
+
+  baseline: () =>
+    unwrap(api.get<{ success: true; snapshot_date: string; data: HardeningBaseline; meta: PostingMeta }>(
+      '/gl/hardening/baseline'
+    )),
+
+  pendingAudit: () =>
+    unwrap(api.get<{ success: true; data: AuditRecord[]; count: number }>('/gl/hardening/audit/pending')),
+
+  auditLog: (p?: { page?: number; size?: number; status?: string }) => {
+    const params = new URLSearchParams()
+    if (p?.page)   params.set('page',   String(p.page))
+    if (p?.size)   params.set('size',   String(p.size))
+    if (p?.status) params.set('status', p.status)
+    const qs = params.toString()
+    return unwrap(api.get<{ success: true; data: AuditRecord[]; pagination: { page: number; size: number; total: number } }>(
+      `/gl/hardening/audit${qs ? `?${qs}` : ''}`
+    ))
+  },
+
+  approve: (id: number, reason?: string) =>
+    unwrap(api.post<{ success: true; data: { audit_id: number; approved_by: number } }>(
+      `/gl/hardening/audit/${id}/approve`,
+      { reason }
+    )),
+
+  reject: (id: number, reason: string) =>
+    unwrap(api.post<{ success: true; data: { audit_id: number; rejected_by: number } }>(
+      `/gl/hardening/audit/${id}/reject`,
+      { reason }
+    )),
+}
+
 export interface SystemIntegrityScoreResult {
   success: true
   overall_score: number
@@ -451,7 +554,7 @@ export const glApi = {
   wipFlush: (id: number, body: { season_id: number; memo?: string }) =>
     unwrap(api.post<{ entry_id: number; wip_account: string; cogs_account: string; amount: number }>(`/gl/periods/${id}/wip-flush`, body)),
 
-  entries:     (p?: { page?: number; size?: number; start?: string; end?: string; ref_type?: string; search?: string; expense_code?: number; center_code?: string }) =>
+  entries:     (p?: { page?: number; size?: number; start?: string; end?: string; module?: 'supplier' | 'inventory' | 'cash'; ref_type?: string; search?: string; expense_code?: number; center_code?: string }) =>
     unwrapPaginated<unknown>(api.get(paginatedUrl('/gl/entries', p ?? {}))),
   getEntry:    (id: number) => unwrap(api.get(`/gl/entries/${id}`)),
   createEntry: (body: unknown) => api.post('/gl/entries/manual-entries', body),

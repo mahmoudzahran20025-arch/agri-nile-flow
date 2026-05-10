@@ -22,6 +22,7 @@ const ReconciliationPage       = lazy(() => import('./pages/gl/ReconciliationPag
 const PeriodCloseCockpit       = lazy(() => import('./pages/gl/PeriodCloseCockpit'))
 const BatchPostingCenterPage   = lazy(() => import('./pages/gl/BatchPostingCenterPage'))
 const HealthIntegrityPage      = lazy(() => import('./pages/gl/HealthIntegrityPage'))
+const HardeningDashboardPage   = lazy(() => import('./pages/gl/HardeningDashboardPage'))
 const GLSettingsPage           = lazy(() => import('./pages/gl/GLSettingsPage'))
 const PostingGroupsPage        = lazy(() => import('./pages/gl/PostingGroupsPage'))
 const PostingSetupPage         = lazy(() => import('./pages/gl/PostingSetupPage'))
@@ -212,6 +213,7 @@ export default function App() {
         <Route path="gl/entries"      element={<JournalEntriesPage />} />
         <Route path="gl/statements"   element={<FinancialStatementsPage />} />
         <Route path="gl/health-integrity" element={<HealthIntegrityPage />} />
+        <Route path="gl/hardening"         element={<HardeningDashboardPage />} />
         {/* GL Settings hub — tabs: mappings | integrations | periods */}
         <Route path="gl/settings"      element={<GLSettingsPage />} />
         <Route path="gl/posting-groups" element={<PostingGroupsPage />} />

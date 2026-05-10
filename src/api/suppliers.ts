@@ -32,24 +32,23 @@ async function updateSupplierRunningBalance(
   newTxnId: number,
   newTxnDate: string,
 ) {
-  // Check if this is a backdated insert (not the latest transaction)
+  // Only posted rows contribute to the running balance visible to users.
+  // Draft rows have balance_no_checks = balance_with_checks = 0 until posted.
   const latestRow = await db.prepare(
     `SELECT transaction_date FROM supplier_transactions
-     WHERE company_id = ? AND supplier_code = ? AND id != ?
+     WHERE company_id = ? AND supplier_code = ? AND id != ? AND status = 'posted'
      ORDER BY transaction_date DESC, id DESC LIMIT 1`
   ).bind(companyId, supplierCode, newTxnId).first<{ transaction_date: string }>()
 
   const isBackdated = latestRow && latestRow.transaction_date > newTxnDate
 
   if (isBackdated) {
-    // Full rebalance — every row after the insertion point needs recalculation
     return _fullRebalanceSupplierBalances(db, companyId, supplierCode)
   }
 
-  // Fast path: compute balance at the row just before this one, then apply delta
   const prevRow = await db.prepare(
     `SELECT balance_no_checks, balance_with_checks FROM supplier_transactions
-     WHERE company_id = ? AND supplier_code = ? AND id < ?
+     WHERE company_id = ? AND supplier_code = ? AND id < ? AND status = 'posted'
      ORDER BY transaction_date DESC, id DESC LIMIT 1`
   ).bind(companyId, supplierCode, newTxnId).first<{
     balance_no_checks: number
@@ -70,28 +69,26 @@ async function updateSupplierRunningBalance(
   const newNoChecks   = prevNoChecks   + delta
   const newWithChecks = prevWithChecks + deltaCheck
 
-  // Update the new row itself
   await db.prepare(
     `UPDATE supplier_transactions SET balance_no_checks = ?, balance_with_checks = ? WHERE id = ? AND company_id = ?`
   ).bind(newNoChecks, newWithChecks, newTxnId, companyId).run()
 
-  // Propagate delta to all subsequent rows (same delta shifts every future row)
   if (Math.abs(delta) > 0 || Math.abs(deltaCheck) > 0) {
     await db.prepare(
       `UPDATE supplier_transactions
        SET balance_no_checks   = balance_no_checks   + ?,
            balance_with_checks = balance_with_checks + ?
-       WHERE company_id = ? AND supplier_code = ? AND id > ?`
+       WHERE company_id = ? AND supplier_code = ? AND id > ? AND status = 'posted'`
     ).bind(delta, deltaCheck, companyId, supplierCode, newTxnId).run()
   }
 }
 
-/** Full rebalance — only used for backdated inserts or delete operations. */
+/** Full rebalance — only posted rows, used for backdated inserts or delete operations. */
 async function _fullRebalanceSupplierBalances(db: Env['DB'], companyId: number, supplierCode: number) {
   const { results: rows } = await db.prepare(
     `SELECT id, credit, debit, check_amount
      FROM supplier_transactions
-     WHERE company_id = ? AND supplier_code = ?
+     WHERE company_id = ? AND supplier_code = ? AND status = 'posted'
      ORDER BY transaction_date ASC, id ASC`
   ).bind(companyId, supplierCode).all<{
     id: number; credit: number | null; debit: number | null; check_amount: number | null
@@ -410,6 +407,22 @@ suppliers.post('/', financeOnly, async (c) => {
     return c.json({ success: false, error: 'الكود والاسم مطلوبان' }, 400)
   }
 
+  // BPG is required for proper GL posting — enforce at creation boundary
+  if (!body.bus_posting_group_code?.trim()) {
+    return c.json({
+      success: false,
+      error: 'bus_posting_group_code مطلوب لتمكين الترحيل المحاسبي الصحيح. القيم المتاحة: AGRI-OP, LABOR, LOCAL, IMPORT',
+    }, 400)
+  }
+
+  // Validate BPG exists in posting_rules
+  const bpgValid = await c.env.DB
+    .prepare('SELECT 1 FROM posting_rules WHERE company_id = ? AND bus_posting_group_code = ? LIMIT 1')
+    .bind(company_id, body.bus_posting_group_code).first()
+  if (!bpgValid) {
+    return c.json({ success: false, error: `مجموعة الترحيل "${body.bus_posting_group_code}" غير موجودة في قواعد الترحيل` }, 400)
+  }
+
   // Basic email validation
   if (body.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) {
     return c.json({ success: false, error: 'صيغة البريد الإلكتروني غير صحيحة' }, 400)
@@ -433,7 +446,7 @@ suppliers.post('/', financeOnly, async (c) => {
       body.tax_number ?? null, body.credit_limit ?? null,
       body.payment_terms ?? 30,
       body.supplier_type ?? 'supplier',
-      body.bus_posting_group_code ?? null,
+      body.bus_posting_group_code,
     ).run()
 
   return c.json({ success: true, data: { code: body.code } }, 201)
@@ -468,7 +481,20 @@ suppliers.patch('/:code', financeOnly, async (c) => {
   if (body.credit_limit  !== undefined) { fields.push('credit_limit = ?');  values.push(body.credit_limit) }
   if (body.payment_terms !== undefined) { fields.push('payment_terms = ?'); values.push(body.payment_terms) }
   if (body.supplier_type !== undefined) { fields.push('supplier_type = ?'); values.push(body.supplier_type) }
-  if (body.bus_posting_group_code !== undefined) { fields.push('bus_posting_group_code = ?'); values.push(body.bus_posting_group_code) }
+  if (body.bus_posting_group_code !== undefined) {
+    // Prevent clearing BPG on update — once set it must remain valid
+    if (!body.bus_posting_group_code?.trim()) {
+      return c.json({ success: false, error: 'لا يمكن إزالة مجموعة الترحيل (bus_posting_group_code). لتغييرها أرسل قيمة جديدة صحيحة.' }, 400)
+    }
+    const bpgValid = await c.env.DB
+      .prepare('SELECT 1 FROM posting_rules WHERE company_id = ? AND bus_posting_group_code = ? LIMIT 1')
+      .bind(company_id, body.bus_posting_group_code).first()
+    if (!bpgValid) {
+      return c.json({ success: false, error: `مجموعة الترحيل "${body.bus_posting_group_code}" غير موجودة في قواعد الترحيل` }, 400)
+    }
+    fields.push('bus_posting_group_code = ?')
+    values.push(body.bus_posting_group_code)
+  }
 
   if (!fields.length) return c.json({ success: false, error: 'لا توجد بيانات للتحديث' }, 400)
 
@@ -606,6 +632,9 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
   const normalizedExpenseCategory = b.expense_category?.trim() || null
   const notesWithMeta = b.notes?.trim() || null
 
+  // Always INSERT as draft first — GL posting and cash mirror run before we commit to 'posted'.
+  // This guarantees the running balance (which filters on posted) is never corrupted by a
+  // mid-flight failure: if anything below throws, the row stays draft and balance is unaffected.
   const result = await c.env.DB.prepare(
     `INSERT INTO supplier_transactions
      (company_id, season_id, supplier_code, account_code, center_code, financial_account_id,
@@ -620,21 +649,18 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
     normalizedExpenseCategory, equipmentName, b.equipment_type_id ?? null, b.equipment_usage_mode ?? null, b.amount,
     credit, debit, checkAmt, 0, 0,
     b.due_date ?? null, notesWithMeta,
-    date.getFullYear(), date.getMonth() + 1, userId, status
+    date.getFullYear(), date.getMonth() + 1, userId, 'draft'
   ).run()
 
   const txnId = result.meta.last_row_id
 
-  await updateSupplierRunningBalance(c.env.DB, company_id, code, txnId, b.transaction_date)
-
-  // Auto-post GL entry only for 'posted' status
   if (status === 'posted') {
     let createdAssetId: number | null = null
+    let glEntryId: number | null = null
     try {
       const supplierName = supplier.name
 
       if (b.entry_type === 'د') {
-        // Create the asset first so any downstream posting failure can be compensated.
         if (b.equipment_usage_mode === 'owned') {
           createdAssetId = await createOwnedCapitalAsset(c.env.DB, {
             companyId: company_id,
@@ -648,7 +674,7 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
           })
         }
 
-        await FinanceCore.resolveSupplierInvoice(c.env.DB, {
+        glEntryId = await FinanceCore.resolveSupplierInvoice(c.env.DB, {
           company_id,
           ref_id: txnId,
           amount: b.amount,
@@ -658,7 +684,7 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
           supplier_code: code
         })
       } else {
-        await FinanceCore.resolveSupplierPayment(c.env.DB, {
+        glEntryId = await FinanceCore.resolveSupplierPayment(c.env.DB, {
           company_id,
           ref_id: txnId,
           amount: b.amount,
@@ -670,31 +696,45 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
           financial_account_id: b.financial_account_id ?? null,
         })
 
-        // Mirror payment into cash_transactions so treasury running balance stays accurate.
-        // skipSupplierMirror=true prevents an infinite loop (cash_movement would otherwise
-        // try to write back to supplier_transactions for the same transaction).
-        // skipGlPosting=true prevents double GL entries (resolveSupplierPayment already posted it).
-        await FinanceCore.recordCashMovement(c.env.DB, {
-          company_id,
-          userId,
-          transaction_date: b.transaction_date,
-          direction: 'م',   // outflow — we are paying the supplier
-          amount: b.amount,
-          financial_account_id: b.financial_account_id ?? null,
-          narration: `${b.expense_category ? b.expense_category + ' — ' : ''}سداد مستحقات ${supplierName ?? code}`,
-          supplier_code: code,
-          season_id: b.season_id ?? null,
-          center_code: b.center_code ?? null,
-          document_type: b.document_type ?? null,
-          document_number: b.document_number ?? null,
-          notes: b.notes
-            ? `${b.notes} | [MIRROR_SUPPLIER_PAYMENT]`
-            : '[MIRROR_SUPPLIER_PAYMENT]',
-          status: 'posted',
-          skipSupplierMirror: true,
-          skipGlPosting: true,
-        })
+        // Cash mirror runs AFTER GL. If it fails, we reverse the GL entry so no partial state exists.
+        try {
+          await FinanceCore.recordCashMovement(c.env.DB, {
+            company_id,
+            userId,
+            transaction_date: b.transaction_date,
+            direction: 'م',
+            amount: b.amount,
+            financial_account_id: b.financial_account_id ?? null,
+            narration: `${b.expense_category ? b.expense_category + ' — ' : ''}سداد مستحقات ${supplierName ?? code}`,
+            supplier_code: code,
+            season_id: b.season_id ?? null,
+            center_code: b.center_code ?? null,
+            document_type: b.document_type ?? null,
+            document_number: b.document_number ?? null,
+            notes: b.notes
+              ? `${b.notes} | [MIRROR_SUPPLIER_PAYMENT]`
+              : '[MIRROR_SUPPLIER_PAYMENT]',
+            status: 'posted',
+            skipSupplierMirror: true,
+            skipGlPosting: true,
+          })
+        } catch (mirrorErr: unknown) {
+          // Cash mirror failed after GL was written — void the GL entry to restore atomicity.
+          if (glEntryId != null) {
+            await c.env.DB.prepare(
+              "UPDATE journal_entries SET is_posted = 0, status = 'voided' WHERE id = ? AND company_id = ?"
+            ).bind(glEntryId, company_id).run()
+          }
+          throw mirrorErr
+        }
       }
+
+      // All operations succeeded — promote to posted and compute running balance.
+      await c.env.DB.prepare(
+        "UPDATE supplier_transactions SET status = 'posted' WHERE id = ? AND company_id = ?"
+      ).bind(txnId, company_id).run()
+
+      await updateSupplierRunningBalance(c.env.DB, company_id, code, txnId, b.transaction_date)
     } catch (e: unknown) {
       if (createdAssetId != null) {
         await c.env.DB.prepare('DELETE FROM depreciation_schedules WHERE asset_id = ? AND company_id = ?')
@@ -702,9 +742,7 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
         await c.env.DB.prepare('DELETE FROM fixed_assets WHERE id = ? AND company_id = ?')
           .bind(createdAssetId, company_id).run()
       }
-      await c.env.DB.prepare(
-        "UPDATE supplier_transactions SET status = 'draft' WHERE id = ?"
-      ).bind(txnId).run()
+      // Row remains as draft; running balance was never touched (draft rows are excluded).
       await logFinancialWorkflowFailure(c.env.DB, {
         company_id,
         user_id: userId,
@@ -822,10 +860,10 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
   }
 
   let createdAssetId: number | null = null
+  let glEntryId: number | null = null
   try {
     const supplierName = supplier.name
 
-    // 1. Post to GL
     if (txn.entry_type === 'د') {
       if (txn.equipment_usage_mode === 'owned') {
         createdAssetId = await createOwnedCapitalAsset(c.env.DB, {
@@ -840,17 +878,18 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
         })
       }
 
-      await FinanceCore.resolveSupplierInvoice(c.env.DB, {
+      glEntryId = await FinanceCore.resolveSupplierInvoice(c.env.DB, {
         company_id,
         ref_id: id,
         amount: txn.amount,
         date: txn.transaction_date,
         description: `${txn.expense_category ?? txn.entry_type} — ${supplierName ?? code}`,
         created_by: userId,
+        expense_category: txn.expense_category,
         supplier_code: code
       })
     } else {
-      await FinanceCore.resolveSupplierPayment(c.env.DB, {
+      glEntryId = await FinanceCore.resolveSupplierPayment(c.env.DB, {
         company_id,
         ref_id: id,
         amount: txn.amount,
@@ -858,38 +897,49 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
         description: `${txn.expense_category ?? txn.entry_type} — ${supplierName ?? code}`,
         created_by: userId,
         center_code: txn.center_code ?? undefined,
+        expense_category: txn.expense_category,
         supplier_code: code,
         financial_account_id: txn.financial_account_id ?? null,
       })
 
-      // Keep treasury running balance and supplier payment visibility aligned
-      // with the direct posted path.
-      await FinanceCore.recordCashMovement(c.env.DB, {
-        company_id,
-        userId,
-        transaction_date: txn.transaction_date,
-        direction: 'م',
-        amount: txn.amount,
-        financial_account_id: txn.financial_account_id ?? null,
-        narration: `${txn.expense_category ? txn.expense_category + ' — ' : ''}سداد مستحقات ${supplierName ?? code}`,
-        supplier_code: code,
-        season_id: txn.season_id ?? null,
-        center_code: txn.center_code ?? null,
-        document_type: txn.document_type ?? null,
-        document_number: txn.document_number ?? null,
-        notes: txn.notes
-          ? `${txn.notes} | [MIRROR_SUPPLIER_PAYMENT]`
-          : '[MIRROR_SUPPLIER_PAYMENT]',
-        status: 'posted',
-        skipSupplierMirror: true,
-        skipGlPosting: true,
-      })
+      // Cash mirror runs AFTER GL. If it fails, void the GL entry to restore atomicity.
+      try {
+        await FinanceCore.recordCashMovement(c.env.DB, {
+          company_id,
+          userId,
+          transaction_date: txn.transaction_date,
+          direction: 'م',
+          amount: txn.amount,
+          financial_account_id: txn.financial_account_id ?? null,
+          narration: `${txn.expense_category ? txn.expense_category + ' — ' : ''}سداد مستحقات ${supplierName ?? code}`,
+          supplier_code: code,
+          season_id: txn.season_id ?? null,
+          center_code: txn.center_code ?? null,
+          document_type: txn.document_type ?? null,
+          document_number: txn.document_number ?? null,
+          notes: txn.notes
+            ? `${txn.notes} | [MIRROR_SUPPLIER_PAYMENT]`
+            : '[MIRROR_SUPPLIER_PAYMENT]',
+          status: 'posted',
+          skipSupplierMirror: true,
+          skipGlPosting: true,
+        })
+      } catch (mirrorErr: unknown) {
+        if (glEntryId != null) {
+          await c.env.DB.prepare(
+            "UPDATE journal_entries SET is_posted = 0, status = 'voided' WHERE id = ? AND company_id = ?"
+          ).bind(glEntryId, company_id).run()
+        }
+        throw mirrorErr
+      }
     }
 
-    // 2. Update status to posted
+    // All operations succeeded — promote to posted, then compute running balance.
     await c.env.DB
-      .prepare("UPDATE supplier_transactions SET status = 'posted' WHERE id = ?")
-      .bind(id).run()
+      .prepare("UPDATE supplier_transactions SET status = 'posted' WHERE id = ? AND company_id = ?")
+      .bind(id, company_id).run()
+
+    await updateSupplierRunningBalance(c.env.DB, company_id, code, id, txn.transaction_date)
 
     void logAudit(c.env.DB, {
       user_id: userId, company_id, action: 'UPDATE',
@@ -906,6 +956,7 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
       await c.env.DB.prepare('DELETE FROM fixed_assets WHERE id = ? AND company_id = ?')
         .bind(createdAssetId, company_id).run()
     }
+    // Draft row is untouched; running balance was never updated (it filters posted only).
     await logFinancialWorkflowFailure(c.env.DB, {
       company_id,
       user_id: userId,

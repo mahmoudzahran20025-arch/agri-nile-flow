@@ -31,6 +31,7 @@ import { Topbar } from './Topbar';
 import GlobalSearch from '../GlobalSearch';
 import OfflineBanner from '../OfflineBanner';
 import PeriodWarningBanner from '../PeriodWarningBanner';
+import DegradedModeBanner from '../DegradedModeBanner';
 import QuickEntryFAB from '../QuickEntryFAB';
 import KeyboardShortcuts from '../KeyboardShortcuts';
 import { useAppStore } from '../../store/appStore';
@@ -109,11 +110,8 @@ const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: 'GL Setup',
     items: [
-      {
-        label: 'Chart of Accounts',
-        icon: <BookOpen size={18} />,
-        path: '/gl/accounts',
-      },
+      { label: 'Chart of Accounts', icon: <BookOpen size={18} />, path: '/gl/accounts' },
+      { label: 'GL Hardening',     icon: <ShieldCheck size={18} />, path: '/gl/hardening' },
       {
         label: 'Configuration',
         icon: <Sliders size={18} />,
@@ -325,6 +323,7 @@ export const AppShell = () => {
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative bg-[#f8fafc]">
         <Topbar onMenuClick={() => setMobileOpen(true)} />
+        <DegradedModeBanner />
         <div className="flex-1 overflow-y-auto overflow-x-hidden relative flex flex-col">
           <div className="flex-1 flex flex-col">
             <Outlet />

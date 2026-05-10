@@ -82,6 +82,7 @@ receipts.post('/receive-po/:po_id', permissionGuard('inventory', 'create'), asyn
     company_id, userId, po_id: poId,
     received_date: b.received_date,
     supplier_code: po.supplier_code ?? undefined,
+    notes: b.notes,
     items: enrichedLines
   })
 

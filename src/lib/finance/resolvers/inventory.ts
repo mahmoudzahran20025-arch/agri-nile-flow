@@ -3,10 +3,10 @@ import {
   resolveInventoryMovement as peResolveInventory,
   resolveInventoryTransfer as peResolveTransfer,
   resolvePurchaseReceipt as peResolvePurchaseReceipt,
-  resolveControlAccount,
 } from '../../posting_engine'
 import { postFromBusinessEvent } from '../business_events'
 import { readInventoryBalance, upsertInventoryBalance, enqueueInventoryPostingOutbox } from '../../inventory_posting'
+import { resolveSupplierPayableAccount } from './supplier_payable_account'
 
 export async function resolveInventoryMovement(
   db: D1Database,
@@ -167,7 +167,7 @@ export async function resolvePurchaseReceipt(
     company_id: number
     ref_id: number
     po_id?: number
-    supplier_id?: number
+    supplier_code?: number
     warehouse?: string
     total_amount: number
     date: string
@@ -175,7 +175,7 @@ export async function resolvePurchaseReceipt(
     created_by?: number
   },
 ): Promise<number | null> {
-  const apCode = await resolveControlAccount(db, opts.company_id, 'accounts_payable') ?? '212000010'
+  const apCode = await resolveSupplierPayableAccount(db, opts.company_id, opts.supplier_code)
   const blueprint = await peResolvePurchaseReceipt(
     db,
     opts.company_id,
@@ -188,21 +188,35 @@ export async function resolvePurchaseReceipt(
     throw new Error(`PURCHASE_RECEIPT_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
 
+  const supplierName = opts.supplier_code == null
+    ? null
+    : (await db.prepare(
+      'SELECT name FROM suppliers WHERE company_id = ? AND code = ? LIMIT 1'
+    ).bind(opts.company_id, opts.supplier_code).first<{ name: string | null }>())?.name ?? null
+
+  const entryDescription = [
+    'استلام مشتريات',
+    supplierName ? `مورد ${supplierName}` : null,
+    opts.po_id ? `أمر شراء #${opts.po_id}` : null,
+    opts.warehouse ? `مخزن ${opts.warehouse}` : null,
+    opts.description?.trim() || null,
+  ].filter(Boolean).join(' | ')
+
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'purchase_receipt',
     source_module: 'inventory',
     source_id:     opts.ref_id,
     event_date:    opts.date,
-    description:   `استلام مشتريات | ${opts.description ?? ''} | ${opts.warehouse ?? ''}`,
+    description:   entryDescription,
     created_by:    opts.created_by,
-    payload:       { po_id: opts.po_id, supplier_id: opts.supplier_id, warehouse: opts.warehouse ?? '', total_amount: opts.total_amount },
+    payload:       { po_id: opts.po_id, supplier_code: opts.supplier_code, warehouse: opts.warehouse ?? '', total_amount: opts.total_amount },
     trace:         blueprint.trace ?? null,
     lines:         blueprint.lines.map((l) => ({
       account_code:  l.account_code!,
       debit:         l.debit ?? 0,
       credit:        l.credit ?? 0,
-      description:   l.description ?? `استلام مشتريات | ${opts.warehouse}`,
+      description:   l.description ?? entryDescription,
       rule_slot:     l.rule_slot,
       source_ledger: 'inventory' as const,
       source_record_id: opts.ref_id,
@@ -224,6 +238,7 @@ export async function processPOReceiptOrchestrated(
     po_id: number
     received_date: string
     supplier_code?: number
+    notes?: string
     items: Array<{
       po_item_id: number
       item_code: number
@@ -283,13 +298,19 @@ export async function processPOReceiptOrchestrated(
 
   // Post GL — on failure, mark movements failed and enqueue for async retry
   const totalAmount = opts.items.reduce((s, i) => s + i.qty_received * i.unit_price, 0)
+  const warehouseSummary = Array.from(new Set(opts.items.map((item) => item.warehouse).filter(Boolean))).join(' + ')
+  const itemSummary = opts.items.length === 1 ? opts.items[0].item_name : `${opts.items.length} أصناف`
+  const receiptDescription = [itemSummary, opts.notes?.trim() || null].filter(Boolean).join(' | ')
   try {
     await resolvePurchaseReceipt(db, {
       company_id:   opts.company_id,
       ref_id:       opts.po_id,
       po_id:        opts.po_id,
+      supplier_code: opts.supplier_code,
+      warehouse:    warehouseSummary,
       total_amount: totalAmount,
       date:         opts.received_date,
+      description:  receiptDescription,
       created_by:   opts.userId,
     })
   } catch (err: unknown) {

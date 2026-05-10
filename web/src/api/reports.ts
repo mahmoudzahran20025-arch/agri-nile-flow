@@ -1,4 +1,5 @@
 import { api, unwrap, paginatedUrl } from './core'
+import type { PostingMeta } from './gl'
 
 type LegacyCoverage = {
   has_legacy_gaps: boolean
@@ -89,6 +90,7 @@ export const reportsApi = {
         last_balance: number; tx_count: number
       }>
       legacy_coverage?: LegacyCoverage
+      meta?: PostingMeta
     }
 
     if (!raw.success) throw new Error(raw.error || 'API returned success=false')
@@ -96,6 +98,7 @@ export const reportsApi = {
     return {
       data: raw.data ?? [],
       legacy_coverage: raw.legacy_coverage ?? null,
+      meta: raw.meta ?? null,
     }
   },
 

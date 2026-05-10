@@ -44,6 +44,19 @@ const BENEFICIARY_TYPES: { value: BeneficiaryType; label: string; icon: React.Re
 
 const DOCUMENT_TYPES = ['فاتورة', 'شيك', 'تحويل بنكي', 'نقداً', 'إيصال', 'أخرى']
 
+function cashNeedsOperationalDimensions(input: {
+  direction: 'د' | 'م'
+  center_code?: string
+  supplier_code?: string
+  partner_id?: string
+  expense_code?: string
+}) {
+  if (input.direction !== 'م') return false
+  if (input.center_code?.trim()) return true
+  if (input.expense_code?.trim()) return true
+  return !input.supplier_code?.trim() && !input.partner_id?.trim()
+}
+
 export default function AddCashTransactionModal({ open, onClose, prefill, contextLabel }: Props) {
   const qc = useQueryClient()
   const { toast } = useToast()
@@ -200,10 +213,17 @@ export default function AddCashTransactionModal({ open, onClose, prefill, contex
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    const requiresOperationalDimensions = form.status === 'posted' && cashNeedsOperationalDimensions({
+      direction: form.direction as 'د' | 'م',
+      center_code: form.center_code,
+      supplier_code: form.supplier_code,
+      partner_id: form.partner_id,
+      expense_code: form.expense_code,
+    })
     if (!form.narration.trim() || !form.amount) { setError('البيان والمبلغ مطلوبان'); return }
     if (!form.financial_account_id) { setError('يجب اختيار الحساب (الخزينة أو البنك)'); return }
-    if (form.status === 'posted' && !form.season_id) { setError('الموسم مطلوب عند الترحيل'); return }
-    if (form.status === 'posted' && !form.center_code) { setError('مركز التكلفة مطلوب عند الترحيل'); return }
+    if (requiresOperationalDimensions && !form.season_id) { setError('الموسم مطلوب عند الترحيل التشغيلي'); return }
+    if (requiresOperationalDimensions && !form.center_code) { setError('مركز التكلفة مطلوب عند الترحيل التشغيلي'); return }
     if (form.narration.trim().length < 3) { setError('البيان يجب أن يكون 3 أحرف على الأقل'); return }
     if (Number(form.amount) <= 0) { setError('المبلغ يجب أن يكون أكبر من صفر'); return }
     if (form.status === 'posted' && form.direction === 'م' && !form.supplier_code && !form.partner_id && !form.expense_code) {

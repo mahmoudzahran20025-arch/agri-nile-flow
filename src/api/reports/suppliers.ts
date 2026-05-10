@@ -1,8 +1,51 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { getUser } from '../../middleware/auth'
+import { getFlag, buildPostingMeta } from '../../lib/hardening'
 
 const suppliers = new Hono<{ Bindings: Env }>()
+
+type LegacyCoverage = {
+  has_legacy_gaps: boolean
+  posted_events_total: number
+  covered_events: number
+  missing_journal_link_events: number
+  missing_supplier_code_events: number
+  coverage_rate_pct: number
+  notes: string
+}
+
+async function getLegacyCoverage(db: Env['DB'], companyId: number): Promise<LegacyCoverage> {
+  const legacy = await db.prepare(
+    `SELECT
+       COUNT(*) AS posted_events_total,
+       SUM(CASE WHEN journal_entry_id IS NULL THEN 1 ELSE 0 END) AS missing_journal_link_events,
+       SUM(CASE WHEN json_extract(payload, '$.supplier_code') IS NULL THEN 1 ELSE 0 END) AS missing_supplier_code_events
+     FROM business_events
+     WHERE company_id = ?
+       AND source_module = 'suppliers'
+       AND status = 'posted'`
+  ).bind(companyId).first<{
+    posted_events_total: number | null
+    missing_journal_link_events: number | null
+    missing_supplier_code_events: number | null
+  }>()
+
+  const postedTotal = Number(legacy?.posted_events_total ?? 0)
+  const missingJournal = Number(legacy?.missing_journal_link_events ?? 0)
+  const missingSupplier = Number(legacy?.missing_supplier_code_events ?? 0)
+  const covered = Math.max(postedTotal - missingJournal - missingSupplier, 0)
+
+  return {
+    has_legacy_gaps: missingJournal > 0 || missingSupplier > 0,
+    posted_events_total: postedTotal,
+    covered_events: covered,
+    missing_journal_link_events: missingJournal,
+    missing_supplier_code_events: missingSupplier,
+    coverage_rate_pct: postedTotal > 0 ? Math.round((covered / postedTotal) * 10000) / 100 : 100,
+    notes: 'Rows with missing supplier_code in old payloads are excluded from supplier-level projection.',
+  }
+}
 
 async function buildUnifiedApProjection(
   db: Env['DB'],
@@ -11,23 +54,27 @@ async function buildUnifiedApProjection(
 ) {
   const seasonId = opts.seasonId ?? null
   const supplierCode = opts.supplierCode ?? null
+  const legacyCoverage = await getLegacyCoverage(db, companyId)
 
   const ap = await db.prepare(
     `SELECT account_code
      FROM posting_rules
      WHERE company_id = ?
        AND rule_type = 'control'
-       AND mapping_key = 'accounts_payable'
+       AND mapping_key IN ('accounts_payable', 'wages_payable')
        AND is_active = 1
-     ORDER BY priority ASC, id DESC
+     ORDER BY CASE WHEN mapping_key = 'accounts_payable' THEN 0 ELSE 1 END,
+              priority ASC,
+              id DESC
      LIMIT 1`
   ).bind(companyId).first<{ account_code: string }>()
 
   if (!ap?.account_code) {
     return {
       ok: false as const,
-      error: 'No active control mapping found for accounts_payable in posting_rules',
+      error: 'No active control mapping found for accounts_payable/wages_payable in posting_rules',
       code: 'MISSING_AP_CONTROL_MAPPING',
+      legacyCoverage,
     }
   }
 
@@ -104,39 +151,11 @@ async function buildUnifiedApProjection(
     control_account: string
   }>()
 
-  const legacy = await db.prepare(
-    `SELECT
-       COUNT(*) AS posted_events_total,
-       SUM(CASE WHEN journal_entry_id IS NULL THEN 1 ELSE 0 END) AS missing_journal_link_events,
-       SUM(CASE WHEN json_extract(payload, '$.supplier_code') IS NULL THEN 1 ELSE 0 END) AS missing_supplier_code_events
-     FROM business_events
-     WHERE company_id = ?
-       AND source_module = 'suppliers'
-       AND status = 'posted'`
-  ).bind(companyId).first<{
-    posted_events_total: number | null
-    missing_journal_link_events: number | null
-    missing_supplier_code_events: number | null
-  }>()
-
-  const postedTotal = Number(legacy?.posted_events_total ?? 0)
-  const missingJournal = Number(legacy?.missing_journal_link_events ?? 0)
-  const missingSupplier = Number(legacy?.missing_supplier_code_events ?? 0)
-  const covered = Math.max(postedTotal - missingJournal - missingSupplier, 0)
-
   return {
     ok: true as const,
     rows,
     controlAccount: ap.account_code,
-    legacyCoverage: {
-      has_legacy_gaps: missingJournal > 0 || missingSupplier > 0,
-      posted_events_total: postedTotal,
-      covered_events: covered,
-      missing_journal_link_events: missingJournal,
-      missing_supplier_code_events: missingSupplier,
-      coverage_rate_pct: postedTotal > 0 ? Math.round((covered / postedTotal) * 10000) / 100 : 100,
-      notes: 'Rows with missing supplier_code in old payloads are excluded from supplier-level projection.',
-    },
+    legacyCoverage,
   }
 }
 
@@ -158,10 +177,11 @@ suppliers.get('/supplier-payments', async (c) => {
     }, 400)
   }
 
-  const unified = await buildUnifiedApProjection(c.env.DB, company_id, { seasonId, supplierCode })
-  if (!unified.ok) {
-    return c.json({ success: false, error: unified.error, code: unified.code }, 409)
-  }
+  // Skip the expensive GL projection when the caller wants a specific source table —
+  // in that case the summary is built directly from the filtered statements below.
+  const unified = sourceTable
+    ? { ok: false as const, error: 'source_table filter active', code: 'SOURCE_TABLE_FILTER_ACTIVE', legacyCoverage: await getLegacyCoverage(c.env.DB, company_id) }
+    : await buildUnifiedApProjection(c.env.DB, company_id, { seasonId, supplierCode })
 
   const stConds: string[] = ['st.company_id = ?', "st.status = 'posted'"]
   const siConds: string[] = ['si.company_id = ?', 'si.journal_entry_id IS NOT NULL']
@@ -326,7 +346,7 @@ suppliers.get('/supplier-payments', async (c) => {
         balance: 0,
         tx_count: 0,
         data_source: `${sourceTable}_filtered`,
-        control_account: unified.controlAccount,
+        control_account: unified.ok ? unified.controlAccount : 'N/A',
       }
 
       existing.total_credit += Number(row.credit ?? 0)
@@ -339,25 +359,87 @@ suppliers.get('/supplier-payments', async (c) => {
 
     summary = Array.from(summaryMap.values())
   } else {
-    summary = unified.rows
-      .filter((r) => Number(r.total_credit ?? 0) !== 0 || Number(r.total_debit ?? 0) !== 0 || (!!supplierCode && Number(r.code) === supplierCode))
-      .map((r) => ({
-        supplier_code: r.code,
-        supplier_name: r.name,
-        total_credit: Number(r.total_credit ?? 0),
-        total_debit: Number(r.total_debit ?? 0),
-        balance: Number(r.balance ?? 0),
-        tx_count: Number(r.tx_count ?? 0),
-        data_source: r.data_source,
-        control_account: r.control_account,
-      }))
+    if (unified.ok) {
+      summary = unified.rows
+        .filter((r) => Number(r.total_credit ?? 0) !== 0 || Number(r.total_debit ?? 0) !== 0 || (!!supplierCode && Number(r.code) === supplierCode))
+        .map((r) => ({
+          supplier_code: r.code,
+          supplier_name: r.name,
+          total_credit: Number(r.total_credit ?? 0),
+          total_debit: Number(r.total_debit ?? 0),
+          balance: Number(r.balance ?? 0),
+          tx_count: Number(r.tx_count ?? 0),
+          data_source: r.data_source,
+          control_account: r.control_account,
+        }))
+    } else {
+      const summaryMap = new Map<number, {
+        supplier_code: number
+        supplier_name: string
+        total_credit: number
+        total_debit: number
+        balance: number
+        tx_count: number
+        data_source: string
+        control_account: string
+      }>()
+
+      for (const row of (statements as Array<Record<string, unknown>>)) {
+        const code = Number(row.supplier_code)
+        if (!Number.isFinite(code) || code <= 0) continue
+
+        const existing = summaryMap.get(code) ?? {
+          supplier_code: code,
+          supplier_name: String(row.supplier_name ?? ''),
+          total_credit: 0,
+          total_debit: 0,
+          balance: 0,
+          tx_count: 0,
+          data_source: 'fallback_source_tables_no_ap_mapping',
+          control_account: 'N/A',
+        }
+
+        existing.total_credit += Number(row.credit ?? 0)
+        existing.total_debit += Number(row.debit ?? 0)
+        existing.balance = existing.total_credit - existing.total_debit
+        existing.tx_count += 1
+
+        summaryMap.set(code, existing)
+      }
+
+      summary = Array.from(summaryMap.values())
+    }
   }
+
+  const strictPosting = await getFlag(c.env.DB, company_id, 'strict_posting_mode')
+  const isGlPrimary = unified.ok && !sourceTable
+  const meta = buildPostingMeta({
+    isGlPrimary,
+    degradedReason: !unified.ok
+      ? unified.error
+      : sourceTable
+        ? `source_table filter active — reading from ${sourceTable} directly`
+        : undefined,
+    strictPostingActive: strictPosting,
+  })
 
   return c.json({
     success: true,
     data: statements,
     summary,
-    legacy_coverage: unified.legacyCoverage,
+    legacy_coverage: {
+      ...unified.legacyCoverage,
+      notes: unified.ok
+        ? unified.legacyCoverage.notes
+        : `${unified.legacyCoverage.notes} AP control mapping missing; summary is computed from source tables fallback.`,
+    },
+    warning: unified.ok
+      ? null
+      : {
+          code: unified.code,
+          message: unified.error,
+        },
+    meta,
   })
 })
 
@@ -365,15 +447,72 @@ suppliers.get('/suppliers-balance', async (c) => {
   const { company_id } = getUser(c)
   const seasonId = c.req.query('season_id') ? Number(c.req.query('season_id')) : null
 
-  const unified = await buildUnifiedApProjection(c.env.DB, company_id, { seasonId })
-  if (!unified.ok) {
-    return c.json({ success: false, error: unified.error, code: unified.code }, 409)
+  const [unified, strictPosting] = await Promise.all([
+    buildUnifiedApProjection(c.env.DB, company_id, { seasonId }),
+    getFlag(c.env.DB, company_id, 'strict_posting_mode'),
+  ])
+
+  if (unified.ok) {
+    return c.json({
+      success: true,
+      data: unified.rows,
+      legacy_coverage: unified.legacyCoverage,
+      meta: buildPostingMeta({ isGlPrimary: true, strictPostingActive: strictPosting }),
+    })
   }
+
+  const stConds: string[] = ['st.company_id = ?', "st.status = 'posted'"]
+  const stBinds: unknown[] = [company_id]
+
+  if (seasonId) {
+    stConds.push('st.season_id = ?')
+    stBinds.push(seasonId)
+  }
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT
+       s.code,
+       s.name,
+       s.activity,
+       COALESCE(SUM(st.credit), 0) AS total_credit,
+       COALESCE(SUM(st.debit), 0) AS total_debit,
+       COALESCE(SUM(st.credit), 0) - COALESCE(SUM(st.debit), 0) AS balance,
+       COALESCE(SUM(st.credit), 0) - COALESCE(SUM(st.debit), 0) AS last_balance,
+       COUNT(st.id) AS tx_count
+     FROM suppliers s
+     LEFT JOIN supplier_transactions st
+       ON st.supplier_code = s.code
+      AND ${stConds.join(' AND ')}
+     WHERE s.company_id = ?
+     GROUP BY s.code, s.name, s.activity
+     ORDER BY ABS(balance) DESC`
+  ).bind(...stBinds, company_id).all<{
+    code: number
+    name: string
+    activity: string | null
+    total_credit: number
+    total_debit: number
+    balance: number
+    last_balance: number
+    tx_count: number
+  }>()
 
   return c.json({
     success: true,
-    data: unified.rows,
-    legacy_coverage: unified.legacyCoverage,
+    data: results ?? [],
+    legacy_coverage: {
+      ...unified.legacyCoverage,
+      notes: `${unified.legacyCoverage.notes} AP control mapping missing; balances are fallback source-table aggregates.`,
+    },
+    warning: {
+      code: unified.code,
+      message: unified.error,
+    },
+    meta: buildPostingMeta({
+      isGlPrimary: false,
+      degradedReason: unified.error,
+      strictPostingActive: strictPosting,
+    }),
   })
 })
 

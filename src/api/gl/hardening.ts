@@ -186,7 +186,79 @@ hardening.get('/baseline', adminOnly, async (c) => {
          COUNT(*) AS total_events,
          SUM(CASE WHEN journal_entry_id IS NOT NULL THEN 1 ELSE 0 END) AS linked,
          SUM(CASE WHEN journal_entry_id IS NULL THEN 1 ELSE 0 END) AS unlinked,
-         ROUND(100.0 * SUM(CASE WHEN journal_entry_id IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 2) AS success_rate_pct
+         SUM(CASE
+               WHEN source_module = 'inventory'
+                 THEN CASE
+                        WHEN ABS(COALESCE(CAST(json_extract(payload, '$.value_in') AS REAL), 0)) > 0.0001
+                          OR ABS(COALESCE(CAST(json_extract(payload, '$.value_out') AS REAL), 0)) > 0.0001
+                          THEN 1 ELSE 0 END
+               ELSE CASE
+                      WHEN ABS(COALESCE(CAST(json_extract(payload, '$.amount') AS REAL), 0)) > 0.0001
+                        OR ABS(COALESCE(CAST(json_extract(payload, '$.debit') AS REAL), 0)) > 0.0001
+                        OR ABS(COALESCE(CAST(json_extract(payload, '$.credit') AS REAL), 0)) > 0.0001
+                        THEN 1 ELSE 0 END
+             END) AS material_total_events,
+         SUM(CASE
+               WHEN journal_entry_id IS NOT NULL AND source_module = 'inventory'
+                 THEN CASE
+                        WHEN ABS(COALESCE(CAST(json_extract(payload, '$.value_in') AS REAL), 0)) > 0.0001
+                          OR ABS(COALESCE(CAST(json_extract(payload, '$.value_out') AS REAL), 0)) > 0.0001
+                          THEN 1 ELSE 0 END
+               WHEN journal_entry_id IS NOT NULL
+                 THEN CASE
+                        WHEN ABS(COALESCE(CAST(json_extract(payload, '$.amount') AS REAL), 0)) > 0.0001
+                          OR ABS(COALESCE(CAST(json_extract(payload, '$.debit') AS REAL), 0)) > 0.0001
+                          OR ABS(COALESCE(CAST(json_extract(payload, '$.credit') AS REAL), 0)) > 0.0001
+                          THEN 1 ELSE 0 END
+               ELSE 0
+             END) AS material_linked,
+         SUM(CASE
+               WHEN journal_entry_id IS NULL AND source_module = 'inventory'
+                 THEN CASE
+                        WHEN ABS(COALESCE(CAST(json_extract(payload, '$.value_in') AS REAL), 0)) > 0.0001
+                          OR ABS(COALESCE(CAST(json_extract(payload, '$.value_out') AS REAL), 0)) > 0.0001
+                          THEN 1 ELSE 0 END
+               WHEN journal_entry_id IS NULL
+                 THEN CASE
+                        WHEN ABS(COALESCE(CAST(json_extract(payload, '$.amount') AS REAL), 0)) > 0.0001
+                          OR ABS(COALESCE(CAST(json_extract(payload, '$.debit') AS REAL), 0)) > 0.0001
+                          OR ABS(COALESCE(CAST(json_extract(payload, '$.credit') AS REAL), 0)) > 0.0001
+                          THEN 1 ELSE 0 END
+               ELSE 0
+             END) AS material_unlinked,
+         ROUND(100.0 * SUM(CASE WHEN journal_entry_id IS NOT NULL THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS raw_success_rate_pct,
+         ROUND(
+           100.0 * SUM(CASE
+                         WHEN journal_entry_id IS NOT NULL AND source_module = 'inventory'
+                           THEN CASE
+                                  WHEN ABS(COALESCE(CAST(json_extract(payload, '$.value_in') AS REAL), 0)) > 0.0001
+                                    OR ABS(COALESCE(CAST(json_extract(payload, '$.value_out') AS REAL), 0)) > 0.0001
+                                    THEN 1 ELSE 0 END
+                         WHEN journal_entry_id IS NOT NULL
+                           THEN CASE
+                                  WHEN ABS(COALESCE(CAST(json_extract(payload, '$.amount') AS REAL), 0)) > 0.0001
+                                    OR ABS(COALESCE(CAST(json_extract(payload, '$.debit') AS REAL), 0)) > 0.0001
+                                    OR ABS(COALESCE(CAST(json_extract(payload, '$.credit') AS REAL), 0)) > 0.0001
+                                    THEN 1 ELSE 0 END
+                         ELSE 0
+                       END)
+           / NULLIF(
+               SUM(CASE
+                     WHEN source_module = 'inventory'
+                       THEN CASE
+                              WHEN ABS(COALESCE(CAST(json_extract(payload, '$.value_in') AS REAL), 0)) > 0.0001
+                                OR ABS(COALESCE(CAST(json_extract(payload, '$.value_out') AS REAL), 0)) > 0.0001
+                                THEN 1 ELSE 0 END
+                     ELSE CASE
+                            WHEN ABS(COALESCE(CAST(json_extract(payload, '$.amount') AS REAL), 0)) > 0.0001
+                              OR ABS(COALESCE(CAST(json_extract(payload, '$.debit') AS REAL), 0)) > 0.0001
+                              OR ABS(COALESCE(CAST(json_extract(payload, '$.credit') AS REAL), 0)) > 0.0001
+                              THEN 1 ELSE 0 END
+                   END),
+               0
+             ),
+           2
+         ) AS success_rate_pct
        FROM business_events
        WHERE company_id = ?`
     ).bind(company_id).first(),
@@ -308,7 +380,7 @@ hardening.get('/audit/pending', adminOnly, async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT pra.id, pra.rule_id, pra.action, pra.changed_by, pra.changed_at,
             pra.change_reason, pra.old_values, pra.new_values,
-            u.name AS changed_by_name
+            u.full_name AS changed_by_name
      FROM posting_rules_audit pra
      LEFT JOIN users u ON u.id = pra.changed_by
      WHERE pra.company_id = ? AND pra.approval_status = 'pending'

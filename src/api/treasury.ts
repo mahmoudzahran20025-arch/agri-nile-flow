@@ -26,6 +26,19 @@ async function ensureActiveCenterCode(db: Env['DB'], company_id: number, center_
   return !!row?.ok
 }
 
+function cashNeedsOperationalDimensions(input: {
+  direction: 'د' | 'م'
+  center_code?: number | null
+  supplier_code?: number | null
+  partner_id?: number | null
+  expense_code?: string | null
+}): boolean {
+  if (input.direction !== 'م') return false
+  if (input.center_code != null) return true
+  if (input.expense_code != null) return true
+  return input.supplier_code == null && input.partner_id == null
+}
+
 const transactionSchema = z.object({
   transaction_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'التاريخ يجب أن يكون بصيغة YYYY-MM-DD'),
   direction: z.enum(['د', 'م'], { message: "الاتجاه يجب أن يكون 'د' (دائن/وارد) أو 'م' (مدين/صادر)" }),
@@ -174,7 +187,9 @@ treasury.post('/transactions', zValidator('json', transactionSchema), async (c) 
     }
   }
 
-  if (b.status === 'posted' && (b.season_id == null || b.center_code == null)) {
+  const requiresOperationalDimensions = b.status === 'posted' && cashNeedsOperationalDimensions(b)
+
+  if (requiresOperationalDimensions && (b.season_id == null || b.center_code == null)) {
     return c.json({ success: false, error: 'الموسم ومركز التكلفة مطلوبان عند الترحيل' }, 422)
   }
   if (b.status === 'posted' && b.center_code != null) {
@@ -225,11 +240,19 @@ treasury.post('/transactions', zValidator('json', transactionSchema), async (c) 
   }
 
   const draft = await c.env.DB.prepare(
-    'SELECT season_id, center_code FROM cash_transactions WHERE id = ? AND company_id = ?'
-  ).bind(id, company_id).first<{ season_id: number | null; center_code: number | null }>()
+    `SELECT season_id, center_code, supplier_code, partner_id, expense_code, direction
+     FROM cash_transactions WHERE id = ? AND company_id = ?`
+  ).bind(id, company_id).first<{
+    season_id: number | null
+    center_code: number | null
+    supplier_code: number | null
+    partner_id: number | null
+    expense_code: string | null
+    direction: 'د' | 'م'
+  }>()
 
   if (!draft) return c.json({ success: false, error: 'الحركة غير موجودة' }, 404)
-  if (draft.season_id == null || draft.center_code == null) {
+  if (cashNeedsOperationalDimensions(draft) && (draft.season_id == null || draft.center_code == null)) {
     return c.json({ success: false, error: 'الموسم ومركز التكلفة مطلوبان عند الترحيل' }, 422)
   }
   const validCenter = await ensureActiveCenterCode(c.env.DB, company_id, draft.center_code)

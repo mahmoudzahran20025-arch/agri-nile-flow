@@ -6,6 +6,7 @@ import { reportsApi, configApi } from '../../api/client'
 import { KpiStrip, type KpiItem } from '../../components/ui/KpiStrip'
 import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
 import SectionCard from '../../components/ui/SectionCard'
+import CertificationBadge from '../../components/ui/CertificationBadge'
 import type { Season } from '../../types'
 
 function egp(n: number | null | undefined) {
@@ -42,6 +43,7 @@ export default function SuppliersBalancePage() {
 
   const rows = balanceData?.data ?? []
   const legacyCoverage = balanceData?.legacy_coverage
+  const postingMeta = balanceData?.meta ?? null
 
   const { data: paymentsData } = useQuery({
     queryKey: ['reports', 'supplier-payments', selected?.code, seasonId, sourceFilter],
@@ -120,22 +122,19 @@ export default function SuppliersBalancePage() {
       <div className="px-6 py-5 bg-white border-b border-slate-200">
         <h1 className="text-[18px] font-bold text-[#0F2D5C]">ميزان الموردين والعملاء</h1>
         <p className="text-[12px] text-slate-500 mt-0.5">ملخص أرصدة الموردين · دائن / مدين / الرصيد الصافي</p>
-        <div className="mt-2">
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <CertificationBadge meta={postingMeta} showReason />
           {legacyCoverage ? (
             legacyCoverage.has_legacy_gaps ? (
               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border bg-amber-50 text-amber-700 border-amber-200">
-                Legacy Coverage: {legacyCoverage.coverage_rate_pct}% (Gaps: {legacyCoverage.missing_journal_link_events + legacyCoverage.missing_supplier_code_events})
+                تغطية السجلات القديمة: {legacyCoverage.coverage_rate_pct}% · {legacyCoverage.missing_journal_link_events + legacyCoverage.missing_supplier_code_events} فجوة
               </span>
             ) : (
               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border bg-emerald-50 text-emerald-700 border-emerald-200">
-                Legacy Coverage: {legacyCoverage.coverage_rate_pct}% (No gaps)
+                تغطية السجلات القديمة: {legacyCoverage.coverage_rate_pct}% — لا فجوات
               </span>
             )
-          ) : (
-            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border bg-slate-50 text-slate-600 border-slate-200">
-              Legacy Coverage: N/A
-            </span>
-          )}
+          ) : null}
         </div>
       </div>
 

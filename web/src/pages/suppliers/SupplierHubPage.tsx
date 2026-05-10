@@ -224,20 +224,24 @@ function FixedAssetsPanel() {
 function EquipmentTab() {
   const [subTab, setSubTab] = useState<'movements' | 'assets'>('movements')
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['supplier-payments-equipment'],
-    queryFn:  () => reportsApi.supplierPayments(),
+    queryFn:  () => reportsApi.supplierPayments({ source_table: 'supplier_transactions' }),
     enabled:  subTab === 'movements',
   })
 
-  const rows = (data?.data as Array<{
+  type EquipmentRow = {
     id: number; transaction_date: string; supplier_name: string | null
     document_type: string | null; equipment: string | null; unit: string | null
     quantity: number | null; unit_price: number | null; amount: number
     expense_category: string | null; notes: string | null
     equipment_usage_mode: 'owned' | 'rental' | null
     journal_entry_id: number | null; gl_posted: number | null
-  }> ?? []).filter(r => r.equipment)
+  }
+  type PaymentsResponse = { data: EquipmentRow[]; warning?: { code: string; message: string } | null }
+  const typedData = data as PaymentsResponse | undefined
+  const rows = (typedData?.data ?? []).filter(r => r.equipment)
+  const apWarning = typedData?.warning ?? null
 
   function egp(n: number | null) {
     if (n == null) return '—'
@@ -288,6 +292,16 @@ function EquipmentTab() {
         ))}
       </div>
 
+      {apWarning && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800" role="alert" dir="rtl">
+          <AlertCircle size={16} className="mt-0.5 shrink-0 text-amber-600" />
+          <div>
+            <span className="font-semibold">تنبيه — بيانات جزئية: </span>
+            الأرقام مستخرجة من المعاملات مباشرةً وليس من دفتر الأستاذ. يرجى مراجعة إعداد حساب الدائنين (AP) في قواعد الترحيل.
+          </div>
+        </div>
+      )}
+
       {subTab === 'assets' && <FixedAssetsPanel />}
 
       {subTab === 'movements' && (
@@ -320,6 +334,11 @@ function EquipmentTab() {
             <div className="px-5 py-3 border-b border-slate-100">
               <span className="text-sm font-bold text-slate-700">سجل عمليات المعدات ({rows.length})</span>
             </div>
+            {error && (
+              <div className="mx-4 mt-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700">
+                تعذر تحميل بيانات عمليات المعدات: {error instanceof Error ? error.message : 'خطأ غير معروف'}
+              </div>
+            )}
             {isLoading
               ? <div className="flex items-center justify-center h-40 text-slate-400 text-sm">جار التحميل…</div>
               : (

@@ -1,0 +1,1 @@
+SELECT COUNT(*) AS cnt FROM supplier_transactions WHERE company_id=1 AND status='posted';

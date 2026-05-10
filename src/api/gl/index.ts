@@ -14,6 +14,7 @@ import masterData from './master-data'
 import exchangeRates from './exchange-rates'
 import eventTypes from './event-types'
 import accountRolePolicy from './account-role-policy'
+import hardening from './hardening'
 
 // Main GL router - aggregator for all GL sub-modules
 const gl = new Hono<{ Bindings: Env }>()
@@ -54,6 +55,9 @@ gl.route('/', reports)
 
 // Integrity: System integrity checks, audit logs, health score
 gl.route('/', integrity)
+
+// Hardening: Feature flags, baseline metrics, governance controls
+gl.route('/hardening', hardening)
 
 // Health check endpoint for the GL module
 gl.get('/health', (c) => {

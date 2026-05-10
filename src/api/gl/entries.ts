@@ -22,28 +22,119 @@ entries.get('/', async (c) => {
   const offset    = (page - 1) * size
   const start     = c.req.query('start')
   const end       = c.req.query('end')
-  const module    = c.req.query('module') // 'supplier' | 'inventory' | 'cash'
+  const moduleRaw = c.req.query('module')
+  const module = moduleRaw === 'supplier' || moduleRaw === 'inventory' || moduleRaw === 'cash'
+    ? moduleRaw
+    : undefined
+  const refType   = c.req.query('ref_type')
   const search    = c.req.query('search')
+  const expenseCode = c.req.query('expense_code')
+  const centerCodeRaw = c.req.query('center_code')
+  const centerCode = centerCodeRaw == null || centerCodeRaw === '' ? null : Number(centerCodeRaw)
 
-  // Determine source table/view based on module filter
-  let sourceTable = 'journal_entries e'
-  if (module === 'supplier') {
-    sourceTable = 'vw_supplier_entries e'
-  } else if (module === 'inventory') {
-    sourceTable = 'vw_inventory_entries e'
-  } else if (module === 'cash') {
-    sourceTable = 'vw_cash_entries e'
-  }
+  const sourceTable = 'journal_entries e'
 
   let where = 'WHERE e.company_id = ?'
   const p: unknown[] = [company_id]
+  // Hide technical reclassification entries from the default journal feed.
+  // They remain accessible via search/local_id when explicitly queried.
+  where += " AND COALESCE(e.local_id, '') NOT LIKE 'reclass_supplier_ap_%'"
   if (start) { where += ' AND e.entry_date >= ?'; p.push(start) }
   if (end) { where += ' AND e.entry_date <= ?'; p.push(end) }
+  if (refType) { where += ' AND e.ref_type = ?'; p.push(refType) }
+
+  if (module === 'supplier') {
+    where += ` AND (
+      e.ref_type = 'supplier_transaction'
+      OR EXISTS (
+        SELECT 1
+        FROM journal_entry_lines jl
+        WHERE jl.entry_id = e.id
+          AND jl.company_id = e.company_id
+          AND jl.source_ledger = 'supplier'
+      )
+      OR (
+        e.ref_type = 'business_event'
+        AND EXISTS (
+          SELECT 1
+          FROM business_events be
+          WHERE be.id = e.ref_id
+            AND be.company_id = e.company_id
+            AND LOWER(COALESCE(be.source_module, '')) IN ('supplier', 'suppliers')
+        )
+      )
+    )`
+  } else if (module === 'inventory') {
+    where += ` AND (
+      e.ref_type = 'inventory_movement'
+      OR EXISTS (
+        SELECT 1
+        FROM journal_entry_lines jl
+        WHERE jl.entry_id = e.id
+          AND jl.company_id = e.company_id
+          AND jl.source_ledger = 'inventory'
+      )
+      OR (
+        e.ref_type = 'business_event'
+        AND EXISTS (
+          SELECT 1
+          FROM business_events be
+          WHERE be.id = e.ref_id
+            AND be.company_id = e.company_id
+            AND LOWER(COALESCE(be.source_module, '')) IN ('inventory', 'inventory_movement')
+        )
+      )
+    )`
+  } else if (module === 'cash') {
+    where += ` AND (
+      e.ref_type = 'cash_transaction'
+      OR EXISTS (
+        SELECT 1
+        FROM journal_entry_lines jl
+        WHERE jl.entry_id = e.id
+          AND jl.company_id = e.company_id
+          AND jl.source_ledger = 'cash'
+      )
+      OR (
+        e.ref_type = 'business_event'
+        AND EXISTS (
+          SELECT 1
+          FROM business_events be
+          WHERE be.id = e.ref_id
+            AND be.company_id = e.company_id
+            AND LOWER(COALESCE(be.source_module, '')) IN ('cash', 'treasury', 'cash_transaction')
+        )
+      )
+    )`
+  }
 
   if (search) {
     where += ' AND (e.description LIKE ? OR e.entry_number LIKE ? OR CAST(e.id AS TEXT) LIKE ?)'
     const s = `%${search}%`
     p.push(s, s, s)
+  }
+
+  if (Number.isFinite(centerCode)) {
+    where += ` AND EXISTS (
+      SELECT 1
+      FROM journal_entry_lines jl
+      WHERE jl.entry_id = e.id
+        AND jl.company_id = e.company_id
+        AND jl.center_code = ?
+    )`
+    p.push(centerCode)
+  }
+
+  if (expenseCode) {
+    where += ` AND EXISTS (
+      SELECT 1
+      FROM cash_transactions ct
+      WHERE ct.company_id = e.company_id
+        AND e.ref_type = 'cash_transaction'
+        AND ct.id = e.ref_id
+        AND CAST(ct.expense_code AS TEXT) = ?
+    )`
+    p.push(expenseCode)
   }
 
   const [rows, cnt] = await Promise.all([
@@ -136,6 +227,16 @@ entries.get('/:id/trace', async (c) => {
     ).bind(entry.ref_id, company_id).first()
   }
 
+  if (!sourceEvent && entry.ref_type === 'supplier_transaction' && entry.ref_id) {
+    sourceEvent = await c.env.DB.prepare(
+      `SELECT id, event_type, event_date, source_module, source_id, status, payload
+       FROM business_events
+       WHERE company_id = ? AND source_module = 'suppliers' AND source_id = ?
+       ORDER BY id DESC
+       LIMIT 1`
+    ).bind(company_id, entry.ref_id).first()
+  }
+
   let sourceDocument: unknown = null
   try {
     sourceDocument = await c.env.DB.prepare(
@@ -172,6 +273,27 @@ entries.get('/:id/trace', async (c) => {
     } catch (err) {
       // Ignore error
     }
+  }
+
+  if (!sourceDocument && entry.ref_type === 'supplier_transaction' && entry.ref_id) {
+    try {
+      sourceDocument = await c.env.DB.prepare(
+        `SELECT id, source_module, source_id, document_type, event_id, event_date, status, 'primary' AS link_type
+         FROM source_documents
+         WHERE company_id = ? AND source_module = 'suppliers' AND source_id = ?
+         ORDER BY id DESC
+         LIMIT 1`
+      ).bind(company_id, entry.ref_id).first()
+    } catch (err) {
+      // Ignore error
+    }
+  }
+
+  if (!sourceEvent && sourceDocument && typeof sourceDocument === 'object' && 'event_id' in sourceDocument && sourceDocument.event_id) {
+    sourceEvent = await c.env.DB.prepare(
+      `SELECT id, event_type, event_date, source_module, source_id, status, payload
+       FROM business_events WHERE id = ? AND company_id = ?`
+    ).bind((sourceDocument as { event_id: number }).event_id, company_id).first()
   }
 
   return c.json({
