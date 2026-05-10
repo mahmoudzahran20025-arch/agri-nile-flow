@@ -78,6 +78,13 @@ function num(n: number | null | undefined, dp = 2) {
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: dp }).format(n)
 }
 
+function buildOperationId(prefix: string) {
+  const g = globalThis as typeof globalThis & { crypto?: { randomUUID?: () => string } }
+  const uuid = g.crypto?.randomUUID?.()
+  if (uuid) return `${prefix}_${uuid}`
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+}
+
 // ── Lifecycle Stepper ────────────────────────────────────────
 function LifecycleStepper({ status }: { status: WorkOrder['status'] }) {
   const stages = LIFECYCLE.filter(s => s.key !== 'cancelled')
@@ -412,6 +419,7 @@ export default function WorkOrdersPage() {
   const [openNew,        setOpenNew]        = useState(false)
   const [openTask,       setOpenTask]       = useState(false)
   const [openEquipment,  setOpenEquipment]  = useState(false)
+  const [equipmentOperationId, setEquipmentOperationId] = useState('')
   const [confirmCosted, setConfirmCosted] = useState(false)
   const [actualDate,   setActualDate]    = useState('')
   const [err, setErr] = useState('')
@@ -555,6 +563,7 @@ export default function WorkOrdersPage() {
 
   const addEquipment = useMutation({
     mutationFn: () => operationsApi.addEquipment(selectedId!, {
+      operation_id: equipmentOperationId,
       equipment_name: equipForm.equipment_name.trim(),
       task_date:      equipForm.task_date,
       hours_worked:   Number(equipForm.hours_worked),
@@ -576,6 +585,7 @@ export default function WorkOrdersPage() {
         equipment_name: '', task_date: '', hours_worked: '', cost_per_hour: '',
         equipment_usage_mode: 'rental', fixed_asset_id: '', supplier_code: '', notes: '',
       })
+      setEquipmentOperationId('')
       setErr('')
     },
   })
@@ -816,7 +826,11 @@ export default function WorkOrdersPage() {
             <CostBreakdown
               detail={detail}
               canEdit={canWrite('operations') && !['costed', 'cancelled'].includes(detail.status)}
-              onAddEquipment={() => { setOpenEquipment(true); setErr('') }}
+              onAddEquipment={() => {
+                setEquipmentOperationId(buildOperationId(`wo${detail.id}_equipment`))
+                setOpenEquipment(true)
+                setErr('')
+              }}
             />
           </div>
         )}
@@ -957,7 +971,11 @@ export default function WorkOrdersPage() {
       </Modal>
 
       {/* ── Add Equipment Modal ────────────────────────────── */}
-      <Modal open={openEquipment} onClose={() => { setOpenEquipment(false); setErr('') }} title="تسجيل تشغيل معدة" size="md">
+      <Modal open={openEquipment} onClose={() => {
+        setOpenEquipment(false)
+        setEquipmentOperationId('')
+        setErr('')
+      }} title="تسجيل تشغيل معدة" size="md">
         <div className="grid grid-cols-2 gap-4">
           {/* Usage mode toggle */}
           <div className="col-span-2">
@@ -1055,7 +1073,11 @@ export default function WorkOrdersPage() {
         </div>
         {err && <p className="text-red-600 text-sm mt-3">{err}</p>}
         <div className="flex justify-end gap-3 mt-6">
-          <button className="btn-secondary" onClick={() => { setOpenEquipment(false); setErr('') }}>إلغاء</button>
+          <button className="btn-secondary" onClick={() => {
+            setOpenEquipment(false)
+            setEquipmentOperationId('')
+            setErr('')
+          }}>إلغاء</button>
           <button
             className="btn-primary gap-2"
             onClick={() => addEquipment.mutate()}

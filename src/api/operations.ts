@@ -337,6 +337,7 @@ operations.post('/orders/:id/equipment', async (c) => {
   }
 
   const b = await c.req.json<{
+    operation_id?: string
     equipment_name: string
     task_date: string
     hours_worked: number
@@ -349,6 +350,10 @@ operations.post('/orders/:id/equipment', async (c) => {
 
   if (!b.equipment_name?.trim() || !b.task_date) {
     return c.json({ success: false, error: 'اسم المعدة والتاريخ مطلوبان' }, 400)
+  }
+  const operationId = (b.operation_id ?? '').trim()
+  if (!operationId) {
+    return c.json({ success: false, error: 'operation_id مطلوب ويجب أن يكون غير فارغ' }, 400)
   }
   if (!Number.isFinite(b.hours_worked) || b.hours_worked <= 0) {
     return c.json({ success: false, error: 'عدد الساعات يجب أن يكون أكبر من صفر' }, 400)
@@ -371,16 +376,91 @@ operations.post('/orders/:id/equipment', async (c) => {
     if (!asset) return c.json({ success: false, error: 'الأصل الثابت المحدد غير موجود أو غير نشط' }, 422)
   }
 
-  const result = await c.env.DB.prepare(
-    `INSERT INTO work_order_equipment
-     (work_order_id, company_id, equipment_name, task_date, hours_worked, cost_per_hour,
-      equipment_usage_mode, fixed_asset_id, supplier_code, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(orderId, company_id, b.equipment_name.trim(), b.task_date,
-         b.hours_worked, b.cost_per_hour, usageMode, b.fixed_asset_id ?? null,
-         b.supplier_code ?? null, b.notes ?? null).run()
+  // Idempotency gate: same operation_id on same order must return the original result.
+  const existingByOperationId = await c.env.DB.prepare(
+    `SELECT id, journal_entry_id, equipment_name, task_date, hours_worked, cost_per_hour,
+            equipment_usage_mode, fixed_asset_id, supplier_code, notes
+     FROM work_order_equipment
+     WHERE company_id = ? AND work_order_id = ? AND operation_id = ?
+     LIMIT 1`
+  ).bind(company_id, orderId, operationId).first<{
+    id: number
+    journal_entry_id: number | null
+    equipment_name: string
+    task_date: string
+    hours_worked: number
+    cost_per_hour: number
+    equipment_usage_mode: 'owned' | 'rental'
+    fixed_asset_id: number | null
+    supplier_code: number | null
+    notes: string | null
+  }>()
 
-  const equipmentId = Number(result.meta.last_row_id)
+  if (existingByOperationId) {
+    const samePayload =
+      existingByOperationId.equipment_name === b.equipment_name.trim() &&
+      existingByOperationId.task_date === b.task_date &&
+      Number(existingByOperationId.hours_worked) === Number(b.hours_worked) &&
+      Number(existingByOperationId.cost_per_hour) === Number(b.cost_per_hour) &&
+      existingByOperationId.equipment_usage_mode === usageMode &&
+      Number(existingByOperationId.fixed_asset_id ?? 0) === Number(b.fixed_asset_id ?? 0) &&
+      Number(existingByOperationId.supplier_code ?? 0) === Number(b.supplier_code ?? 0) &&
+      (existingByOperationId.notes ?? '') === (b.notes ?? '')
+
+    if (!samePayload) {
+      return c.json({
+        success: false,
+        error: 'operation_id مستخدم مسبقًا ببيانات مختلفة',
+      }, 409)
+    }
+
+    return c.json({
+      success: true,
+      duplicate: true,
+      data: {
+        id: existingByOperationId.id,
+        journal_entry_id: existingByOperationId.journal_entry_id,
+        operation_id: operationId,
+      },
+    }, 200)
+  }
+
+  let equipmentId: number
+  try {
+    const result = await c.env.DB.prepare(
+      `INSERT INTO work_order_equipment
+       (work_order_id, company_id, operation_id, equipment_name, task_date, hours_worked, cost_per_hour,
+        equipment_usage_mode, fixed_asset_id, supplier_code, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(orderId, company_id, operationId, b.equipment_name.trim(), b.task_date,
+           b.hours_worked, b.cost_per_hour, usageMode, b.fixed_asset_id ?? null,
+           b.supplier_code ?? null, b.notes ?? null).run()
+
+    equipmentId = Number(result.meta.last_row_id)
+  } catch (e: any) {
+    const msg = String(e?.message ?? '')
+    if (msg.includes('UNIQUE constraint failed')) {
+      const existing = await c.env.DB.prepare(
+        `SELECT id, journal_entry_id
+         FROM work_order_equipment
+         WHERE company_id = ? AND work_order_id = ? AND operation_id = ?
+         LIMIT 1`
+      ).bind(company_id, orderId, operationId).first<{ id: number; journal_entry_id: number | null }>()
+
+      if (existing) {
+        return c.json({
+          success: true,
+          duplicate: true,
+          data: {
+            id: existing.id,
+            journal_entry_id: existing.journal_entry_id,
+            operation_id: operationId,
+          },
+        }, 200)
+      }
+    }
+    throw e
+  }
   const equipmentCost = Math.round(b.hours_worked * b.cost_per_hour * 100) / 100
 
   if (equipmentCost > 0) {
@@ -410,7 +490,7 @@ operations.post('/orders/:id/equipment', async (c) => {
     }
   }
 
-  return c.json({ success: true, data: { id: equipmentId } }, 201)
+  return c.json({ success: true, data: { id: equipmentId, operation_id: operationId } }, 201)
 })
 
 // DELETE /api/operations/equipment/:id

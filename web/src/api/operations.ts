@@ -33,6 +33,7 @@ export const operationsApi = {
   deleteTask:  (id: number) => api.delete(`/operations/tasks/${id}`),
 
   addEquipment: (orderId: number, body: {
+    operation_id: string
     equipment_name: string; task_date: string
     hours_worked: number; cost_per_hour: number
     equipment_usage_mode?: 'owned' | 'rental'

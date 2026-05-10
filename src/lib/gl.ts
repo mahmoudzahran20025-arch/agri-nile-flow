@@ -20,6 +20,7 @@ interface PostEntryOpts {
   ref_type:           string
   ref_id:             number
   lines:              GLLine[]
+  expected_minimum_lines?: number
   created_by?:        number
   posting_rule_trace?: string   // JSON trace from posting engine
 }
@@ -82,6 +83,11 @@ async function validatePostingAccounts(
 }
 
 export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promise<number | null> {
+  const minimumLines = Math.max(2, Number(opts.expected_minimum_lines ?? 2))
+  if (!Array.isArray(opts.lines) || opts.lines.length < minimumLines) {
+    throw new Error(`GL_MIN_LINES: Journal entry requires at least ${minimumLines} lines.`)
+  }
+
   const totalDebit  = opts.lines.reduce((s, l) => s + l.debit, 0)
   const totalCredit = opts.lines.reduce((s, l) => s + l.credit, 0)
   if (Math.abs(totalDebit - totalCredit) > 0.01) {
@@ -98,18 +104,19 @@ export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promis
   try {
     let entryId: number | null = null
 
-    // Step 1: Insert the header to get the entry ID
+    // Stage 1: Persist header as draft. It is promoted to posted only after
+    // line persistence + invariant checks pass.
     const entry = await db
       .prepare(`INSERT INTO journal_entries
                 (company_id, period_id, entry_date, description, ref_type, ref_id, is_posted, created_by, posting_rule_trace)
-                VALUES (?,?,?,?,?,?,1,?,?)`)
+                VALUES (?,?,?,?,?,?,0,?,?)`)
       .bind(opts.company_id, periodId, opts.entry_date, opts.description,
             opts.ref_type, opts.ref_id, opts.created_by ?? null,
             opts.posting_rule_trace ?? null).run()
 
     entryId = Number(entry.meta.last_row_id)
 
-    // Step 2: Insert ALL lines atomically using db.batch()
+    // Stage 2: Persist all lines
     const lineStmts = opts.lines.map(l =>
       db.prepare(
         `INSERT INTO journal_entry_lines
@@ -124,6 +131,50 @@ export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promis
     )
     try {
       await db.batch(lineStmts)
+
+      // Stage 3: Validate persisted entry before finalizing as posted.
+      const persisted = await db.prepare(
+        `SELECT COUNT(*) AS line_count,
+                COALESCE(SUM(debit), 0) AS total_debit,
+                COALESCE(SUM(credit), 0) AS total_credit
+         FROM journal_entry_lines
+         WHERE entry_id = ? AND company_id = ?`
+      ).bind(entryId, opts.company_id).first<{
+        line_count: number
+        total_debit: number
+        total_credit: number
+      }>()
+
+      const lineCount = Number(persisted?.line_count ?? 0)
+      const persistedDebit = Number(persisted?.total_debit ?? 0)
+      const persistedCredit = Number(persisted?.total_credit ?? 0)
+
+      if (lineCount < minimumLines) {
+        throw new Error(`GL_MIN_LINES: Persisted line_count=${lineCount} below minimum ${minimumLines}.`)
+      }
+      if (Math.abs(persistedDebit - persistedCredit) > 0.01) {
+        throw new Error('GL_UNBALANCED_PERSISTED: Persisted journal lines are unbalanced.')
+      }
+
+      await db.prepare(
+        `UPDATE journal_entries
+         SET is_posted = 1
+         WHERE id = ? AND company_id = ?`
+      ).bind(entryId, opts.company_id).run()
+
+      const orphanGuard = await db.prepare(
+        `SELECT COUNT(*) AS n
+         FROM journal_entries e
+         LEFT JOIN journal_entry_lines l
+           ON l.entry_id = e.id AND l.company_id = e.company_id
+         WHERE e.id = ? AND e.company_id = ? AND e.is_posted = 1
+         GROUP BY e.id
+         HAVING COUNT(l.id) = 0`
+      ).bind(entryId, opts.company_id).first<{ n: number }>()
+
+      if (orphanGuard) {
+        throw new Error('GL_ORPHAN_POSTED_GUARD: posted journal entry has zero lines.')
+      }
     } catch (lineErr: any) {
       // Compensating cleanup: do not keep a header without a full, valid line set.
       if (entryId) {

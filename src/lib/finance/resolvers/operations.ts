@@ -5,6 +5,17 @@ import {
 } from '../../posting_engine'
 import { postFromBusinessEvent } from '../business_events'
 
+async function requireControlMapping(
+  db: D1Database,
+  companyId: number,
+  key: string,
+  context: string,
+): Promise<string> {
+  const code = await resolveControlAccount(db, companyId, key)
+  if (code) return code
+  throw new Error(`COA_CONTROL_UNRESOLVED: ${context}. Missing active mapping for key [${key}].`)
+}
+
 export async function resolveWorkOrderLabor(
   db: D1Database,
   opts: {
@@ -19,8 +30,18 @@ export async function resolveWorkOrderLabor(
     field_id?: number | null
   },
 ): Promise<number | null> {
-  const cogsAcc         = await resolveControlAccount(db, opts.company_id, 'labor_expense') ?? '5101'
-  const wagesPayableAcc = await resolveControlAccount(db, opts.company_id, 'wages_payable') ?? '21200001'
+  const cogsAcc = await requireControlMapping(
+    db,
+    opts.company_id,
+    'labor_expense',
+    'Work order labor debit account'
+  )
+  const wagesPayableAcc = await requireControlMapping(
+    db,
+    opts.company_id,
+    'wages_payable',
+    'Work order labor credit account'
+  )
   const blueprint = await peResolveWorkOrderLabor(
     db,
     opts.company_id,
@@ -51,7 +72,7 @@ export async function resolveWorkOrderLabor(
       season_id:     opts.season_id ?? undefined,
       field_id:      opts.field_id ?? undefined,
       rule_slot:     l.rule_slot,
-      source_ledger: 'payroll' as const,
+      source_ledger: 'manual' as const,
       source_record_id: opts.ref_id,
     })),
   })
