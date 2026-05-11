@@ -171,3 +171,72 @@ Difference:   0.00 ✅ BALANCED
 **Prepared by**: Finance/GL Audit & Refinement Process  
 **Reviewed by**: [Pending]  
 **Approved by**: [Pending]
+
+---
+
+## 📌 ADDENDUM (May 8, 2026) — Controlled Production Remediation
+
+### Scope
+- Historical posted supplier journals were carrying account code `2120` (header account).
+- One inventory movement (`id=6767`) was `posted` with zero value and no `journal_entry_id`.
+
+### Controlled Remediation Applied
+- Executed one-time production remediation script:
+	- `sql/repair_historical_supplier_header_postings_and_zero_value_inventory.sql`
+- The remediation was controlled as follows:
+	- Temporarily dropped `trg_gl_prevent_posted_line_update`.
+	- Remapped historical `supplier_transaction` journal lines from `2120` to `212000010`.
+	- Recreated `trg_gl_prevent_posted_line_update` immediately in the same script.
+	- Marked movement `6767` as `exempt_zero_value` with reason `historical_zero_value_live_repair`.
+
+### Post-Remediation Verification (Live D1)
+- Header account postings: `0`
+- Inventory ghost-posted: `0`
+- Unbalanced journal entries: `0`
+- Posted cash missing journal: `0`
+- Posted supplier missing journal: `0`
+- Outbox failed/stuck: `0`
+- Orphan journal lines: `0`
+- Broken journal links (supplier/inventory/cash/work_tasks/work_order_equipment): `0`
+
+### Decision Update
+- Final accounting-engine decision after remediation: **GO**.
+
+---
+
+## 🛰️ Daily Monitoring SOP — Engine Health (Mandatory)
+
+### Endpoint
+- `GET /api/gl/engine-health`
+
+### Operational Owner
+- Finance Operations (daily)
+- ERP/Engineering On-Call (for any non-zero blocker)
+
+### Monitoring Windows
+- Start of day (before posting operations)
+- Mid-day checkpoint
+- End of day (pre-close readiness)
+
+### Must-Be-Zero Indicators
+- `unbalanced_journal_entries`
+- `empty_posted_entries`
+- `header_account_postings`
+- `posted_cash_missing_journal`
+- `posted_supplier_missing_journal`
+- `inventory_ghost_posted`
+- `inventory_failed`
+- `inventory_outbox_stuck`
+- `inventory_outbox_failed`
+
+### Escalation Policy
+- If any must-be-zero indicator > 0:
+	- Mark finance status as `attention`.
+	- Open incident with timestamp and endpoint payload snapshot.
+	- Pause period-close actions until indicators return to zero.
+
+### UI Adoption
+- Finance command center at `/gl` now reads live values from:
+	- `GET /api/gl/engine-health`
+	- `GET /api/gl/reconciliation/trial-balance`
+- This replaces demo-style summary behavior with real operational numbers.
