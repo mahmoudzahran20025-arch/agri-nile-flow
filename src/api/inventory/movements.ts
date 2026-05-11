@@ -30,6 +30,33 @@ function isSupportedMovementType(movementType: string): boolean {
   return SUPPORTED_MOVEMENT_TYPES.has(movementType)
 }
 
+function normalizeIsoDate(value: string): string {
+  const raw = value.trim()
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) {
+    throw new Error(`INVALID_MOVEMENT_DATE: expected YYYY-MM-DD, got "${value}"`)
+  }
+  const y = Number(m[1])
+  const mo = Number(m[2])
+  const d = Number(m[3])
+  const dt = new Date(Date.UTC(y, mo - 1, d))
+  const valid = dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d
+  if (!valid) {
+    throw new Error(`INVALID_MOVEMENT_DATE: out-of-range date "${value}"`)
+  }
+  return `${m[1]}-${m[2]}-${m[3]}`
+}
+
+function yearMonthParts(isoDate: string): { year: number; month: number } {
+  const [y, m] = isoDate.split('-')
+  return { year: Number(y), month: Number(m) }
+}
+
+function isFutureIsoDate(isoDate: string): boolean {
+  const today = new Date().toISOString().slice(0, 10)
+  return isoDate > today
+}
+
 // ── Helper: map legacy Arabic / typed movement_type to transaction_type ───────
 function mapToTransactionType(movementType: string): string {
   const MAP: Record<string, string> = {
@@ -56,6 +83,108 @@ async function validateActiveCenterCode(
     'SELECT 1 AS ok FROM cost_centers WHERE company_id = ? AND CAST(code AS INTEGER) = ? AND is_active = 1 LIMIT 1'
   ).bind(companyId, centerCode).first<{ ok: number }>()
   return !!row
+}
+
+async function tableExists(db: Env['DB'], tableName: string): Promise<boolean> {
+  const row = await db.prepare(
+    "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1"
+  ).bind(tableName).first<{ ok: number }>()
+  return !!row?.ok
+}
+
+async function isKnownServiceTypeCode(db: Env['DB'], company_id: number, code: string): Promise<boolean> {
+  const normalized = code.trim()
+  if (!normalized) return false
+
+  if (await tableExists(db, 'service_types')) {
+    const row = await db.prepare(
+      'SELECT 1 AS ok FROM service_types WHERE company_id = ? AND code = ? AND is_active = 1 LIMIT 1'
+    ).bind(company_id, normalized).first<{ ok: number }>()
+    if (row?.ok) return true
+  }
+
+  const legacyByCode = await db.prepare(
+    'SELECT 1 AS ok FROM expense_types WHERE company_id = ? AND CAST(code AS TEXT) = ? LIMIT 1'
+  ).bind(company_id, normalized).first<{ ok: number }>()
+  if (legacyByCode?.ok) return true
+
+  const legacyByName = await db.prepare(
+    'SELECT 1 AS ok FROM expense_types WHERE company_id = ? AND TRIM(name) = ? LIMIT 1'
+  ).bind(company_id, normalized).first<{ ok: number }>()
+  return !!legacyByName?.ok
+}
+
+async function isSupplierAuthorizedForService(
+  db: Env['DB'],
+  company_id: number,
+  supplier_code: number,
+  service_type_code: string,
+): Promise<boolean> {
+  if (!(await tableExists(db, 'supplier_service_map'))) {
+    return true
+  }
+
+  const row = await db.prepare(
+    `SELECT 1 AS ok
+     FROM supplier_service_map
+     WHERE company_id = ? AND supplier_code = ? AND service_type_code = ? AND is_active = 1
+     LIMIT 1`
+  ).bind(company_id, supplier_code, service_type_code).first<{ ok: number }>()
+
+  return !!row?.ok
+}
+
+async function validateInventoryGovernance(
+  db: Env['DB'],
+  company_id: number,
+  input: {
+    movement_type: string
+    supplier_code?: number | null
+    document_number?: number | null
+    center_code?: number | null
+    statement_text?: string | null
+    notes?: string | null
+    service_type_code?: string | null
+  },
+): Promise<{ statementText: string | null; serviceTypeCode: string | null }> {
+  const statementText = (input.statement_text ?? input.notes ?? '').trim() || null
+  const serviceTypeCode = input.service_type_code?.trim() || null
+
+  if (input.movement_type === 'GRN') {
+    if (input.supplier_code == null) {
+      throw new Error('GRN_REQUIRES_SUPPLIER')
+    }
+    if (input.document_number == null) {
+      throw new Error('GRN_REQUIRES_DOCUMENT')
+    }
+  }
+
+  if (input.movement_type === 'ISSUE') {
+    if (input.center_code == null) {
+      throw new Error('ISSUE_REQUIRES_CENTER')
+    }
+    if (!statementText || statementText.length < 3) {
+      throw new Error('ISSUE_REQUIRES_STATEMENT')
+    }
+    if (!serviceTypeCode) {
+      throw new Error('ISSUE_REQUIRES_SERVICE_TYPE')
+    }
+  }
+
+  if (serviceTypeCode) {
+    const known = await isKnownServiceTypeCode(db, company_id, serviceTypeCode)
+    if (!known) {
+      throw new Error('UNKNOWN_SERVICE_TYPE_CODE')
+    }
+    if (input.supplier_code != null) {
+      const authorized = await isSupplierAuthorizedForService(db, company_id, input.supplier_code, serviceTypeCode)
+      if (!authorized) {
+        throw new Error('SUPPLIER_NOT_AUTHORIZED_FOR_SERVICE')
+      }
+    }
+  }
+
+  return { statementText, serviceTypeCode }
 }
 
 async function ensureOutboxQueued(
@@ -180,6 +309,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     movement_date: string; warehouse: string; movement_type: string
     item_code: number; quantity: number; unit_price?: number
     supplier_code?: number; document_number?: number; notes?: string
+    statement_text?: string; service_type_code?: string
     season_id?: number; field_id?: number; work_order_id?: number
     center_code?: number; pack_capacity?: number; pack_count?: number
     payment_method?: 'cash' | 'credit'
@@ -193,19 +323,30 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     return c.json({ success: false, error: 'نوع حركة غير مدعوم' }, 400)
   }
 
+  let movementDate: string
+  try {
+    movementDate = normalizeIsoDate(b.movement_date)
+  } catch (err: any) {
+    return c.json({ success: false, error: err?.message ?? 'صيغة تاريخ الحركة غير صحيحة' }, 422)
+  }
+
+  if (isFutureIsoDate(movementDate)) {
+    return c.json({ success: false, error: 'غير مسموح بترحيل حركة مخزنية بتاريخ مستقبلي' }, 422)
+  }
+
   const direction = resolveMovementDirection(b.movement_type)
   const isInbound = direction === 'IN'
 
   const controls = await getInventoryPostingControls(c.env.DB, company_id)
   try {
-    enforceInventoryLockDate(controls, b.movement_date)
+    enforceInventoryLockDate(controls, movementDate)
   } catch (e: any) {
     return c.json({ success: false, error: `الفترة المخزنية مغلقة حتى ${controls.locked_through_date}`, code: 'INVENTORY_PERIOD_LOCKED' }, 422)
   }
 
-  const periodId = await getOpenPeriod(c.env.DB, company_id, b.movement_date)
+  const periodId = await getOpenPeriod(c.env.DB, company_id, movementDate)
   if (!periodId) {
-    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.movement_date}` }, 400)
+    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${movementDate}` }, 400)
   }
 
   let centerCode = b.center_code
@@ -221,6 +362,43 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     }
   }
 
+  let statementText: string | null
+  let serviceTypeCode: string | null
+  try {
+    ({ statementText, serviceTypeCode } = await validateInventoryGovernance(c.env.DB, company_id, {
+      movement_type: b.movement_type,
+      supplier_code: b.supplier_code ?? null,
+      document_number: b.document_number ?? null,
+      center_code: centerCode ?? null,
+      statement_text: b.statement_text ?? null,
+      notes: b.notes ?? null,
+      service_type_code: b.service_type_code ?? null,
+    }))
+  } catch (e: any) {
+    if (e.message === 'GRN_REQUIRES_SUPPLIER') {
+      return c.json({ success: false, error: 'كود المورد مطلوب في استلام المخزون GRN' }, 422)
+    }
+    if (e.message === 'GRN_REQUIRES_DOCUMENT') {
+      return c.json({ success: false, error: 'رقم المستند مطلوب في استلام المخزون GRN' }, 422)
+    }
+    if (e.message === 'ISSUE_REQUIRES_CENTER') {
+      return c.json({ success: false, error: 'مركز التكلفة مطلوب في صرف المخزون ISSUE' }, 422)
+    }
+    if (e.message === 'ISSUE_REQUIRES_STATEMENT') {
+      return c.json({ success: false, error: 'البيان مطلوب في صرف المخزون ISSUE ويجب ألا يقل عن 3 أحرف' }, 422)
+    }
+    if (e.message === 'ISSUE_REQUIRES_SERVICE_TYPE') {
+      return c.json({ success: false, error: 'service_type_code مطلوب في صرف المخزون ISSUE' }, 422)
+    }
+    if (e.message === 'UNKNOWN_SERVICE_TYPE_CODE') {
+      return c.json({ success: false, error: 'service_type_code غير معروف أو غير نشط' }, 422)
+    }
+    if (e.message === 'SUPPLIER_NOT_AUTHORIZED_FOR_SERVICE') {
+      return c.json({ success: false, error: 'المورد غير مخول لهذا service_type_code' }, 422)
+    }
+    throw e
+  }
+
   // Use readInventoryBalance — heals stale snapshots automatically before returning.
   const prev    = await readInventoryBalance(c.env.DB, company_id, b.item_code, b.warehouse)
   const prevQty = prev.balance_qty
@@ -228,7 +406,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
 
   if (!isInbound) {
     if (b.quantity > prevQty) {
-      return c.json({ success: false, error: `الكمية المتاحة بتاريخ ${b.movement_date} هي (${prevQty})، والمطلوب (${b.quantity})`, code: 'INSUFFICIENT_STOCK' }, 409)
+      return c.json({ success: false, error: `الكمية المتاحة بتاريخ ${movementDate} هي (${prevQty})، والمطلوب (${b.quantity})`, code: 'INSUFFICIENT_STOCK' }, 409)
     }
     const minFutureBal = await c.env.DB.prepare(
       `SELECT MIN(balance_qty) as min_bal FROM inventory_movements
@@ -237,8 +415,8 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
            SELECT MAX(id) FROM inventory_movements
            WHERE company_id = ? AND item_code = ? AND warehouse = ? AND movement_date = ?
          )))`
-    ).bind(company_id, b.item_code, b.warehouse, b.movement_date, b.movement_date,
-           company_id, b.item_code, b.warehouse, b.movement_date)
+        ).bind(company_id, b.item_code, b.warehouse, movementDate, movementDate,
+          company_id, b.item_code, b.warehouse, movementDate)
       .first<{ min_bal: number | null }>()
 
     if (minFutureBal && minFutureBal.min_bal !== null && minFutureBal.min_bal < b.quantity) {
@@ -271,17 +449,18 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
   const localId = `inv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
   const dQty = qtyIn - qtyOut
   const dVal = valueIn - valueOut
-  const date = new Date(b.movement_date)
+  const ym = yearMonthParts(movementDate)
 
   // Create the transaction header (groups this movement under a logical document).
   const txRes = await c.env.DB.prepare(
     `INSERT INTO inventory_transactions
      (company_id, transaction_type, document_number, movement_date, warehouse, notes,
-      line_count, total_qty, total_value, status, created_by_user_id)
-     VALUES (?,?,?,?,?,?,1,?,?,'confirmed',?)`
+      statement_text, service_type_code, line_count, total_qty, total_value, status, created_by_user_id)
+     VALUES (?,?,?,?,?,?,?,?,1,?,?,'confirmed',?)`
   ).bind(
     company_id, mapToTransactionType(b.movement_type),
-    b.document_number ?? null, b.movement_date, b.warehouse, b.notes ?? null,
+    b.document_number ?? null, movementDate, b.warehouse, b.notes ?? null,
+    statementText, serviceTypeCode,
     b.quantity, movementValue, userId,
   ).run()
   const transactionId = txRes.meta.last_row_id as number
@@ -292,16 +471,16 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
        (company_id, season_id, field_id, work_order_id, supplier_code, item_code, center_code,
         movement_date, warehouse, movement_type, document_number, pack_capacity, pack_count,
         quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
-        notes, year, month, created_by_user_id, local_id,
+        notes, statement_text, service_type_code, year, month, created_by_user_id, local_id,
         zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
       company_id, b.season_id ?? null, b.field_id ?? null, b.work_order_id ?? null,
       b.supplier_code ?? null, b.item_code, centerCode ?? null,
-      b.movement_date, b.warehouse, b.movement_type, b.document_number ?? null,
+      movementDate, b.warehouse, b.movement_type, b.document_number ?? null,
       b.pack_capacity ?? null, b.pack_count ?? null, b.quantity, unitPrice,
       qtyIn, qtyOut, balQty, valueIn, valueOut, balVal,
-      b.notes ?? null, date.getFullYear(), date.getMonth() + 1, userId, localId,
+      b.notes ?? null, statementText, serviceTypeCode, ym.year, ym.month, userId, localId,
       movementValue === 0 ? (zeroValueReason ?? null) : null,
       movementValue === 0 ? role : null,
       controls.posting_mode,
@@ -313,7 +492,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
        SET balance_qty = balance_qty + ?, balance_value = balance_value + ?
        WHERE company_id = ? AND item_code = ? AND warehouse = ?
          AND (movement_date > ? OR (movement_date = ? AND id > (SELECT id FROM inventory_movements WHERE local_id = ? AND company_id = ?)))`
-    ).bind(dQty, dVal, company_id, b.item_code, b.warehouse, b.movement_date, b.movement_date, localId, company_id)
+    ).bind(dQty, dVal, company_id, b.item_code, b.warehouse, movementDate, movementDate, localId, company_id)
   ])
 
   const movRow = await c.env.DB.prepare('SELECT id FROM inventory_movements WHERE local_id = ? AND company_id = ?').bind(localId, company_id).first<{id:number}>()
@@ -336,7 +515,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     const outboxPayload = {
       company_id, ref_id: movId,
       item_code: b.item_code, warehouse: b.warehouse,
-      movement_type: b.movement_type, value: glValue, date: b.movement_date,
+      movement_type: b.movement_type, value: glValue, date: movementDate,
       item_name: itemRow?.name ?? String(b.item_code), created_by: userId,
       center_code: centerCode ?? null, payment_method: b.payment_method ?? null,
       supplier_code: b.supplier_code ?? null, work_order_id: b.work_order_id ?? null,
@@ -352,7 +531,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     try {
       await FinanceCore.recordCashMovement(c.env.DB, {
         company_id, userId,
-        transaction_date: b.movement_date,
+        transaction_date: movementDate,
         direction: 'م',
         amount: valueIn,
         narration: `شراء نقدي: ${itemRow?.name ?? b.item_code} (مخزن: ${b.warehouse})`,
@@ -390,7 +569,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'CREATE',
     table_name: 'inventory_movements', record_id: movId,
-    new_value: { type: b.movement_type, item: b.item_code, warehouse: b.warehouse, qty: b.quantity, price: unitPrice, date: b.movement_date },
+    new_value: { type: b.movement_type, item: b.item_code, warehouse: b.warehouse, qty: b.quantity, price: unitPrice, date: movementDate },
   })
 
   return c.json({
@@ -415,6 +594,8 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     movement_type:    string
     supplier_code?:   number
     document_number?: number
+    statement_text?:  string
+    service_type_code?: string
     season_id?:       number
     field_id?:        number
     work_order_id?:   number
@@ -435,6 +616,13 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     return c.json({ success: false, error: 'نوع حركة غير مدعوم' }, 400)
   }
 
+  let movementDate: string
+  try {
+    movementDate = normalizeIsoDate(b.movement_date)
+  } catch (err: any) {
+    return c.json({ success: false, error: err?.message ?? 'صيغة تاريخ الحركة غير صحيحة' }, 422)
+  }
+
   const gate = await enforceDataQualityPolicy(c.env.DB, company_id, { mode: 'bulk', module: 'inventory_batch' })
   if (!gate.ok) {
     return c.json({ success: false, error: gate.error, code: gate.code, details: gate.details }, gate.status ?? 409)
@@ -445,13 +633,13 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
 
   const controls = await getInventoryPostingControls(c.env.DB, company_id)
   try {
-    enforceInventoryLockDate(controls, b.movement_date)
+    enforceInventoryLockDate(controls, movementDate)
   } catch {
     return c.json({ success: false, error: `الفترة المخزنية مغلقة حتى ${controls.locked_through_date}`, code: 'INVENTORY_PERIOD_LOCKED' }, 422)
   }
 
-  const periodId = await getOpenPeriod(c.env.DB, company_id, b.movement_date)
-  if (!periodId) return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.movement_date}` }, 400)
+  const periodId = await getOpenPeriod(c.env.DB, company_id, movementDate)
+  if (!periodId) return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${movementDate}` }, 400)
 
   let centerCode = b.center_code
   if (!centerCode && b.field_id) {
@@ -464,6 +652,40 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     if (!isValidCenter) {
       return c.json({ success: false, error: 'مركز التكلفة غير موجود أو غير نشط' }, 422)
     }
+  }
+
+  let statementText: string | null
+  let serviceTypeCode: string | null
+  try {
+    ({ statementText, serviceTypeCode } = await validateInventoryGovernance(c.env.DB, company_id, {
+      movement_type: b.movement_type,
+      supplier_code: b.supplier_code ?? null,
+      document_number: b.document_number ?? null,
+      center_code: centerCode ?? null,
+      statement_text: b.statement_text ?? null,
+      notes: b.notes ?? null,
+      service_type_code: b.service_type_code ?? null,
+    }))
+  } catch (e: any) {
+    if (e.message === 'GRN_REQUIRES_SUPPLIER') {
+      return c.json({ success: false, error: 'كود المورد مطلوب في استلام المخزون GRN' }, 422)
+    }
+    if (e.message === 'GRN_REQUIRES_DOCUMENT') {
+      return c.json({ success: false, error: 'رقم المستند مطلوب في استلام المخزون GRN' }, 422)
+    }
+    if (e.message === 'ISSUE_REQUIRES_CENTER') {
+      return c.json({ success: false, error: 'مركز التكلفة مطلوب في صرف المخزون ISSUE' }, 422)
+    }
+    if (e.message === 'ISSUE_REQUIRES_STATEMENT') {
+      return c.json({ success: false, error: 'البيان مطلوب في صرف المخزون ISSUE ويجب ألا يقل عن 3 أحرف' }, 422)
+    }
+    if (e.message === 'ISSUE_REQUIRES_SERVICE_TYPE') {
+      return c.json({ success: false, error: 'service_type_code مطلوب في صرف المخزون ISSUE' }, 422)
+    }
+    if (e.message === 'UNKNOWN_SERVICE_TYPE_CODE') {
+      return c.json({ success: false, error: 'service_type_code غير معروف أو غير نشط' }, 422)
+    }
+    throw e
   }
 
   // Idempotency guard: reject before any inserts if document already exists.
@@ -484,9 +706,9 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     }
   }
 
-  const date     = new Date(b.movement_date)
-  const year     = date.getFullYear()
-  const month    = date.getMonth() + 1
+  const ym = yearMonthParts(movementDate)
+  const year = ym.year
+  const month = ym.month
   const batchKey = `batch_${Date.now()}_${Math.random().toString(36).slice(2)}`
 
   type LineResult = {
@@ -554,11 +776,12 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
   const batchTxRes = await c.env.DB.prepare(
     `INSERT INTO inventory_transactions
      (company_id, transaction_type, document_number, movement_date, warehouse, notes,
-      line_count, total_qty, total_value, status, created_by_user_id)
-     VALUES (?,?,?,?,?,?,?,?,?,'confirmed',?)`
+      statement_text, service_type_code, line_count, total_qty, total_value, status, created_by_user_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,'confirmed',?)`
   ).bind(
     company_id, mapToTransactionType(b.movement_type),
-    b.document_number ?? null, b.movement_date, b.warehouse, b.notes ?? null,
+    b.document_number ?? null, movementDate, b.warehouse, b.notes ?? null,
+    statementText, serviceTypeCode,
     lineResults.length, totalBatchQty, totalBatchVal, userId,
   ).run()
   const batchTransactionId = batchTxRes.meta.last_row_id as number
@@ -569,16 +792,16 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
        (company_id, season_id, field_id, work_order_id, supplier_code, item_code, movement_date, warehouse,
         movement_type, document_number, quantity, unit_price,
         qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
-        notes, year, month, created_by_user_id, local_id, center_code,
+        notes, statement_text, service_type_code, year, month, created_by_user_id, local_id, center_code,
         zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
       company_id, b.season_id ?? null, b.field_id ?? null, b.work_order_id ?? null,
       b.supplier_code ?? null, lr.item_code,
-      b.movement_date, b.warehouse, b.movement_type, b.document_number ?? null,
+      movementDate, b.warehouse, b.movement_type, b.document_number ?? null,
       lr.quantity, lr.unit_price,
       lr.qtyIn, lr.qtyOut, lr.balQty, lr.valueIn, lr.valueOut, lr.balVal,
-      lr.lineNotes ?? b.notes ?? null, year, month, userId, lr.localId, centerCode ?? null,
+      lr.lineNotes ?? b.notes ?? null, statementText, serviceTypeCode, year, month, userId, lr.localId, centerCode ?? null,
       (lr.valueIn + lr.valueOut) === 0 ? (b.zero_value_reason?.trim() ?? null) : null,
       (lr.valueIn + lr.valueOut) === 0 ? role : null,
       controls.posting_mode,
@@ -604,7 +827,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
        SET balance_qty = balance_qty + ?, balance_value = balance_value + ?
        WHERE company_id = ? AND item_code = ? AND warehouse = ?
          AND (movement_date > ? OR (movement_date = ? AND id > ?))`
-    ).bind(dQty, dVal, company_id, lr.item_code, b.warehouse, b.movement_date, b.movement_date, ins.id)
+    ).bind(dQty, dVal, company_id, lr.item_code, b.warehouse, movementDate, movementDate, ins.id)
   }).filter(Boolean) as any[]
 
   if (deltaStmts.length > 0) await c.env.DB.batch(deltaStmts)
@@ -630,7 +853,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', ins.id, {
       company_id, ref_id: ins.id,
       item_code: lr.item_code, warehouse: b.warehouse,
-      movement_type: b.movement_type, value: glValue, date: b.movement_date,
+      movement_type: b.movement_type, value: glValue, date: movementDate,
       item_name: itemRow?.name ?? String(lr.item_code), created_by: userId,
       center_code: centerCode ?? null, payment_method: b.payment_method ?? null,
       supplier_code: b.supplier_code ?? null, work_order_id: b.work_order_id ?? null,
@@ -644,7 +867,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     try {
       await FinanceCore.recordCashMovement(c.env.DB, {
         company_id, userId,
-        transaction_date: b.movement_date,
+        transaction_date: movementDate,
         direction: 'م',
         amount: totalValue,
         narration: `شراء نقدي Batch (مخزن: ${b.warehouse}) - ${lineResults.length} صنف`,
@@ -711,14 +934,21 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
     return c.json({ success: false, error: 'لا يمكن التحويل لنفس المخزن' }, 400)
   }
 
+  let movementDate: string
+  try {
+    movementDate = normalizeIsoDate(b.movement_date)
+  } catch (err: any) {
+    return c.json({ success: false, error: err?.message ?? 'صيغة تاريخ الحركة غير صحيحة' }, 422)
+  }
+
   const controls = await getInventoryPostingControls(c.env.DB, company_id)
   try {
-    enforceInventoryLockDate(controls, b.movement_date)
+    enforceInventoryLockDate(controls, movementDate)
   } catch {
     return c.json({ success: false, error: `الفترة المخزنية مغلقة حتى ${controls.locked_through_date}`, code: 'INVENTORY_PERIOD_LOCKED' }, 422)
   }
 
-  const periodId = await getOpenPeriod(c.env.DB, company_id, b.movement_date)
+  const periodId = await getOpenPeriod(c.env.DB, company_id, movementDate)
   if (!periodId) return c.json({ success: false, error: 'الفترة المالية مغلقة' }, 400)
 
   // Staleness-aware balance read for source warehouse — heals stale snapshots automatically.
@@ -751,8 +981,9 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
   
   // Use a more robust batch key
   const batchKey = `trf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
-  const yr = new Date(b.movement_date).getFullYear()
-  const mo = new Date(b.movement_date).getMonth() + 1
+  const ym = yearMonthParts(movementDate)
+  const yr = ym.year
+  const mo = ym.month
 
   const outLocalId = `${batchKey}_out`
   const inLocalId  = `${batchKey}_in`
@@ -764,7 +995,7 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
       line_count, total_qty, total_value, status, created_by_user_id)
      VALUES (?,?,?,?,?,?,?,2,?,?,'confirmed',?)`
   ).bind(
-    company_id, 'TRANSFER', null, b.movement_date, b.from_warehouse, b.to_warehouse, b.notes ?? null,
+    company_id, 'TRANSFER', null, movementDate, b.from_warehouse, b.to_warehouse, b.notes ?? null,
     b.quantity, totalValue, userId,
   ).run()
   const trfTransactionId = trfTxRes.meta.last_row_id as number
@@ -775,7 +1006,7 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
        quantity, unit_price, qty_out, balance_qty, value_out, balance_value, notes, year, month, created_by_user_id, local_id,
        zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(company_id, b.item_code, b.movement_date, b.from_warehouse, 'TRANSFER_OUT',
+    ).bind(company_id, b.item_code, movementDate, b.from_warehouse, 'TRANSFER_OUT',
       b.quantity, avgPrice, b.quantity, srcBal.balance_qty - b.quantity, totalValue, srcBal.balance_value - totalValue,
       `تحويل إلى ${b.to_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, outLocalId,
       totalValue === 0 ? (b.notes?.trim() ?? null) : null,
@@ -789,7 +1020,7 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
        quantity, unit_price, qty_in, balance_qty, value_in, balance_value, notes, year, month, created_by_user_id, local_id,
        zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(company_id, b.item_code, b.movement_date, b.to_warehouse, 'TRANSFER_IN',
+    ).bind(company_id, b.item_code, movementDate, b.to_warehouse, 'TRANSFER_IN',
       b.quantity, avgPrice, b.quantity, dstPrevQty + b.quantity, totalValue, dstPrevVal + totalValue,
       `تحويل من ${b.from_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, inLocalId,
       totalValue === 0 ? (b.notes?.trim() ?? null) : null,
@@ -825,7 +1056,7 @@ movements.post('/movements/transfer', permissionGuard('inventory', 'create'), as
     await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_transfer', outId, {
       company_id, ref_id: outId, item_code: b.item_code,
       from_warehouse: b.from_warehouse, to_warehouse: b.to_warehouse,
-      value: totalValue, date: b.movement_date,
+      value: totalValue, date: movementDate,
       item_name: itemRow?.name ?? String(b.item_code), created_by: userId,
       target_movement_id: inId,
     })
@@ -865,19 +1096,27 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
     return c.json({ success: false, error: 'لا يمكن التحويل لنفس المخزن' }, 400)
   }
 
+  let movementDate: string
+  try {
+    movementDate = normalizeIsoDate(b.movement_date)
+  } catch (err: any) {
+    return c.json({ success: false, error: err?.message ?? 'صيغة تاريخ الحركة غير صحيحة' }, 422)
+  }
+
   const controls = await getInventoryPostingControls(c.env.DB, company_id)
   try {
-    enforceInventoryLockDate(controls, b.movement_date)
+    enforceInventoryLockDate(controls, movementDate)
   } catch {
     return c.json({ success: false, error: `الفترة المخزنية مغلقة حتى ${controls.locked_through_date}`, code: 'INVENTORY_PERIOD_LOCKED' }, 422)
   }
 
-  const periodId = await getOpenPeriod(c.env.DB, company_id, b.movement_date)
+  const periodId = await getOpenPeriod(c.env.DB, company_id, movementDate)
   if (!periodId) return c.json({ success: false, error: 'الفترة المالية مغلقة' }, 400)
 
   const batchKey = `trf_batch_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
-  const yr = new Date(b.movement_date).getFullYear()
-  const mo = new Date(b.movement_date).getMonth() + 1
+  const ym = yearMonthParts(movementDate)
+  const yr = ym.year
+  const mo = ym.month
   const stmts: any[] = []
 
   // Create ONE transaction header for the entire transfer-batch.
@@ -887,7 +1126,7 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
       line_count, total_qty, total_value, status, created_by_user_id)
      VALUES (?,'TRANSFER',?,?,?,?,?,0,0,'confirmed',?)`
   ).bind(
-    company_id, b.movement_date, b.from_warehouse, b.to_warehouse,
+    company_id, movementDate, b.from_warehouse, b.to_warehouse,
     b.notes ?? null, b.items.length * 2, userId,
   ).run()
   const trfBatchTransactionId = trfBatchTxRes.meta.last_row_id as number
@@ -929,7 +1168,7 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
        quantity, unit_price, qty_out, balance_qty, value_out, balance_value, notes, year, month, created_by_user_id, local_id,
        zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(company_id, it.item_code, b.movement_date, b.from_warehouse, 'TRANSFER_OUT',
+    ).bind(company_id, it.item_code, movementDate, b.from_warehouse, 'TRANSFER_OUT',
       it.quantity, avgPrice, it.quantity, srcBal.balance_qty - it.quantity, totVal, srcBal.balance_value - totVal,
       `تحويل Batch إلى ${b.to_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, outLoc,
       totVal === 0 ? (b.notes?.trim() ?? null) : null,
@@ -943,7 +1182,7 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
        quantity, unit_price, qty_in, balance_qty, value_in, balance_value, notes, year, month, created_by_user_id, local_id,
        zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(company_id, it.item_code, b.movement_date, b.to_warehouse, 'TRANSFER_IN',
+    ).bind(company_id, it.item_code, movementDate, b.to_warehouse, 'TRANSFER_IN',
       it.quantity, avgPrice, it.quantity, dPQ + it.quantity, totVal, dPV + totVal,
       `تحويل Batch من ${b.from_warehouse}: ${b.notes ?? ''}`, yr, mo, userId, inLoc,
       totVal === 0 ? (b.notes?.trim() ?? null) : null,
@@ -983,7 +1222,7 @@ movements.post('/movements/transfer-batch', permissionGuard('inventory', 'create
     await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_transfer', ins.id, {
       company_id, ref_id: ins.id, item_code: ins.item_code,
       from_warehouse: b.from_warehouse, to_warehouse: b.to_warehouse,
-      value: totVal, date: b.movement_date,
+      value: totVal, date: movementDate,
       item_name: itemRow?.name ?? String(ins.item_code), created_by: userId,
       target_movement_id: inId,
     })

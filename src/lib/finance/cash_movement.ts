@@ -10,14 +10,17 @@ interface CashMovementInput {
   direction: 'د' | 'م'
   amount: number
   narration: string
+  statement_text?: string | null
   recipient_name?: string | null
   document_number?: number | null
   supplier_code?: number | null
   center_code?: number | null
   field_id?: number | null
   expense_code?: string | null
+  service_type_code?: string | null
   season_id?: number | null
   notes?: string | null
+  notes_internal?: string | null
   document_type?: string | null
   contraAccount?: string | null
   partner_id?: number | null
@@ -46,10 +49,45 @@ interface CashDraftRow {
   recipient_name?: string | null
 }
 
+function normalizeIsoDate(value: string): string {
+  const raw = value.trim()
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) {
+    throw new Error(`INVALID_TRANSACTION_DATE: expected YYYY-MM-DD, got "${value}"`)
+  }
+  const y = Number(m[1])
+  const mo = Number(m[2])
+  const d = Number(m[3])
+  const dt = new Date(Date.UTC(y, mo - 1, d))
+  const valid = dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d
+  if (!valid) {
+    throw new Error(`INVALID_TRANSACTION_DATE: out-of-range date "${value}"`)
+  }
+  return `${m[1]}-${m[2]}-${m[3]}`
+}
+
+function yearMonthParts(isoDate: string): { year: number; month: number } {
+  const [y, m] = isoDate.split('-')
+  return { year: Number(y), month: Number(m) }
+}
+
+let cachedCashTransactionColumns: Set<string> | null = null
+
+async function getCashTransactionColumns(db: D1Database): Promise<Set<string>> {
+  if (cachedCashTransactionColumns) return cachedCashTransactionColumns
+  const { results } = await db
+    .prepare('PRAGMA table_info(cash_transactions)')
+    .all<{ name: string }>()
+  cachedCashTransactionColumns = new Set((results ?? []).map((r) => r.name))
+  return cachedCashTransactionColumns
+}
+
 export async function prepareCashMovement(
   db: D1Database,
   opts: CashMovementInput,
 ) {
+  const postingDate = normalizeIsoDate(opts.transaction_date)
+  const ym = yearMonthParts(postingDate)
   const status = opts.status ?? 'posted'
   const isPosted = status === 'posted'
   const batchKey = `cash_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
@@ -60,8 +98,8 @@ export async function prepareCashMovement(
   let delta = 0
 
   if (isPosted) {
-    periodId = await getOpenPeriod(db, opts.company_id, opts.transaction_date)
-    if (!periodId) throw new Error(`PERIOD_CLOSED: No open period for ${opts.transaction_date}`)
+    periodId = await getOpenPeriod(db, opts.company_id, postingDate)
+    if (!periodId) throw new Error(`PERIOD_CLOSED: No open period for ${postingDate}`)
 
     const accountId = opts.financial_account_id ?? null
 
@@ -71,7 +109,7 @@ export async function prepareCashMovement(
                   WHERE company_id = ? AND financial_account_id = ?
                     AND transaction_date <= ? AND status = 'posted'
                   ORDER BY transaction_date DESC, id DESC LIMIT 1`)
-        .bind(opts.company_id, accountId, opts.transaction_date)
+        .bind(opts.company_id, accountId, postingDate)
         .first<{ running_balance: number }>()
 
       const prevBalance = lastRow?.running_balance ?? 0
@@ -83,7 +121,7 @@ export async function prepareCashMovement(
           `UPDATE cash_transactions SET running_balance = running_balance + ?
            WHERE company_id = ? AND financial_account_id = ? AND status = 'posted'
              AND (transaction_date > ? OR (transaction_date = ? AND (local_id IS NULL OR local_id != ?)))`
-        ).bind(delta, opts.company_id, accountId, opts.transaction_date, opts.transaction_date, batchKey)
+        ).bind(delta, opts.company_id, accountId, postingDate, postingDate, batchKey)
       )
     } else {
       delta = opts.direction === 'د' ? opts.amount : -opts.amount
@@ -91,40 +129,78 @@ export async function prepareCashMovement(
     }
   }
 
+  const cashColumns = await getCashTransactionColumns(db)
+  const insertColumns = [
+    'company_id',
+    'season_id',
+    'supplier_code',
+    'partner_id',
+    'financial_account_id',
+    'transaction_date',
+    'direction',
+    'document_number',
+    'recipient_name',
+    'narration',
+    'amount',
+    'debit',
+    'credit',
+    'running_balance',
+    'year',
+    'month',
+    'created_by_user_id',
+    'status',
+    'center_code',
+    'field_id',
+    'expense_code',
+    'local_id',
+    'document_type',
+    'notes',
+  ]
+  const insertValues: Array<string | number | null> = [
+    opts.company_id,
+    opts.season_id ?? null,
+    opts.supplier_code ?? null,
+    opts.partner_id ?? null,
+    opts.financial_account_id ?? null,
+    postingDate,
+    opts.direction,
+    opts.document_number ?? null,
+    opts.recipient_name ?? null,
+    opts.narration,
+    opts.amount,
+    opts.direction === 'م' ? opts.amount : 0,
+    opts.direction === 'د' ? opts.amount : 0,
+    newBalance,
+    ym.year,
+    ym.month,
+    opts.userId,
+    status,
+    opts.center_code ?? null,
+    opts.field_id ?? null,
+    opts.expense_code ?? null,
+    batchKey,
+    opts.document_type ?? null,
+    opts.notes_internal ?? opts.notes ?? null,
+  ]
+
+  if (cashColumns.has('statement_text')) {
+    insertColumns.push('statement_text')
+    insertValues.push(opts.statement_text ?? opts.narration)
+  }
+  if (cashColumns.has('service_type_code')) {
+    insertColumns.push('service_type_code')
+    insertValues.push(opts.service_type_code ?? null)
+  }
+  if (cashColumns.has('notes_internal')) {
+    insertColumns.push('notes_internal')
+    insertValues.push(opts.notes_internal ?? opts.notes ?? null)
+  }
+
+  const placeholders = insertColumns.map(() => '?').join(',')
   stmts.push(
     db.prepare(
-      `INSERT INTO cash_transactions
-       (company_id, season_id, supplier_code, partner_id, financial_account_id, transaction_date,
-        direction, document_number, recipient_name, narration, amount,
-        debit, credit, running_balance, year, month, created_by_user_id, status, center_code, field_id, expense_code, local_id,
-        document_type, notes)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(
-      opts.company_id,
-      opts.season_id ?? null,
-      opts.supplier_code ?? null,
-      opts.partner_id ?? null,
-      opts.financial_account_id ?? null,
-      opts.transaction_date,
-      opts.direction,
-      opts.document_number ?? null,
-      opts.recipient_name ?? null,
-      opts.narration,
-      opts.amount,
-      opts.direction === 'م' ? opts.amount : 0,
-      opts.direction === 'د' ? opts.amount : 0,
-      newBalance,
-      new Date(opts.transaction_date).getFullYear(),
-      new Date(opts.transaction_date).getMonth() + 1,
-      opts.userId,
-      status,
-      opts.center_code ?? null,
-      opts.field_id ?? null,
-      opts.expense_code ?? null,
-      batchKey,
-      opts.document_type ?? null,
-      opts.notes ?? null
-    )
+      `INSERT INTO cash_transactions (${insertColumns.join(',')}) VALUES (${placeholders})`
+    ).bind(...insertValues)
   )
 
   if (isPosted && opts.supplier_code && !opts.skipSupplierMirror) {
@@ -135,7 +211,7 @@ export async function prepareCashMovement(
                 WHERE company_id = ? AND supplier_code = ?
                   AND transaction_date <= ?
                 ORDER BY transaction_date DESC, id DESC LIMIT 1`)
-      .bind(opts.company_id, opts.supplier_code, opts.transaction_date)
+      .bind(opts.company_id, opts.supplier_code, postingDate)
       .first<{ id: number; balance_with_checks: number; balance_no_checks: number }>()
 
     const prevBalNoChecks = lastSupRow?.balance_no_checks ?? 0
@@ -153,7 +229,7 @@ export async function prepareCashMovement(
              balance_with_checks = balance_with_checks + ?
          WHERE company_id = ? AND supplier_code = ?
            AND (transaction_date > ? OR (transaction_date = ? AND local_id IS NOT NULL AND local_id != ?))`
-      ).bind(supDelta, supDelta, opts.company_id, opts.supplier_code, opts.transaction_date, opts.transaction_date, supKey)
+      ).bind(supDelta, supDelta, opts.company_id, opts.supplier_code, postingDate, postingDate, supKey)
     )
 
     stmts.push(
@@ -167,7 +243,7 @@ export async function prepareCashMovement(
         opts.company_id,
         opts.season_id ?? null,
         opts.supplier_code,
-        opts.transaction_date,
+        postingDate,
         opts.direction,
         'cash_payment',
         opts.narration,
@@ -201,7 +277,7 @@ export async function prepareCashMovement(
         financial_account_id: opts.financial_account_id ?? undefined,
         direction: opts.direction,
         amount: opts.amount,
-        date: opts.transaction_date,
+        date: postingDate,
         description: opts.narration,
         created_by: opts.userId,
         center_code: opts.center_code ?? undefined,
@@ -224,7 +300,7 @@ export async function prepareCashMovement(
         record_id: inserted.id,
         error,
         context: {
-          transaction_date: opts.transaction_date,
+          transaction_date: postingDate,
           direction: opts.direction,
           amount: opts.amount,
           financial_account_id: opts.financial_account_id ?? null,

@@ -26,6 +26,82 @@ async function ensureActiveCenterCode(db: Env['DB'], company_id: number, center_
   return !!row?.ok
 }
 
+async function tableExists(db: Env['DB'], tableName: string): Promise<boolean> {
+  const row = await db.prepare(
+    "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1"
+  ).bind(tableName).first<{ ok: number }>()
+  return !!row?.ok
+}
+
+async function isKnownServiceTypeCode(db: Env['DB'], company_id: number, code: string): Promise<boolean> {
+  const normalized = code.trim()
+  if (!normalized) return false
+
+  if (await tableExists(db, 'service_types')) {
+    const row = await db.prepare(
+      'SELECT 1 AS ok FROM service_types WHERE company_id = ? AND code = ? AND is_active = 1 LIMIT 1'
+    ).bind(company_id, normalized).first<{ ok: number }>()
+    return !!row?.ok
+  }
+
+  // Backward-compatible fallback until service_types is migrated.
+  const legacy = await db.prepare(
+    'SELECT 1 AS ok FROM expense_types WHERE company_id = ? AND CAST(code AS TEXT) = ? LIMIT 1'
+  ).bind(company_id, normalized).first<{ ok: number }>()
+  return !!legacy?.ok
+}
+
+function hasTechnicalGovernanceTag(text?: string | null): boolean {
+  if (!text) return false
+  return /\b(NEEDS_DIMENSION|NEEDS_POSTING_LINK|MISSING_DIMENSION|MISSING_POSTING_LINK)\b/i.test(text)
+}
+
+function isFutureIsoDate(isoDate: string): boolean {
+  const today = new Date().toISOString().slice(0, 10)
+  return isoDate > today
+}
+
+async function ensureActiveFinancialAccount(
+  db: Env['DB'],
+  company_id: number,
+  financial_account_id: number,
+): Promise<boolean> {
+  const row = await db.prepare(
+    `SELECT 1 AS ok
+     FROM bank_accounts b
+     JOIN chart_of_accounts coa
+       ON coa.company_id = b.company_id
+      AND coa.code = b.gl_account_code
+      AND coa.is_active = 1
+      AND coa.is_header = 0
+     WHERE b.company_id = ?
+       AND b.id = ?
+       AND b.is_active = 1
+       AND b.gl_account_code IS NOT NULL
+       AND TRIM(b.gl_account_code) <> ''
+     LIMIT 1`
+  ).bind(company_id, financial_account_id).first<{ ok: number }>()
+  return !!row?.ok
+}
+
+async function isSupplierAuthorizedForService(
+  db: Env['DB'],
+  company_id: number,
+  supplier_code: number,
+  service_type_code: string,
+): Promise<boolean> {
+  if (!(await tableExists(db, 'supplier_service_map'))) {
+    return true
+  }
+  const row = await db.prepare(
+    `SELECT 1 AS ok
+     FROM supplier_service_map
+     WHERE company_id = ? AND supplier_code = ? AND service_type_code = ? AND is_active = 1
+     LIMIT 1`
+  ).bind(company_id, supplier_code, service_type_code).first<{ ok: number }>()
+  return !!row?.ok
+}
+
 function cashNeedsOperationalDimensions(input: {
   direction: 'د' | 'م'
   center_code?: number | null
@@ -43,7 +119,8 @@ const transactionSchema = z.object({
   transaction_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'التاريخ يجب أن يكون بصيغة YYYY-MM-DD'),
   direction: z.enum(['د', 'م'], { message: "الاتجاه يجب أن يكون 'د' (دائن/وارد) أو 'م' (مدين/صادر)" }),
   amount: z.number().positive('المبلغ يجب أن يكون أكبر من صفر'),
-  narration: z.string().min(3, 'البيان يجب أن يكون 3 أحرف على الأقل'),
+  narration: z.string().optional().nullable(),
+  statement_text: z.string().optional().nullable(),
   recipient_name: z.string().optional().nullable(),
   document_number: z.number().optional().nullable(),
   supplier_code: z.number().optional().nullable(),
@@ -52,6 +129,8 @@ const transactionSchema = z.object({
   season_id: z.number().optional().nullable(),
   status: z.enum(['draft', 'posted']).optional().default('posted'),
   notes: z.string().optional().nullable(),
+  notes_internal: z.string().optional().nullable(),
+  service_type_code: z.string().optional().nullable(),
   expense_code: z.union([z.string(), z.number()]).optional().nullable().transform(v => v == null ? null : String(v)),
   document_type: z.string().optional().nullable(),
   unit: z.string().optional().nullable(),
@@ -179,11 +258,51 @@ treasury.get('/balance', async (c) => {
 treasury.post('/transactions', zValidator('json', transactionSchema), async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const b = c.req.valid('json')
+  const statementText = (b.statement_text ?? b.narration ?? '').trim()
+  const notesInternal = (b.notes_internal ?? b.notes ?? '').trim() || null
+  const serviceTypeCode = b.service_type_code?.trim() || null
+
+  if (statementText.length < 3) {
+    return c.json({ success: false, error: 'البيان يجب أن يكون 3 أحرف على الأقل' }, 422)
+  }
 
   if (b.status === 'posted') {
+    if (isFutureIsoDate(b.transaction_date)) {
+      return c.json({ success: false, error: 'غير مسموح بترحيل حركة خزينة بتاريخ مستقبلي' }, 422)
+    }
+
     const gate = await enforceDataQualityPolicy(c.env.DB, company_id, { mode: 'posted', module: 'treasury' })
     if (!gate.ok) {
       return c.json({ success: false, error: gate.error, code: gate.code, details: gate.details }, gate.status ?? 409)
+    }
+
+    if (b.financial_account_id == null) {
+      return c.json({ success: false, error: 'الحساب المالي مطلوب عند الترحيل' }, 422)
+    }
+    const validFinancialAccount = await ensureActiveFinancialAccount(c.env.DB, company_id, b.financial_account_id)
+    if (!validFinancialAccount) {
+      return c.json({ success: false, error: 'الحساب المالي غير صالح أو غير نشط أو غير مربوط بحساب GL ورقي' }, 422)
+    }
+    if (hasTechnicalGovernanceTag(statementText)) {
+      return c.json({ success: false, error: 'غير مسموح باستخدام وسوم الحوكمة التقنية داخل البيان' }, 422)
+    }
+    if (hasTechnicalGovernanceTag(notesInternal)) {
+      return c.json({ success: false, error: 'وسوم الحوكمة التقنية يجب أن تُسجل كـ flags وليس داخل الملاحظات' }, 422)
+    }
+    if (serviceTypeCode) {
+      const knownServiceType = await isKnownServiceTypeCode(c.env.DB, company_id, serviceTypeCode)
+      if (!knownServiceType) {
+        return c.json({ success: false, error: 'service_type_code غير معروف أو غير نشط' }, 422)
+      }
+      if (b.supplier_code != null) {
+        const authorized = await isSupplierAuthorizedForService(c.env.DB, company_id, b.supplier_code, serviceTypeCode)
+        if (!authorized) {
+          return c.json({ success: false, error: 'المورد غير مخول لهذا service_type_code' }, 422)
+        }
+      }
+    }
+    if (b.direction === 'م' && b.supplier_code != null && !serviceTypeCode) {
+      return c.json({ success: false, error: 'service_type_code مطلوب عند سداد مورد مرحّل' }, 422)
     }
   }
 
@@ -209,7 +328,8 @@ treasury.post('/transactions', zValidator('json', transactionSchema), async (c) 
       transaction_date: b.transaction_date,
       direction: b.direction,
       amount: b.amount,
-      narration: b.narration,
+      narration: statementText,
+      statement_text: statementText,
       recipient_name: b.recipient_name,
       document_number: b.document_number,
       supplier_code: b.supplier_code,
@@ -217,7 +337,9 @@ treasury.post('/transactions', zValidator('json', transactionSchema), async (c) 
       field_id: b.field_id,
       season_id: b.season_id,
       expense_code: b.expense_code,
-      notes: b.notes,
+      notes: notesInternal,
+      notes_internal: notesInternal,
+      service_type_code: serviceTypeCode,
       status: b.status,
       document_type: b.document_type,
       financial_account_id: b.financial_account_id,
@@ -240,7 +362,8 @@ treasury.post('/transactions', zValidator('json', transactionSchema), async (c) 
   }
 
   const draft = await c.env.DB.prepare(
-    `SELECT season_id, center_code, supplier_code, partner_id, expense_code, direction
+    `SELECT season_id, center_code, supplier_code, partner_id, expense_code, direction,
+            financial_account_id, narration, notes, service_type_code, transaction_date
      FROM cash_transactions WHERE id = ? AND company_id = ?`
   ).bind(id, company_id).first<{
     season_id: number | null
@@ -249,15 +372,54 @@ treasury.post('/transactions', zValidator('json', transactionSchema), async (c) 
     partner_id: number | null
     expense_code: string | null
     direction: 'د' | 'م'
+    financial_account_id: number | null
+    narration: string | null
+    notes: string | null
+    service_type_code: string | null
+    transaction_date: string
   }>()
 
   if (!draft) return c.json({ success: false, error: 'الحركة غير موجودة' }, 404)
+  if (draft.financial_account_id == null) {
+    return c.json({ success: false, error: 'الحساب المالي مطلوب عند الترحيل' }, 422)
+  }
+  if (isFutureIsoDate(draft.transaction_date)) {
+    return c.json({ success: false, error: 'غير مسموح بترحيل حركة خزينة بتاريخ مستقبلي' }, 422)
+  }
+  const validFinancialAccount = await ensureActiveFinancialAccount(c.env.DB, company_id, draft.financial_account_id)
+  if (!validFinancialAccount) {
+    return c.json({ success: false, error: 'الحساب المالي غير صالح أو غير نشط أو غير مربوط بحساب GL ورقي' }, 422)
+  }
+  if (!draft.narration || draft.narration.trim().length < 3) {
+    return c.json({ success: false, error: 'البيان يجب أن يكون 3 أحرف على الأقل' }, 422)
+  }
+  if (hasTechnicalGovernanceTag(draft.narration)) {
+    return c.json({ success: false, error: 'غير مسموح باستخدام وسوم الحوكمة التقنية داخل البيان' }, 422)
+  }
+  if (hasTechnicalGovernanceTag(draft.notes)) {
+    return c.json({ success: false, error: 'وسوم الحوكمة التقنية يجب أن تُسجل كـ flags وليس داخل الملاحظات' }, 422)
+  }
+  if (draft.direction === 'م' && draft.supplier_code != null && (!draft.service_type_code || !draft.service_type_code.trim())) {
+    return c.json({ success: false, error: 'service_type_code مطلوب عند سداد مورد مرحّل' }, 422)
+  }
+  if (draft.service_type_code && draft.supplier_code != null) {
+    const knownServiceType = await isKnownServiceTypeCode(c.env.DB, company_id, draft.service_type_code)
+    if (!knownServiceType) {
+      return c.json({ success: false, error: 'service_type_code غير معروف أو غير نشط' }, 422)
+    }
+    const authorized = await isSupplierAuthorizedForService(c.env.DB, company_id, draft.supplier_code, draft.service_type_code)
+    if (!authorized) {
+      return c.json({ success: false, error: 'المورد غير مخول لهذا service_type_code' }, 422)
+    }
+  }
   if (cashNeedsOperationalDimensions(draft) && (draft.season_id == null || draft.center_code == null)) {
     return c.json({ success: false, error: 'الموسم ومركز التكلفة مطلوبان عند الترحيل' }, 422)
   }
-  const validCenter = await ensureActiveCenterCode(c.env.DB, company_id, draft.center_code)
-  if (!validCenter) {
-    return c.json({ success: false, error: 'مركز التكلفة غير صالح أو غير نشط' }, 422)
+  if (draft.center_code != null) {
+    const validCenter = await ensureActiveCenterCode(c.env.DB, company_id, draft.center_code)
+    if (!validCenter) {
+      return c.json({ success: false, error: 'مركز التكلفة غير صالح أو غير نشط' }, 422)
+    }
   }
 
   try {

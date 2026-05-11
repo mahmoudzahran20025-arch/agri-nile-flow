@@ -8,7 +8,9 @@ import { clearPostingEngineCaches } from '../../lib/posting_engine'
 const hardening = new Hono<{ Bindings: Env }>()
 hardening.use('*', authMiddleware)
 
-const adminOnly = roleGuard(['super_admin', 'company_admin'])
+// Mutations (flag toggles, approvals) require admin; reads are open to finance roles
+const adminOnly   = roleGuard(['super_admin', 'company_admin'])
+const financeRead = roleGuard(['super_admin', 'company_admin', 'accountant'])
 
 function parseJsonObject(input: string | null | undefined): Record<string, unknown> {
   if (!input) return {}
@@ -114,7 +116,7 @@ async function applyApprovedPostingRuleChange(
 }
 
 // GET /api/gl/hardening/flags — read all flags for this company
-hardening.get('/flags', adminOnly, async (c) => {
+hardening.get('/flags', financeRead, async (c) => {
   const { company_id } = getUser(c)
 
   const { results } = await c.env.DB.prepare(
@@ -176,7 +178,7 @@ hardening.patch('/flags/:key', adminOnly, async (c) => {
 })
 
 // GET /api/gl/hardening/baseline — daily governance metrics snapshot
-hardening.get('/baseline', adminOnly, async (c) => {
+hardening.get('/baseline', financeRead, async (c) => {
   const { company_id } = getUser(c)
 
   const [postingSuccess, dimensionCompleteness, subledgerDrift, ruleHealth, flags, pendingAudit] = await Promise.all([
@@ -374,7 +376,7 @@ hardening.get('/baseline', adminOnly, async (c) => {
 // ── Maker-Checker for posting_rules changes ─────────────────────────────────
 
 // GET /api/gl/hardening/audit/pending — list changes awaiting approval
-hardening.get('/audit/pending', adminOnly, async (c) => {
+hardening.get('/audit/pending', financeRead, async (c) => {
   const { company_id } = getUser(c)
 
   const { results } = await c.env.DB.prepare(
@@ -467,7 +469,7 @@ hardening.post('/audit/:id/reject', adminOnly, async (c) => {
 })
 
 // GET /api/gl/hardening/audit — full audit log (paginated)
-hardening.get('/audit', adminOnly, async (c) => {
+hardening.get('/audit', financeRead, async (c) => {
   const { company_id } = getUser(c)
   const page = Math.max(1, Number(c.req.query('page') ?? 1))
   const size = Math.min(100, Number(c.req.query('size') ?? 50))

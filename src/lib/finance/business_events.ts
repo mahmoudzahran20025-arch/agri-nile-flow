@@ -3,16 +3,35 @@ import { postAutoEntry } from '../gl'
 import type { RuleTrace } from '../posting_engine'
 
 const OPERATION_KEY_BY_EVENT_TYPE: Record<string, string> = {
-  supplier_invoice: 'SUPPLIER_INVOICE',
-  supplier_payment: 'SUPPLIER_PAYMENT',
-  sales_invoice: 'SALES_INVOICE',
-  sale_receipt: 'SALE_RECEIPT',
-  inventory_movement: 'INVENTORY_MOVEMENT',
-  purchase_receipt: 'INVENTORY_IN',
-  work_order_labor: 'PRODUCTION_CONSUMPTION',
-  harvest_cost: 'PRODUCTION_OUTPUT',
-  expense: 'CASH_EXPENSE',
-  cash_transaction: 'CASH_EXPENSE',
+  supplier_invoice:     'SUPPLIER_INVOICE',
+  supplier_payment:     'SUPPLIER_PAYMENT',
+  sales_invoice:        'SALES_INVOICE',
+  sale_receipt:         'SALE_RECEIPT',
+  inventory_movement:   'INVENTORY_MOVEMENT',
+  purchase_receipt:     'INVENTORY_IN',
+  work_order_labor:     'PRODUCTION_CONSUMPTION',
+  harvest_cost:         'PRODUCTION_OUTPUT',
+  expense:              'CASH_EXPENSE',
+  cash_transaction:     'CASH_EXPENSE',  // covers both receipt and payment directions
+  revenue:              'SALE_RECEIPT',  // cash sales revenue → same matrix row as sale_receipt
+  cash_receipt:         'CASH_INCOME',   // direct cash receipt (non-sales)
+}
+
+function normalizeIsoDate(value: string): string {
+  const raw = value.trim()
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) {
+    throw new Error(`INVALID_EVENT_DATE: expected YYYY-MM-DD, got "${value}"`)
+  }
+  const y = Number(m[1])
+  const mo = Number(m[2])
+  const d = Number(m[3])
+  const dt = new Date(Date.UTC(y, mo - 1, d))
+  const valid = dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d
+  if (!valid) {
+    throw new Error(`INVALID_EVENT_DATE: out-of-range date "${value}"`)
+  }
+  return `${m[1]}-${m[2]}-${m[3]}`
 }
 
 async function ensureDeterministicMatrixCoverage(
@@ -241,6 +260,7 @@ export async function postFromBusinessEvent(
   db: D1Database,
   opts: EventBackedPostOpts,
 ): Promise<number | null> {
+  const normalizedEventDate = normalizeIsoDate(opts.event_date)
   const eventPayload = JSON.stringify(opts.payload)
   let eventId: number | null = null
 
@@ -252,7 +272,7 @@ export async function postFromBusinessEvent(
      WHERE company_id = ? AND is_closed = 1
        AND start_date <= ? AND end_date >= ?
      LIMIT 1`
-  ).bind(opts.company_id, opts.event_date, opts.event_date)
+  ).bind(opts.company_id, normalizedEventDate, normalizedEventDate)
     .first<{ id: number; name: string }>()
 
   if (lockedPeriod) {
@@ -292,7 +312,7 @@ export async function postFromBusinessEvent(
       ).bind(
         opts.company_id,
         opts.event_type,
-        opts.event_date,
+        normalizedEventDate,
         opts.source_module,
         opts.source_id,
         eventPayload,
@@ -347,7 +367,7 @@ export async function postFromBusinessEvent(
       `UPDATE business_events
        SET status = 'pending', error_message = NULL, payload = ?, event_date = ?, posted_by = ?, posted_at = NULL
        WHERE id = ? AND company_id = ?`
-    ).bind(eventPayload, opts.event_date, opts.created_by ?? null, eventId, opts.company_id).run()
+    ).bind(eventPayload, normalizedEventDate, opts.created_by ?? null, eventId, opts.company_id).run()
   }
 
   if (!eventId) {
@@ -359,7 +379,7 @@ export async function postFromBusinessEvent(
   try {
     const entryId = await postAutoEntry(db, {
       company_id:         opts.company_id,
-      entry_date:         opts.event_date,
+      entry_date:         normalizedEventDate,
       description:        opts.description,
       ref_type:           'business_event',
       ref_id:             eventId,

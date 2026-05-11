@@ -6,19 +6,12 @@ const { execSync } = require('node:child_process')
 const DB_NAME = 'agri-nile-flow-data-lake'
 const COMPANY_ID = 1
 const APPLY = process.argv.includes('--apply')
+const NO_CUTOFF = process.argv.includes('--no-cutoff')
+const POSTING_CUTOFF_DATE = process.env.POSTING_CUTOFF_DATE || new Date().toISOString().slice(0, 10)
 const ROOT = process.cwd()
 const TMP_DIR = path.join(ROOT, 'sql', 'generated_phase4')
 
 const GENERIC_AP_ACCOUNT = '212000010'
-const SUPPLIER_AP_OVERRIDES = new Map([
-  ['20900151:*', '212000013'],
-  ['21400108:*', '212000017'],
-  ['21400002:*', '212000018'],
-  ['20100033:*', '212000019'],
-  ['20300086:*', '212000020'],
-  ['20900353:31001', '212000030'],
-  ['20900353:ميكنة', '212000016'],
-])
 
 function runD1Json(sql) {
   const compact = sql.replace(/\s+/g, ' ').trim()
@@ -93,16 +86,23 @@ function warehouseInventoryAccount(warehouse, controlAccounts) {
   return mapping.get(key) || fallback
 }
 
-function supplierOverrideKey(supplierCode, expenseCategory) {
-  return `${String(supplierCode)}:${expenseCategory == null || expenseCategory === '' ? '*' : String(expenseCategory)}`
+function ipgInventoryAccount(ipg, inventoryAccountsByIpg) {
+  if (!ipg) return null
+  return inventoryAccountsByIpg.get(String(ipg).trim()) || null
 }
 
-function resolveSupplierApAccount(row, controlAccounts) {
-  const exact = SUPPLIER_AP_OVERRIDES.get(supplierOverrideKey(row.supplier_code, row.expense_category))
-  if (exact) return exact
+function supplierServiceKey(supplierCode, serviceTypeCode) {
+  return `${String(supplierCode)}:${serviceTypeCode == null || serviceTypeCode === '' ? '*' : String(serviceTypeCode)}`
+}
 
-  const generic = SUPPLIER_AP_OVERRIDES.get(supplierOverrideKey(row.supplier_code, '*'))
-  if (generic) return generic
+function resolveSupplierApAccount(row, controlAccounts, supplierServiceExactMap, supplierServicePrimaryMap) {
+  if (row.supplier_code != null) {
+    const exact = supplierServiceExactMap.get(supplierServiceKey(row.supplier_code, row.service_type_code))
+    if (exact) return exact
+
+    const primary = supplierServicePrimaryMap.get(String(row.supplier_code))
+    if (primary) return primary
+  }
 
   if (row.supplier_gl && String(row.supplier_gl) !== GENERIC_AP_ACCOUNT) return String(row.supplier_gl)
   return controlAccounts.get('accounts_payable') || GENERIC_AP_ACCOUNT
@@ -117,7 +117,7 @@ function resolveSupplierExpenseAccount(row, controlAccounts, expenseTypeAccounts
   return controlAccounts.get('expense_default') || controlAccounts.get('purchases') || '51200034'
 }
 
-function resolveCashPlan(row, controlAccounts, expenseTypeAccounts) {
+function resolveCashPlan(row, controlAccounts, expenseTypeAccounts, supplierServiceExactMap, supplierServicePrimaryMap) {
   const cashAccount = controlAccounts.get('cash') || '14010101'
   const revenueAccount = controlAccounts.get('revenue_default') || '41010001'
   const expenseDefault = controlAccounts.get('expense_default') || '51200034'
@@ -136,7 +136,7 @@ function resolveCashPlan(row, controlAccounts, expenseTypeAccounts) {
   if (row.supplier_code != null) {
     return {
       amount,
-      debitAccount: resolveSupplierApAccount(row, controlAccounts),
+      debitAccount: resolveSupplierApAccount(row, controlAccounts, supplierServiceExactMap, supplierServicePrimaryMap),
       creditAccount: cashAccount,
       eventLabel: 'سداد عبر الخزينة',
     }
@@ -185,6 +185,36 @@ const expenseTypeAccounts = buildLookupMap(
   'code',
   'gl_account_code',
 )
+const supplierServiceRows = query(`
+  SELECT supplier_code, service_type_code, default_ap_account_code, is_primary
+  FROM supplier_service_map
+  WHERE company_id=${COMPANY_ID}
+    AND is_active=1
+`)
+const supplierServiceExactMap = new Map()
+const supplierServicePrimaryMap = new Map()
+for (const row of supplierServiceRows) {
+  if (row.supplier_code == null || row.default_ap_account_code == null) continue
+  supplierServiceExactMap.set(supplierServiceKey(row.supplier_code, row.service_type_code), String(row.default_ap_account_code))
+  if (Number(row.is_primary || 0) === 1 && !supplierServicePrimaryMap.has(String(row.supplier_code))) {
+    supplierServicePrimaryMap.set(String(row.supplier_code), String(row.default_ap_account_code))
+  }
+}
+
+const inventorySetupRows = query(`
+  SELECT inv_posting_group_code, inventory_account
+  FROM inventory_posting_setup
+  WHERE company_id=${COMPANY_ID}
+    AND is_active=1
+    AND inventory_account IS NOT NULL
+`)
+const inventoryAccountsByIpg = new Map()
+for (const row of inventorySetupRows) {
+  if (!row.inv_posting_group_code || !row.inventory_account) continue
+  if (!inventoryAccountsByIpg.has(String(row.inv_posting_group_code))) {
+    inventoryAccountsByIpg.set(String(row.inv_posting_group_code), String(row.inventory_account))
+  }
+}
 
 function loadPrelinkedRepairs(tableName, refType, sourceModule, dateColumn, extraPredicate = '1=1') {
   return query(`
@@ -238,7 +268,7 @@ let nextJeId = maxJeId + 1
 const supplierRows = query(`
     SELECT st.id, st.transaction_date, st.entry_type, st.amount, st.debit, st.credit,
       st.center_code, st.season_id, st.document_type, st.document_number,
-         st.notes, st.expense_category, st.supplier_code,
+         st.notes, st.expense_category, st.supplier_code, st.service_type_code,
          s.name AS supplier_name, s.gl_account_code AS supplier_gl,
          be.id AS event_id, be.event_type AS event_type
   FROM supplier_transactions st
@@ -286,9 +316,14 @@ const cashRows = query(`
 const inventoryRows = query(`
   SELECT im.id, im.movement_date, im.movement_type, im.value_in, im.value_out,
          im.quantity, im.unit_price, im.center_code, im.season_id, im.field_id,
-         im.item_code, im.warehouse,
+         im.item_code, im.warehouse, im.warehouse_id,
+         w.inv_posting_group_code,
          be.id AS event_id, be.event_type AS event_type
   FROM inventory_movements im
+  LEFT JOIN warehouses w
+    ON w.company_id = im.company_id
+   AND w.id = im.warehouse_id
+   AND w.is_active = 1
   LEFT JOIN business_events be
     ON be.company_id = im.company_id
    AND be.source_module = 'inventory'
@@ -311,6 +346,7 @@ let totalDebit = 0
 let totalCredit = 0
 let skippedZero = 0
 let skippedNoEvent = 0
+let skippedFuture = 0
 let plannedEntries = 0
 
 function markEventExempt(eventId, reason) {
@@ -346,7 +382,18 @@ function emitEntry({ refType, refId, entryDate, description, eventId, eventType,
   sql.push(`INSERT INTO posting_rule_resolutions (company_id, rule_type, result, error_message, journal_entry_id, source_event_id) VALUES (${COMPANY_ID}, '${esc(eventType || refType)}', 'resolved', 'Phase4 rebuild without engine trace', ${jeId}, ${eventId});`)
 }
 
+function isFutureDated(entryDate) {
+  if (NO_CUTOFF) return false
+  return String(entryDate) > POSTING_CUTOFF_DATE
+}
+
 for (const row of supplierRows) {
+  if (isFutureDated(row.transaction_date)) {
+    skippedFuture += 1
+    markEventExempt(row.event_id, `future_dated_source:${row.transaction_date}>${POSTING_CUTOFF_DATE}`)
+    continue
+  }
+
   const isPayment = String(row.entry_type || '').trim() === 'م'
   const amount = isPayment ? money(row.debit || row.amount || row.credit) : money(row.credit || row.amount || row.debit)
   if (amount <= 0) {
@@ -355,7 +402,7 @@ for (const row of supplierRows) {
     continue
   }
 
-  const apAccount = resolveSupplierApAccount(row, controlAccounts)
+  const apAccount = resolveSupplierApAccount(row, controlAccounts, supplierServiceExactMap, supplierServicePrimaryMap)
   const expenseAccount = resolveSupplierExpenseAccount(row, controlAccounts, expenseTypeAccounts)
   const description = [
     isPayment ? 'سداد مستحقات مورد' : 'إثبات معاملة مورد',
@@ -382,7 +429,13 @@ for (const row of supplierRows) {
 }
 
 for (const row of cashRows) {
-  const plan = resolveCashPlan(row, controlAccounts, expenseTypeAccounts)
+  if (isFutureDated(row.transaction_date)) {
+    skippedFuture += 1
+    markEventExempt(row.event_id, `future_dated_source:${row.transaction_date}>${POSTING_CUTOFF_DATE}`)
+    continue
+  }
+
+  const plan = resolveCashPlan(row, controlAccounts, expenseTypeAccounts, supplierServiceExactMap, supplierServicePrimaryMap)
   if (plan.amount <= 0) {
     skippedZero += 1
     markEventExempt(row.event_id, 'exempt_zero_value')
@@ -404,7 +457,16 @@ for (const row of cashRows) {
 }
 
 for (const row of inventoryRows) {
-  const inventoryAccount = warehouseInventoryAccount(row.warehouse, controlAccounts)
+  if (isFutureDated(row.movement_date)) {
+    skippedFuture += 1
+    sql.push(`UPDATE inventory_movements SET gl_posting_status='future_blocked', gl_posted_at=datetime('now') WHERE company_id=${COMPANY_ID} AND id=${row.id} AND journal_entry_id IS NULL;`)
+    markEventExempt(row.event_id, `future_dated_source:${row.movement_date}>${POSTING_CUTOFF_DATE}`)
+    continue
+  }
+
+  const inventoryAccount =
+    ipgInventoryAccount(row.inv_posting_group_code, inventoryAccountsByIpg)
+    || warehouseInventoryAccount(row.warehouse, controlAccounts)
   const isGrn = String(row.movement_type) === 'GRN'
   const amount = isGrn ? money(row.value_in || (money(row.quantity) * money(row.unit_price))) : money(row.value_out || (money(row.quantity) * money(row.unit_price)))
 
@@ -427,7 +489,7 @@ for (const row of inventoryRows) {
       ? { account: inventoryAccount, debit: amount, credit: 0, centerCode: row.center_code, seasonId: row.season_id, fieldId: row.field_id, sourceLedger: 'inventory' }
       : { account: controlAccounts.get('cogs') || '45010001', debit: amount, credit: 0, centerCode: row.center_code, seasonId: row.season_id, fieldId: row.field_id, sourceLedger: 'inventory' },
     lineB: isGrn
-      ? { account: resolveSupplierApAccount({ supplier_code: null, expense_category: null, supplier_gl: null }, controlAccounts), debit: 0, credit: amount, centerCode: row.center_code, seasonId: row.season_id, fieldId: row.field_id, sourceLedger: 'inventory' }
+      ? { account: resolveSupplierApAccount({ supplier_code: null, service_type_code: null, supplier_gl: null }, controlAccounts, supplierServiceExactMap, supplierServicePrimaryMap), debit: 0, credit: amount, centerCode: row.center_code, seasonId: row.season_id, fieldId: row.field_id, sourceLedger: 'inventory' }
       : { account: inventoryAccount, debit: 0, credit: amount, centerCode: row.center_code, seasonId: row.season_id, fieldId: row.field_id, sourceLedger: 'inventory' },
     sourceUpdateSql: (jeId) => `UPDATE inventory_movements SET journal_entry_id=${jeId}, gl_posting_status='posted', gl_posted_at=datetime('now') WHERE company_id=${COMPANY_ID} AND id=${row.id} AND journal_entry_id IS NULL;`,
   })
@@ -435,7 +497,8 @@ for (const row of inventoryRows) {
 
 console.log(`\nCandidates: supplier=${supplierRows.length}, cash=${cashRows.length}, inventory=${inventoryRows.length}`)
 console.log(`Prelinked repairs: supplier=${supplierRepairs.length}, cash=${cashRepairs.length}, inventory=${inventoryRepairs.length}`)
-console.log(`Planned entries: ${plannedEntries}, planned statements: ${sql.length}, skipped_zero_amount=${skippedZero}, skipped_missing_event=${skippedNoEvent}`)
+console.log(`Posting cutoff date: ${POSTING_CUTOFF_DATE}`)
+console.log(`Planned entries: ${plannedEntries}, planned statements: ${sql.length}, skipped_zero_amount=${skippedZero}, skipped_future_date=${skippedFuture}, skipped_missing_event=${skippedNoEvent}`)
 console.log(`Planned totals: debit=${totalDebit.toFixed(2)}, credit=${totalCredit.toFixed(2)}, diff=${Math.abs(totalDebit - totalCredit).toFixed(2)}`)
 
 if (Math.abs(totalDebit - totalCredit) > 0.01) {

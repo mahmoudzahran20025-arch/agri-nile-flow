@@ -11,27 +11,25 @@ import DebugPage     from './pages/DebugPage'
 import DashboardPage from './pages/DashboardPage'
 
 // ── Lazy chunks: GL / Finance ───────────────────────────────────────────────
+// ── Lazy chunks: GL / Finance (core) ────────────────────────────────────────
 const FinanceHomePage          = lazy(() => import('./pages/gl/FinanceHomePage'))
 const ChartOfAccountsPage      = lazy(() => import('./pages/gl/ChartOfAccountsPage'))
 const JournalEntriesPage       = lazy(() => import('./pages/gl/JournalEntriesPage'))
 const FinancialStatementsPage  = lazy(() => import('./pages/gl/FinancialStatementsPage'))
 const AccountLedgerPage        = lazy(() => import('./pages/gl/AccountLedgerPage'))
 const PeriodsPage              = lazy(() => import('./pages/gl/PeriodsPage'))
-const PostingSimulatorPage     = lazy(() => import('./pages/gl/PostingSimulatorPage'))
-const ReconciliationPage       = lazy(() => import('./pages/gl/ReconciliationPage'))
 const PeriodCloseCockpit       = lazy(() => import('./pages/gl/PeriodCloseCockpit'))
+const ReconciliationPage       = lazy(() => import('./pages/gl/ReconciliationPage'))
 const BatchPostingCenterPage   = lazy(() => import('./pages/gl/BatchPostingCenterPage'))
-const HealthIntegrityPage      = lazy(() => import('./pages/gl/HealthIntegrityPage'))
-const HardeningDashboardPage   = lazy(() => import('./pages/gl/HardeningDashboardPage'))
-const GLSettingsPage           = lazy(() => import('./pages/gl/GLSettingsPage'))
 const PostingGroupsPage        = lazy(() => import('./pages/gl/PostingGroupsPage'))
-const PostingSetupPage         = lazy(() => import('./pages/gl/PostingSetupPage'))
 const PostingRulesPage         = lazy(() => import('./pages/gl/PostingRulesPage'))
+const PostingSetupPage         = lazy(() => import('./pages/gl/PostingSetupPage'))
 const PostingSetupHealthPage   = lazy(() => import('./pages/gl/PostingSetupHealthPage'))
-const SetupWizardPage          = lazy(() => import('./pages/gl/SetupWizardPage'))
-const MasterDataPage           = lazy(() => import('./pages/gl/MasterDataPage'))
-const ExchangeRatesPage        = lazy(() => import('./pages/gl/ExchangeRatesPage'))
-const AccountRolePolicyPage    = lazy(() => import('./pages/gl/AccountRolePolicyPage'))
+const GLSettingsPage           = lazy(() => import('./pages/gl/GLSettingsPage'))
+// Merged workspaces
+const HardeningDashboardPage   = lazy(() => import('./pages/gl/HardeningDashboardPage'))
+const HealthIntegrityPage      = lazy(() => import('./pages/gl/HealthIntegrityPage'))
+const GlIntegrityAuditPage     = lazy(() => import('./pages/gl/GlIntegrityAuditPage'))
 
 // ── Lazy chunks: HR ─────────────────────────────────────────────────────────
 const EmployeeListPage    = lazy(() => import('./pages/hr/EmployeeListPage'))
@@ -77,7 +75,7 @@ const InventoryBalancesPage      = lazy(() => import('./pages/inventory/Inventor
 const PhysicalCountPage          = lazy(() => import('./pages/inventory/PhysicalCountPage'))
 const FixedAssetsPage            = lazy(() => import('./pages/inventory/FixedAssetsPage'))
 const WipBalancesPage            = lazy(() => import('./pages/inventory/WipBalancesPage'))
-const GlIntegrityAuditPage       = lazy(() => import('./pages/gl/GlIntegrityAuditPage'))
+
 const UsersPage                = lazy(() => import('./pages/users/UsersPage'))
 const ConfigPage               = lazy(() => import('./pages/config/ConfigPage'))
 const FieldsPage               = lazy(() => import('./pages/fields/FieldsPage'))
@@ -206,33 +204,37 @@ export default function App() {
         <Route path="operations/templates" element={<WorkOrderTemplatesPage />} />
         <Route path="contracts"  element={<ContractsPage />} />
 
-        {/* General Ledger */}
-        <Route path="gl"             element={<FinanceHomePage />} />
+        {/* ── General Ledger: core workspaces ─────────────────────────────── */}
+        <Route path="gl"              element={<FinanceHomePage />} />
         <Route path="gl/accounts"     element={<ChartOfAccountsPage />} />
         <Route path="gl/ledger/:code" element={<AccountLedgerPage />} />
         <Route path="gl/entries"      element={<JournalEntriesPage />} />
         <Route path="gl/statements"   element={<FinancialStatementsPage />} />
-        <Route path="gl/health-integrity" element={<HealthIntegrityPage />} />
-        <Route path="gl/hardening"         element={<HardeningDashboardPage />} />
-        {/* GL Settings hub — tabs: mappings | integrations | periods */}
-        <Route path="gl/settings"      element={<GLSettingsPage />} />
-        <Route path="gl/posting-groups" element={<PostingGroupsPage />} />
-        <Route path="gl/posting-setup"  element={<PostingSetupPage />} />
-        <Route path="gl/posting-setup/health" element={<PostingSetupHealthPage />} />
+        <Route path="gl/batch-posting" element={<BatchPostingCenterPage />} />
+        <Route path="gl/reconciliation" element={<ReconciliationPage />} />
+        <Route path="gl/periods"       element={<PeriodsPage />} />
+        <Route path="gl/period-close"  element={<PeriodCloseCockpit />} />
+
+        {/* ── Posting workspace (rules + tables + health as tabs) ──────────── */}
+        <Route path="gl/posting-groups"       element={<PostingGroupsPage />} />
         <Route path="gl/posting-rules"        element={<PostingRulesPage />} />
-        <Route path="gl/setup-wizard" element={<SetupWizardPage />} />
-        <Route path="gl/master-data"  element={<MasterDataPage />} />
-        <Route path="gl/exchange-rates" element={<ExchangeRatesPage />} />
-        <Route path="gl/account-role-policy" element={<AccountRolePolicyPage />} />
-        {/* Sprint 2 Finance epics */}
-        <Route path="gl/posting-simulator" element={<PostingSimulatorPage />} />
-        <Route path="gl/reconciliation"    element={<ReconciliationPage />} />
-        <Route path="gl/period-close"      element={<PeriodCloseCockpit />} />
-        {/* Sprint 3 Finance epics */}
-        <Route path="gl/batch-posting"     element={<BatchPostingCenterPage />} />
+        <Route path="gl/posting-setup"        element={<PostingSetupPage />} />
+        <Route path="gl/posting-setup/health" element={<PostingSetupHealthPage />} />
+
+        {/* ── GL Hardening workspace (governance + health + integrity) ─────── */}
+        <Route path="gl/hardening"      element={<HardeningDashboardPage />} />
+        <Route path="gl/health-integrity" element={<HealthIntegrityPage />} />
         <Route path="gl/integrity-audit"  element={<GlIntegrityAuditPage />} />
-        {/* Keep direct routes alive for backward-compat / deep-linking */}
-        <Route path="gl/periods"      element={<PeriodsPage />} />
+
+        {/* ── GL Settings ─────────────────────────────────────────────────── */}
+        <Route path="gl/settings" element={<GLSettingsPage />} />
+
+        {/* ── Archived pages: redirect to nearest live workspace ───────────── */}
+        <Route path="gl/posting-simulator"   element={<Navigate to="/gl/posting-rules" replace />} />
+        <Route path="gl/setup-wizard"        element={<Navigate to="/gl/settings"      replace />} />
+        <Route path="gl/master-data"         element={<Navigate to="/gl/settings"      replace />} />
+        <Route path="gl/exchange-rates"      element={<Navigate to="/gl/settings"      replace />} />
+        <Route path="gl/account-role-policy" element={<Navigate to="/gl/hardening"     replace />} />
         {/* /treasury/ap and /treasury/po redirect into the Hub with the correct tab */}
         <Route path="treasury/ap"     element={<Navigate to="/treasury?tab=ap"  replace />} />
         <Route path="treasury/po"     element={<Navigate to="/treasury?tab=po"  replace />} />

@@ -56,13 +56,12 @@ const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: 'Finance',
     items: [
-      { label: 'Finance Center',     path: '/gl',                  icon: <BarChart3      size={18} /> },
-      { label: 'Journal Entries',    path: '/gl/entries',          icon: <BookOpen       size={18} /> },
-      { label: 'Batch Posting',      path: '/gl/batch-posting',    icon: <TrendingUp     size={18} /> },
-      { label: 'Reconciliation',     path: '/gl/reconciliation',   icon: <ArrowLeftRight size={18} /> },
-      { label: 'Period Close',       path: '/gl/period-close',     icon: <CalendarDays   size={18} /> },
-      { label: 'Health & Integrity', path: '/gl/health-integrity', icon: <ShieldCheck    size={18} /> },
-      { label: 'GL Integrity Audit', path: '/gl/integrity-audit',  icon: <GitBranch      size={18} /> },
+      { label: 'Finance Center',  path: '/gl',                 icon: <BarChart3      size={18} /> },
+      { label: 'Journal Entries', path: '/gl/entries',         icon: <BookOpen       size={18} /> },
+      { label: 'Batch Posting',   path: '/gl/batch-posting',   icon: <TrendingUp     size={18} /> },
+      { label: 'Reconciliation',  path: '/gl/reconciliation',  icon: <ArrowLeftRight size={18} /> },
+      { label: 'Fiscal Periods',  path: '/gl/periods',         icon: <CalendarDays   size={18} /> },
+      { label: 'GL Governance',   path: '/gl/hardening',       icon: <ShieldCheck    size={18} /> },
     ],
   },
   {
@@ -110,25 +109,11 @@ const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: 'GL Setup',
     items: [
-      { label: 'Chart of Accounts', icon: <BookOpen size={18} />, path: '/gl/accounts' },
-      { label: 'GL Hardening',     icon: <ShieldCheck size={18} />, path: '/gl/hardening' },
-      {
-        label: 'Configuration',
-        icon: <Sliders size={18} />,
-        children: [
-          { label: 'Posting Groups',  path: '/gl/posting-groups' },
-          { label: 'Posting Rules',   path: '/gl/posting-rules' },
-          { label: 'Posting Tables',  path: '/gl/posting-setup' },
-          { label: 'Posting Health',  path: '/gl/posting-setup/health' },
-          { label: 'Simulator',       path: '/gl/posting-simulator' },
-          { label: 'Setup Wizard',    path: '/gl/setup-wizard' },
-          { label: 'Fiscal Periods',  path: '/gl/periods' },
-          { label: 'GL Settings',     path: '/gl/settings' },
-          { label: 'Master Data',     path: '/gl/master-data' },
-          { label: 'Exchange Rates',  path: '/gl/exchange-rates' },
-          { label: 'Role Policy',     path: '/gl/account-role-policy' },
-        ],
-      },
+      { label: 'Chart of Accounts', icon: <BookOpen    size={18} />, path: '/gl/accounts' },
+      { label: 'Posting Groups',    icon: <Sliders     size={18} />, path: '/gl/posting-groups' },
+      { label: 'Posting Rules',     icon: <FileText    size={18} />, path: '/gl/posting-rules' },
+      { label: 'Posting Tables',    icon: <ClipboardList size={18} />, path: '/gl/posting-setup' },
+      { label: 'GL Settings',       icon: <Settings    size={18} />, path: '/gl/settings' },
     ],
   },
   {

@@ -63,6 +63,7 @@ export interface SupplierTransaction {
   document_type:       string | null
   document_number:     number | null
   expense_category:    string | null
+  service_type_code?:  string | null
   equipment:           string | null
   unit:                string | null
   quantity:            number | null
@@ -79,6 +80,8 @@ export interface SupplierTransaction {
   equipment_type_id?:   number | null
   equipment_usage_mode?: 'owned' | 'rental' | null
   notes:               string | null
+  statement_text?:     string | null
+  notes_internal?:     string | null
   year:                number | null
   month:               number | null
   status?:             'draft' | 'posted'
@@ -92,6 +95,8 @@ export interface CashTransaction {
   document_number: number | null
   recipient_name:  string | null
   narration:       string | null
+  statement_text?: string | null
+  service_type_code?: string | null
   amount:          number
   debit:           number
   credit:          number
@@ -100,6 +105,7 @@ export interface CashTransaction {
   month:           number | null
   status?:           'draft' | 'posted'
   notes:             string | null
+  notes_internal?:    string | null
   field_id?:         number | null
   center_code?:      number | null
   season_id?:        number | null
@@ -143,6 +149,8 @@ export interface InventoryMovement {
   supplier_name: string | null
   document_number: number | null
   notes:         string | null
+  statement_text?: string | null
+  service_type_code?: string | null
   season_id:     number | null
   field_id:      number | null
   work_order_id: number | null

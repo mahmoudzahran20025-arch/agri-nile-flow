@@ -1,19 +1,17 @@
 import { useSearchParams } from 'react-router-dom'
-import { Settings, ShieldCheck, CalendarDays } from 'lucide-react'
-import IntegrationControlPage from './IntegrationControlPage'
-import PeriodsPage            from './PeriodsPage'
+import { Settings, CalendarDays } from 'lucide-react'
+import PeriodsPage from './PeriodsPage'
 
-type Tab = 'integrations' | 'periods'
+type Tab = 'periods'
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode; desc: string }[] = [
-  { id: 'integrations', icon: <ShieldCheck size={15} />, label: 'حوكمة الربط',     desc: 'تفعيل وتعطيل الربط التلقائي لكل وحدة' },
-  { id: 'periods',      icon: <CalendarDays size={15}/>, label: 'الفترات المالية', desc: 'إدارة الفترات المالية وقفلها' },
+  { id: 'periods', icon: <CalendarDays size={15} />, label: 'الفترات المالية', desc: 'إدارة الفترات المالية وقفلها' },
 ]
 
 export default function GLSettingsPage() {
   const [params, setParams] = useSearchParams()
-  const rawTab = params.get('tab')
-  const tab: Tab = rawTab === 'periods' ? 'periods' : 'integrations'
+  const tab: Tab = 'periods'
+  void params
 
   const setTab = (t: Tab) => setParams({ tab: t }, { replace: true })
 
@@ -25,7 +23,7 @@ export default function GLSettingsPage() {
           <Settings size={22} className="text-slate-500" />
           <div>
             <h1 className="page-title">إعدادات المحاسبة</h1>
-            <p className="text-sm text-slate-500">حوكمة الربط المتقدم · الفترات المالية · متوافق مع محرك الترحيل الجديد</p>
+            <p className="text-sm text-slate-500">الفترات المالية · إعدادات النظام</p>
           </div>
         </div>
       </div>
@@ -49,10 +47,9 @@ export default function GLSettingsPage() {
         ))}
       </div>
 
-      {/* Tab content — render each page inline, suppressing their own h1 header */}
+      {/* Tab content */}
       <div className="[&_.page-header]:hidden [&_.page-title]:hidden">
-        {tab === 'integrations' && <IntegrationControlPage />}
-        {tab === 'periods'      && <PeriodsPage />}
+        <PeriodsPage />
       </div>
     </div>
   )

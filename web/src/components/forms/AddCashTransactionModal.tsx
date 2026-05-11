@@ -235,12 +235,15 @@ export default function AddCashTransactionModal({ open, onClose, prefill, contex
       const res = await treasuryApi.create({
         transaction_date: form.transaction_date,
         direction:        form.direction,
+        statement_text:   form.narration.trim(),
         narration:        form.narration.trim(),
         amount:           Number(form.amount),
         document_number:  form.document_number ? Number(form.document_number) : undefined,
         document_type:    form.document_type || undefined,
         recipient_name:   form.recipient_name.trim() || undefined,
+        notes_internal:   form.notes.trim() || undefined,
         notes:            form.notes.trim() || undefined,
+        service_type_code: form.expense_code ? String(form.expense_code) : undefined,
         supplier_code:    beneficiaryType === 'supplier' && form.supplier_code
                             ? Number(form.supplier_code) : undefined,
         season_id:        form.season_id ? Number(form.season_id) : undefined,
@@ -559,7 +562,7 @@ export default function AddCashTransactionModal({ open, onClose, prefill, contex
 
         {/* ── Notes ───────────────────────────────────────── */}
         <div>
-          <label className="label">ملاحظات</label>
+          <label className="label">ملاحظات داخلية</label>
           <textarea className="input" rows={2} placeholder="ملاحظات إضافية..." value={form.notes}
             onChange={e => set('notes', e.target.value)} />
         </div>

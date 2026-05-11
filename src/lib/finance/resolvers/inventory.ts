@@ -8,6 +8,28 @@ import { postFromBusinessEvent } from '../business_events'
 import { readInventoryBalance, upsertInventoryBalance, enqueueInventoryPostingOutbox } from '../../inventory_posting'
 import { resolveSupplierPayableAccount } from './supplier_payable_account'
 
+function normalizeIsoDate(value: string): string {
+  const raw = value.trim()
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) {
+    throw new Error(`INVALID_RECEIPT_DATE: expected YYYY-MM-DD, got "${value}"`)
+  }
+  const y = Number(m[1])
+  const mo = Number(m[2])
+  const d = Number(m[3])
+  const dt = new Date(Date.UTC(y, mo - 1, d))
+  const valid = dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d
+  if (!valid) {
+    throw new Error(`INVALID_RECEIPT_DATE: out-of-range date "${value}"`)
+  }
+  return `${m[1]}-${m[2]}-${m[3]}`
+}
+
+function yearMonthParts(isoDate: string): { year: number; month: number } {
+  const [y, m] = isoDate.split('-')
+  return { year: Number(y), month: Number(m) }
+}
+
 export async function resolveInventoryMovement(
   db: D1Database,
   opts: {
@@ -26,17 +48,31 @@ export async function resolveInventoryMovement(
     supplier_code?: number | string
     payment_method?: string
     work_order_id?: number
+    warehouse_id?: number | null
   },
 ): Promise<number | null> {
   // Resolve IPG/PPG from DB so the posting_engine cascade uses Steps 1-7, not always Step 8.
-  const [itemRow, warehouseRow] = await Promise.all([
+  const [itemRow, movementRow] = await Promise.all([
     db.prepare(
       'SELECT prod_posting_group_code, inv_posting_group_code FROM items WHERE company_id = ? AND code = ? LIMIT 1'
     ).bind(opts.company_id, opts.item_code).first<{ prod_posting_group_code: string | null; inv_posting_group_code: string | null }>(),
     db.prepare(
-      'SELECT inv_posting_group_code FROM warehouses WHERE company_id = ? AND name = ? AND is_active = 1 LIMIT 1'
-    ).bind(opts.company_id, opts.warehouse).first<{ inv_posting_group_code: string | null }>(),
+      'SELECT warehouse_id, warehouse FROM inventory_movements WHERE company_id = ? AND id = ? LIMIT 1'
+    ).bind(opts.company_id, opts.ref_id).first<{ warehouse_id: number | null; warehouse: string | null }>(),
   ])
+
+  const effectiveWarehouseId = opts.warehouse_id ?? movementRow?.warehouse_id ?? null
+  const effectiveWarehouseName = (opts.warehouse && opts.warehouse.trim()) || movementRow?.warehouse || null
+
+  const warehouseRow = effectiveWarehouseId != null
+    ? await db.prepare(
+      'SELECT inv_posting_group_code FROM warehouses WHERE company_id = ? AND id = ? AND is_active = 1 LIMIT 1'
+    ).bind(opts.company_id, effectiveWarehouseId).first<{ inv_posting_group_code: string | null }>()
+    : (effectiveWarehouseName
+      ? await db.prepare(
+        'SELECT inv_posting_group_code FROM warehouses WHERE company_id = ? AND name = ? AND is_active = 1 LIMIT 1'
+      ).bind(opts.company_id, effectiveWarehouseName).first<{ inv_posting_group_code: string | null }>()
+      : null)
 
   // Warehouse IPG takes precedence over item-level IPG (warehouse is the physical location context)
   const ipg = warehouseRow?.inv_posting_group_code ?? itemRow?.inv_posting_group_code ?? null
@@ -69,7 +105,10 @@ export async function resolveInventoryMovement(
     description:   `${opts.movement_type} مخزني | ${opts.item_name} | ${opts.warehouse}`,
     created_by:    opts.created_by,
     payload:       {
-      item_code: opts.item_code, warehouse: opts.warehouse, movement_type: opts.movement_type,
+      item_code: opts.item_code,
+      warehouse: opts.warehouse,
+      warehouse_id: effectiveWarehouseId,
+      movement_type: opts.movement_type,
       value: opts.value, item_name: opts.item_name, ipg, ppg,
     },
     trace:         blueprint.trace ?? null,
@@ -169,18 +208,40 @@ export async function resolvePurchaseReceipt(
     po_id?: number
     supplier_code?: number
     warehouse?: string
+    warehouse_id?: number | null
+    item_code?: number | null
     total_amount: number
     date: string
     description?: string
+    service_type_code?: string | null
     created_by?: number
   },
 ): Promise<number | null> {
-  const apCode = await resolveSupplierPayableAccount(db, opts.company_id, opts.supplier_code)
+  // Resolve IPG from warehouse and PPG from item so the engine uses the correct
+  // inventory account (step 1/2 of cascade) rather than always falling through to
+  // the NULL×NULL catch-all (step 8 → 14070106 مخزن متنوع).
+  const [warehouseRow, itemRow] = await Promise.all([
+    opts.warehouse_id != null
+      ? db.prepare('SELECT inv_posting_group_code FROM warehouses WHERE company_id=? AND id=? AND is_active=1 LIMIT 1')
+          .bind(opts.company_id, opts.warehouse_id).first<{ inv_posting_group_code: string | null }>()
+      : opts.warehouse
+        ? db.prepare('SELECT inv_posting_group_code FROM warehouses WHERE company_id=? AND name=? AND is_active=1 LIMIT 1')
+            .bind(opts.company_id, opts.warehouse).first<{ inv_posting_group_code: string | null }>()
+        : Promise.resolve(null),
+    opts.item_code != null
+      ? db.prepare('SELECT prod_posting_group_code FROM items WHERE company_id=? AND code=? LIMIT 1')
+          .bind(opts.company_id, opts.item_code).first<{ prod_posting_group_code: string | null }>()
+      : Promise.resolve(null),
+  ])
+  const ipg = warehouseRow?.inv_posting_group_code ?? null
+  const ppg = itemRow?.prod_posting_group_code ?? null
+
+  const apCode = await resolveSupplierPayableAccount(db, opts.company_id, opts.supplier_code, null, opts.service_type_code)
   const blueprint = await peResolvePurchaseReceipt(
     db,
     opts.company_id,
-    null,
-    null,
+    ipg,
+    ppg,
     apCode,
     opts.total_amount,
   )
@@ -210,7 +271,7 @@ export async function resolvePurchaseReceipt(
     event_date:    opts.date,
     description:   entryDescription,
     created_by:    opts.created_by,
-    payload:       { po_id: opts.po_id, supplier_code: opts.supplier_code, warehouse: opts.warehouse ?? '', total_amount: opts.total_amount },
+    payload:       { po_id: opts.po_id, supplier_code: opts.supplier_code, warehouse: opts.warehouse ?? '', total_amount: opts.total_amount, ipg, ppg, item_code: opts.item_code ?? null },
     trace:         blueprint.trace ?? null,
     lines:         blueprint.lines.map((l) => ({
       account_code:  l.account_code!,
@@ -249,6 +310,8 @@ export async function processPOReceiptOrchestrated(
     }>
   },
 ): Promise<{ movements: number; status: string }> {
+  const receiptDate = normalizeIsoDate(opts.received_date)
+  const ym = yearMonthParts(receiptDate)
   const localIdBase = `por_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
   let movCount = 0
 
@@ -258,7 +321,6 @@ export async function processPOReceiptOrchestrated(
     const valueIn = item.qty_received * item.unit_price
     const balQty  = prev.balance_qty + item.qty_received
     const balVal  = prev.balance_value + valueIn
-    const d       = new Date(opts.received_date)
     const localId = `${localIdBase}_${item.po_item_id}`
 
     const insertResult = await db.prepare(
@@ -268,9 +330,9 @@ export async function processPOReceiptOrchestrated(
         year, month, created_by_user_id, local_id, gl_posting_status)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`
     ).bind(
-      opts.company_id, item.item_code, opts.received_date, item.warehouse, 'GRN',
+      opts.company_id, item.item_code, receiptDate, item.warehouse, 'GRN',
       item.qty_received, item.unit_price, item.qty_received, 0, balQty, valueIn, 0, balVal,
-      d.getFullYear(), d.getMonth() + 1, opts.userId, localId,
+      ym.year, ym.month, opts.userId, localId,
     ).run()
 
     const movementId = insertResult.meta.last_row_id as number
@@ -303,15 +365,18 @@ export async function processPOReceiptOrchestrated(
   const receiptDescription = [itemSummary, opts.notes?.trim() || null].filter(Boolean).join(' | ')
   try {
     await resolvePurchaseReceipt(db, {
-      company_id:   opts.company_id,
-      ref_id:       opts.po_id,
-      po_id:        opts.po_id,
+      company_id:    opts.company_id,
+      ref_id:        opts.po_id,
+      po_id:         opts.po_id,
       supplier_code: opts.supplier_code,
-      warehouse:    warehouseSummary,
-      total_amount: totalAmount,
-      date:         opts.received_date,
-      description:  receiptDescription,
-      created_by:   opts.userId,
+      warehouse:     warehouseSummary,
+      // Pass first item's code so PPG can route to the correct inventory account
+      item_code:     opts.items[0]?.item_code ?? null,
+      total_amount:  totalAmount,
+      date:          receiptDate,
+      description:   receiptDescription,
+      service_type_code: 'SRV_SUPPLY',
+      created_by:    opts.userId,
     })
   } catch (err: unknown) {
     const errMsg = String((err as Error)?.message ?? err)

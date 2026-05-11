@@ -15,6 +15,8 @@ import exchangeRates from './exchange-rates'
 import eventTypes from './event-types'
 import accountRolePolicy from './account-role-policy'
 import hardening from './hardening'
+import enhancedLedger from './enhanced_ledger'
+import journalEntryEngine from './journal_entry_regeneration'
 
 // Main GL router - aggregator for all GL sub-modules
 const gl = new Hono<{ Bindings: Env }>()
@@ -58,6 +60,12 @@ gl.route('/', integrity)
 
 // Hardening: Feature flags, baseline metrics, governance controls
 gl.route('/hardening', hardening)
+
+// Enhanced Ledger: Server-side filtered ledger + CSV export
+gl.route('/', enhancedLedger)
+
+// JE Regeneration: Rebuild journal entries from business events with trace metadata
+gl.route('/regeneration', journalEntryEngine)
 
 // Health check endpoint for the GL module
 gl.get('/health', (c) => {

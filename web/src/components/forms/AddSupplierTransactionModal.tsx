@@ -138,8 +138,11 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
         document_type:    form.document_type || undefined,
         document_number:  form.document_number ? Number(form.document_number) : undefined,
         expense_category: form.expense_category || undefined,
+        service_type_code: form.expense_category || undefined,
         equipment_type_id: form.equipment_type_id ? Number(form.equipment_type_id) : undefined,
         equipment_usage_mode: form.equipment_usage_mode || undefined,
+        statement_text:   form.notes.trim() || undefined,
+        notes_internal:   undefined,
         notes:            form.notes.trim() || undefined,
         season_id:        form.season_id ? Number(form.season_id) : undefined,
         center_code:      form.center_code ? Number(form.center_code) : undefined,
@@ -357,8 +360,8 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
 
         {/* ── Notes ───────────────────────────────────────── */}
         <div>
-          <label className="label">ملاحظات</label>
-          <textarea className="input" rows={2} placeholder="ملاحظات..." value={form.notes}
+          <label className="label">البيان</label>
+          <textarea className="input" rows={2} placeholder="بيان الحركة (مطلوب عند الترحيل)..." value={form.notes}
             onChange={e => set('notes', e.target.value)} />
         </div>
 

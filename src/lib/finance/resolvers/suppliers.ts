@@ -6,6 +6,19 @@ import {
 import { postFromBusinessEvent } from '../business_events'
 import { resolveSupplierPayableAccount } from './supplier_payable_account'
 
+async function resolveBpgFromServiceType(
+  db: D1Database,
+  company_id: number,
+  service_type_code: string | null | undefined,
+): Promise<string | null> {
+  if (!service_type_code) return null
+  const row = await db
+    .prepare('SELECT bus_posting_group_code FROM service_types WHERE company_id = ? AND code = ? LIMIT 1')
+    .bind(company_id, service_type_code)
+    .first<{ bus_posting_group_code: string | null }>()
+  return row?.bus_posting_group_code ?? null
+}
+
 export async function resolveSupplierInvoice(
   db: D1Database,
   opts: {
@@ -16,14 +29,18 @@ export async function resolveSupplierInvoice(
     date: string
     description: string
     expense_category?: string | null
+    service_type_code?: string | null
     created_by?: number
   },
 ): Promise<number | null> {
-  const apCode = await resolveSupplierPayableAccount(db, opts.company_id, opts.supplier_code, opts.expense_category)
+  const [apCode, bpgCode] = await Promise.all([
+    resolveSupplierPayableAccount(db, opts.company_id, opts.supplier_code, opts.expense_category, opts.service_type_code),
+    resolveBpgFromServiceType(db, opts.company_id, opts.service_type_code),
+  ])
   const blueprint = await peResolveSupplierInvoice(
     db,
     opts.company_id,
-    null,
+    bpgCode,
     null,
     apCode,
     opts.amount,
@@ -66,14 +83,17 @@ export async function resolveSupplierPayment(
     center_code?: number
     supplier_code?: number | null
     expense_category?: string | null
+    service_type_code?: string | null
     financial_account_id?: number | null
   },
 ): Promise<number | null> {
-  const cashAcc = opts.financial_account_id
-    ? (await db.prepare('SELECT gl_account_code FROM bank_accounts WHERE id = ? AND company_id = ?').bind(opts.financial_account_id, opts.company_id).first<{ gl_account_code: string }>())?.gl_account_code || ''
-    : ''
-
-  const apCode = await resolveSupplierPayableAccount(db, opts.company_id, opts.supplier_code, opts.expense_category)
+  const [cashAccRow, apCode] = await Promise.all([
+    opts.financial_account_id
+      ? db.prepare('SELECT gl_account_code FROM bank_accounts WHERE id = ? AND company_id = ?').bind(opts.financial_account_id, opts.company_id).first<{ gl_account_code: string }>()
+      : Promise.resolve(null),
+    resolveSupplierPayableAccount(db, opts.company_id, opts.supplier_code, opts.expense_category, opts.service_type_code),
+  ])
+  const cashAcc = cashAccRow?.gl_account_code ?? ''
   const blueprint = await peResolveSupplierPayment(
     db,
     opts.company_id,

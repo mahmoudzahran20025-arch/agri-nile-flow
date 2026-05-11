@@ -49,18 +49,19 @@ export async function resolveCashLedger(
   if (!contraAcc) {
     // Partner inflows = capital injection → equity; partner outflows = current account
     // Supplier outflows = AP clearing; no-party inflows = revenue; no-party outflows = expense
+    // equity = partner capital inflow; partner_current_account = partner withdrawal/loan
     const key = opts.partner_id && opts.direction === 'د'
-      ? 'equity_default'
+      ? 'equity'
       : opts.partner_id
         ? 'partner_current_account'
         : opts.supplier_code
           ? 'accounts_payable'
           : opts.direction === 'د' ? 'revenue_default' : 'expense_default'
     contraAcc = (await resolveControlAccount(db, opts.company_id, key)) || ''
-    // Fall back to partner_current_account if equity_default not configured
-    if (!contraAcc && opts.partner_id && opts.direction === 'د') {
-      contraAcc = (await resolveControlAccount(db, opts.company_id, 'partner_current_account')) || ''
-      contraResolution = `control:partner_current_account(equity_default:missing)`
+    if (!contraAcc && opts.partner_id) {
+      // Final fallback: equity account covers both directions if current_account missing
+      contraAcc = (await resolveControlAccount(db, opts.company_id, 'equity')) || ''
+      contraResolution = `control:equity(${key}:missing)`
     } else {
       contraResolution = contraResolution || `control:${key}`
     }

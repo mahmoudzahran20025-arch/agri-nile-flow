@@ -3,10 +3,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ShieldCheck, ShieldAlert, Activity, CheckCircle2, XCircle,
   AlertTriangle, RefreshCw, ToggleLeft, ToggleRight, Clock,
-  Users, Package, FileText, ChevronRight,
+  Users, Package, FileText, ChevronRight, Lock,
 } from 'lucide-react'
 import { hardeningApi } from '../../api/gl'
 import { useToast } from '../../contexts/ToastContext'
+import { useAppStore } from '../../store/appStore'
 import SectionCard from '../../components/ui/SectionCard'
 import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
 
@@ -36,10 +37,12 @@ function FlagRow({
   flag,
   onToggle,
   isToggling,
+  canEdit,
 }: {
   flag: { flag_key: string; flag_value: number; description: string | null; set_at: string }
   onToggle: (key: string, current: number) => void
   isToggling: boolean
+  canEdit: boolean
 }) {
   const meta = FLAG_LABELS[flag.flag_key]
   const isOn = flag.flag_value === 1
@@ -56,19 +59,26 @@ function FlagRow({
         <p className="text-[11px] text-slate-500 mt-0.5">{meta?.help ?? flag.description}</p>
         <p className="text-[10px] text-slate-400 mt-0.5">آخر تعديل: {flag.set_at?.slice(0, 16).replace('T', ' ')}</p>
       </div>
-      <button
-        onClick={() => onToggle(flag.flag_key, flag.flag_value)}
-        disabled={isToggling}
-        className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[12px] font-medium transition-colors disabled:opacity-50"
-        style={{
-          background: isOn ? '#dcfce7' : '#f1f5f9',
-          color:      isOn ? '#166534' : '#475569',
-          borderColor: isOn ? '#86efac' : '#e2e8f0',
-        }}
-      >
-        {isOn ? <ToggleRight size={15} /> : <ToggleLeft size={15} />}
-        {isOn ? 'مُفعَّل' : 'معطَّل'}
-      </button>
+      {canEdit ? (
+        <button
+          onClick={() => onToggle(flag.flag_key, flag.flag_value)}
+          disabled={isToggling}
+          className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[12px] font-medium transition-colors disabled:opacity-50"
+          style={{
+            background: isOn ? '#dcfce7' : '#f1f5f9',
+            color:      isOn ? '#166534' : '#475569',
+            borderColor: isOn ? '#86efac' : '#e2e8f0',
+          }}
+        >
+          {isOn ? <ToggleRight size={15} /> : <ToggleLeft size={15} />}
+          {isOn ? 'مُفعَّل' : 'معطَّل'}
+        </button>
+      ) : (
+        <div className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[12px] font-medium bg-slate-50 text-slate-400 border-slate-200">
+          <Lock size={12} />
+          {isOn ? 'مُفعَّل' : 'معطَّل'}
+        </div>
+      )}
     </div>
   )
 }
@@ -77,9 +87,11 @@ function FlagRow({
 export default function HardeningDashboardPage() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
+  const role = useAppStore(s => s.role)
+  const isAdmin = role === 'super_admin' || role === 'company_admin'
   const [auditPage, setAuditPage] = useState(1)
 
-  const { data: baseline, isLoading: baselineLoading, refetch: refetchBaseline } = useQuery({
+  const { data: baseline, isLoading: baselineLoading, error: baselineError, refetch: refetchBaseline } = useQuery({
     queryKey: ['hardening', 'baseline'],
     queryFn:  hardeningApi.baseline,
     refetchInterval: 60_000,
@@ -129,6 +141,18 @@ export default function HardeningDashboardPage() {
   const actions: CommandAction[] = [
     { id: 'refresh', label: 'تحديث', icon: <RefreshCw size={14} />, onClick: () => { refetchBaseline(); refetchFlags() }, variant: 'secondary' },
   ]
+
+  // Explicit error state — never leave a blank screen
+  const isAccessDenied = baselineError && (String(baselineError).includes('403') || String(baselineError).includes('Forbidden') || String(baselineError).includes('غير مصرح'))
+  if (isAccessDenied) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-center p-8" dir="rtl">
+        <XCircle size={48} className="text-red-400" />
+        <h2 className="text-[16px] font-bold text-slate-700">صلاحيات غير كافية</h2>
+        <p className="text-[13px] text-slate-500 max-w-sm">هذه الصفحة متاحة لمدراء الشركة فقط. تواصل مع المدير لطلب الوصول.</p>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col h-full bg-[#f8fafc]" dir="rtl">
@@ -240,6 +264,7 @@ export default function HardeningDashboardPage() {
                     flag={f}
                     onToggle={(key, current) => toggleFlag({ key, current })}
                     isToggling={isToggling}
+                    canEdit={isAdmin}
                   />
                 ))}
               </div>

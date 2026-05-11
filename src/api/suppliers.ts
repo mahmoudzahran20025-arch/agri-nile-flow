@@ -15,6 +15,87 @@ suppliers.use('*', authMiddleware)
 // Read operations use DB-driven permissionGuard so any role with suppliers.read can view.
 const financeOnly = roleGuard(['super_admin', 'company_admin', 'accountant'])
 
+function normalizeIsoDate(value: string): string {
+  const raw = value.trim()
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) {
+    throw new Error(`INVALID_DATE: expected YYYY-MM-DD, got "${value}"`)
+  }
+  const y = Number(m[1])
+  const mo = Number(m[2])
+  const d = Number(m[3])
+  const dt = new Date(Date.UTC(y, mo - 1, d))
+  const valid = dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d
+  if (!valid) {
+    throw new Error(`INVALID_DATE: out-of-range date "${value}"`)
+  }
+  return `${m[1]}-${m[2]}-${m[3]}`
+}
+
+async function tableExists(db: Env['DB'], tableName: string): Promise<boolean> {
+  const row = await db.prepare(
+    "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1"
+  ).bind(tableName).first<{ ok: number }>()
+  return !!row?.ok
+}
+
+async function tableColumnExists(db: Env['DB'], tableName: string, columnName: string): Promise<boolean> {
+  const { results } = await db.prepare(`PRAGMA table_info(${tableName})`).all<{ name: string }>()
+  return (results ?? []).some((r) => r.name === columnName)
+}
+
+async function isKnownServiceTypeCode(db: Env['DB'], company_id: number, code: string): Promise<boolean> {
+  const normalized = code.trim()
+  if (!normalized) return false
+
+  if (await tableExists(db, 'service_types')) {
+    const row = await db.prepare(
+      'SELECT 1 AS ok FROM service_types WHERE company_id = ? AND code = ? AND is_active = 1 LIMIT 1'
+    ).bind(company_id, normalized).first<{ ok: number }>()
+    if (row?.ok) return true
+  }
+
+  const legacyByCode = await db.prepare(
+    'SELECT 1 AS ok FROM expense_types WHERE company_id = ? AND CAST(code AS TEXT) = ? LIMIT 1'
+  ).bind(company_id, normalized).first<{ ok: number }>()
+  if (legacyByCode?.ok) return true
+
+  const legacyByName = await db.prepare(
+    'SELECT 1 AS ok FROM expense_types WHERE company_id = ? AND TRIM(name) = ? LIMIT 1'
+  ).bind(company_id, normalized).first<{ ok: number }>()
+  return !!legacyByName?.ok
+}
+
+function hasTechnicalGovernanceTag(text?: string | null): boolean {
+  if (!text) return false
+  return /\b(NEEDS_DIMENSION|NEEDS_POSTING_LINK|MISSING_DIMENSION|MISSING_POSTING_LINK)\b/i.test(text)
+}
+
+function isFutureIsoDate(isoDate: string): boolean {
+  const today = new Date().toISOString().slice(0, 10)
+  return isoDate > today
+}
+
+async function isSupplierAuthorizedForService(
+  db: Env['DB'],
+  company_id: number,
+  supplier_code: number,
+  service_type_code: string,
+): Promise<boolean> {
+  if (!(await tableExists(db, 'supplier_service_map'))) {
+    return true
+  }
+
+  const row = await db.prepare(
+    `SELECT 1 AS ok
+     FROM supplier_service_map
+     WHERE company_id = ? AND supplier_code = ? AND service_type_code = ? AND is_active = 1
+     LIMIT 1`
+  ).bind(company_id, supplier_code, service_type_code).first<{ ok: number }>()
+
+  return !!row?.ok
+}
+
 /**
  * Updates the running balance for a newly inserted supplier transaction and
  * propagates the delta forward to all rows with a later date/id.
@@ -555,12 +636,20 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
     unit?: string; quantity?: number; unit_price?: number; amount: number
     credit?: number; debit?: number; check_amount?: number; due_date?: string
     notes?: string; season_id?: number; center_code?: number; account_code?: number
+    statement_text?: string; notes_internal?: string; service_type_code?: string
     financial_account_id?: number; equipment_usage_mode?: 'owned' | 'rental'
     status?: 'draft' | 'posted'
   }>()
 
   if (!b.transaction_date || !b.entry_type || b.amount == null) {
     return c.json({ success: false, error: 'التاريخ ونوع القيد والمبلغ مطلوبة' }, 400)
+  }
+
+  let postingDate: string
+  try {
+    postingDate = normalizeIsoDate(b.transaction_date)
+  } catch (err: any) {
+    return c.json({ success: false, error: err?.message ?? 'صيغة التاريخ غير صحيحة' }, 422)
   }
 
   const supplier = await c.env.DB
@@ -578,6 +667,10 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
   const status = b.status ?? 'posted'
 
   if (status === 'posted') {
+    if (isFutureIsoDate(postingDate)) {
+      return c.json({ success: false, error: 'غير مسموح بترحيل قيد مورد بتاريخ مستقبلي' }, 422)
+    }
+
     const gate = await enforceDataQualityPolicy(c.env.DB, company_id, { mode: 'posted', module: 'suppliers' })
     if (!gate.ok) {
       return c.json({ success: false, error: gate.error, code: gate.code, details: gate.details }, gate.status ?? 409)
@@ -617,9 +710,9 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
   }
 
   if (status === 'posted') {
-    const periodId = await getOpenPeriod(c.env.DB, company_id, b.transaction_date)
+    const periodId = await getOpenPeriod(c.env.DB, company_id, postingDate)
     if (!periodId) {
-      return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.transaction_date}` }, 400)
+      return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${postingDate}` }, 400)
     }
   }
 
@@ -627,30 +720,82 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
   const debit  = b.debit  ?? (b.entry_type === 'م' ? b.amount : 0)
   const checkAmt = b.check_amount ?? 0
 
-  const date = new Date(b.transaction_date)
+  const [yearPart, monthPart] = postingDate.split('-')
   const equipmentName = (b.equipment && b.equipment.trim()) || equipmentType?.name || null
+  const statementText = (b.statement_text ?? b.notes ?? '').trim()
+  const notesInternal = b.notes_internal?.trim() || null
   const normalizedExpenseCategory = b.expense_category?.trim() || null
-  const notesWithMeta = b.notes?.trim() || null
+  const serviceTypeCode = b.service_type_code?.trim() || null
+  const isSupplierInvoice = b.entry_type === 'د' && credit > 0
+
+  if (status === 'posted') {
+    if (statementText.length < 3) {
+      return c.json({ success: false, error: 'البيان مطلوب عند الترحيل (3 أحرف على الأقل)' }, 422)
+    }
+    if (hasTechnicalGovernanceTag(statementText)) {
+      return c.json({ success: false, error: 'غير مسموح باستخدام وسوم الحوكمة التقنية داخل البيان' }, 422)
+    }
+    if (hasTechnicalGovernanceTag(notesInternal)) {
+      return c.json({ success: false, error: 'وسوم الحوكمة التقنية يجب أن تُسجل كـ flags وليس داخل الملاحظات' }, 422)
+    }
+    if (isSupplierInvoice && !serviceTypeCode) {
+      return c.json({ success: false, error: 'service_type_code مطلوب عند ترحيل فاتورة المورد' }, 422)
+    }
+    if (serviceTypeCode) {
+      const knownServiceType = await isKnownServiceTypeCode(c.env.DB, company_id, serviceTypeCode)
+      if (!knownServiceType) {
+        return c.json({ success: false, error: 'service_type_code غير معروف أو غير نشط' }, 422)
+      }
+      const authorized = await isSupplierAuthorizedForService(c.env.DB, company_id, code, serviceTypeCode)
+      if (!authorized) {
+        return c.json({ success: false, error: 'المورد غير مخول لهذا service_type_code' }, 422)
+      }
+    }
+    if (isSupplierInvoice && !serviceTypeCode && !normalizedExpenseCategory) {
+      return c.json({ success: false, error: 'تصنيف الخدمة مطلوب عند ترحيل فاتورة المورد' }, 422)
+    }
+  }
+
+  const hasStatementTextCol = await tableColumnExists(c.env.DB, 'supplier_transactions', 'statement_text')
+  const hasNotesInternalCol = await tableColumnExists(c.env.DB, 'supplier_transactions', 'notes_internal')
+  const hasServiceTypeCodeCol = await tableColumnExists(c.env.DB, 'supplier_transactions', 'service_type_code')
 
   // Always INSERT as draft first — GL posting and cash mirror run before we commit to 'posted'.
   // This guarantees the running balance (which filters on posted) is never corrupted by a
   // mid-flight failure: if anything below throws, the row stays draft and balance is unaffected.
-  const result = await c.env.DB.prepare(
-    `INSERT INTO supplier_transactions
-     (company_id, season_id, supplier_code, account_code, center_code, financial_account_id,
-      transaction_date, entry_type, document_type, document_number,
-      expense_category, equipment, equipment_type_id, equipment_usage_mode, amount,
-      credit, debit, check_amount, balance_no_checks, balance_with_checks,
-      due_date, notes, year, month, created_by_user_id, status)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).bind(
+  const insertColumns = [
+    'company_id', 'season_id', 'supplier_code', 'account_code', 'center_code', 'financial_account_id',
+    'transaction_date', 'entry_type', 'document_type', 'document_number',
+    'expense_category', 'equipment', 'equipment_type_id', 'equipment_usage_mode', 'amount',
+    'credit', 'debit', 'check_amount', 'balance_no_checks', 'balance_with_checks',
+    'due_date', 'notes', 'year', 'month', 'created_by_user_id', 'status',
+  ]
+  const insertValues: Array<string | number | null> = [
     company_id, b.season_id ?? null, code, b.account_code ?? null, b.center_code ?? null, b.financial_account_id ?? null,
-    b.transaction_date, b.entry_type, b.document_type ?? null, b.document_number ?? null,
+    postingDate, b.entry_type, b.document_type ?? null, b.document_number ?? null,
     normalizedExpenseCategory, equipmentName, b.equipment_type_id ?? null, b.equipment_usage_mode ?? null, b.amount,
     credit, debit, checkAmt, 0, 0,
-    b.due_date ?? null, notesWithMeta,
-    date.getFullYear(), date.getMonth() + 1, userId, 'draft'
-  ).run()
+    b.due_date ?? null, statementText || null,
+    Number(yearPart), Number(monthPart), userId, 'draft',
+  ]
+
+  if (hasStatementTextCol) {
+    insertColumns.push('statement_text')
+    insertValues.push(statementText || null)
+  }
+  if (hasNotesInternalCol) {
+    insertColumns.push('notes_internal')
+    insertValues.push(notesInternal)
+  }
+  if (hasServiceTypeCodeCol) {
+    insertColumns.push('service_type_code')
+    insertValues.push(serviceTypeCode)
+  }
+
+  const placeholders = insertColumns.map(() => '?').join(',')
+  const result = await c.env.DB.prepare(
+    `INSERT INTO supplier_transactions (${insertColumns.join(',')}) VALUES (${placeholders})`
+  ).bind(...insertValues).run()
 
   const txnId = result.meta.last_row_id
 
@@ -667,7 +812,7 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
             txnId,
             supplierCode: code,
             equipmentType,
-            transactionDate: b.transaction_date,
+            transactionDate: postingDate,
             amount: b.amount,
             centerCode: b.center_code ?? null,
             userId,
@@ -678,21 +823,23 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
           company_id,
           ref_id: txnId,
           amount: b.amount,
-          date: b.transaction_date,
+          date: postingDate,
           description: `${b.expense_category ?? b.entry_type} — ${supplierName ?? code}`,
           created_by: userId,
-          supplier_code: code
+          supplier_code: code,
+          service_type_code: serviceTypeCode,
         })
       } else {
         glEntryId = await FinanceCore.resolveSupplierPayment(c.env.DB, {
           company_id,
           ref_id: txnId,
           amount: b.amount,
-          date: b.transaction_date,
+          date: postingDate,
           description: `${b.expense_category ?? b.entry_type} — ${supplierName ?? code}`,
           created_by: userId,
           center_code: b.center_code ?? undefined,
           supplier_code: code,
+          service_type_code: serviceTypeCode,
           financial_account_id: b.financial_account_id ?? null,
         })
 
@@ -701,18 +848,21 @@ suppliers.post('/:code/transactions', financeOnly, async (c) => {
           await FinanceCore.recordCashMovement(c.env.DB, {
             company_id,
             userId,
-            transaction_date: b.transaction_date,
+            transaction_date: postingDate,
             direction: 'م',
             amount: b.amount,
             financial_account_id: b.financial_account_id ?? null,
             narration: `${b.expense_category ? b.expense_category + ' — ' : ''}سداد مستحقات ${supplierName ?? code}`,
+            statement_text: `${b.expense_category ? b.expense_category + ' — ' : ''}سداد مستحقات ${supplierName ?? code}`,
+            service_type_code: serviceTypeCode,
             supplier_code: code,
             season_id: b.season_id ?? null,
             center_code: b.center_code ?? null,
             document_type: b.document_type ?? null,
             document_number: b.document_number ?? null,
-            notes: b.notes
-              ? `${b.notes} | [MIRROR_SUPPLIER_PAYMENT]`
+            notes: statementText || null,
+            notes_internal: notesInternal
+              ? `${notesInternal} | [MIRROR_SUPPLIER_PAYMENT]`
               : '[MIRROR_SUPPLIER_PAYMENT]',
             status: 'posted',
             skipSupplierMirror: true,
@@ -807,7 +957,7 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
   const txn = await c.env.DB
     .prepare(`SELECT id, supplier_code, entry_type, amount, transaction_date, expense_category,
                      center_code, account_code, season_id, document_type, document_number, notes,
-                     financial_account_id, equipment_type_id, equipment_usage_mode
+                     financial_account_id, equipment_type_id, equipment_usage_mode, service_type_code
               FROM supplier_transactions
               WHERE id = ? AND company_id = ? AND supplier_code = ? AND status = 'draft'`)
     .bind(id, company_id, code).first<{
@@ -826,12 +976,22 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
       financial_account_id: number | null
       equipment_type_id: number | null
       equipment_usage_mode: 'owned' | 'rental' | null
+      service_type_code: string | null
     }>()
 
   if (!txn) return c.json({ success: false, error: 'المسودة غير موجودة أو تم ترحيلها بالفعل' }, 404)
 
   if (txn.season_id == null || txn.center_code == null) {
     return c.json({ success: false, error: 'لا يمكن ترحيل المسودة بدون موسم ومركز تكلفة' }, 422)
+  }
+  if (!txn.notes || txn.notes.trim().length < 3) {
+    return c.json({ success: false, error: 'لا يمكن ترحيل المسودة بدون بيان واضح (3 أحرف على الأقل)' }, 422)
+  }
+  if (hasTechnicalGovernanceTag(txn.notes)) {
+    return c.json({ success: false, error: 'غير مسموح باستخدام وسوم الحوكمة التقنية داخل البيان' }, 422)
+  }
+  if (!(txn.expense_category?.trim())) {
+    return c.json({ success: false, error: 'لا يمكن ترحيل المسودة بدون تصنيف خدمة/مصروف' }, 422)
   }
 
   const periodId = await getOpenPeriod(c.env.DB, company_id, txn.transaction_date)
@@ -886,7 +1046,8 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
         description: `${txn.expense_category ?? txn.entry_type} — ${supplierName ?? code}`,
         created_by: userId,
         expense_category: txn.expense_category,
-        supplier_code: code
+        supplier_code: code,
+        service_type_code: txn.service_type_code ?? null,
       })
     } else {
       glEntryId = await FinanceCore.resolveSupplierPayment(c.env.DB, {
@@ -899,6 +1060,7 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
         center_code: txn.center_code ?? undefined,
         expense_category: txn.expense_category,
         supplier_code: code,
+        service_type_code: txn.service_type_code ?? null,
         financial_account_id: txn.financial_account_id ?? null,
       })
 
@@ -912,14 +1074,14 @@ suppliers.patch('/:code/transactions/:id/post', financeOnly, async (c) => {
           amount: txn.amount,
           financial_account_id: txn.financial_account_id ?? null,
           narration: `${txn.expense_category ? txn.expense_category + ' — ' : ''}سداد مستحقات ${supplierName ?? code}`,
+          statement_text: `${txn.expense_category ? txn.expense_category + ' — ' : ''}سداد مستحقات ${supplierName ?? code}`,
           supplier_code: code,
           season_id: txn.season_id ?? null,
           center_code: txn.center_code ?? null,
           document_type: txn.document_type ?? null,
           document_number: txn.document_number ?? null,
-          notes: txn.notes
-            ? `${txn.notes} | [MIRROR_SUPPLIER_PAYMENT]`
-            : '[MIRROR_SUPPLIER_PAYMENT]',
+          notes: txn.notes,
+          notes_internal: '[MIRROR_SUPPLIER_PAYMENT]',
           status: 'posted',
           skipSupplierMirror: true,
           skipGlPosting: true,
