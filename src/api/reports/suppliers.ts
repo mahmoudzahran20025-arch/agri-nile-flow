@@ -516,4 +516,188 @@ suppliers.get('/suppliers-balance', async (c) => {
   })
 })
 
+// ── GET /reports/supplier-ap-summary — AP aging by supplier and service class ──
+// Primary: supplier_ap_ledger VIEW (from migration 0109, derived from supplier_transactions)
+// Buckets: current (≤30d), 31-60d, 61-90d, >90d overdue
+
+suppliers.get('/supplier-ap-summary', async (c) => {
+  const { company_id } = getUser(c)
+  const supplierCode  = c.req.query('supplier_code')   ? Number(c.req.query('supplier_code'))   : null
+  const serviceClass  = c.req.query('service_class')   ?? null   // maps to service_group in service_types
+  const overdueOnly   = c.req.query('overdue_only') === '1'
+
+  // ── Per-supplier AP aging from the supplier_ap_ledger VIEW ─────────────
+  const agingFilters: string[] = ['sal.company_id = ?', 'sal.open_amount > 0']
+  const agingBinds: unknown[] = [company_id]
+
+  if (supplierCode) {
+    agingFilters.push('sal.supplier_code = ?')
+    agingBinds.push(supplierCode)
+  }
+
+  if (overdueOnly) {
+    agingFilters.push('sal.days_overdue_max > 0')
+  }
+
+  // The VIEW aggregates open invoices, already computed AP balance and aging
+  const { results: agingRows } = await c.env.DB.prepare(`
+    SELECT
+      sal.supplier_code,
+      s.name     AS supplier_name,
+      s.activity AS supplier_activity,
+      sal.open_invoice_count,
+      sal.open_amount,
+      sal.paid_amount,
+      sal.net_ap_balance,
+      sal.oldest_due_date,
+      sal.days_overdue_max,
+      sal.has_estimated_due_date,
+      -- Aging bucket breakdown from open invoices
+      (SELECT COALESCE(SUM(credit - COALESCE(debit,0)), 0)
+       FROM supplier_transactions t2
+       WHERE t2.company_id = sal.company_id
+         AND t2.supplier_code = sal.supplier_code
+         AND t2.status = 'posted'
+         AND (t2.entry_type = 'د' OR t2.entry_type = 'invoice')
+         AND (t2.debit IS NULL OR t2.debit < t2.credit)
+         AND (t2.due_date IS NULL OR julianday(t2.due_date) >= julianday('now'))
+      ) AS current_amount,
+      (SELECT COALESCE(SUM(credit - COALESCE(debit,0)), 0)
+       FROM supplier_transactions t2
+       WHERE t2.company_id = sal.company_id
+         AND t2.supplier_code = sal.supplier_code
+         AND t2.status = 'posted'
+         AND (t2.entry_type = 'د' OR t2.entry_type = 'invoice')
+         AND (t2.debit IS NULL OR t2.debit < t2.credit)
+         AND t2.due_date IS NOT NULL
+         AND julianday('now') - julianday(t2.due_date) BETWEEN 1 AND 30
+      ) AS overdue_1_30,
+      (SELECT COALESCE(SUM(credit - COALESCE(debit,0)), 0)
+       FROM supplier_transactions t2
+       WHERE t2.company_id = sal.company_id
+         AND t2.supplier_code = sal.supplier_code
+         AND t2.status = 'posted'
+         AND (t2.entry_type = 'د' OR t2.entry_type = 'invoice')
+         AND (t2.debit IS NULL OR t2.debit < t2.credit)
+         AND t2.due_date IS NOT NULL
+         AND julianday('now') - julianday(t2.due_date) BETWEEN 31 AND 60
+      ) AS overdue_31_60,
+      (SELECT COALESCE(SUM(credit - COALESCE(debit,0)), 0)
+       FROM supplier_transactions t2
+       WHERE t2.company_id = sal.company_id
+         AND t2.supplier_code = sal.supplier_code
+         AND t2.status = 'posted'
+         AND (t2.entry_type = 'د' OR t2.entry_type = 'invoice')
+         AND (t2.debit IS NULL OR t2.debit < t2.credit)
+         AND t2.due_date IS NOT NULL
+         AND julianday('now') - julianday(t2.due_date) BETWEEN 61 AND 90
+      ) AS overdue_61_90,
+      (SELECT COALESCE(SUM(credit - COALESCE(debit,0)), 0)
+       FROM supplier_transactions t2
+       WHERE t2.company_id = sal.company_id
+         AND t2.supplier_code = sal.supplier_code
+         AND t2.status = 'posted'
+         AND (t2.entry_type = 'د' OR t2.entry_type = 'invoice')
+         AND (t2.debit IS NULL OR t2.debit < t2.credit)
+         AND t2.due_date IS NOT NULL
+         AND julianday('now') - julianday(t2.due_date) > 90
+      ) AS overdue_gt_90
+    FROM supplier_ap_ledger sal
+    JOIN suppliers s ON s.code = sal.supplier_code AND s.company_id = sal.company_id
+    WHERE ${agingFilters.join(' AND ')}
+    ORDER BY sal.days_overdue_max DESC, sal.net_ap_balance DESC
+  `).bind(...agingBinds).all<{
+    supplier_code: number; supplier_name: string; supplier_activity: string | null
+    open_invoice_count: number; open_amount: number; paid_amount: number
+    net_ap_balance: number; oldest_due_date: string | null
+    days_overdue_max: number | null; has_estimated_due_date: number
+    current_amount: number; overdue_1_30: number
+    overdue_31_60: number; overdue_61_90: number; overdue_gt_90: number
+  }>()
+
+  // ── Per-service-class totals (from supplier service map) ────────────────
+  const { results: byServiceClass } = await c.env.DB.prepare(`
+    SELECT
+      COALESCE(ssm.service_type_code, 'UNCLASSIFIED')  AS service_type_code,
+      COALESCE(st.name_ar, ssm.service_type_code)      AS service_type_name_ar,
+      COALESCE(st.service_group, 'OTHER')              AS service_group,
+      COUNT(DISTINCT t.supplier_code)                  AS supplier_count,
+      COALESCE(SUM(CASE
+        WHEN (t.entry_type = 'د' OR t.entry_type = 'invoice')
+             AND (t.debit IS NULL OR t.debit < t.credit)
+        THEN t.credit - COALESCE(t.debit, 0)
+        ELSE 0
+      END), 0) AS open_invoiced,
+      COALESCE(SUM(CASE
+        WHEN (t.entry_type = 'م' OR t.entry_type = 'payment')
+        THEN t.debit
+        ELSE 0
+      END), 0) AS total_paid,
+      COUNT(CASE
+        WHEN (t.entry_type = 'د' OR t.entry_type = 'invoice')
+             AND (t.debit IS NULL OR t.debit < t.credit)
+        THEN 1
+      END) AS invoice_count
+    FROM supplier_transactions t
+    LEFT JOIN supplier_service_map ssm
+           ON ssm.supplier_code = t.supplier_code
+          AND ssm.company_id    = t.company_id
+          AND ssm.is_primary    = 1
+    LEFT JOIN service_types st
+           ON st.code        = ssm.service_type_code
+          AND st.company_id  = t.company_id
+    WHERE t.company_id = ? AND t.status = 'posted'
+      ${serviceClass ? 'AND st.service_group = ?' : ''}
+    GROUP BY ssm.service_type_code
+    ORDER BY open_invoiced DESC
+  `).bind(...(serviceClass ? [company_id, serviceClass] : [company_id])).all<{
+    service_type_code: string; service_type_name_ar: string; service_group: string
+    supplier_count: number; open_invoiced: number; total_paid: number; invoice_count: number
+  }>()
+
+  // ── Aggregate summary totals ─────────────────────────────────────────────
+  const totalOpenAp    = agingRows.reduce((s, r) => s + r.net_ap_balance, 0)
+  const totalCurrent   = agingRows.reduce((s, r) => s + r.current_amount, 0)
+  const totalOverdue   = agingRows.reduce((s, r) => s + r.overdue_1_30 + r.overdue_31_60 + r.overdue_61_90 + r.overdue_gt_90, 0)
+  const overdue1_30    = agingRows.reduce((s, r) => s + r.overdue_1_30, 0)
+  const overdue31_60   = agingRows.reduce((s, r) => s + r.overdue_31_60, 0)
+  const overdue61_90   = agingRows.reduce((s, r) => s + r.overdue_61_90, 0)
+  const overdueGt90    = agingRows.reduce((s, r) => s + r.overdue_gt_90, 0)
+  const estimatedCount = agingRows.filter(r => r.has_estimated_due_date).length
+
+  return c.json({
+    success: true,
+    data: {
+      // Per-supplier aging rows
+      suppliers: agingRows,
+      // Service-class breakdown
+      by_service_class: byServiceClass,
+      // Aggregate AP aging summary
+      summary: {
+        supplier_count:       agingRows.length,
+        total_open_ap:        Math.round(totalOpenAp    * 100) / 100,
+        current_amount:       Math.round(totalCurrent   * 100) / 100,
+        total_overdue:        Math.round(totalOverdue   * 100) / 100,
+        overdue_pct:          totalOpenAp > 0 ? Math.round((totalOverdue / totalOpenAp) * 1000) / 10 : 0,
+        aging_buckets: {
+          current:     Math.round(totalCurrent * 100) / 100,
+          overdue_1_30:  Math.round(overdue1_30  * 100) / 100,
+          overdue_31_60: Math.round(overdue31_60 * 100) / 100,
+          overdue_61_90: Math.round(overdue61_90 * 100) / 100,
+          overdue_gt_90: Math.round(overdueGt90  * 100) / 100,
+        },
+        estimated_due_date_count: estimatedCount,
+        _note: estimatedCount > 0
+          ? `${estimatedCount} مورد بتواريخ استحقاق تقديرية (due_date_estimated = 1). راجع الفواتير الأصلية لتأكيد التواريخ.`
+          : null,
+      },
+      filters_applied: {
+        supplier_code: supplierCode,
+        service_class: serviceClass,
+        overdue_only:  overdueOnly,
+      },
+    },
+  })
+})
+
 export default suppliers
