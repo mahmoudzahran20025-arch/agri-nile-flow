@@ -25,6 +25,7 @@ import {
   ArrowLeftRight,
   Clock,
   ClipboardList,
+  ShoppingCart,
   X as XIcon,
 } from 'lucide-react';
 import { Topbar } from './Topbar';
@@ -70,14 +71,17 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { label: 'Financial Statements', path: '/gl/statements',          icon: <FileText  size={18} /> },
       { label: 'Season Reports',       path: '/reports/season',         icon: <Sprout    size={18} /> },
       { label: 'Cost Centers',         path: '/reports/cost-centers',   icon: <BarChart3 size={18} /> },
-      { label: 'Suppliers Balance',    path: '/reports/suppliers-balance', icon: <Users  size={18} /> },
+      { label: 'Suppliers Balance',    path: '/reports/suppliers-balance', icon: <Users      size={18} /> },
+      { label: 'Cost per Feddan',      path: '/reports/cost-per-feddan',     icon: <TrendingUp size={18} /> },
+      { label: 'Supplier AP Summary',  path: '/reports/supplier-ap-summary', icon: <Clock      size={18} /> },
     ],
   },
   {
     title: 'Suppliers & AP',
     items: [
-      { label: 'Suppliers Hub',   path: '/suppliers',     icon: <Users         size={18} /> },
-      { label: 'AP Aging',        path: '/treasury/ap',   icon: <Clock         size={18} /> },
+      { label: 'Suppliers Hub',     path: '/suppliers',              icon: <Users         size={18} /> },
+      { label: 'Procurement',       path: '/suppliers/procurement',  icon: <ShoppingCart  size={18} /> },
+      { label: 'AP Aging',          path: '/treasury/ap',            icon: <Clock         size={18} /> },
       { label: 'Purchase Orders', path: '/treasury/po',   icon: <ClipboardList size={18} /> },
       { label: 'Cash & Banks',    path: '/treasury',      icon: <Wallet        size={18} /> },
       { label: 'Bank Reconcile',  path: '/treasury/bank', icon: <ArrowLeftRight size={18} /> },

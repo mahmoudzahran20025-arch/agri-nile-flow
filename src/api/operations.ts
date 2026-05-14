@@ -18,7 +18,7 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   approved:    ['in_progress', 'cancelled'],
   in_progress: ['done', 'cancelled'],
   done:        ['costed', 'in_progress'],  // allow back to in_progress if mistake
-  costed:      [],                          // terminal state
+  costed:      ['cancelled'],                // reversible via GL compensating entry
   cancelled:   [],                          // terminal state
 }
 
@@ -241,6 +241,51 @@ operations.patch('/orders/:id/status', async (c) => {
       current_status: current.status,
       allowed_next:   allowed,
     }, 422)
+  }
+
+  if (status === 'cancelled' && current.status === 'costed') {
+    // Compensating GL reversal: find the work_order_labor entry posted at costing time
+    const origEntry = await c.env.DB.prepare(
+      `SELECT id FROM journal_entries
+       WHERE company_id = ? AND source_module = 'operations' AND source_id = ?
+         AND event_type = 'work_order_labor'
+       ORDER BY id DESC LIMIT 1`
+    ).bind(company_id, id).first<{ id: number }>()
+
+    if (origEntry) {
+      const { results: origLines } = await c.env.DB.prepare(
+        `SELECT account_code, debit, credit, description, center_code, season_id, field_id, rule_slot
+         FROM journal_entry_lines WHERE journal_entry_id = ?`
+      ).bind(origEntry.id).all<{
+        account_code: string; debit: number; credit: number
+        description: string | null; center_code: number | null
+        season_id: number | null; field_id: number | null; rule_slot: string | null
+      }>()
+
+      if (origLines.length > 0) {
+        try {
+          await FinanceCore.postManualReversal(c.env.DB, {
+            company_id,
+            original_entry_id: origEntry.id,
+            date: actual_date ?? getTodayIsoDate(),
+            reason: `إلغاء أمر عمل #${id} — عكس تكاليف الإنتاج`,
+            lines: origLines.map((l) => ({
+              account_code: l.account_code,
+              debit:        l.credit,   // flip DR↔CR
+              credit:       l.debit,
+              description:  l.description ?? undefined,
+              center_code:  l.center_code ?? undefined,
+              season_id:    l.season_id ?? undefined,
+              field_id:     l.field_id ?? undefined,
+              rule_slot:    l.rule_slot ?? undefined,
+            })),
+            created_by: userId,
+          })
+        } catch (e: any) {
+          return c.json({ success: false, error: `فشل عكس القيود المحاسبية: ${e.message}` }, 400)
+        }
+      }
+    }
   }
 
   if (status === 'costed') {

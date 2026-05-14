@@ -25,6 +25,7 @@ import { getUser, permissionGuard } from '../../middleware/auth'
 import { getOpenPeriod } from '../../lib/gl'
 import { logAudit } from '../../lib/audit'
 import { normalizeIsoDate, isFutureIsoDate, yearMonthParts } from '../../lib/utils/date'
+import { enforceIssueDimensions } from '../../lib/dimension_validator'
 import {
   enforceInventoryLockDate,
   enqueueInventoryPostingOutbox,
@@ -38,43 +39,6 @@ const issues = new Hono<{ Bindings: Env }>()
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-async function validateActiveCenterCode(
-  db: Env['DB'],
-  companyId: number,
-  centerCode: number,
-): Promise<boolean> {
-  const row = await db.prepare(
-    'SELECT 1 AS ok FROM cost_centers WHERE company_id = ? AND CAST(code AS INTEGER) = ? AND is_active = 1 LIMIT 1'
-  ).bind(companyId, centerCode).first<{ ok: number }>()
-  return !!row
-}
-
-async function validateActiveSeasonId(
-  db: Env['DB'],
-  companyId: number,
-  seasonId: number,
-): Promise<boolean> {
-  const row = await db.prepare(
-    "SELECT 1 AS ok FROM seasons WHERE id = ? AND company_id = ? AND status NOT IN ('closed','cancelled') LIMIT 1"
-  ).bind(seasonId, companyId).first<{ ok: number }>()
-  return !!row?.ok
-}
-
-async function isKnownServiceTypeCode(db: Env['DB'], companyId: number, code: string): Promise<boolean> {
-  const normalized = code.trim()
-  if (!normalized) return false
-
-  const byService = await db.prepare(
-    'SELECT 1 AS ok FROM service_types WHERE company_id = ? AND code = ? AND is_active = 1 LIMIT 1'
-  ).bind(companyId, normalized).first<{ ok: number }>()
-  if (byService?.ok) return true
-
-  const byExpense = await db.prepare(
-    'SELECT 1 AS ok FROM expense_types WHERE company_id = ? AND CAST(code AS TEXT) = ? LIMIT 1'
-  ).bind(companyId, normalized).first<{ ok: number }>()
-  return !!byExpense?.ok
-}
-
 async function ensureOutboxQueued(
   db: Env['DB'],
   companyId: number,
@@ -86,71 +50,6 @@ async function ensureOutboxQueued(
      ORDER BY id DESC LIMIT 1`
   ).bind(companyId, movementId).first<{ id: number }>()
   if (!row?.id) throw new Error(`OUTBOX_ENQUEUE_FAILED:inventory_movement:${movementId}`)
-}
-
-// ── Dimension guard: validates mandatory ISSUE-specific fields ────────────────
-// Returns enriched dimensions or throws a { status, error, code } object.
-async function enforceIssueDimensions(
-  db: Env['DB'],
-  companyId: number,
-  input: {
-    season_id?: number
-    center_code?: number
-    field_id?: number
-    service_type_code?: string
-    statement_text?: string
-    notes?: string
-    work_order_id?: number
-  },
-): Promise<{
-  seasonId: number
-  centerCode: number
-  fieldId: number | null
-  serviceTypeCode: string
-  statementText: string
-  fieldWarning: string | null
-}> {
-  if (!input.season_id) {
-    throw { status: 422, error: 'season_id مطلوب لصرف المخزون', code: 'ISSUE_REQUIRES_SEASON' }
-  }
-  if (!input.center_code) {
-    throw { status: 422, error: 'center_code مطلوب لصرف المخزون', code: 'ISSUE_REQUIRES_CENTER' }
-  }
-  if (!input.service_type_code?.trim()) {
-    throw { status: 422, error: 'service_type_code مطلوب لصرف المخزون', code: 'ISSUE_REQUIRES_SERVICE_TYPE' }
-  }
-  const statementText = (input.statement_text ?? input.notes ?? '').trim()
-  if (statementText.length < 3) {
-    throw { status: 422, error: 'البيان مطلوب ويجب ألا يقل عن 3 أحرف', code: 'ISSUE_REQUIRES_STATEMENT' }
-  }
-
-  const seasonValid = await validateActiveSeasonId(db, companyId, input.season_id)
-  if (!seasonValid) {
-    throw { status: 422, error: `الموسم ${input.season_id} غير موجود أو مغلق`, code: 'INVALID_SEASON' }
-  }
-
-  const centerValid = await validateActiveCenterCode(db, companyId, input.center_code)
-  if (!centerValid) {
-    throw { status: 422, error: 'مركز التكلفة غير موجود أو غير نشط', code: 'INVALID_CENTER' }
-  }
-
-  const serviceKnown = await isKnownServiceTypeCode(db, companyId, input.service_type_code.trim())
-  if (!serviceKnown) {
-    throw { status: 422, error: 'service_type_code غير معروف أو غير نشط', code: 'UNKNOWN_SERVICE_TYPE_CODE' }
-  }
-
-  const fieldWarning = !input.field_id
-    ? 'field_id غير محدد — إمكانية التتبع على مستوى القطعة محدودة'
-    : null
-
-  return {
-    seasonId:        input.season_id,
-    centerCode:      input.center_code,
-    fieldId:         input.field_id ?? null,
-    serviceTypeCode: input.service_type_code.trim(),
-    statementText,
-    fieldWarning,
-  }
 }
 
 // ── POST /issues ──────────────────────────────────────────────────────────────

@@ -51,13 +51,8 @@ INSERT OR IGNORE INTO unit_types (company_id, code, name_ar, name_en, unit_class
   (1, 'FEDDAN',     'فدان',        'Feddan',        'quantity'),
   (1, 'TON',        'طن',          'Ton',           'quantity'),
   (1, 'AMOUNT',     'مبلغ',        'Amount (EGP)',  'monetary');
--- Note: 'مبلغ' is monetary — used for supervision/fixed-fee services.
--- It is NOT a physical UoM but appears in service entries.
 
 -- ── BLOCK 2: form_templates ───────────────────────────────────────────────────
--- One row per service_type_code per company.
--- The frontend reads this to know: what form to render, what title to show,
--- what endpoint to call, and what the amount formula is.
 CREATE TABLE IF NOT EXISTS form_templates (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
   company_id          INTEGER NOT NULL REFERENCES companies(id),
@@ -68,10 +63,7 @@ CREATE TABLE IF NOT EXISTS form_templates (
   description_ar      TEXT,
   target_endpoint     TEXT,               -- e.g., '/api/suppliers/:code/transactions'
   amount_formula      TEXT,               -- e.g., 'qty * unit_price'
-  -- 'qty * unit_price' for mechanization and labor
-  -- 'amount'           for fixed-fee supervision
-  -- 'qty * unit_price' for materials (supply)
-  default_unit_code   TEXT REFERENCES unit_types(code),
+  default_unit_code   TEXT, -- logical FK to unit_types.code
   requires_supplier   INTEGER NOT NULL DEFAULT 1,
   requires_document   INTEGER NOT NULL DEFAULT 1,
   requires_quantity   INTEGER NOT NULL DEFAULT 0,
@@ -93,49 +85,14 @@ INSERT OR IGNORE INTO form_templates
    target_endpoint, amount_formula, default_unit_code,
    requires_supplier, requires_document, requires_quantity, requires_field, requires_season, requires_center, sort_order)
 VALUES
-  -- Equipment Rental (ميكنة)
-  (1, 'SRV_MECH',       'TMPL_MECH_INVOICE',
-   'فاتورة ميكنة / إيجار آلات', 'Equipment Rental Invoice',
-   '/api/suppliers/:code/transactions', 'qty * unit_price', 'HOUR',
-   1, 1, 1, 1, 1, 1, 10),
-
-  -- Labor Supply (عمالة)
-  (1, 'SRV_LABOR',      'TMPL_LABOR_INVOICE',
-   'فاتورة عمالة', 'Labor Supply Invoice',
-   '/api/suppliers/:code/transactions', 'qty * unit_price', 'WORKER',
-   1, 1, 1, 1, 1, 1, 20),
-
-  -- Supply / Materials Purchase (توريد ومشتريات)
-  (1, 'SRV_SUPPLY',     'TMPL_SUPPLY_INVOICE',
-   'فاتورة توريد / شراء مستلزمات', 'Supply / Materials Purchase',
-   '/api/suppliers/:code/transactions', 'qty * unit_price', 'KG',
-   1, 1, 1, 0, 1, 0, 30),
-
-  -- Agricultural Supervision (اشراف زراعي)
-  (1, 'SRV_SUPERVISION','TMPL_SUPERVISION_INVOICE',
-   'فاتورة إشراف زراعي', 'Agricultural Supervision Invoice',
-   '/api/suppliers/:code/transactions', 'amount', 'AMOUNT',
-   1, 1, 0, 0, 1, 1, 40),
-
-  -- Spare Parts (قطع غيار)
-  (1, 'SRV_SPARE_PARTS','TMPL_SPARE_INVOICE',
-   'فاتورة قطع غيار', 'Spare Parts Invoice',
-   '/api/suppliers/:code/transactions', 'qty * unit_price', 'UNIT',
-   1, 1, 1, 1, 1, 1, 50),
-
-  -- Logistics / Transport (نقل وشحن)
-  (1, 'SRV_LOGISTICS',  'TMPL_LOGISTICS_INVOICE',
-   'فاتورة نقل وشحن', 'Logistics / Transport Invoice',
-   '/api/suppliers/:code/transactions', 'amount', 'AMOUNT',
-   1, 1, 0, 0, 1, 0, 60);
+  (1, 'SRV_MECH',       'TMPL_MECH_INVOICE', 'فاتورة ميكنة / إيجار آلات', 'Equipment Rental Invoice', '/api/suppliers/:code/transactions', 'qty * unit_price', 'HOUR', 1, 1, 1, 1, 1, 1, 10),
+  (1, 'SRV_LABOR',      'TMPL_LABOR_INVOICE', 'فاتورة عمالة', 'Labor Supply Invoice', '/api/suppliers/:code/transactions', 'qty * unit_price', 'WORKER', 1, 1, 1, 1, 1, 1, 20),
+  (1, 'SRV_SUPPLY',     'TMPL_SUPPLY_INVOICE', 'فاتورة توريد / شراء مستلزمات', 'Supply / Materials Purchase', '/api/suppliers/:code/transactions', 'qty * unit_price', 'KG', 1, 1, 1, 0, 1, 0, 30),
+  (1, 'SRV_SUPERVISION','TMPL_SUPERVISION_INVOICE', 'فاتورة إشراف زراعي', 'Agricultural Supervision Invoice', '/api/suppliers/:code/transactions', 'amount', 'AMOUNT', 1, 1, 0, 0, 1, 1, 40),
+  (1, 'SRV_SPARE_PARTS','TMPL_SPARE_INVOICE', 'فاتورة قطع غيار', 'Spare Parts Invoice', '/api/suppliers/:code/transactions', 'qty * unit_price', 'UNIT', 1, 1, 1, 1, 1, 1, 50),
+  (1, 'SRV_LOGISTICS',  'TMPL_LOGISTICS_INVOICE', 'فاتورة نقل وشحن', 'Logistics / Transport Invoice', '/api/suppliers/:code/transactions', 'amount', 'AMOUNT', 1, 1, 0, 0, 1, 0, 60);
 
 -- ── BLOCK 3: form_fields ──────────────────────────────────────────────────────
--- One row per input field per template.
--- field_type: 'text' | 'number' | 'date' | 'select' | 'textarea' | 'readonly'
--- source_table / source_value_col / source_label_col: for select fields —
---   where to fetch options from (e.g., suppliers, fields, seasons, unit_types)
--- api_param: the exact key this field maps to in the POST body
--- validation_json: JSON string with rules { min, max, pattern, required }
 CREATE TABLE IF NOT EXISTS form_fields (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
   company_id          INTEGER NOT NULL REFERENCES companies(id),
@@ -163,95 +120,66 @@ CREATE TABLE IF NOT EXISTS form_fields (
 CREATE INDEX IF NOT EXISTS idx_form_fields_template
   ON form_fields(template_id, sort_order);
 
--- ─── Seed fields for SRV_MECH template ────────────────────────────────────────
--- template_id resolved dynamically below via subquery
+-- Seed fields for SRV_MECH template
 INSERT OR IGNORE INTO form_fields
   (company_id, template_id, field_key, label_ar, label_en, field_type, is_required, sort_order, source_table, source_value_col, source_label_col, validation_json)
-SELECT
-  1,
-  (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_MECH'),
-  col.field_key, col.label_ar, col.label_en, col.field_type,
-  col.is_required, col.sort_order, col.source_table, col.source_value_col, col.source_label_col,
-  col.validation_json
-FROM (
-  SELECT 'transaction_date' AS field_key, 'تاريخ العملية' AS label_ar, 'Date' AS label_en, 'date' AS field_type, 1 AS is_required, 10 AS sort_order, NULL AS source_table, NULL AS source_value_col, NULL AS source_label_col, '{"max_future":false}' AS validation_json UNION ALL
-  SELECT 'document_number',  'رقم المستخلص',        'Document No',   'text',   1, 20, NULL, NULL, NULL, '{"min_length":1}' UNION ALL
-  SELECT 'document_type',    'نوع المستند',          'Doc Type',      'select', 1, 30, NULL, NULL, NULL, NULL UNION ALL
-  SELECT 'supplier_code',    'المورد',               'Supplier',      'select', 1, 40, 'suppliers', 'code', 'name', '{"service_type":"SRV_MECH"}' UNION ALL
-  SELECT 'field_id',         'البيفوت / الحقل',      'Field/Pivot',   'select', 1, 50, 'fields',    'id',   'name', NULL UNION ALL
-  SELECT 'season_id',        'الموسم',               'Season',        'select', 1, 60, 'seasons',   'id',   'name', NULL UNION ALL
-  SELECT 'center_code',      'مركز التكلفة',         'Cost Center',   'select', 1, 70, 'cost_centers', 'code', 'name', NULL UNION ALL
-  SELECT 'quantity',         'عدد الساعات',          'Hours',         'number', 1, 80, NULL, NULL, NULL, '{"min":0.1,"max":24}' UNION ALL
-  SELECT 'unit_price',       'سعر الساعة (جنيه)',    'Rate/Hour',     'number', 1, 90, NULL, NULL, NULL, '{"min":0}' UNION ALL
-  SELECT 'amount',           'الإجمالي (محسوب)',     'Total',         'readonly',0,100, NULL, NULL, NULL, NULL UNION ALL
-  SELECT 'due_date',         'تاريخ الاستحقاق',      'Due Date',      'date',   1,110, NULL, NULL, NULL, '{"max_future":true}' UNION ALL
-  SELECT 'statement_text',   'البيان',               'Narration',     'text',   1,120, NULL, NULL, NULL, '{"min_length":3}'
-) AS col;
+VALUES
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_MECH'), 'transaction_date', 'تاريخ العملية', 'Date', 'date', 1, 10, NULL, NULL, NULL, '{"max_future":false}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_MECH'), 'document_number', 'رقم المستخلص', 'Document No', 'text', 1, 20, NULL, NULL, NULL, '{"min_length":1}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_MECH'), 'document_type', 'نوع المستند', 'Doc Type', 'select', 1, 30, NULL, NULL, NULL, NULL),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_MECH'), 'supplier_code', 'المورد', 'Supplier', 'select', 1, 40, 'suppliers', 'code', 'name', '{"service_type":"SRV_MECH"}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_MECH'), 'field_id', 'البيفوت / الحقل', 'Field/Pivot', 'select', 1, 50, 'fields', 'id', 'name', NULL),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_MECH'), 'season_id', 'الموسم', 'Season', 'select', 1, 60, 'seasons', 'id', 'name', NULL),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_MECH'), 'center_code', 'مركز التكلفة', 'Cost Center', 'select', 1, 70, 'cost_centers', 'code', 'name', NULL),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_MECH'), 'quantity', 'عدد الساعات', 'Hours', 'number', 1, 80, NULL, NULL, NULL, '{"min":0.1,"max":24}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_MECH'), 'unit_price', 'سعر الساعة (جنيه)', 'Rate/Hour', 'number', 1, 90, NULL, NULL, NULL, '{"min":0}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_MECH'), 'amount', 'الإجمالي (محسوب)', 'Total', 'readonly', 0, 100, NULL, NULL, NULL, NULL),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_MECH'), 'due_date', 'تاريخ الاستحقاق', 'Due Date', 'date', 1, 110, NULL, NULL, NULL, '{"max_future":true}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_MECH'), 'statement_text', 'البيان', 'Narration', 'text', 1, 120, NULL, NULL, NULL, '{"min_length":3}');
 
--- ─── Seed fields for SRV_LABOR template ───────────────────────────────────────
+-- Seed fields for SRV_LABOR template
 INSERT OR IGNORE INTO form_fields
   (company_id, template_id, field_key, label_ar, label_en, field_type, is_required, sort_order, source_table, source_value_col, source_label_col, validation_json)
-SELECT
-  1,
-  (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_LABOR'),
-  col.field_key, col.label_ar, col.label_en, col.field_type,
-  col.is_required, col.sort_order, col.source_table, col.source_value_col, col.source_label_col,
-  col.validation_json
-FROM (
-  SELECT 'transaction_date' AS field_key, 'تاريخ العملية' AS label_ar, 'Date' AS label_en, 'date' AS field_type, 1 AS is_required, 10 AS sort_order, NULL AS source_table, NULL AS source_value_col, NULL AS source_label_col, '{"max_future":false}' AS validation_json UNION ALL
-  SELECT 'document_number',  'رقم المستخلص',        'Document No',   'text',   1, 20, NULL, NULL, NULL, '{"min_length":1}' UNION ALL
-  SELECT 'supplier_code',    'مورد العمالة',         'Labor Supplier','select', 1, 30, 'suppliers', 'code', 'name', '{"service_type":"SRV_LABOR"}' UNION ALL
-  SELECT 'field_id',         'البيفوت / الحقل',      'Field/Pivot',   'select', 1, 40, 'fields',    'id',   'name', NULL UNION ALL
-  SELECT 'season_id',        'الموسم',               'Season',        'select', 1, 50, 'seasons',   'id',   'name', NULL UNION ALL
-  SELECT 'center_code',      'مركز التكلفة',         'Cost Center',   'select', 1, 60, 'cost_centers', 'code', 'name', NULL UNION ALL
-  SELECT 'quantity',         'عدد العمال',           'Workers',       'number', 1, 70, NULL, NULL, NULL, '{"min":1,"max":500}' UNION ALL
-  SELECT 'unit_price',       'أجر العامل (جنيه)',    'Rate/Worker',   'number', 1, 80, NULL, NULL, NULL, '{"min":0}' UNION ALL
-  SELECT 'amount',           'الإجمالي (محسوب)',     'Total',         'readonly',0, 90, NULL, NULL, NULL, NULL UNION ALL
-  SELECT 'due_date',         'تاريخ الاستحقاق',      'Due Date',      'date',   1,100, NULL, NULL, NULL, '{"max_future":true}' UNION ALL
-  SELECT 'statement_text',   'البيان',               'Narration',     'text',   1,110, NULL, NULL, NULL, '{"min_length":3}'
-) AS col;
+VALUES
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_LABOR'), 'transaction_date', 'تاريخ العملية', 'Date', 'date', 1, 10, NULL, NULL, NULL, '{"max_future":false}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_LABOR'), 'document_number', 'رقم المستخلص', 'Document No', 'text', 1, 20, NULL, NULL, NULL, '{"min_length":1}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_LABOR'), 'supplier_code', 'مورد العمالة', 'Labor Supplier', 'select', 1, 30, 'suppliers', 'code', 'name', '{"service_type":"SRV_LABOR"}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_LABOR'), 'field_id', 'البيفوت / الحقل', 'Field/Pivot', 'select', 1, 40, 'fields', 'id', 'name', NULL),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_LABOR'), 'season_id', 'الموسم', 'Season', 'select', 1, 50, 'seasons', 'id', 'name', NULL),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_LABOR'), 'center_code', 'مركز التكلفة', 'Cost Center', 'select', 1, 60, 'cost_centers', 'code', 'name', NULL),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_LABOR'), 'quantity', 'عدد العمال', 'Workers', 'number', 1, 70, NULL, NULL, NULL, '{"min":1,"max":500}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_LABOR'), 'unit_price', 'أجر العامل (جنيه)', 'Rate/Worker', 'number', 1, 80, NULL, NULL, NULL, '{"min":0}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_LABOR'), 'amount', 'الإجمالي (محسوب)', 'Total', 'readonly', 0, 90, NULL, NULL, NULL, NULL),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_LABOR'), 'due_date', 'تاريخ الاستحقاق', 'Due Date', 'date', 1, 100, NULL, NULL, NULL, '{"max_future":true}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_LABOR'), 'statement_text', 'البيان', 'Narration', 'text', 1, 110, NULL, NULL, NULL, '{"min_length":3}');
 
--- ─── Seed fields for SRV_SUPERVISION template ─────────────────────────────────
+-- Seed fields for SRV_SUPERVISION template
 INSERT OR IGNORE INTO form_fields
   (company_id, template_id, field_key, label_ar, label_en, field_type, is_required, sort_order, source_table, source_value_col, source_label_col, validation_json)
-SELECT
-  1,
-  (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPERVISION'),
-  col.field_key, col.label_ar, col.label_en, col.field_type,
-  col.is_required, col.sort_order, col.source_table, col.source_value_col, col.source_label_col,
-  col.validation_json
-FROM (
-  SELECT 'transaction_date' AS field_key, 'تاريخ الفاتورة' AS label_ar, 'Invoice Date' AS label_en, 'date' AS field_type, 1 AS is_required, 10 AS sort_order, NULL AS source_table, NULL AS source_value_col, NULL AS source_label_col, '{"max_future":false}' AS validation_json UNION ALL
-  SELECT 'document_number',  'رقم الفاتورة',         'Invoice No',    'text',   1, 20, NULL, NULL, NULL, '{"min_length":1}' UNION ALL
-  SELECT 'supplier_code',    'مورد الإشراف',         'Supplier',      'select', 1, 30, 'suppliers', 'code', 'name', '{"service_type":"SRV_SUPERVISION"}' UNION ALL
-  SELECT 'season_id',        'الموسم',               'Season',        'select', 1, 40, 'seasons',   'id',   'name', NULL UNION ALL
-  SELECT 'center_code',      'مركز التكلفة',         'Cost Center',   'select', 1, 50, 'cost_centers', 'code', 'name', NULL UNION ALL
-  SELECT 'amount',           'قيمة فاتورة الإشراف (جنيه)', 'Supervision Fee', 'number', 1, 60, NULL, NULL, NULL, '{"min":1}' UNION ALL
-  SELECT 'due_date',         'تاريخ الاستحقاق',      'Due Date',      'date',   1, 70, NULL, NULL, NULL, '{"max_future":true}' UNION ALL
-  SELECT 'statement_text',   'البيان',               'Narration',     'text',   1, 80, NULL, NULL, NULL, '{"min_length":3}'
-) AS col;
+VALUES
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPERVISION'), 'transaction_date', 'تاريخ الفاتورة', 'Invoice Date', 'date', 1, 10, NULL, NULL, NULL, '{"max_future":false}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPERVISION'), 'document_number', 'رقم الفاتورة', 'Invoice No', 'text', 1, 20, NULL, NULL, NULL, '{"min_length":1}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPERVISION'), 'supplier_code', 'مورد الإشراف', 'Supplier', 'select', 1, 30, 'suppliers', 'code', 'name', '{"service_type":"SRV_SUPERVISION"}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPERVISION'), 'season_id', 'الموسم', 'Season', 'select', 1, 40, 'seasons', 'id', 'name', NULL),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPERVISION'), 'center_code', 'مركز التكلفة', 'Cost Center', 'select', 1, 50, 'cost_centers', 'code', 'name', NULL),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPERVISION'), 'amount', 'قيمة فاتورة الإشراف (جنيه)', 'Supervision Fee', 'number', 1, 60, NULL, NULL, NULL, '{"min":1}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPERVISION'), 'due_date', 'تاريخ الاستحقاق', 'Due Date', 'date', 1, 70, NULL, NULL, NULL, '{"max_future":true}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPERVISION'), 'statement_text', 'البيان', 'Narration', 'text', 1, 80, NULL, NULL, NULL, '{"min_length":3}');
 
--- ─── Seed fields for SRV_SUPPLY template ──────────────────────────────────────
+-- Seed fields for SRV_SUPPLY template
 INSERT OR IGNORE INTO form_fields
   (company_id, template_id, field_key, label_ar, label_en, field_type, is_required, sort_order, source_table, source_value_col, source_label_col, validation_json)
-SELECT
-  1,
-  (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPPLY'),
-  col.field_key, col.label_ar, col.label_en, col.field_type,
-  col.is_required, col.sort_order, col.source_table, col.source_value_col, col.source_label_col,
-  col.validation_json
-FROM (
-  SELECT 'transaction_date' AS field_key, 'تاريخ الفاتورة' AS label_ar, 'Invoice Date' AS label_en, 'date' AS field_type, 1 AS is_required, 10 AS sort_order, NULL AS source_table, NULL AS source_value_col, NULL AS source_label_col, '{"max_future":false}' AS validation_json UNION ALL
-  SELECT 'document_number',  'رقم الفاتورة',         'Invoice No',    'text',   1, 20, NULL, NULL, NULL, '{"min_length":1}' UNION ALL
-  SELECT 'supplier_code',    'المورد',               'Supplier',      'select', 1, 30, 'suppliers', 'code', 'name', '{"service_type":"SRV_SUPPLY"}' UNION ALL
-  SELECT 'season_id',        'الموسم',               'Season',        'select', 1, 40, 'seasons',   'id',   'name', NULL UNION ALL
-  SELECT 'quantity',         'الكمية',               'Quantity',      'number', 1, 50, NULL, NULL, NULL, '{"min":0}' UNION ALL
-  SELECT 'unit_type',        'وحدة القياس',          'Unit',          'select', 1, 60, 'unit_types', 'code', 'name_ar', NULL UNION ALL
-  SELECT 'unit_price',       'السعر للوحدة (جنيه)',  'Unit Price',    'number', 1, 70, NULL, NULL, NULL, '{"min":0}' UNION ALL
-  SELECT 'amount',           'الإجمالي (محسوب)',     'Total',         'readonly',0, 80, NULL, NULL, NULL, NULL UNION ALL
-  SELECT 'due_date',         'تاريخ الاستحقاق',      'Due Date',      'date',   1, 90, NULL, NULL, NULL, '{"max_future":true}' UNION ALL
-  SELECT 'statement_text',   'البيان',               'Narration',     'text',   1,100, NULL, NULL, NULL, '{"min_length":3}'
-) AS col;
+VALUES
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPPLY'), 'transaction_date', 'تاريخ الفاتورة', 'Invoice Date', 'date', 1, 10, NULL, NULL, NULL, '{"max_future":false}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPPLY'), 'document_number', 'رقم الفاتورة', 'Invoice No', 'text', 1, 20, NULL, NULL, NULL, '{"min_length":1}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPPLY'), 'supplier_code', 'المورد', 'Supplier', 'select', 1, 30, 'suppliers', 'code', 'name', '{"service_type":"SRV_SUPPLY"}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPPLY'), 'season_id', 'الموسم', 'Season', 'select', 1, 40, 'seasons', 'id', 'name', NULL),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPPLY'), 'quantity', 'الكمية', 'Quantity', 'number', 1, 50, NULL, NULL, NULL, '{"min":0}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPPLY'), 'unit_type', 'وحدة القياس', 'Unit', 'select', 1, 60, 'unit_types', 'code', 'name_ar', NULL),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPPLY'), 'unit_price', 'السعر للوحدة (جنيه)', 'Unit Price', 'number', 1, 70, NULL, NULL, NULL, '{"min":0}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPPLY'), 'amount', 'الإجمالي (محسوب)', 'Total', 'readonly', 0, 80, NULL, NULL, NULL, NULL),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPPLY'), 'due_date', 'تاريخ الاستحقاق', 'Due Date', 'date', 1, 90, NULL, NULL, NULL, '{"max_future":true}'),
+  (1, (SELECT id FROM form_templates WHERE company_id=1 AND service_type_code='SRV_SUPPLY'), 'statement_text', 'البيان', 'Narration', 'text', 1, 100, NULL, NULL, NULL, '{"min_length":3}');
 
 -- ── BLOCK 4: Verification ─────────────────────────────────────────────────────
 SELECT

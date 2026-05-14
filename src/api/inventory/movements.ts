@@ -8,6 +8,7 @@ import { logAudit } from '../../lib/audit'
 import { logFinancialWorkflowFailure } from '../../lib/finance/workflow_policy'
 import { enforceDataQualityPolicy } from '../../lib/data_quality'
 import { normalizeIsoDate, isFutureIsoDate, yearMonthParts } from '../../lib/utils/date'
+import { isActiveCenterCode } from '../../lib/dimension_validator'
 import {
   enforceInventoryLockDate,
   enqueueInventoryPostingOutbox,
@@ -47,16 +48,6 @@ function mapToTransactionType(movementType: string): string {
   return MAP[movementType] ?? movementType
 }
 
-async function validateActiveCenterCode(
-  db: Env['DB'],
-  companyId: number,
-  centerCode: number,
-): Promise<boolean> {
-  const row = await db.prepare(
-    'SELECT 1 AS ok FROM cost_centers WHERE company_id = ? AND CAST(code AS INTEGER) = ? AND is_active = 1 LIMIT 1'
-  ).bind(companyId, centerCode).first<{ ok: number }>()
-  return !!row
-}
 
 async function tableExists(db: Env['DB'], tableName: string): Promise<boolean> {
   const row = await db.prepare(
@@ -351,8 +342,12 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     if (!centerCode && wo.center_code) centerCode = wo.center_code
   }
 
+  if (b.movement_type === 'GRN' && resolvedSeasonId == null) {
+    return c.json({ success: false, error: 'الموسم مطلوب في استلام المخزون GRN' }, 422)
+  }
+
   if (centerCode != null) {
-    const isValidCenter = await validateActiveCenterCode(c.env.DB, company_id, centerCode)
+    const isValidCenter = await isActiveCenterCode(c.env.DB, company_id, centerCode)
     if (!isValidCenter) {
       return c.json({ success: false, error: 'مركز التكلفة غير موجود أو غير نشط' }, 422)
     }
@@ -659,8 +654,12 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     if (!centerCode && wo.center_code) centerCode = wo.center_code
   }
 
+  if (b.movement_type === 'GRN' && resolvedSeasonId == null) {
+    return c.json({ success: false, error: 'الموسم مطلوب في استلام المخزون GRN' }, 422)
+  }
+
   if (centerCode != null) {
-    const isValidCenter = await validateActiveCenterCode(c.env.DB, company_id, centerCode)
+    const isValidCenter = await isActiveCenterCode(c.env.DB, company_id, centerCode)
     if (!isValidCenter) {
       return c.json({ success: false, error: 'مركز التكلفة غير موجود أو غير نشط' }, 422)
     }

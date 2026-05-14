@@ -52,6 +52,8 @@ const SuppliersBalancePage  = lazy(() => import('./pages/reports/SuppliersBalanc
 const SeasonSummaryPage     = lazy(() => import('./pages/reports/SeasonSummaryPage'))
 const SeasonPnLPage         = lazy(() => import('./pages/reports/SeasonPnLPage'))
 const PivotCostsPage        = lazy(() => import('./pages/reports/PivotCostsPage'))
+const CostPerFeddanPage     = lazy(() => import('./pages/reports/CostPerFeddanPage'))
+const SupplierAPSummaryPage = lazy(() => import('./pages/reports/SupplierAPSummaryPage'))
 const SeasonClosePage       = lazy(() => import('./pages/reports/SeasonClosePage'))
 const SeasonReadinessPage   = lazy(() => import('./pages/reports/SeasonReadinessPage'))
 const BudgetVsActualPage    = lazy(() => import('./pages/reports/BudgetVsActualPage'))
@@ -59,6 +61,7 @@ const SeasonReportsPage     = lazy(() => import('./pages/reports/SeasonReportsPa
 
 // ── Lazy chunks: Operations / misc ──────────────────────────────────────────
 const SupplierHubPage          = lazy(() => import('./pages/suppliers/SupplierHubPage'))
+const ProcurementGatewayPage   = lazy(() => import('./pages/suppliers/ProcurementGatewayPage'))
 const SupplierDetailPage       = lazy(() => import('./pages/suppliers/SupplierDetailPage'))
 const PendingApprovalsPage     = lazy(() => import('./pages/suppliers/PendingApprovalsPage'))
 const APAgingPage              = lazy(() => import('./pages/suppliers/APAgingPage'))
@@ -161,6 +164,7 @@ export default function App() {
 
         {/* Suppliers */}
         <Route path="suppliers"              element={<SupplierHubPage />} />
+        <Route path="suppliers/procurement"  element={<ProcurementGatewayPage />} />
         <Route path="suppliers/aging"        element={<APAgingPage />} />
         <Route path="suppliers/pending"      element={<PendingApprovalsPage />} />
         <Route path="suppliers/:code"        element={<SupplierDetailPage />} />
@@ -262,6 +266,8 @@ export default function App() {
         <Route path="reports/season-summary"     element={<SeasonSummaryPage />} />
         <Route path="reports/season-pnl"         element={<SeasonPnLPage />} />
         <Route path="reports/pivot-costs"        element={<PivotCostsPage />} />
+        <Route path="reports/cost-per-feddan"    element={<CostPerFeddanPage />} />
+        <Route path="reports/supplier-ap-summary" element={<SupplierAPSummaryPage />} />
         <Route path="reports/season-close"       element={<SeasonClosePage />} />
         <Route path="reports/season-readiness"   element={<SeasonReadinessPage />} />
         <Route path="reports/budget-vs-actual"   element={<BudgetVsActualPage />} />

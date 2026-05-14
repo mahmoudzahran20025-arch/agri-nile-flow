@@ -17,6 +17,7 @@ import accountRolePolicy from './account-role-policy'
 import hardening from './hardening'
 import enhancedLedger from './enhanced_ledger'
 import journalEntryEngine from './journal_entry_regeneration'
+import preview from './preview'
 
 // Main GL router - aggregator for all GL sub-modules
 const gl = new Hono<{ Bindings: Env }>()
@@ -66,6 +67,9 @@ gl.route('/', enhancedLedger)
 
 // JE Regeneration: Rebuild journal entries from business events with trace metadata
 gl.route('/regeneration', journalEntryEngine)
+
+// Preview: Dry-run GL line resolution without writing to DB
+gl.route('/', preview)
 
 // Health check endpoint for the GL module
 gl.get('/health', (c) => {

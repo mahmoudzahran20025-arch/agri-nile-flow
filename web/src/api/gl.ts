@@ -418,6 +418,36 @@ export interface ValidationBlueprint {
   isBlocked:        boolean
 }
 
+export interface GlPreviewLine {
+  account_code:  string
+  account_label?: string
+  debit:         number
+  credit:        number
+  description:   string
+  rule_slot:     string
+}
+
+export interface GlPreviewResult {
+  event_type:   string
+  amount:       number
+  lines:        GlPreviewLine[]
+  balanced:     boolean
+  total_debit:  number
+  total_credit: number
+  warning:      string | null
+}
+
+export interface GlPreviewRequest {
+  event_type:     string
+  amount:         number
+  description?:   string
+  season_id?:     number
+  center_code?:   number
+  field_id?:      number
+  debit_account?: string
+  credit_account?: string
+}
+
 export interface AccountUsageMetadata {
   account_code:   string
   usage_count:    number
@@ -677,6 +707,10 @@ export const glApi = {
     bpg_code?: string | null; ppg_code?: string | null; ipg_code?: string | null
     ap_code?: string; cash_code?: string; receivable_code?: string; amount?: number
   }) => unwrap(api.post<ValidationBlueprint>('/gl/posting-setup/validate', body)),
+
+  // ── GL Preview (dry-run) ────────────────────────────────────────────────────
+  preview: (body: GlPreviewRequest) =>
+    unwrap(api.post<GlPreviewResult>('/gl/preview', body)),
 
   // ── Reconciliation ──────────────────────────────────────────────────────────
   reconciliationSourceDocs: (p?: {
