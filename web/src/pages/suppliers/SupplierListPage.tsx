@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Search, Plus, ExternalLink, FileText, X, Clock } from 'lucide-react'
 import { suppliersApi } from '../../api/client'
 import { usePermission } from '../../hooks/usePermission'
-import DataTable, { type Column, type SortState } from '../../components/ui/DataTable'
+import DataTableV2, { type ColumnV2 } from '../../components/ui/DataTableV2'
 import SidePanel from '../../components/ui/SidePanel'
 import AddSupplierModal from '../../components/forms/AddSupplierModal'
 import AddSupplierTransactionModal from '../../components/forms/AddSupplierTransactionModal'
@@ -15,7 +15,7 @@ function egp(n: number | undefined) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 }
 
-// ── Filter types ──────────────────────────────────────────────
+// ── Filter types ─────────────────────────────────────────────
 type StatusFilter  = 'all' | 'active' | 'inactive'
 type BalanceFilter = 'all' | 'credit' | 'debit' | 'zero'
 
@@ -106,17 +106,19 @@ function SupplierPanel({ supplier, onClose, onNavigate, onAddTransaction }: {
 }
 
 // ── Columns ───────────────────────────────────────────────────
-const COLUMNS: Column<Supplier>[] = [
-  { key: 'code',     header: 'الكود',          width: '90px',  sortable: true },
-  { key: 'name',     header: 'المورد / العميل',                sortable: true },
-  { key: 'activity', header: 'النشاط',          render: r => r.activity ?? '—' },
+const COLUMNS: ColumnV2<Supplier>[] = [
+  { key: 'code',     header: 'الكود',          width: '90px',  sortable: true, csvValue: r => String(r.code) },
+  { key: 'name',     header: 'المورد / العميل',                sortable: true, csvValue: r => r.name },
+  { key: 'activity', header: 'النشاط',          render: r => r.activity ?? '—', csvValue: r => r.activity ?? '' },
   {
     key: 'total_credit', header: 'إجمالي الدائن', sortable: true,
     render: r => <span className="text-green-700 font-medium">{egp(r.total_credit)}</span>,
+    csvValue: r => String(r.total_credit ?? 0),
   },
   {
     key: 'total_debit', header: 'إجمالي المدين', sortable: true,
     render: r => <span className="text-red-600 font-medium">{egp(r.total_debit)}</span>,
+    csvValue: r => String(r.total_debit ?? 0),
   },
   {
     key: 'current_balance', header: 'الرصيد الحالي', sortable: true,
@@ -128,6 +130,7 @@ const COLUMNS: Column<Supplier>[] = [
         </span>
       )
     },
+    csvValue: r => String(r.current_balance ?? 0),
   },
   {
     key: 'is_active', header: 'الحالة',
@@ -136,6 +139,7 @@ const COLUMNS: Column<Supplier>[] = [
         {r.is_active ? 'نشط' : 'موقوف'}
       </span>
     ),
+    csvValue: r => r.is_active ? 'نشط' : 'موقوف',
   },
 ]
 
@@ -152,7 +156,6 @@ export default function SupplierListPage() {
   const [selected,     setSelected]     = useState<Supplier | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [balFilter,    setBalFilter]    = useState<BalanceFilter>('all')
-  const [sort,         setSort]         = useState<SortState | undefined>(undefined)
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['suppliers', page, q],
@@ -188,18 +191,8 @@ export default function SupplierListPage() {
     if (balFilter === 'debit')  rows = rows.filter(r => (r.current_balance ?? 0) < 0)
     if (balFilter === 'zero')   rows = rows.filter(r => (r.current_balance ?? 0) === 0)
 
-    if (sort) {
-      const k = sort.key as keyof Supplier
-      rows = [...rows].sort((a, b) => {
-        const av = a[k] ?? 0
-        const bv = b[k] ?? 0
-        const cmp = typeof av === 'string' ? av.localeCompare(String(bv), 'ar') : Number(av) - Number(bv)
-        return sort.dir === 'asc' ? cmp : -cmp
-      })
-    }
-
     return rows
-  }, [data, statusFilter, balFilter, sort])
+  }, [data, statusFilter, balFilter])
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
@@ -210,12 +203,11 @@ export default function SupplierListPage() {
   const clearFilters = () => {
     setStatusFilter('all')
     setBalFilter('all')
-    setSort(undefined)
   }
 
   const hasActiveFilters = statusFilter !== 'all' || balFilter !== 'all'
 
-  const columns = useMemo<Column<Supplier>[]>(() => {
+  const columns = useMemo<ColumnV2<Supplier>[]>(() => {
     if (!canWrite('suppliers')) return COLUMNS
     return [
       ...COLUMNS,
@@ -224,6 +216,7 @@ export default function SupplierListPage() {
         header: 'إجراء',
         align: 'center',
         width: '120px',
+        sortable: false,
         render: (r) => (
           <button
             type="button"
@@ -344,7 +337,7 @@ export default function SupplierListPage() {
         )}
       </div>
 
-      <DataTable<Supplier>
+      <DataTableV2<Supplier>
         columns={columns}
         data={filtered}
         loading={isLoading}
@@ -354,9 +347,9 @@ export default function SupplierListPage() {
         onPage={setPage}
         rowKey={r => r.code}
         onRowClick={r => setSelected(r)}
-        sort={sort}
-        onSort={setSort}
         emptyText="لا يوجد موردين أو عملاء مسجلين"
+        searchPlaceholder="بحث في الموردين..."
+        exportFilename={`suppliers-${new Date().toISOString().slice(0,10)}.csv`}
       />
 
       {/* Side panel for quick view */}

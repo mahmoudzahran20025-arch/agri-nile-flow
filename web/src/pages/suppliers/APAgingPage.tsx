@@ -4,20 +4,22 @@ import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, ChevronRight, Download, RefreshCw } from 'lucide-react';
 import { suppliersApi } from '../../api/client';
 
+// Shape returned by GET /suppliers/aging-summary (payments.ts)
 interface AgingRow {
   supplier_code:   string;
   supplier_name:   string;
-  current:         number;
-  days_1_30:       number;
-  days_31_60:      number;
-  days_61_90:      number;
-  days_90_plus:    number;
+  current_amt:     number;
+  d1_30:           number;
+  d31_60:          number;
+  d61_90:          number;
+  d90_plus:        number;
   total_outstanding: number;
 }
 
 interface AgingSummaryResponse {
-  aging_summary: AgingRow[];
-  as_of_date:    string;
+  suppliers: AgingRow[];
+  as_of:     string;
+  totals:    { current: number; d1_30: number; d31_60: number; d61_90: number; d90_plus: number; total: number };
 }
 
 interface OpenItem {
@@ -52,7 +54,7 @@ function bucketColor(bucket: string) {
 function exportCsv(rows: AgingRow[]) {
   const header = 'Supplier Code,Supplier Name,Current,1-30d,31-60d,61-90d,90d+,Total Outstanding';
   const lines = rows.map(r =>
-    [r.supplier_code, `"${r.supplier_name}"`, r.current, r.days_1_30, r.days_31_60, r.days_61_90, r.days_90_plus, r.total_outstanding].join(',')
+    [r.supplier_code, `"${r.supplier_name}"`, r.current_amt ?? 0, r.d1_30 ?? 0, r.d31_60 ?? 0, r.d61_90 ?? 0, r.d90_plus ?? 0, r.total_outstanding ?? 0].join(',')
   );
   const blob = new Blob([[header, ...lines].join('\n')], { type: 'text/csv' });
   const url  = URL.createObjectURL(blob);
@@ -136,23 +138,23 @@ export default function APAgingPage() {
     queryFn:  () => suppliersApi.agingSummary() as Promise<AgingSummaryResponse>,
   });
 
-  const rows = data?.aging_summary ?? [];
+  const rows = data?.suppliers ?? [];
 
-  const totals = rows.reduce(
+  const totals = data?.totals ?? rows.reduce(
     (acc, r) => ({
-      current:           acc.current           + r.current,
-      days_1_30:         acc.days_1_30         + r.days_1_30,
-      days_31_60:        acc.days_31_60        + r.days_31_60,
-      days_61_90:        acc.days_61_90        + r.days_61_90,
-      days_90_plus:      acc.days_90_plus      + r.days_90_plus,
-      total_outstanding: acc.total_outstanding + r.total_outstanding,
+      current:           acc.current           + (r.current_amt ?? 0),
+      d1_30:             acc.d1_30             + (r.d1_30       ?? 0),
+      d31_60:            acc.d31_60            + (r.d31_60      ?? 0),
+      d61_90:            acc.d61_90            + (r.d61_90      ?? 0),
+      d90_plus:          acc.d90_plus          + (r.d90_plus    ?? 0),
+      total:             acc.total             + (r.total_outstanding ?? 0),
     }),
-    { current: 0, days_1_30: 0, days_31_60: 0, days_61_90: 0, days_90_plus: 0, total_outstanding: 0 }
+    { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90_plus: 0, total: 0 }
   );
 
-  const overdueTotal = totals.days_31_60 + totals.days_61_90 + totals.days_90_plus;
-  const overduePct   = totals.total_outstanding > 0
-    ? Math.round((overdueTotal / totals.total_outstanding) * 100)
+  const overdueTotal = (totals.d31_60 ?? 0) + (totals.d61_90 ?? 0) + (totals.d90_plus ?? 0);
+  const overduePct   = (totals.total ?? 0) > 0
+    ? Math.round((overdueTotal / (totals.total ?? 1)) * 100)
     : 0;
 
   return (
@@ -167,8 +169,8 @@ export default function APAgingPage() {
               <span className="text-slate-600 font-medium">AP Aging</span>
             </div>
             <h1 className="text-[18px] font-bold text-[#0F2D5C]">Accounts Payable Aging</h1>
-            {data?.as_of_date && (
-              <p className="text-[12px] text-slate-500 mt-0.5">As of {data.as_of_date}</p>
+            {data?.as_of && (
+              <p className="text-[12px] text-slate-500 mt-0.5">As of {data.as_of}</p>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -196,8 +198,8 @@ export default function APAgingPage() {
         <div className="grid grid-cols-3 gap-4">
           <div className="bg-white rounded-lg border border-slate-200 p-4">
             <p className="text-[11px] uppercase tracking-wider font-bold text-slate-400 mb-2">Total Outstanding</p>
-            <p className="text-[24px] font-bold text-[#0F2D5C]">{isLoading ? '…' : fmt(totals.total_outstanding)}</p>
-            <p className="text-[11px] text-slate-400 mt-1">{rows.length} suppliers</p>
+            <p className="text-[24px] font-bold text-[#0F2D5C]">{isLoading ? '…' : fmt(totals.total ?? 0)}</p>
+                  <p className="text-[11px] text-slate-400 mt-1">{rows.length} suppliers</p>
           </div>
           <div className="bg-white rounded-lg border border-slate-200 p-4">
             <p className="text-[11px] uppercase tracking-wider font-bold text-slate-400 mb-2">Overdue (31d+)</p>
@@ -209,7 +211,7 @@ export default function APAgingPage() {
           <div className="bg-white rounded-lg border border-slate-200 p-4">
             <p className="text-[11px] uppercase tracking-wider font-bold text-slate-400 mb-2">Current (≤30d)</p>
             <p className="text-[24px] font-bold text-emerald-600">
-              {isLoading ? '…' : fmt(totals.current + totals.days_1_30)}
+              {isLoading ? '…' : fmt((totals.current ?? 0) + (totals.d1_30 ?? 0))}
             </p>
             <p className="text-[11px] text-slate-400 mt-1">{100 - overduePct}% of total</p>
           </div>
@@ -219,7 +221,7 @@ export default function APAgingPage() {
         {!isLoading && overdueTotal > 0 && (
           <div className="flex items-center gap-2 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded text-[12px] text-amber-700">
             <AlertTriangle size={14} />
-            {fmt(overdueTotal)} overdue across {rows.filter(r => r.days_31_60 + r.days_61_90 + r.days_90_plus > 0).length} suppliers
+            {fmt(overdueTotal)} overdue across {rows.filter(r => (r.d31_60 ?? 0) + (r.d61_90 ?? 0) + (r.d90_plus ?? 0) > 0).length} suppliers
           </div>
         )}
 
@@ -246,8 +248,8 @@ export default function APAgingPage() {
                 <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No open payables</td></tr>
               ) : (
                 rows.map(row => {
-                  const overdue = row.days_31_60 + row.days_61_90 + row.days_90_plus;
-                  const risk = row.days_90_plus > 0 ? 'high' : overdue > 0 ? 'medium' : 'ok';
+                  const overdue = (row.d31_60 ?? 0) + (row.d61_90 ?? 0) + (row.d90_plus ?? 0);
+                  const risk = (row.d90_plus ?? 0) > 0 ? 'high' : overdue > 0 ? 'medium' : 'ok';
                   return (
                     <tr
                       key={row.supplier_code}
@@ -258,12 +260,12 @@ export default function APAgingPage() {
                         <p className="font-medium text-slate-800">{row.supplier_name}</p>
                         <p className="text-[11px] text-slate-400 font-mono">{row.supplier_code}</p>
                       </td>
-                      <td className="px-4 py-2.5 tabular-nums text-right text-emerald-700">{row.current > 0 ? fmt(row.current) : '—'}</td>
-                      <td className="px-4 py-2.5 tabular-nums text-right text-sky-700">{row.days_1_30 > 0 ? fmt(row.days_1_30) : '—'}</td>
-                      <td className="px-4 py-2.5 tabular-nums text-right text-amber-600">{row.days_31_60 > 0 ? fmt(row.days_31_60) : '—'}</td>
-                      <td className="px-4 py-2.5 tabular-nums text-right text-orange-600">{row.days_61_90 > 0 ? fmt(row.days_61_90) : '—'}</td>
-                      <td className="px-4 py-2.5 tabular-nums text-right text-red-600 font-medium">{row.days_90_plus > 0 ? fmt(row.days_90_plus) : '—'}</td>
-                      <td className="px-4 py-2.5 tabular-nums text-right font-bold text-slate-800">{fmt(row.total_outstanding)}</td>
+                      <td className="px-4 py-2.5 tabular-nums text-right text-emerald-700">{(row.current_amt ?? 0) > 0 ? fmt(row.current_amt) : '—'}</td>
+                      <td className="px-4 py-2.5 tabular-nums text-right text-sky-700">{(row.d1_30 ?? 0) > 0 ? fmt(row.d1_30) : '—'}</td>
+                      <td className="px-4 py-2.5 tabular-nums text-right text-amber-600">{(row.d31_60 ?? 0) > 0 ? fmt(row.d31_60) : '—'}</td>
+                      <td className="px-4 py-2.5 tabular-nums text-right text-orange-600">{(row.d61_90 ?? 0) > 0 ? fmt(row.d61_90) : '—'}</td>
+                      <td className="px-4 py-2.5 tabular-nums text-right text-red-600 font-medium">{(row.d90_plus ?? 0) > 0 ? fmt(row.d90_plus) : '—'}</td>
+                      <td className="px-4 py-2.5 tabular-nums text-right font-bold text-slate-800">{fmt(row.total_outstanding ?? 0)}</td>
                       <td className="px-4 py-2.5">
                         <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
                           risk === 'high'   ? 'bg-red-100 text-red-700' :
@@ -287,12 +289,12 @@ export default function APAgingPage() {
               <tfoot className="bg-slate-50 border-t-2 border-slate-200">
                 <tr>
                   <td className="px-4 py-2.5 text-[11px] font-bold text-slate-600 uppercase tracking-wider">Total</td>
-                  <td className="px-4 py-2.5 tabular-nums text-right font-bold text-emerald-700">{fmt(totals.current)}</td>
-                  <td className="px-4 py-2.5 tabular-nums text-right font-bold text-sky-700">{fmt(totals.days_1_30)}</td>
-                  <td className="px-4 py-2.5 tabular-nums text-right font-bold text-amber-600">{fmt(totals.days_31_60)}</td>
-                  <td className="px-4 py-2.5 tabular-nums text-right font-bold text-orange-600">{fmt(totals.days_61_90)}</td>
-                  <td className="px-4 py-2.5 tabular-nums text-right font-bold text-red-600">{fmt(totals.days_90_plus)}</td>
-                  <td className="px-4 py-2.5 tabular-nums text-right font-bold text-slate-800 text-[13px]">{fmt(totals.total_outstanding)}</td>
+                  <td className="px-4 py-2.5 tabular-nums text-right font-bold text-emerald-700">{fmt(totals.current ?? 0)}</td>
+                  <td className="px-4 py-2.5 tabular-nums text-right font-bold text-sky-700">{fmt(totals.d1_30 ?? 0)}</td>
+                  <td className="px-4 py-2.5 tabular-nums text-right font-bold text-amber-600">{fmt(totals.d31_60 ?? 0)}</td>
+                  <td className="px-4 py-2.5 tabular-nums text-right font-bold text-orange-600">{fmt(totals.d61_90 ?? 0)}</td>
+                  <td className="px-4 py-2.5 tabular-nums text-right font-bold text-red-600">{fmt(totals.d90_plus ?? 0)}</td>
+                  <td className="px-4 py-2.5 tabular-nums text-right font-bold text-slate-800 text-[13px]">{fmt(totals.total ?? 0)}</td>
                   <td colSpan={2} />
                 </tr>
               </tfoot>

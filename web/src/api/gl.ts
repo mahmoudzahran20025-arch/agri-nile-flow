@@ -712,6 +712,31 @@ export const glApi = {
   preview: (body: GlPreviewRequest) =>
     unwrap(api.post<GlPreviewResult>('/gl/preview', body)),
 
+  // ── Depreciation ───────────────────────────────────────────────────────────
+  depreciationSchedule: () =>
+    unwrap(api.get<{
+      assets: Array<{
+        id: number; asset_code: string; name: string; category: string
+        acquisition_date: string; cost: number; salvage_value: number
+        useful_life_months: number; depreciation_method: string
+        center_code: number | null; center_name: string | null
+        field_id: number | null; field_name: string | null; season_id: number | null
+        monthly_amount: number; posted_months: number; remaining_months: number
+        accumulated: number; book_value: number; pct_complete: number; fully_depreciated: boolean
+      }>
+      summary: {
+        active_assets: number; fully_depreciated: number
+        pending_assets: number; total_monthly_charge: number
+      }
+    }>('/gl/depreciation/schedule')),
+
+  runDepreciation: (period_year: number, period_month: number) =>
+    unwrap(api.post<{
+      period_year: number; period_month: number
+      total_assets: number; posted: number; skipped: number; total_charge: number
+      entries: Array<{ asset_id: number; asset_name: string; depreciation_amount: number; entry_id: number | null }>
+    }>('/gl/depreciation/run', { period_year, period_month })),
+
   // ── Reconciliation ──────────────────────────────────────────────────────────
   reconciliationSourceDocs: (p?: {
     page?: number; size?: number; source_module?: string; status?: string

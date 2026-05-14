@@ -120,4 +120,7 @@ export const fieldsApi = {
 
   deleteHarvest: (id: number): Promise<void> =>
     api.delete<void>(`/fields/harvest/${id}`).then(() => undefined),
+
+  repostHarvestGL: (id: number): Promise<{ harvest_id: number; journal_entry_id: number | null; message: string }> =>
+    unwrap(api.post(`/fields/harvest/${id}/repost`, {})),
 }

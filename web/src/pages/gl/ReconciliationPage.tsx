@@ -6,14 +6,148 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, CheckCircle2, XCircle, RefreshCw, FileSearch, ExternalLink, Filter, GitBranch } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, XCircle, RefreshCw, FileSearch, ExternalLink, Filter, GitBranch, ShieldCheck, ShieldAlert } from 'lucide-react'
 import { glApi, type SourceDocRow, type ReconciliationResult } from '../../api/client'
+import { reportsApi } from '../../api/reports'
 import GlEntryTraceDrawer from '../../components/gl/GlEntryTraceDrawer'
 import { KpiStrip, type KpiItem } from '../../components/ui/KpiStrip'
 import SectionCard from '../../components/ui/SectionCard'
 import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
 import StatusBadge from '../../components/ui/StatusBadge'
 import DataTable, { type Column } from '../../components/ui/DataTable'
+
+// ── Control Account Health Panel ─────────────────────────────────────────────
+
+const EGP = (n: number) =>
+  new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 2 }).format(n)
+
+type Severity = 'ok' | 'warning' | 'critical'
+
+function SeverityChip({ severity }: { severity: Severity }) {
+  const cfg = {
+    ok:       'bg-emerald-50 text-emerald-700 border-emerald-200',
+    warning:  'bg-amber-50   text-amber-700   border-amber-200',
+    critical: 'bg-red-50     text-red-700     border-red-200',
+  }[severity]
+  const label = { ok: 'OK', warning: 'تحقق', critical: 'حرج' }[severity]
+  return (
+    <span className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full border ${cfg}`}>{label}</span>
+  )
+}
+
+function BoundaryCard({ label, sub_account, subledger_total, gl_balance, gap, severity }: {
+  label: string; sub_account: string; subledger_total: number; gl_balance: number; gap: number; severity: Severity
+}) {
+  const borderCls = severity === 'critical' ? 'border-red-300' : severity === 'warning' ? 'border-amber-200' : 'border-slate-200'
+  return (
+    <div className={`rounded-xl border ${borderCls} bg-white p-4 space-y-3`} dir="rtl">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-slate-800">{label}</p>
+          <p className="text-xs text-slate-400 font-mono mt-0.5">{sub_account}</p>
+        </div>
+        <SeverityChip severity={severity} />
+      </div>
+      <div className="grid grid-cols-2 gap-3 text-xs">
+        <div>
+          <p className="text-slate-400">الدفتر المساعد</p>
+          <p className="font-mono font-semibold text-slate-700 mt-0.5">{EGP(subledger_total)}</p>
+        </div>
+        <div>
+          <p className="text-slate-400">رصيد الأستاذ</p>
+          <p className="font-mono font-semibold text-slate-700 mt-0.5">{EGP(gl_balance)}</p>
+        </div>
+      </div>
+      {Math.abs(gap) > 0.01 ? (
+        <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg ${severity === 'critical' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
+          <AlertTriangle size={11} />
+          فجوة {EGP(Math.abs(gap))}
+        </div>
+      ) : (
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 px-2.5 py-1.5 rounded-lg bg-emerald-50">
+          <CheckCircle2 size={11} />
+          متطابق تماماً
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ControlAccountHealthPanel() {
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
+    queryKey: ['reconciliation-status'],
+    queryFn:  reportsApi.reconciliationStatus,
+    refetchInterval: 5 * 60 * 1000,
+  })
+
+  if (isLoading) {
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        {[1, 2, 3].map(i => <div key={i} className="h-36 bg-slate-100 rounded-xl animate-pulse" />)}
+      </div>
+    )
+  }
+
+  if (isError || !data) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+        <AlertTriangle size={15} />
+        تعذّر تحميل بيانات فحص الحسابات — تحقق من الاتصال
+      </div>
+    )
+  }
+
+  const { boundaries, integrity, overall_ok, checked_at } = data
+  const checkedTime = new Date(checked_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })
+
+  return (
+    <div className="space-y-3" dir="rtl">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {overall_ok
+            ? <ShieldCheck size={16} className="text-emerald-600" />
+            : <ShieldAlert  size={16} className="text-red-500" />
+          }
+          <span className="text-sm font-semibold text-slate-700">
+            {overall_ok ? 'جميع حسابات الضبط سليمة' : 'يوجد فجوات تحتاج مراجعة'}
+          </span>
+          <span className="text-xs text-slate-400">آخر فحص {checkedTime}</span>
+        </div>
+        <button
+          onClick={() => refetch()}
+          className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded hover:bg-slate-100 transition-colors"
+          title="تحديث"
+        >
+          <RefreshCw size={11} className={isFetching ? 'animate-spin' : ''} />
+          تحديث
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <BoundaryCard {...boundaries.ap}             />
+        <BoundaryCard {...boundaries.inventory}      />
+        <BoundaryCard {...boundaries.payroll_payable} />
+      </div>
+
+      {!integrity.all_clean && (
+        <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+          <XCircle size={15} className="text-red-500 shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-semibold text-red-800">مشاكل في سلامة البيانات</p>
+            <ul className="text-xs text-red-700 mt-1 space-y-0.5 list-disc list-inside">
+              {integrity.ghost_entries > 0 && (
+                <li>قيود GL بلا أحداث أعمال مرتبطة: <strong>{integrity.ghost_entries}</strong></li>
+              )}
+              {integrity.orphan_events > 0 && (
+                <li>أحداث أعمال بلا قيد محاسبي: <strong>{integrity.orphan_events}</strong></li>
+              )}
+            </ul>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -214,6 +348,15 @@ export default function ReconciliationPage() {
       <KpiStrip items={kpis} />
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
+
+        {/* Control Account Health — sub-ledger vs GL boundaries */}
+        <SectionCard
+          title="فحص حسابات الضبط"
+          subtitle="مقارنة أرصدة الدفاتر المساعدة مقابل حسابات الأستاذ العامة الضابطة"
+          icon={<ShieldCheck size={14} className="text-slate-500" />}
+        >
+          <ControlAccountHealthPanel />
+        </SectionCard>
 
         {/* Mismatch summary cards */}
         {mismatches > 0 && (

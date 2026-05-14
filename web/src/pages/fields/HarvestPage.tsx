@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Wheat, Plus, Loader2, TrendingUp, TrendingDown,
-  DollarSign, Scale, BarChart3, Trash2, Edit3, Calculator,
+  DollarSign, Scale, BarChart3, Trash2, Edit3, Calculator, RefreshCw,
 } from 'lucide-react'
 import { fieldsApi, QUALITY_LABELS } from '../../api/fields'
 import type { HarvestRecord } from '../../api/fields'
@@ -359,6 +359,15 @@ export default function HarvestPage() {
     },
   })
 
+  const [repostSuccess, setRepostSuccess] = useState<number | null>(null)
+  const repostMut = useMutation({
+    mutationFn: (id: number) => fieldsApi.repostHarvestGL(id),
+    onSuccess: (data) => {
+      setRepostSuccess(data.journal_entry_id)
+      setTimeout(() => setRepostSuccess(null), 4000)
+    },
+  })
+
   // KPIs
   const totalTons    = harvests.reduce((s, h) => s + (h.qty_tons ?? 0), 0)
   const totalRevenue = harvests.reduce((s, h) => s + (h.revenue ?? 0), 0)
@@ -367,6 +376,20 @@ export default function HarvestPage() {
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto" dir="rtl">
+
+      {/* Repost success toast */}
+      {repostSuccess !== null && (
+        <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 font-medium">
+          <RefreshCw size={14} />
+          تم إعادة ترحيل القيود المحاسبية بنجاح — قيد #{repostSuccess}
+        </div>
+      )}
+      {repostMut.isError && (
+        <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <RefreshCw size={14} />
+          {(repostMut.error as Error)?.message?.replace(/^Error:\s*/i, '') ?? 'فشل إعادة الترحيل'}
+        </div>
+      )}
 
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -495,13 +518,24 @@ export default function HarvestPage() {
                         <td className="px-4 py-3 text-center">
                           <div className="flex items-center justify-center gap-1">
                             <button onClick={() => setEditRecord(h)}
-                              className="p-1.5 text-gray-400 hover:text-brand-600 hover:bg-brand-50 rounded-lg transition-colors">
+                              className="p-1.5 text-gray-400 hover:text-brand-600 hover:bg-brand-50 rounded-lg transition-colors"
+                              title="تعديل السجل">
                               <Edit3 size={14} />
+                            </button>
+                            <button
+                              onClick={() => repostMut.mutate(h.id)}
+                              disabled={repostMut.isPending && repostMut.variables === h.id}
+                              className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                              title="إعادة ترحيل القيود المحاسبية">
+                              {repostMut.isPending && repostMut.variables === h.id
+                                ? <Loader2 size={14} className="animate-spin" />
+                                : <RefreshCw size={14} />}
                             </button>
                             <button
                               onClick={() => { if (confirm('حذف هذا السجل؟')) deleteMut.mutate(h.id) }}
                               disabled={deleteMut.isPending}
-                              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+                              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                              title="حذف السجل">
                               <Trash2 size={14} />
                             </button>
                           </div>

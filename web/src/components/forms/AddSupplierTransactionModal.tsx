@@ -4,6 +4,7 @@ import { Info } from 'lucide-react'
 import Modal from '../ui/Modal'
 import { suppliersApi, configApi, financeApi, operationsApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
+import { FormRenderer } from './FormRenderer'
 
 interface Props { open: boolean; onClose: () => void; supplierCode: number; supplierName: string }
 
@@ -16,6 +17,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
   const { toast } = useToast()
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState('')
+  const [dynamicValues, setDynamicValues] = useState<Record<string, unknown>>({})
   const [form, setForm] = useState({
     transaction_date: today(),
     entry_type:       'م',
@@ -43,9 +45,15 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
         notes: '',
         season_id: '', center_code: '', work_order_id: '', financial_account_id: '', status: 'posted',
       })
+      setDynamicValues({})
       setError('')
     }
   }, [open])
+
+  // Reset dynamic fields when expense_category changes
+  useEffect(() => {
+    setDynamicValues({})
+  }, [form.expense_category])
 
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }))
 
@@ -159,6 +167,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
         work_order_id:    form.work_order_id ? Number(form.work_order_id) : undefined,
         financial_account_id: form.financial_account_id ? Number(form.financial_account_id) : undefined,
         status:           form.status,
+        ...dynamicValues,
       })
       if (!(res as { success: boolean }).success) {
         setError((res as { error: string }).error ?? 'حدث خطأ')
@@ -363,6 +372,18 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
             ))}
           </select>
         </div>
+
+        {/* ── Dynamic service-type fields ─────────────────── */}
+        {form.expense_category && (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4">
+            <FormRenderer
+              serviceTypeCode={form.expense_category}
+              values={dynamicValues}
+              onChange={(key, value) => setDynamicValues(prev => ({ ...prev, [key]: value }))}
+              disabled={saving}
+            />
+          </div>
+        )}
 
         {(form.expense_category === 'SRV_MECH' || form.expense_category === 'SRV_LABOR') && (
           <div className="bg-brand-50 border border-brand-200 rounded-xl p-3">

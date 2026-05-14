@@ -264,6 +264,20 @@ export const reportsApi = {
     }>(url))
   },
 
+  reconciliationStatus: () => {
+    type RecBoundary = {
+      label: string; sub_account: string
+      subledger_total: number; gl_balance: number
+      gap: number; ok: boolean; severity: 'ok' | 'warning' | 'critical'
+    }
+    return unwrap(api.get<{
+      checked_at: string
+      boundaries: { ap: RecBoundary; inventory: RecBoundary; payroll_payable: RecBoundary }
+      integrity:  { ghost_entries: number; orphan_events: number; all_clean: boolean }
+      overall_ok: boolean
+    }>('/reports/reconciliation-status'))
+  },
+
   costPerFeddan: (season_id: number, field_id?: number, sort?: string) => {
     const qs = new URLSearchParams({ season_id: String(season_id) })
     if (field_id) qs.set('field_id', String(field_id))

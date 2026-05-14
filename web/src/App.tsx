@@ -33,6 +33,7 @@ const GlIntegrityAuditPage     = lazy(() => import('./pages/gl/GlIntegrityAuditP
 const JERegenerationPage       = lazy(() => import('./pages/gl/JERegenerationPage'))
 const VerificationDashboardPage = lazy(() => import('./pages/gl/VerificationDashboardPage'))
 const ServiceTypesPage          = lazy(() => import('./pages/gl/ServiceTypesPage'))
+const DepreciationPage          = lazy(() => import('./pages/gl/DepreciationPage'))
 
 // ── Lazy chunks: HR ─────────────────────────────────────────────────────────
 const EmployeeListPage    = lazy(() => import('./pages/hr/EmployeeListPage'))
@@ -53,7 +54,8 @@ const SeasonSummaryPage     = lazy(() => import('./pages/reports/SeasonSummaryPa
 const SeasonPnLPage         = lazy(() => import('./pages/reports/SeasonPnLPage'))
 const PivotCostsPage        = lazy(() => import('./pages/reports/PivotCostsPage'))
 const CostPerFeddanPage     = lazy(() => import('./pages/reports/CostPerFeddanPage'))
-const SupplierAPSummaryPage = lazy(() => import('./pages/reports/SupplierAPSummaryPage'))
+const SupplierAPSummaryPage    = lazy(() => import('./pages/reports/SupplierAPSummaryPage'))
+const ServiceTypeSummaryPage   = lazy(() => import('./pages/reports/ServiceTypeSummaryPage'))
 const SeasonClosePage       = lazy(() => import('./pages/reports/SeasonClosePage'))
 const SeasonReadinessPage   = lazy(() => import('./pages/reports/SeasonReadinessPage'))
 const BudgetVsActualPage    = lazy(() => import('./pages/reports/BudgetVsActualPage'))
@@ -93,6 +95,7 @@ const WorkOrdersPage           = lazy(() => import('./pages/operations/WorkOrder
 const WorkOrderTemplatesPage   = lazy(() => import('./pages/operations/WorkOrderTemplatesPage'))
 const ContractsPage            = lazy(() => import('./pages/contracts/ContractsPage'))
 const SuperAdminPage           = lazy(() => import('./pages/admin/SuperAdminPage'))
+const OnboardingPage           = lazy(() => import('./pages/admin/OnboardingPage'))
 const AuditLogPage             = lazy(() => import('./pages/audit/AuditLogPage'))
 const ErrorLogPage             = lazy(() => import('./pages/audit/ErrorLogPage'))
 const IntegrityPage            = lazy(() => import('./pages/audit/IntegrityPage'))
@@ -241,6 +244,7 @@ export default function App() {
         {/* ── GL Settings ─────────────────────────────────────────────────── */}
         <Route path="gl/settings"      element={<GLSettingsPage />} />
         <Route path="gl/service-types" element={<ServiceTypesPage />} />
+        <Route path="gl/depreciation"  element={<DepreciationPage />} />
 
         {/* ── Archived pages: redirect to nearest live workspace ───────────── */}
         <Route path="gl/posting-simulator"   element={<Navigate to="/gl/posting-rules" replace />} />
@@ -267,13 +271,15 @@ export default function App() {
         <Route path="reports/season-pnl"         element={<SeasonPnLPage />} />
         <Route path="reports/pivot-costs"        element={<PivotCostsPage />} />
         <Route path="reports/cost-per-feddan"    element={<CostPerFeddanPage />} />
-        <Route path="reports/supplier-ap-summary" element={<SupplierAPSummaryPage />} />
+        <Route path="reports/supplier-ap-summary"    element={<SupplierAPSummaryPage />} />
+        <Route path="reports/service-type-summary"  element={<ServiceTypeSummaryPage />} />
         <Route path="reports/season-close"       element={<SeasonClosePage />} />
         <Route path="reports/season-readiness"   element={<SeasonReadinessPage />} />
         <Route path="reports/budget-vs-actual"   element={<BudgetVsActualPage />} />
 
         {/* Super Admin */}
-        <Route path="admin" element={<SuperAdminPage />} />
+        <Route path="admin"            element={<SuperAdminPage />} />
+        <Route path="admin/onboarding" element={<OnboardingPage />} />
 
         {/* Audit Center — unified with tabs: log | errors | integrity */}
         <Route path="audit"           element={<AuditCenterPage />} />

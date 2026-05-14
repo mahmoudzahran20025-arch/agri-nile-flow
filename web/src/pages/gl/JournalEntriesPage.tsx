@@ -8,7 +8,7 @@ import NewEntryForm from '../../components/gl/NewEntryForm';
 import GlEntryTraceDrawer from '../../components/gl/GlEntryTraceDrawer';
 import { KpiStrip, KpiItem } from '../../components/ui/KpiStrip';
 import { CommandBar, CommandAction } from '../../components/shell/CommandBar';
-import DataTable, { Column, SortState } from '../../components/ui/DataTable';
+import DataTableV2, { type ColumnV2 } from '../../components/ui/DataTableV2';
 import StatusBadge from '../../components/ui/StatusBadge';
 
 interface JournalEntry {
@@ -34,7 +34,6 @@ export default function JournalEntriesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [page, setPage] = useState(1);
-  const [sort, setSort] = useState<SortState>({ key: 'entry_date', dir: 'desc' });
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState<'All' | 'Posted' | 'Drafts' | 'Voided' | 'Reversals'>('All');
   const [startDate, setStartDate] = useState('');
@@ -112,14 +111,8 @@ export default function JournalEntriesPage() {
     if (tab === 'Posted') filtered = filtered.filter(e => e.is_posted === 1 && !e.reversal_entry_id);
     if (tab === 'Drafts') filtered = filtered.filter(e => e.is_posted === 0);
     if (tab === 'Reversals') filtered = filtered.filter(e => !!e.reversal_entry_id);
-
-    return filtered.sort((a, b) => {
-      const av = sort.key === 'total_debit' ? a.total_debit : a.entry_date;
-      const bv = sort.key === 'total_debit' ? b.total_debit : b.entry_date;
-      const cmp = typeof av === 'string' ? av.localeCompare(String(bv)) : Number(av) - Number(bv);
-      return sort.dir === 'asc' ? cmp : -cmp;
-    });
-  }, [rawEntries, tab, sort]);
+    return filtered;
+  }, [rawEntries, tab]);
 
   const totals = useMemo(() => {
     const debit = rawEntries.reduce((s, e) => s + Number(e.total_debit || 0), 0);
@@ -139,44 +132,49 @@ export default function JournalEntriesPage() {
     enabled: !!selectedId && traceOpen,
   });
 
-  const columns: Column<JournalEntry>[] = [
+  const columns: ColumnV2<JournalEntry>[] = [
     {
       key: 'entry_number',
       header: 'Entry No.',
-      render: (row) => <span className="text-[#0F2D5C] font-semibold">#{row.entry_number || row.id}</span>
+      render: (row) => <span className="text-[#0F2D5C] font-semibold">#{row.entry_number || row.id}</span>,
+      csvValue: (row) => `#${row.entry_number || row.id}`,
     },
-    { key: 'entry_date', header: 'Date', sortable: true, width: '120px' },
-    { key: 'description', header: 'Description', sortable: true },
+    { key: 'entry_date', header: 'Date', sortable: true, width: '120px', csvValue: (row) => row.entry_date },
+    { key: 'description', header: 'Description', sortable: true, csvValue: (row) => row.description },
     {
       key: 'ref_type',
       header: 'Source',
       sortable: true,
-      render: (row) => <StatusBadge type="source" variant={(row.ref_type?.replace('_transaction', '')?.replace('_movement', '') || 'manual') as any} />
+      render: (row) => <StatusBadge type="source" variant={(row.ref_type?.replace('_transaction', '')?.replace('_movement', '') || 'manual') as any} />,
+      csvValue: (row) => row.ref_type?.replace('_transaction', '')?.replace('_movement', '') || 'manual',
     },
     {
       key: 'total_debit',
       header: 'Debit',
       align: 'right',
       render: (row) => <span className="text-[#0F2D5C] font-mono font-medium">{fmt(row.total_debit)}</span>,
-      sortable: true
+      sortable: true,
+      csvValue: (row) => String(row.total_debit ?? 0),
     },
     {
       key: 'total_credit',
       header: 'Credit',
       align: 'right',
       render: (row) => <span className="text-red-600 font-mono font-medium">{fmt(row.total_credit)}</span>,
-      sortable: true
+      sortable: true,
+      csvValue: (row) => String(row.total_credit ?? 0),
     },
     {
       key: 'status',
       header: 'Status',
       render: (row) => (
-        <StatusBadge 
-          type="status" 
-          variant={row.reversal_entry_id ? 'reversed' : row.is_posted ? 'posted' : 'draft'} 
+        <StatusBadge
+          type="status"
+          variant={row.reversal_entry_id ? 'reversed' : row.is_posted ? 'posted' : 'draft'}
         />
-      )
-    }
+      ),
+      csvValue: (row) => row.reversal_entry_id ? 'reversed' : row.is_posted ? 'posted' : 'draft',
+    },
   ];
 
   const kpiItems: KpiItem[] = [
@@ -356,7 +354,7 @@ export default function JournalEntriesPage() {
       {/* Main Content Area */}
       <div className="flex-1 min-h-0 flex relative">
         <div className={`flex-1 p-6 min-h-0 flex flex-col transition-all duration-300 ${selectedId ? 'pl-4 pr-4' : ''}`}>
-          <DataTable
+          <DataTableV2
             columns={columns}
             data={entries}
             loading={isLoading}
@@ -366,8 +364,8 @@ export default function JournalEntriesPage() {
             onPage={setPage}
             rowKey={(r) => r.id}
             onRowClick={(r) => setSelectedId(r.id)}
-            sort={sort}
-            onSort={setSort}
+            exportFilename={`journal-entries-${new Date().toISOString().slice(0, 10)}.csv`}
+            searchPlaceholder="Search entries..."
           />
         </div>
 
