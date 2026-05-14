@@ -13,6 +13,7 @@
 
 import type { D1Database } from '@cloudflare/workers-types'
 import { getFlag } from './hardening'
+import { getNowIsoTimestamp } from './utils/date'
 
 // ── Public Types ──────────────────────────────────────────────────────────────
 
@@ -325,7 +326,7 @@ function blocked(
       resolution_step:   partialTrace.resolution_step   ?? 0,
       matched_rule_id:   partialTrace.matched_rule_id   ?? null,
       resolved_accounts: partialTrace.resolved_accounts ?? {},
-      resolved_at:       new Date().toISOString(),
+      resolved_at:       getNowIsoTimestamp(),
     } : null,
   }
 }
@@ -347,7 +348,7 @@ function buildTrace(
     resolution_step:  step,
     matched_rule_id,
     resolved_accounts,
-    resolved_at:      new Date().toISOString(),
+    resolved_at:      getNowIsoTimestamp(),
   }
 }
 

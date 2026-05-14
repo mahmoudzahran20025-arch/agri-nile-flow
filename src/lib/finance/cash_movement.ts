@@ -1,5 +1,6 @@
 import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types'
 import { getOpenPeriod } from '../gl'
+import { normalizeIsoDate, yearMonthParts } from '../utils/date'
 import { resolveCashLedger } from './resolvers/cash'
 import { logFinancialWorkflowFailure } from './workflow_policy'
 
@@ -47,28 +48,6 @@ interface CashDraftRow {
   document_type?: string | null
   document_number?: number | null
   recipient_name?: string | null
-}
-
-function normalizeIsoDate(value: string): string {
-  const raw = value.trim()
-  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (!m) {
-    throw new Error(`INVALID_TRANSACTION_DATE: expected YYYY-MM-DD, got "${value}"`)
-  }
-  const y = Number(m[1])
-  const mo = Number(m[2])
-  const d = Number(m[3])
-  const dt = new Date(Date.UTC(y, mo - 1, d))
-  const valid = dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d
-  if (!valid) {
-    throw new Error(`INVALID_TRANSACTION_DATE: out-of-range date "${value}"`)
-  }
-  return `${m[1]}-${m[2]}-${m[3]}`
-}
-
-function yearMonthParts(isoDate: string): { year: number; month: number } {
-  const [y, m] = isoDate.split('-')
-  return { year: Number(y), month: Number(m) }
 }
 
 let cachedCashTransactionColumns: Set<string> | null = null

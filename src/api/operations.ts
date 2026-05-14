@@ -357,7 +357,7 @@ operations.delete('/tasks/:id', async (c) => {
 
 // POST /api/operations/orders/:id/equipment
 operations.post('/orders/:id/equipment', async (c) => {
-  const { company_id, sub: userId } = getUser(c)
+  const { company_id } = getUser(c)
   const orderId = Number(c.req.param('id'))
 
   const order = await c.env.DB.prepare(

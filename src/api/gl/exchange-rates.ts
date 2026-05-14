@@ -13,6 +13,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { authMiddleware, getUser, roleGuard } from '../../middleware/auth'
+import { getTodayIsoDate } from '../../lib/utils/date'
 import { logAudit } from '../../lib/audit'
 
 const exchangeRates = new Hono<{ Bindings: Env }>()
@@ -26,7 +27,7 @@ exchangeRates.get('/', async (c) => {
   const { company_id } = getUser(c)
   const date         = c.req.query('date')   // YYYY-MM-DD filter, default today
   const from         = c.req.query('from')   // filter by from_currency
-  const effectiveOn  = date ?? new Date().toISOString().slice(0, 10)
+  const effectiveOn  = date ?? getTodayIsoDate()
 
   let query = `
     SELECT er.*
@@ -80,7 +81,7 @@ exchangeRates.get('/convert', async (c) => {
   const from   = (c.req.query('from')   ?? '').toUpperCase()
   const to     = (c.req.query('to')     ?? '').toUpperCase()
   const amount = parseFloat(c.req.query('amount') ?? '0')
-  const date   = c.req.query('date') ?? new Date().toISOString().slice(0, 10)
+  const date   = c.req.query('date') ?? getTodayIsoDate()
 
   if (!from || !to)   return c.json({ success: false, error: 'من فضلك حدد العملة المصدر والهدف' }, 400)
   if (isNaN(amount))  return c.json({ success: false, error: 'المبلغ غير صحيح' }, 400)
@@ -173,7 +174,7 @@ exchangeRates.post('/', roleGuard(['super_admin', 'company_admin']), async (c) =
 
   const from  = from_currency.toUpperCase()
   const to    = to_currency.toUpperCase()
-  const eDate = effective_date ?? new Date().toISOString().slice(0, 10)
+  const eDate = effective_date ?? getTodayIsoDate()
   const src   = source ?? 'manual'
 
   // Check if rate already exists for this date — if yes, update it

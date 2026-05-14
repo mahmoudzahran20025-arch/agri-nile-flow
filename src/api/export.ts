@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
+import { getTodayIsoDate } from '../lib/utils/date'
 import { resolveMovementDirection } from '../lib/posting_engine'
 
 const exportApi = new Hono<{ Bindings: Env }>()
@@ -354,7 +355,7 @@ exportApi.get('/audit', async (c) => {
 // GET /api/export/gl/balance-sheet?as_of=
 exportApi.get('/gl/balance-sheet', async (c) => {
   const { company_id } = getUser(c)
-  const asOf = c.req.query('as_of') ?? new Date().toISOString().slice(0, 10)
+  const asOf = c.req.query('as_of') ?? getTodayIsoDate()
 
   const { results } = await c.env.DB.prepare(
     `SELECT a.code, a.name, a.account_type, a.is_header,

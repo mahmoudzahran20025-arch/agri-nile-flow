@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { getUser, permissionGuard } from '../../middleware/auth'
+import { getTodayIsoDate } from '../../lib/utils/date'
 import { logAudit } from '../../lib/audit'
 import { FinanceCore } from '../../lib/finance_core'
 
@@ -210,7 +211,7 @@ payroll.patch('/payroll/:id/pay', permissionGuard('hr', 'admin'), async (c) => {
   if (!run) return c.json({ success: false, error: 'المسيرة غير موجودة' }, 404)
   if (run.status !== 'approved') return c.json({ success: false, error: 'يجب اعتماد المسيرة أولاً قبل الصرف' }, 400)
 
-  const payDate = payment_date ?? new Date().toISOString().slice(0, 10)
+  const payDate = payment_date ?? getTodayIsoDate()
 
   let glId: number | null = null
   try {

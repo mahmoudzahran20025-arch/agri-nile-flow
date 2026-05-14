@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { authMiddleware, getUser, roleGuard } from '../../middleware/auth'
+import { getTodayIsoDate } from '../../lib/utils/date'
 
 const reports = new Hono<{ Bindings: Env }>()
 reports.use('*', authMiddleware)
@@ -322,7 +323,7 @@ reports.get('/ledger/:account?', async (c) => {
 // GET /api/gl/trial-balance
 reports.get('/trial-balance', async (c) => {
   const { company_id } = getUser(c)
-  const asOf = c.req.query('as_of') ?? new Date().toISOString().slice(0,10)
+  const asOf = c.req.query('as_of') ?? getTodayIsoDate()
   const { results } = await c.env.DB.prepare(
     `WITH RECURSIVE tree AS (
       SELECT code, parent_code, name, account_type, normal_balance, is_header, 0 AS depth
@@ -368,7 +369,7 @@ reports.get('/trial-balance', async (c) => {
 // GET /api/gl/trial-balance-fast
 reports.get('/trial-balance-fast', async (c) => {
   const { company_id } = getUser(c)
-  const asOf = c.req.query('as_of') ?? new Date().toISOString().slice(0,10)
+  const asOf = c.req.query('as_of') ?? getTodayIsoDate()
 
   // Try materialized view first
   try {
@@ -481,7 +482,7 @@ reports.get('/income-statement', async (c) => {
 // GET /api/gl/balance-sheet
 reports.get('/balance-sheet', async (c) => {
   const { company_id } = getUser(c)
-  const asOf = c.req.query('as_of') ?? new Date().toISOString().slice(0,10)
+  const asOf = c.req.query('as_of') ?? getTodayIsoDate()
 
   const accts = await c.env.DB.prepare(
     'SELECT code, parent_code, name, account_type, normal_balance FROM chart_of_accounts WHERE company_id = ?'

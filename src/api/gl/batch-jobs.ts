@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { authMiddleware, getUser, roleGuard } from '../../middleware/auth'
+import { getTodayIsoDate } from '../../lib/utils/date'
 import { logAudit } from '../../lib/audit'
 import { FinanceCore } from '../../lib/finance_core'
 import {
@@ -191,7 +192,7 @@ batchJobs.post('/batch-post/jobs/:id/process', async (c) => {
             warehouse: String(payload.warehouse ?? ''),
             movement_type: String(payload.movement_type ?? 'GRN'),
             value: Number(payload.value ?? 0),
-            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            date: String(payload.date ?? getTodayIsoDate()),
             item_name: String(payload.item_name ?? ''),
             created_by: userId,
           })
@@ -208,7 +209,7 @@ batchJobs.post('/batch-post/jobs/:id/process', async (c) => {
             ref_id: item.source_id,
             supplier_code: payload.supplier_code ? Number(payload.supplier_code) : null,
             amount: Number(payload.amount ?? 0),
-            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            date: String(payload.date ?? getTodayIsoDate()),
             description: String(payload.description ?? ''),
             created_by: userId,
           })
@@ -220,7 +221,7 @@ batchJobs.post('/batch-post/jobs/:id/process', async (c) => {
             company_id,
             ref_id: item.source_id,
             amount: Number(payload.amount ?? 0),
-            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            date: String(payload.date ?? getTodayIsoDate()),
             description: String(payload.description ?? ''),
             created_by: userId,
             center_code: payload.center_code ? Number(payload.center_code) : undefined,
@@ -235,7 +236,7 @@ batchJobs.post('/batch-post/jobs/:id/process', async (c) => {
             company_id,
             ref_id: item.source_id,
             amount: Number(payload.amount ?? 0),
-            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            date: String(payload.date ?? getTodayIsoDate()),
             description: String(payload.description ?? ''),
             created_by: userId,
             center_code: payload.center_code ? Number(payload.center_code) : undefined,
@@ -250,7 +251,7 @@ batchJobs.post('/batch-post/jobs/:id/process', async (c) => {
             company_id,
             ref_id: item.source_id,
             amount: Number(payload.amount ?? 0),
-            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            date: String(payload.date ?? getTodayIsoDate()),
             description: String(payload.description ?? ''),
             created_by: userId,
             center_code: payload.center_code ? Number(payload.center_code) : undefined,
@@ -265,7 +266,7 @@ batchJobs.post('/batch-post/jobs/:id/process', async (c) => {
             company_id,
             ref_id: item.source_id,
             amount: Number(payload.amount ?? 0),
-            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            date: String(payload.date ?? getTodayIsoDate()),
             description: String(payload.description ?? ''),
             created_by: userId,
             center_code: payload.center_code ? Number(payload.center_code) : undefined,
@@ -280,7 +281,7 @@ batchJobs.post('/batch-post/jobs/:id/process', async (c) => {
             company_id,
             ref_id: item.source_id,
             amount: Number(payload.amount ?? 0),
-            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            date: String(payload.date ?? getTodayIsoDate()),
             description: String(payload.description ?? ''),
             created_by: userId,
           })
@@ -292,7 +293,7 @@ batchJobs.post('/batch-post/jobs/:id/process', async (c) => {
             company_id,
             ref_id: item.source_id,
             amount: Number(payload.amount ?? 0),
-            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            date: String(payload.date ?? getTodayIsoDate()),
             description: String(payload.description ?? ''),
             created_by: userId,
             center_code: payload.center_code ? Number(payload.center_code) : undefined,
@@ -307,7 +308,7 @@ batchJobs.post('/batch-post/jobs/:id/process', async (c) => {
             company_id,
             ref_id: item.source_id,
             amount: Number(payload.amount ?? 0),
-            date: String(payload.date ?? new Date().toISOString().split('T')[0]),
+            date: String(payload.date ?? getTodayIsoDate()),
             description: String(payload.description ?? ''),
             created_by: userId,
           })

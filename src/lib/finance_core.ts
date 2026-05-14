@@ -12,6 +12,7 @@
 
 import type { D1Database } from '@cloudflare/workers-types'
 import { resolveControlAccount } from './posting_engine'
+import { getTodayIsoDate } from './utils/date'
 
 async function requireControlAccount(
   db: D1Database,
@@ -183,7 +184,7 @@ async function carryForwardWIP(
       event_type:    'wip_carryforward',
       source_module: 'operations',
       source_id:     field.field_id,
-      event_date:    new Date().toISOString().slice(0, 10),
+      event_date:    getTodayIsoDate(),
       description:   `ترحيل أعمال تحت التنفيذ: ${field.field_name} — ${field.crop_name}`,
       created_by:    opts.user_id,
       payload:       { season_id: opts.season_id, field_id: field.field_id, cost_balance: costBalance },
@@ -301,9 +302,6 @@ export const FinanceCore = {
   prepareCashMovement,
   commitCashDrafts,
   postCashMovement,
-
-  // Backward compatibility alias
-  recordCashMovement: prepareCashMovement,
 
   // Inventory Resolvers
   resolveInventoryMovement,

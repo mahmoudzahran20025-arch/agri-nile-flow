@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { getUser } from '../../middleware/auth'
+import { getTodayIsoDate } from '../../lib/utils/date'
 import { logAudit } from '../../lib/audit'
 import { getOpenPeriod } from '../../lib/gl'
 import { FinanceCore } from '../../lib/finance_core'
@@ -194,7 +195,7 @@ purchasing.patch('/purchase-orders/:id/receive', async (c) => {
     return c.json({ success: false, error: 'لا يمكن استلام طلب ملغي أو مغلق' }, 400)
   }
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = getTodayIsoDate()
   const periodId = await getOpenPeriod(c.env.DB, company_id, today)
   if (!periodId) {
     return c.json({ success: false,
@@ -555,11 +556,11 @@ purchasing.patch('/supplier-invoices/:id/pay', async (c) => {
     return c.json({ success: false, error: 'لا يوجد مبلغ صالح للدفع — الفاتورة مسددة بالكامل' }, 400)
   }
 
-  const today = b.payment_date ?? new Date().toISOString().slice(0, 10)
+  const today = b.payment_date ?? getTodayIsoDate()
   const narration = `سداد فاتورة مورد #${inv.invoice_number}${b.payment_ref ? ` (${b.payment_ref})` : ''}`
 
   try {
-    await FinanceCore.recordCashMovement(c.env.DB, {
+    await FinanceCore.prepareCashMovement(c.env.DB, {
       company_id,
       userId,
       transaction_date: today,

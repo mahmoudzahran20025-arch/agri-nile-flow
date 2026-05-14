@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { authMiddleware, getUser, roleGuard } from '../../middleware/auth'
+import { getTodayIsoDate } from '../../lib/utils/date'
 import { logAudit } from '../../lib/audit'
 import { FinanceCore } from '../../lib/finance_core'
 
@@ -336,7 +337,7 @@ entries.post('/:id/reverse', async (c) => {
     return c.json({ success: false, error: 'تم عكس هذا القيد مسبقاً' }, 409)
   }
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = getTodayIsoDate()
   const periodId = await c.env.DB.prepare(
     `SELECT id FROM financial_periods
      WHERE company_id = ? AND start_date <= ? AND end_date >= ? AND is_closed = 0

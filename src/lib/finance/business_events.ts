@@ -1,6 +1,7 @@
 import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types'
 import { postAutoEntry } from '../gl'
 import type { RuleTrace } from '../posting_engine'
+import { normalizeIsoDate } from '../utils/date'
 
 const OPERATION_KEY_BY_EVENT_TYPE: Record<string, string> = {
   supplier_invoice:     'SUPPLIER_INVOICE',
@@ -15,23 +16,6 @@ const OPERATION_KEY_BY_EVENT_TYPE: Record<string, string> = {
   cash_transaction:     'CASH_EXPENSE',  // covers both receipt and payment directions
   revenue:              'SALE_RECEIPT',  // cash sales revenue → same matrix row as sale_receipt
   cash_receipt:         'CASH_INCOME',   // direct cash receipt (non-sales)
-}
-
-function normalizeIsoDate(value: string): string {
-  const raw = value.trim()
-  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (!m) {
-    throw new Error(`INVALID_EVENT_DATE: expected YYYY-MM-DD, got "${value}"`)
-  }
-  const y = Number(m[1])
-  const mo = Number(m[2])
-  const d = Number(m[3])
-  const dt = new Date(Date.UTC(y, mo - 1, d))
-  const valid = dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d
-  if (!valid) {
-    throw new Error(`INVALID_EVENT_DATE: out-of-range date "${value}"`)
-  }
-  return `${m[1]}-${m[2]}-${m[3]}`
 }
 
 async function ensureDeterministicMatrixCoverage(
