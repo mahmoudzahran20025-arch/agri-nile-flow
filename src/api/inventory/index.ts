@@ -2,14 +2,15 @@ import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { authMiddleware } from '../../middleware/auth'
 
-import items       from './items'
-import movements   from './movements'
-import receipts    from './receipts'
-import adjustments from './adjustments'
-import analytics   from './analytics'
-import governance  from './governance'
-import balances    from './balances'
+import items        from './items'
+import movements    from './movements'
+import receipts     from './receipts'
+import adjustments  from './adjustments'
+import analytics    from './analytics'
+import governance   from './governance'
+import balances     from './balances'
 import transactions from './transactions'
+import issues       from './issues'
 
 const inventory = new Hono<{ Bindings: Env }>()
 inventory.use('*', authMiddleware)
@@ -23,5 +24,6 @@ inventory.route('/', analytics)
 inventory.route('/', governance)
 inventory.route('/', balances)
 inventory.route('/', transactions)
+inventory.route('/', issues)
 
 export default inventory
