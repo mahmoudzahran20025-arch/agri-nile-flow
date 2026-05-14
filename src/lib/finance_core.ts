@@ -13,6 +13,7 @@
 import type { D1Database } from '@cloudflare/workers-types'
 import { resolveControlAccount } from './posting_engine'
 import { getTodayIsoDate } from './utils/date'
+import { getOpenPeriod } from './gl'
 
 async function requireControlAccount(
   db: D1Database,
@@ -339,6 +340,9 @@ export const FinanceCore = {
   // Manual Entry Resolvers
   postManualEntry,
   postManualReversal,
+
+  // Period utilities — safe to call from any module without importing lib/gl directly
+  getOpenPeriod,
 } as const
 
 // Also export individual functions for direct import
@@ -363,4 +367,5 @@ export {
   resolvePartnerCurrent,
   postManualEntry,
   postManualReversal,
+  getOpenPeriod,
 }

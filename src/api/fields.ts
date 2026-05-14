@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
 import { FinanceCore } from '../lib/finance_core'
+import { logAudit } from '../lib/audit'
 
 const fields = new Hono<{ Bindings: Env }>()
 fields.use('*', authMiddleware)
@@ -149,6 +150,12 @@ fields.post('/harvest', async (c) => {
     return c.json({ success: false, error: message }, 400)
   }
 
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id,
+    action: 'CREATE', table_name: 'harvest_records', record_id: harvestId,
+    new_value: { field_id: b.field_id, crop_name: b.crop_name, qty_tons: b.qty_tons, harvest_date: b.harvest_date },
+  })
+
   return c.json({ success: true, data: { id: harvestId } }, 201)
 })
 
@@ -235,14 +242,96 @@ fields.patch('/harvest/:id', async (c) => {
     }
   }
 
+  const { sub: userId } = getUser(c)
+  void logAudit(c.env.DB, {
+    user_id: Number(userId), company_id,
+    action: 'UPDATE', table_name: 'harvest_records', record_id: id,
+    old_value: before ? { crop_name: before.crop_name, revenue: before.revenue, actual_cost: before.actual_cost } : undefined,
+    new_value: Object.fromEntries(cols.slice(0, -1).map(k => [k, b[k]])),
+  })
+
   return c.json({ success: true, data: null })
+})
+
+// POST /api/fields/harvest/:id/repost
+// Re-runs postHarvestLedger for an existing harvest record. Safe to call multiple times —
+// the function deletes prior GL entries for this harvest_id before re-posting.
+// Use when: (1) a price correction occurred after initial posting, (2) GL accounts were
+// reconfigured and entries need to reflect the new mapping.
+fields.post('/harvest/:id/repost', roleGuard(['super_admin', 'company_admin', 'accountant']), async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+
+  const harvest = await c.env.DB.prepare(
+    `SELECT h.id, h.harvest_date, h.crop_name, h.revenue, h.actual_cost,
+            h.season_id, h.field_id,
+            f.name AS field_name, f.center_code
+     FROM harvest_records h
+     JOIN fields f ON f.id = h.field_id AND f.company_id = h.company_id
+     WHERE h.id = ? AND h.company_id = ?`
+  ).bind(id, company_id).first<{
+    id: number; harvest_date: string; crop_name: string
+    revenue: number | null; actual_cost: number | null
+    season_id: number | null; field_id: number
+    field_name: string; center_code: number | null
+  }>()
+
+  if (!harvest) return c.json({ success: false, error: 'سجل الحصاد غير موجود' }, 404)
+
+  try {
+    await FinanceCore.postHarvestLedger(c.env.DB, {
+      company_id,
+      userId: Number(userId),
+      harvest_id: harvest.id,
+      harvest_date: harvest.harvest_date,
+      crop_name: harvest.crop_name,
+      total_revenue: harvest.revenue ?? 0,
+      total_actual_cost: harvest.actual_cost ?? 0,
+      field_name: harvest.field_name,
+      field_id: harvest.field_id,
+      center_code: harvest.center_code ?? null,
+      season_id: harvest.season_id ?? null,
+    })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'فشل إعادة ترحيل الحصاد'
+    return c.json({ success: false, error: msg }, 400)
+  }
+
+  // Fetch the newly-created journal entry ID to return to the caller
+  const entry = await c.env.DB.prepare(
+    `SELECT id FROM journal_entries
+     WHERE company_id = ? AND source_module = 'fields' AND source_id = ?
+       AND event_type IN ('harvest_cost', 'harvest_revenue')
+     ORDER BY id DESC LIMIT 1`
+  ).bind(company_id, id).first<{ id: number }>()
+
+  return c.json({
+    success: true,
+    data: {
+      harvest_id:      id,
+      journal_entry_id: entry?.id ?? null,
+      message:         'تم إعادة ترحيل قيود الحصاد بنجاح',
+    },
+  })
 })
 
 // DELETE /api/fields/harvest/:id
 fields.delete('/harvest/:id', async (c) => {
-  const { company_id } = getUser(c)
+  const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
+
+  const existing = await c.env.DB.prepare(
+    'SELECT field_id, crop_name, harvest_date FROM harvest_records WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ field_id: number; crop_name: string; harvest_date: string }>()
+
   await c.env.DB.prepare('DELETE FROM harvest_records WHERE id = ? AND company_id = ?').bind(id, company_id).run()
+
+  void logAudit(c.env.DB, {
+    user_id: Number(userId), company_id,
+    action: 'DELETE', table_name: 'harvest_records', record_id: id,
+    old_value: existing ?? undefined,
+  })
+
   return c.json({ success: true, data: null })
 })
 

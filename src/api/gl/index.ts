@@ -18,6 +18,7 @@ import hardening from './hardening'
 import enhancedLedger from './enhanced_ledger'
 import journalEntryEngine from './journal_entry_regeneration'
 import preview from './preview'
+import depreciation from './depreciation'
 
 // Main GL router - aggregator for all GL sub-modules
 const gl = new Hono<{ Bindings: Env }>()
@@ -70,6 +71,9 @@ gl.route('/regeneration', journalEntryEngine)
 
 // Preview: Dry-run GL line resolution without writing to DB
 gl.route('/', preview)
+
+// Depreciation: Monthly batch depreciation posting and schedule view
+gl.route('/', depreciation)
 
 // Health check endpoint for the GL module
 gl.get('/health', (c) => {

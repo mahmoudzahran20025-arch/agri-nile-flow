@@ -259,7 +259,7 @@ reports.get('/ledger/:account?', async (c) => {
       l.credit,
       l.description AS narration,
       l.center_code,
-      COALESCE(cc.name_ar, cc.name_en) AS center_name,
+      cc.name_ar as center_name,
       l.season_id,
       s.name AS season_name,
       l.field_id,

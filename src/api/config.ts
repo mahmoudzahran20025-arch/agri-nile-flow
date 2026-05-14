@@ -119,28 +119,14 @@ config.delete('/operation_types/:id', async (c) => {
   return c.json({ success: true, data: null })
 })
 
-// Custom Expense Types routes to support gl_account_code
+// Expense Types — READ-ONLY audit view (deprecated; use service_types for new data)
+// POST and PATCH removed: expense_types is frozen. Use service_types for all new classifications.
 config.get('/expense_types', async (c) => {
   const { company_id } = getUser(c)
-  const { results } = await c.env.DB.prepare('SELECT code, name, gl_account_code FROM expense_types WHERE company_id = ? ORDER BY code').bind(company_id).all()
+  const { results } = await c.env.DB.prepare(
+    'SELECT code, name, gl_account_code FROM expense_types WHERE company_id = ? AND is_deprecated = 0 ORDER BY code'
+  ).bind(company_id).all()
   return c.json({ success: true, data: results })
-})
-
-config.post('/expense_types', async (c) => {
-  const { company_id } = getUser(c)
-  const b = await c.req.json<{ code: number; name: string; gl_account_code?: string }>()
-  if (!b.code || !b.name) return c.json({ success: false, error: 'الكود والاسم مطلوبان' }, 400)
-  await c.env.DB.prepare('INSERT OR IGNORE INTO expense_types (code, company_id, name, gl_account_code) VALUES (?, ?, ?, ?)').bind(b.code, company_id, b.name, b.gl_account_code || null).run()
-  return c.json({ success: true, data: null }, 201)
-})
-
-config.patch('/expense_types/:code', async (c) => {
-  const { company_id } = getUser(c)
-  const code = c.req.param('code')
-  const { name } = await c.req.json<{ name: string }>()
-  if (!name) return c.json({ success: false, error: 'الاسم مطلوب' }, 400)
-  await c.env.DB.prepare('UPDATE expense_types SET name = ? WHERE code = ? AND company_id = ?').bind(name, code, company_id).run()
-  return c.json({ success: true, data: null })
 })
 
 // Items (extra fields)
@@ -233,15 +219,25 @@ config.post('/seasons', async (c) => {
 })
 
 config.patch('/seasons/:id/status', async (c) => {
-  const { company_id } = getUser(c)
+  const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
   const { status } = await c.req.json<{ status: string }>()
   const allowed = ['planning', 'active', 'harvesting', 'closed']
   if (!allowed.includes(status)) return c.json({ success: false, error: 'حالة غير صالحة' }, 400)
 
+  const before = await c.env.DB.prepare('SELECT status FROM seasons WHERE id = ? AND company_id = ?')
+    .bind(id, company_id).first<{ status: string }>()
+
   await c.env.DB
     .prepare('UPDATE seasons SET status = ? WHERE id = ? AND company_id = ?')
     .bind(status, id, company_id).run()
+
+  void logAudit(c.env.DB, {
+    user_id: Number(userId), company_id,
+    action: 'UPDATE', table_name: 'seasons', record_id: id,
+    old_value: before ? { status: before.status } : undefined,
+    new_value: { status },
+  })
 
   return c.json({ success: true, data: null })
 })
@@ -370,6 +366,13 @@ config.post('/seasons/:id/close', async (c) => {
      SET status = 'closed', closed_at = datetime('now'), closed_by = ?, close_notes = ?
      WHERE id = ? AND company_id = ?`
   ).bind(userId, close_notes ?? null, id, company_id).run()
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id,
+    action: 'UPDATE', table_name: 'seasons', record_id: id,
+    old_value: { status: season.status },
+    new_value: { status: 'closed', wip_carried: wipEntries.length, close_notes: close_notes ?? null },
+  })
 
   return c.json({ success: true, data: { id, status: 'closed', wip_carried: wipEntries.length, wip_details: wipEntries } })
 })

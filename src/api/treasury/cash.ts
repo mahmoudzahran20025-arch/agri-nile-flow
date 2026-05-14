@@ -99,7 +99,7 @@ cash.get('/transactions', async (c) => {
        FROM cash_transactions ct
        LEFT JOIN ledger         ON ledger.id = ct.id
        LEFT JOIN suppliers     s  ON s.code  = ct.supplier_code AND s.company_id = ct.company_id
-       LEFT JOIN expense_types et ON et.code = ct.expense_code  AND et.company_id = ct.company_id
+       LEFT JOIN expense_types et ON et.code = ct.expense_code  AND et.company_id = ct.company_id AND et.is_deprecated = 0
        WHERE ct.company_id = ? ${filters}
        ORDER BY ct.transaction_date ASC, ct.id ASC LIMIT ? OFFSET ?`
     ).bind(company_id, company_id, ...filterBinds, size, offset).all(),

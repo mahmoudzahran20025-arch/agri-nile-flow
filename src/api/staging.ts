@@ -2,8 +2,9 @@ import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
 import { logAudit } from '../lib/audit'
-import { getOpenPeriod } from '../lib/gl'
 import { FinanceCore } from '../lib/finance_core'
+
+const { getOpenPeriod } = FinanceCore
 
 const staging = new Hono<{ Bindings: Env }>()
 staging.use('*', authMiddleware)

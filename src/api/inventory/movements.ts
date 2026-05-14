@@ -60,22 +60,10 @@ async function isKnownServiceTypeCode(db: Env['DB'], company_id: number, code: s
   const normalized = code.trim()
   if (!normalized) return false
 
-  if (await tableExists(db, 'service_types')) {
-    const row = await db.prepare(
-      'SELECT 1 AS ok FROM service_types WHERE company_id = ? AND code = ? AND is_active = 1 LIMIT 1'
-    ).bind(company_id, normalized).first<{ ok: number }>()
-    if (row?.ok) return true
-  }
-
-  const legacyByCode = await db.prepare(
-    'SELECT 1 AS ok FROM expense_types WHERE company_id = ? AND CAST(code AS TEXT) = ? LIMIT 1'
+  const row = await db.prepare(
+    'SELECT 1 AS ok FROM service_types WHERE company_id = ? AND code = ? AND is_active = 1 LIMIT 1'
   ).bind(company_id, normalized).first<{ ok: number }>()
-  if (legacyByCode?.ok) return true
-
-  const legacyByName = await db.prepare(
-    'SELECT 1 AS ok FROM expense_types WHERE company_id = ? AND TRIM(name) = ? LIMIT 1'
-  ).bind(company_id, normalized).first<{ ok: number }>()
-  return !!legacyByName?.ok
+  return !!row?.ok
 }
 
 async function isSupplierAuthorizedForService(
