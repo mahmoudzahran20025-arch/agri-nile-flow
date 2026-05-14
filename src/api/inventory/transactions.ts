@@ -138,7 +138,10 @@ transactions.get('/transactions', permissionGuard('inventory', 'read'), async (c
   return c.json({
     success: true,
     data: rows.results,
-    meta: { total: cnt?.n ?? 0, page, size },
+    total: cnt?.n ?? 0,
+    page,
+    page_size: size,
+    has_more: offset + size < (cnt?.n ?? 0),
   })
 })
 

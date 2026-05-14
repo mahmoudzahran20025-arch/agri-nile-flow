@@ -27,7 +27,10 @@ import budgetsRoutes    from './api/budgets'
 import classifierRoutes from './api/classifier'
 import validationRoutes from './api/validation'
 import assetsRoutes     from './api/assets'
+import schemaRoutes     from './api/schema'
 import { processAllPendingOutbox } from './lib/process_outbox'
+import { runHealthForAllCompanies } from './lib/daily_finance_health'
+import { getTodayIsoDate } from './lib/utils/date'
 
 const app = new Hono<{ Bindings: Env; Variables: { jwtPayload: JwtPayload } }>()
 
@@ -80,6 +83,7 @@ app.route('/api/budgets',    budgetsRoutes)
 app.route('/api/classifier', classifierRoutes)
 app.route('/api/validation', validationRoutes)
 app.route('/api/assets',     assetsRoutes)
+app.route('/api/schema',     schemaRoutes)
 
 // ─── Health Check ─────────────────────────────────────────────
 app.get('/api/health', (c) => c.json({ status: 'ok', ts: new Date().toISOString() }))
@@ -151,18 +155,24 @@ export default {
     ctx.waitUntil((async () => {
       const isDailyRun = event.cron === '0 22 * * *'
 
-      // ── Daily: mark overdue location tasks as missed ───────
+      // ── Daily: mark overdue location tasks + finance health check ──
       if (isDailyRun) {
         try {
-          const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+          const today = getTodayIsoDate()
+
           const result = await env.DB.prepare(
-            `UPDATE location_tasks
-             SET status = 'missed'
-             WHERE status = 'pending' AND task_date < ?`
+            `UPDATE location_tasks SET status = 'missed' WHERE status = 'pending' AND task_date < ?`
           ).bind(today).run()
           console.log(`[Cron:daily] Marked ${result.meta.changes ?? 0} overdue location tasks as missed (${today})`)
         } catch (err) {
           console.error('[Cron:daily] Failed to mark missed tasks:', err)
+        }
+
+        try {
+          await runHealthForAllCompanies(env.DB)
+          console.log('[Cron:daily] Finance health check complete')
+        } catch (err) {
+          console.error('[Cron:daily] Finance health check failed:', err)
         }
       }
 

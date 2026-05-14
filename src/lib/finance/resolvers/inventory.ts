@@ -5,30 +5,9 @@ import {
   resolvePurchaseReceipt as peResolvePurchaseReceipt,
 } from '../../posting_engine'
 import { postFromBusinessEvent } from '../business_events'
+import { normalizeIsoDate, yearMonthParts } from '../../utils/date'
 import { readInventoryBalance, upsertInventoryBalance, enqueueInventoryPostingOutbox } from '../../inventory_posting'
 import { resolveSupplierPayableAccount } from './supplier_payable_account'
-
-function normalizeIsoDate(value: string): string {
-  const raw = value.trim()
-  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (!m) {
-    throw new Error(`INVALID_RECEIPT_DATE: expected YYYY-MM-DD, got "${value}"`)
-  }
-  const y = Number(m[1])
-  const mo = Number(m[2])
-  const d = Number(m[3])
-  const dt = new Date(Date.UTC(y, mo - 1, d))
-  const valid = dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d
-  if (!valid) {
-    throw new Error(`INVALID_RECEIPT_DATE: out-of-range date "${value}"`)
-  }
-  return `${m[1]}-${m[2]}-${m[3]}`
-}
-
-function yearMonthParts(isoDate: string): { year: number; month: number } {
-  const [y, m] = isoDate.split('-')
-  return { year: Number(y), month: Number(m) }
-}
 
 export async function resolveInventoryMovement(
   db: D1Database,
@@ -358,44 +337,46 @@ export async function processPOReceiptOrchestrated(
     `UPDATE purchase_orders SET status = ? WHERE id = ? AND company_id = ?`
   ).bind(newStatus, opts.po_id, opts.company_id).run()
 
-  // Post GL — on failure, mark movements failed and enqueue for async retry
-  const totalAmount = opts.items.reduce((s, i) => s + i.qty_received * i.unit_price, 0)
-  const warehouseSummary = Array.from(new Set(opts.items.map((item) => item.warehouse).filter(Boolean))).join(' + ')
+  // Post GL per line — each item posts with its own PPG so the correct inventory
+  // and purchases accounts are selected (fixes the single-PPG bug for mixed POs).
   const itemSummary = opts.items.length === 1 ? opts.items[0].item_name : `${opts.items.length} أصناف`
   const receiptDescription = [itemSummary, opts.notes?.trim() || null].filter(Boolean).join(' | ')
-  try {
-    await resolvePurchaseReceipt(db, {
-      company_id:    opts.company_id,
-      ref_id:        opts.po_id,
-      po_id:         opts.po_id,
-      supplier_code: opts.supplier_code,
-      warehouse:     warehouseSummary,
-      // Pass first item's code so PPG can route to the correct inventory account
-      item_code:     opts.items[0]?.item_code ?? null,
-      total_amount:  totalAmount,
-      date:          receiptDate,
-      description:   receiptDescription,
-      service_type_code: 'SRV_SUPPLY',
-      created_by:    opts.userId,
-    })
-  } catch (err: unknown) {
-    const errMsg = String((err as Error)?.message ?? err)
-    // Mark all movements for this PO receipt as failed, then enqueue outbox
-    const { results: failedMovs } = await db.prepare(
-      `UPDATE inventory_movements SET gl_posting_status = 'failed', gl_posting_error = ?
-       WHERE company_id = ? AND local_id LIKE ? AND gl_posting_status = 'pending'
-       RETURNING id, item_code, warehouse, movement_type, value_in, value_out, movement_date`
-    ).bind(errMsg, opts.company_id, `por_%_${opts.po_id}%`).all<{
-      id: number; item_code: number; warehouse: string; movement_type: string
-      value_in: number; value_out: number; movement_date: string
-    }>()
 
-    for (const mov of failedMovs ?? []) {
-      await enqueueInventoryPostingOutbox(db, opts.company_id, 'inventory_movement', mov.id, {
-        company_id: opts.company_id, ref_id: mov.id, item_code: mov.item_code,
-        warehouse: mov.warehouse, movement_type: mov.movement_type,
-        value: mov.value_in - mov.value_out, date: mov.movement_date,
+  for (const item of opts.items) {
+    const lineAmount = Math.round(item.qty_received * item.unit_price * 100) / 100
+    if (lineAmount <= 0) continue
+
+    const movRow = await db.prepare(
+      `SELECT id FROM inventory_movements WHERE company_id = ? AND local_id = ? LIMIT 1`
+    ).bind(opts.company_id, `${localIdBase}_${item.po_item_id}`).first<{ id: number }>()
+
+    try {
+      await resolvePurchaseReceipt(db, {
+        company_id:        opts.company_id,
+        ref_id:            movRow?.id ?? opts.po_id,
+        po_id:             opts.po_id,
+        supplier_code:     opts.supplier_code,
+        warehouse:         item.warehouse,
+        item_code:         item.item_code,
+        total_amount:      lineAmount,
+        date:              receiptDate,
+        description:       `${item.item_name} | ${receiptDescription}`,
+        service_type_code: 'SRV_SUPPLY',
+        created_by:        opts.userId,
       })
+    } catch (err: unknown) {
+      const errMsg = String((err as Error)?.message ?? err)
+      if (movRow?.id) {
+        await db.prepare(
+          `UPDATE inventory_movements SET gl_posting_status = 'failed', gl_posting_error = ?
+           WHERE id = ? AND company_id = ?`
+        ).bind(errMsg, movRow.id, opts.company_id).run()
+        await enqueueInventoryPostingOutbox(db, opts.company_id, 'inventory_movement', movRow.id, {
+          company_id: opts.company_id, ref_id: movRow.id, item_code: item.item_code,
+          warehouse: item.warehouse, movement_type: 'GRN',
+          value: lineAmount, date: receiptDate,
+        })
+      }
     }
   }
 

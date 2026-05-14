@@ -9,6 +9,7 @@ import {
   resolveSupplierPayment   as peResolveSupplierPayment,
   resolveExpensePosting    as peResolveExpense,
   resolveSalesRevenue      as peResolveSalesRevenue,
+  clearPostingEngineCaches,
 } from '../../lib/posting_engine'
 
 const postingSetup = new Hono<{ Bindings: Env }>()
@@ -556,6 +557,248 @@ postingSetup.post('/posting-setup/validate', async (c) => {
   }
 
   return c.json({ success: true, data: blueprint })
+})
+
+// =============================================================================
+// SERVICE TYPES CRUD
+// =============================================================================
+
+const SERVICE_GROUPS = ['MECHANIZATION', 'LABOR', 'SUPPLY', 'LOGISTICS', 'SUPERVISION', 'SPARE_PARTS', 'OTHER'] as const
+
+// GET /gl/service-types
+postingSetup.get('/service-types', async (c) => {
+  const { company_id } = getUser(c)
+  const tableExists = await c.env.DB.prepare(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='service_types' LIMIT 1`
+  ).first<{ name: string }>()
+  if (!tableExists) return c.json({ success: true, data: [] })
+
+  const { results } = await c.env.DB.prepare(`
+    SELECT id, code, name_ar, name_en, service_group,
+           default_expense_account_code, default_ap_account_code,
+           requires_supplier, requires_document, requires_center, is_active, created_at
+    FROM service_types WHERE company_id = ? ORDER BY service_group ASC, name_ar ASC
+  `).bind(company_id).all()
+  return c.json({ success: true, data: results })
+})
+
+// POST /gl/service-types
+postingSetup.post('/service-types', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const b = await c.req.json<{
+    code: string; name_ar: string; name_en?: string; service_group: string
+    default_expense_account_code?: string; default_ap_account_code?: string
+    requires_supplier?: number; requires_document?: number; requires_center?: number
+  }>()
+
+  if (!b.code || !b.name_ar || !b.service_group) {
+    return c.json({ success: false, error: 'code و name_ar و service_group مطلوبة' }, 400)
+  }
+  if (!(SERVICE_GROUPS as readonly string[]).includes(b.service_group)) {
+    return c.json({ success: false, error: `service_group غير صحيح` }, 400)
+  }
+
+  const result = await c.env.DB.prepare(`
+    INSERT INTO service_types (company_id, code, name_ar, name_en, service_group,
+      default_expense_account_code, default_ap_account_code,
+      requires_supplier, requires_document, requires_center, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+  `).bind(
+    company_id, b.code.toUpperCase(), b.name_ar, b.name_en ?? null, b.service_group,
+    b.default_expense_account_code ?? null, b.default_ap_account_code ?? null,
+    b.requires_supplier ?? 0, b.requires_document ?? 0, b.requires_center ?? 0,
+  ).run()
+
+  const newId = Number(result.meta.last_row_id)
+  await logAudit(c.env.DB, { user_id: userId, company_id, action: 'CREATE', table_name: 'service_types', record_id: newId, new_value: b })
+  clearPostingEngineCaches()
+  return c.json({ success: true, data: { id: newId } }, 201)
+})
+
+// PATCH /gl/service-types/:id
+postingSetup.patch('/service-types/:id', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const b  = await c.req.json<Record<string, unknown>>()
+
+  const allowed = ['name_ar', 'name_en', 'service_group', 'default_expense_account_code', 'default_ap_account_code', 'requires_supplier', 'requires_document', 'requires_center', 'is_active']
+  const sets: string[] = []; const binds: unknown[] = []
+  for (const k of allowed) {
+    if (k in b) { sets.push(`${k} = ?`); binds.push(b[k]) }
+  }
+  if (sets.length === 0) return c.json({ success: false, error: 'لا توجد حقول للتحديث' }, 400)
+
+  sets.push(`updated_at = datetime('now')`)
+  binds.push(company_id, id)
+
+  await c.env.DB.prepare(
+    `UPDATE service_types SET ${sets.join(', ')} WHERE company_id = ? AND id = ?`
+  ).bind(...binds).run()
+
+  await logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPDATE', table_name: 'service_types', record_id: id, new_value: b })
+  clearPostingEngineCaches()
+  return c.json({ success: true })
+})
+
+// GET /gl/supplier-service-map
+postingSetup.get('/supplier-service-map', async (c) => {
+  const { company_id } = getUser(c)
+  const tableExists = await c.env.DB.prepare(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='supplier_service_map' LIMIT 1`
+  ).first<{ name: string }>()
+  if (!tableExists) return c.json({ success: true, data: [] })
+
+  const { results } = await c.env.DB.prepare(`
+    SELECT ssm.id, ssm.supplier_code, s.name AS supplier_name,
+           ssm.service_type_code, ssm.default_ap_account_code,
+           ssm.default_expense_account_code, ssm.is_primary, ssm.is_active
+    FROM supplier_service_map ssm
+    LEFT JOIN suppliers s ON s.code = ssm.supplier_code AND s.company_id = ssm.company_id
+    WHERE ssm.company_id = ? ORDER BY ssm.supplier_code ASC, ssm.is_primary DESC
+  `).bind(company_id).all()
+  return c.json({ success: true, data: results })
+})
+
+// POST /gl/supplier-service-map
+postingSetup.post('/supplier-service-map', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const b = await c.req.json<{
+    supplier_code: number; service_type_code: string
+    default_ap_account_code?: string; default_expense_account_code?: string; is_primary?: number
+  }>()
+
+  if (!b.supplier_code || !b.service_type_code) {
+    return c.json({ success: false, error: 'supplier_code و service_type_code مطلوبان' }, 400)
+  }
+
+  const result = await c.env.DB.prepare(`
+    INSERT OR REPLACE INTO supplier_service_map
+      (company_id, supplier_code, service_type_code, default_ap_account_code, default_expense_account_code, is_primary, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, 1)
+  `).bind(
+    company_id, b.supplier_code, b.service_type_code.toUpperCase(),
+    b.default_ap_account_code ?? null, b.default_expense_account_code ?? null, b.is_primary ?? 0,
+  ).run()
+
+  await logAudit(c.env.DB, { user_id: userId, company_id, action: 'CREATE', table_name: 'supplier_service_map', record_id: Number(result.meta.last_row_id), new_value: b })
+  clearPostingEngineCaches()
+  return c.json({ success: true }, 201)
+})
+
+// DELETE /gl/supplier-service-map/:id
+postingSetup.delete('/supplier-service-map/:id', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+
+  await c.env.DB.prepare(
+    `UPDATE supplier_service_map SET is_active = 0 WHERE company_id = ? AND id = ?`
+  ).bind(company_id, id).run()
+
+  await logAudit(c.env.DB, { user_id: userId, company_id, action: 'DELETE', table_name: 'supplier_service_map', record_id: id, new_value: { is_active: 0 } })
+  clearPostingEngineCaches()
+  return c.json({ success: true })
+})
+
+// =============================================================================
+// CONTROL ACCOUNT MAPPINGS  (mapping_key → account_code)
+// =============================================================================
+
+const KNOWN_CONTROL_KEYS = [
+  'accounts_payable', 'accounts_receivable', 'accumulated_depreciation',
+  'cash', 'cost_of_goods', 'deferred_revenue', 'depreciation_expense',
+  'equity', 'expense_default', 'inventory', 'partner_capital',
+  'partner_current_account', 'revenue_crops', 'revenue_default',
+  'wages_expense', 'wages_payable', 'wip_asset', 'wip_contra',
+] as const
+
+// GET /gl/control-accounts
+postingSetup.get('/control-accounts', async (c) => {
+  const { company_id } = getUser(c)
+
+  const { results } = await c.env.DB.prepare(`
+    SELECT id, mapping_key, account_code, is_active, updated_at
+    FROM posting_rules
+    WHERE company_id = ? AND rule_type = 'control'
+    ORDER BY mapping_key ASC
+  `).bind(company_id).all<{
+    id: number; mapping_key: string; account_code: string | null
+    is_active: number; updated_at: string
+  }>()
+
+  const seeded: Record<string, { id: number; account_code: string | null; is_active: number; updated_at: string }> = {}
+  for (const r of results) seeded[r.mapping_key] = r
+
+  const data = KNOWN_CONTROL_KEYS.map(key => ({
+    mapping_key:  key,
+    id:           seeded[key]?.id ?? null,
+    account_code: seeded[key]?.account_code ?? null,
+    is_active:    seeded[key]?.is_active ?? 0,
+    updated_at:   seeded[key]?.updated_at ?? null,
+    seeded:       key in seeded,
+  }))
+
+  return c.json({ success: true, data })
+})
+
+// POST /gl/control-accounts — upsert mapping_key → account_code
+postingSetup.post('/control-accounts', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const body = await c.req.json<{ mapping_key: string; account_code: string }>()
+
+  if (!body.mapping_key || !body.account_code) {
+    return c.json({ success: false, error: 'mapping_key و account_code مطلوبان' }, 400)
+  }
+  if (!(KNOWN_CONTROL_KEYS as readonly string[]).includes(body.mapping_key)) {
+    return c.json({ success: false, error: `mapping_key غير معروف: ${body.mapping_key}` }, 400)
+  }
+
+  const acct = await c.env.DB.prepare(
+    `SELECT code FROM chart_of_accounts WHERE company_id = ? AND code = ? AND is_active = 1 LIMIT 1`
+  ).bind(company_id, body.account_code).first<{ code: string }>()
+  if (!acct) return c.json({ success: false, error: `الحساب ${body.account_code} غير موجود أو غير نشط` }, 422)
+
+  const existing = await c.env.DB.prepare(
+    `SELECT id FROM posting_rules WHERE company_id = ? AND rule_type = 'control' AND mapping_key = ? LIMIT 1`
+  ).bind(company_id, body.mapping_key).first<{ id: number }>()
+
+  if (existing) {
+    await c.env.DB.prepare(`
+      UPDATE posting_rules SET account_code = ?, is_active = 1, updated_at = datetime('now') WHERE id = ?
+    `).bind(body.account_code, existing.id).run()
+    await logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPDATE', table_name: 'posting_rules', record_id: existing.id, new_value: { mapping_key: body.mapping_key, account_code: body.account_code } })
+    clearPostingEngineCaches()
+    return c.json({ success: true, data: { id: existing.id, mapping_key: body.mapping_key, account_code: body.account_code } })
+  }
+
+  const result = await c.env.DB.prepare(`
+    INSERT INTO posting_rules (company_id, rule_type, mapping_key, account_code, is_active, priority)
+    VALUES (?, 'control', ?, ?, 1, 100)
+  `).bind(company_id, body.mapping_key, body.account_code).run()
+
+  const newId = Number(result.meta.last_row_id)
+  await logAudit(c.env.DB, { user_id: userId, company_id, action: 'CREATE', table_name: 'posting_rules', record_id: newId, new_value: { mapping_key: body.mapping_key, account_code: body.account_code } })
+  clearPostingEngineCaches()
+  return c.json({ success: true, data: { id: newId, mapping_key: body.mapping_key, account_code: body.account_code } }, 201)
+})
+
+// DELETE /gl/control-accounts/:key — soft deactivate
+postingSetup.delete('/control-accounts/:key', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const key = c.req.param('key')
+
+  const existing = await c.env.DB.prepare(
+    `SELECT id FROM posting_rules WHERE company_id = ? AND rule_type = 'control' AND mapping_key = ? LIMIT 1`
+  ).bind(company_id, key).first<{ id: number }>()
+
+  if (!existing) return c.json({ success: false, error: 'الربط غير موجود' }, 404)
+
+  await c.env.DB.prepare(
+    `UPDATE posting_rules SET is_active = 0, updated_at = datetime('now') WHERE id = ?`
+  ).bind(existing.id).run()
+
+  await logAudit(c.env.DB, { user_id: userId, company_id, action: 'DELETE', table_name: 'posting_rules', record_id: existing.id, new_value: { mapping_key: key, is_active: 0 } })
+  clearPostingEngineCaches()
+  return c.json({ success: true })
 })
 
 export default postingSetup

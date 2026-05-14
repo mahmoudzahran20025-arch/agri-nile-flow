@@ -88,8 +88,8 @@ export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promis
     throw new Error(`GL_MIN_LINES: Journal entry requires at least ${minimumLines} lines.`)
   }
 
-  const totalDebit  = opts.lines.reduce((s, l) => s + l.debit, 0)
-  const totalCredit = opts.lines.reduce((s, l) => s + l.credit, 0)
+  const totalDebit  = Math.round(opts.lines.reduce((s, l) => s + (l.debit  ?? 0), 0) * 100) / 100
+  const totalCredit = Math.round(opts.lines.reduce((s, l) => s + (l.credit ?? 0), 0) * 100) / 100
   if (Math.abs(totalDebit - totalCredit) > 0.01) {
     throw new Error('GL_UNBALANCED: The journal entry is unbalanced.')
   }
@@ -116,19 +116,21 @@ export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promis
 
     entryId = Number(entry.meta.last_row_id)
 
-    // Stage 2: Persist all lines
-    const lineStmts = opts.lines.map(l =>
-      db.prepare(
+    // Stage 2: Persist all lines (amounts rounded to 2dp to prevent float noise)
+    const lineStmts = opts.lines.map(l => {
+      const debit  = Math.round((l.debit  ?? 0) * 100) / 100
+      const credit = Math.round((l.credit ?? 0) * 100) / 100
+      return db.prepare(
         `INSERT INTO journal_entry_lines
          (entry_id, company_id, account_code, debit, credit, description, center_code, season_id, field_id, rule_slot, source_ledger, source_record_id)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
       ).bind(
         entryId, opts.company_id, l.account_code,
-        l.debit, l.credit, l.description ?? null, l.center_code ?? null,
+        debit, credit, l.description ?? null, l.center_code ?? null,
         l.season_id ?? null, l.field_id ?? null, l.rule_slot ?? null,
         l.source_ledger ?? 'manual', l.source_record_id ?? null
       )
-    )
+    })
     try {
       await db.batch(lineStmts)
 

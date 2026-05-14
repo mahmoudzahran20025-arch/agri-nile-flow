@@ -767,4 +767,235 @@ season.get('/season-readiness', async (c) => {
   })
 })
 
+// ── GET /reports/pivot-costs?season_id= ──────────────────────────────────────
+// Cost matrix: rows = cost centers (pivots), columns = service type groups
+season.get('/pivot-costs', async (c) => {
+  const { company_id } = getUser(c)
+  const seasonId = c.req.query('season_id') ? Number(c.req.query('season_id')) : null
+
+  if (!seasonId) return c.json({ success: false, error: 'season_id مطلوب' }, 400)
+
+  const seasonRow = await c.env.DB.prepare(
+    'SELECT id, name, start_date, end_date FROM seasons WHERE id = ? AND company_id = ?'
+  ).bind(seasonId, company_id).first<{ id: number; name: string; start_date: string; end_date: string }>()
+
+  if (!seasonRow) return c.json({ success: false, error: 'الموسم غير موجود' }, 404)
+
+  const { start_date, end_date } = seasonRow
+
+  const [supRows, cashRows, invRows, centerRows, metaRows] = await Promise.all([
+    c.env.DB.prepare(`
+      SELECT st.center_code,
+             COALESCE(sv.service_group, 'OTHER') AS service_group,
+             SUM(st.credit) AS total
+      FROM supplier_transactions st
+      LEFT JOIN service_types sv ON sv.company_id = st.company_id AND sv.code = st.service_type_code
+      WHERE st.company_id = ? AND st.status = 'posted' AND st.season_id = ?
+        AND st.center_code IS NOT NULL
+      GROUP BY st.center_code, service_group
+    `).bind(company_id, seasonId).all<{ center_code: number; service_group: string; total: number }>(),
+
+    c.env.DB.prepare(`
+      SELECT ct.center_code,
+             COALESCE(sv.service_group, 'OTHER') AS service_group,
+             SUM(ct.amount) AS total
+      FROM cash_transactions ct
+      LEFT JOIN service_types sv ON sv.company_id = ct.company_id AND sv.code = ct.service_type_code
+      WHERE ct.company_id = ? AND ct.status = 'posted'
+        AND ct.transaction_date BETWEEN ? AND ?
+        AND ct.center_code IS NOT NULL
+      GROUP BY ct.center_code, service_group
+    `).bind(company_id, start_date, end_date).all<{ center_code: number; service_group: string; total: number }>(),
+
+    c.env.DB.prepare(`
+      SELECT im.center_code, 'SUPPLY' AS service_group, SUM(im.value_out) AS total
+      FROM inventory_movements im
+      WHERE im.company_id = ? AND im.movement_type = 'ISSUE'
+        AND im.movement_date BETWEEN ? AND ?
+        AND im.center_code IS NOT NULL
+      GROUP BY im.center_code
+    `).bind(company_id, start_date, end_date).all<{ center_code: number; service_group: string; total: number }>(),
+
+    c.env.DB.prepare(
+      `SELECT code, name_ar, name_en FROM cost_centers WHERE company_id = ? ORDER BY code`
+    ).bind(company_id).all<{ code: number; name_ar: string; name_en: string }>(),
+
+    c.env.DB.prepare(`
+      SELECT 
+        COUNT(*) AS total_movements,
+        SUM(CASE WHEN center_code IS NULL THEN 1 ELSE 0 END) AS null_center_code,
+        SUM(CASE WHEN service_type_code IS NULL THEN 1 ELSE 0 END) AS null_service_type_code,
+        SUM(CASE WHEN season_id IS NULL AND (movement_date < ? OR movement_date > ?) THEN 1 ELSE 0 END) AS null_season_id,
+        SUM(CASE WHEN movement_date > date('now') THEN 1 ELSE 0 END) AS future_blocked
+      FROM inventory_movements
+      WHERE company_id = ? AND movement_type = 'ISSUE'
+        AND movement_date BETWEEN ? AND ?
+    `).bind(start_date, end_date, company_id, start_date, end_date).first<{
+      total_movements: number;
+      null_center_code: number;
+      null_service_type_code: number;
+      null_season_id: number;
+      future_blocked: number;
+    }>(),
+  ])
+
+  const centerMap: Record<number, string> = {}
+  for (const cc of centerRows.results) {
+    centerMap[cc.code] = cc.name_ar || cc.name_en || String(cc.code)
+  }
+
+  const matrix: Record<number, Record<string, number>> = {}
+  const serviceGroups = new Set<string>()
+
+  for (const row of [...supRows.results, ...cashRows.results, ...invRows.results]) {
+    if (!matrix[row.center_code]) matrix[row.center_code] = {}
+    matrix[row.center_code][row.service_group] = (matrix[row.center_code][row.service_group] ?? 0) + (row.total ?? 0)
+    serviceGroups.add(row.service_group)
+  }
+
+  const groups = Array.from(serviceGroups).sort()
+  const rows = Object.entries(matrix).map(([code, byGroup]) => {
+    const centerCode = Number(code)
+    return {
+      center_code:      centerCode,
+      center_name:      centerMap[centerCode] ?? String(centerCode),
+      by_service_group: byGroup,
+      total:            Object.values(byGroup).reduce((s, v) => s + v, 0),
+    }
+  }).sort((a, b) => b.total - a.total)
+
+  const columnTotals: Record<string, number> = {}
+  for (const g of groups) columnTotals[g] = rows.reduce((s, r) => s + (r.by_service_group[g] ?? 0), 0)
+
+  const totalMovements = metaRows?.total_movements ?? 0
+  const excludedCenter = metaRows?.null_center_code ?? 0
+  const includedMovements = totalMovements - excludedCenter
+
+  return c.json({
+    success: true,
+    data: {
+      season: seasonRow,
+      service_groups: groups,
+      rows,
+      column_totals: columnTotals,
+      grand_total: rows.reduce((s, r) => s + r.total, 0),
+    },
+    meta: {
+      total_movements: totalMovements,
+      included_movements: includedMovements,
+      excluded_movements: excludedCenter,
+      excluded_reasons: {
+        null_season_id: metaRows?.null_season_id ?? 0,
+        null_service_type_code: metaRows?.null_service_type_code ?? 0,
+        null_center_code: excludedCenter,
+        future_blocked: metaRows?.future_blocked ?? 0
+      },
+      coverage_pct: totalMovements > 0 ? ((includedMovements / totalMovements) * 100).toFixed(1) : '100.0'
+    }
+  })
+})
+
+// ── GET /reports/service-type-summary?season_id= ─────────────────────────────
+// Total cost by service type with GL vs ops reconciliation gap
+season.get('/service-type-summary', async (c) => {
+  const { company_id } = getUser(c)
+  const seasonId = c.req.query('season_id') ? Number(c.req.query('season_id')) : null
+
+  if (!seasonId) return c.json({ success: false, error: 'season_id مطلوب' }, 400)
+
+  const seasonRow = await c.env.DB.prepare(
+    'SELECT id, name, start_date, end_date FROM seasons WHERE id = ? AND company_id = ?'
+  ).bind(seasonId, company_id).first<{ id: number; name: string; start_date: string; end_date: string }>()
+
+  if (!seasonRow) return c.json({ success: false, error: 'الموسم غير موجود' }, 404)
+
+  const { start_date, end_date } = seasonRow
+
+  const [supSvc, cashSvc, invIssue, glExpense, serviceTypeRows] = await Promise.all([
+    c.env.DB.prepare(`
+      SELECT COALESCE(st.service_type_code, 'UNCLASSIFIED') AS service_type_code,
+             SUM(st.credit) AS ops_total, COUNT(*) AS txn_count
+      FROM supplier_transactions st
+      WHERE st.company_id = ? AND st.status = 'posted' AND st.season_id = ?
+      GROUP BY service_type_code
+    `).bind(company_id, seasonId).all<{ service_type_code: string; ops_total: number; txn_count: number }>(),
+
+    c.env.DB.prepare(`
+      SELECT COALESCE(ct.service_type_code, 'UNCLASSIFIED') AS service_type_code,
+             SUM(ct.amount) AS ops_total, COUNT(*) AS txn_count
+      FROM cash_transactions ct
+      WHERE ct.company_id = ? AND ct.status = 'posted'
+        AND ct.transaction_date BETWEEN ? AND ?
+      GROUP BY service_type_code
+    `).bind(company_id, start_date, end_date).all<{ service_type_code: string; ops_total: number; txn_count: number }>(),
+
+    c.env.DB.prepare(`
+      SELECT 'SRV_SUPPLY' AS service_type_code,
+             SUM(value_out) AS ops_total, COUNT(*) AS txn_count
+      FROM inventory_movements
+      WHERE company_id = ? AND movement_type = 'ISSUE'
+        AND movement_date BETWEEN ? AND ?
+    `).bind(company_id, start_date, end_date).first<{ service_type_code: string; ops_total: number; txn_count: number }>(),
+
+    c.env.DB.prepare(`
+      SELECT COALESCE(jl.service_type_code, 'UNCLASSIFIED') AS service_type_code,
+             SUM(jl.debit) AS gl_total
+      FROM journal_entry_lines jl
+      JOIN journal_entries je ON je.id = jl.entry_id AND je.company_id = jl.company_id AND je.is_posted = 1
+      JOIN chart_of_accounts coa ON coa.code = jl.account_code AND coa.company_id = jl.company_id
+      WHERE jl.company_id = ? AND jl.season_id = ?
+        AND coa.account_type IN ('expense', 'asset') AND jl.debit > 0
+      GROUP BY jl.service_type_code
+    `).bind(company_id, seasonId).all<{ service_type_code: string; gl_total: number }>(),
+
+    c.env.DB.prepare(
+      `SELECT code, name_ar, service_group FROM service_types WHERE company_id = ? AND is_active = 1`
+    ).bind(company_id).all<{ code: string; name_ar: string; service_group: string }>(),
+  ])
+
+  const svcNameMap: Record<string, { name_ar: string; service_group: string }> = {}
+  for (const s of serviceTypeRows.results) svcNameMap[s.code] = { name_ar: s.name_ar, service_group: s.service_group }
+
+  const opsMap: Record<string, { ops_total: number; txn_count: number }> = {}
+  const addOps = (k: string, total: number, count: number) => {
+    opsMap[k] = { ops_total: (opsMap[k]?.ops_total ?? 0) + total, txn_count: (opsMap[k]?.txn_count ?? 0) + count }
+  }
+  for (const r of supSvc.results)  addOps(r.service_type_code, r.ops_total, r.txn_count)
+  for (const r of cashSvc.results) addOps(r.service_type_code, r.ops_total, r.txn_count)
+  if (invIssue?.ops_total) addOps('SRV_SUPPLY', invIssue.ops_total, invIssue.txn_count)
+
+  const glMap: Record<string, number> = {}
+  for (const r of glExpense.results) glMap[r.service_type_code] = r.gl_total
+
+  const allKeys = Array.from(new Set([...Object.keys(opsMap), ...Object.keys(glMap)]))
+  const rows = allKeys.map(k => {
+    const ops = opsMap[k]?.ops_total ?? 0
+    const gl  = glMap[k] ?? 0
+    return {
+      service_type_code: k,
+      name_ar:           svcNameMap[k]?.name_ar       ?? k,
+      service_group:     svcNameMap[k]?.service_group ?? 'OTHER',
+      ops_total:         ops,
+      gl_total:          gl,
+      gap:               ops - gl,
+      gap_pct:           ops > 0 ? Math.round(((ops - gl) / ops) * 10000) / 100 : 0,
+      txn_count:         opsMap[k]?.txn_count ?? 0,
+    }
+  }).sort((a, b) => b.ops_total - a.ops_total)
+
+  const totals = rows.reduce(
+    (acc, r) => ({ ops_total: acc.ops_total + r.ops_total, gl_total: acc.gl_total + r.gl_total }),
+    { ops_total: 0, gl_total: 0 }
+  )
+
+  return c.json({
+    success: true,
+    data: {
+      season: seasonRow,
+      rows,
+      totals: { ...totals, gap: totals.ops_total - totals.gl_total },
+    },
+  })
+})
+
 export default season

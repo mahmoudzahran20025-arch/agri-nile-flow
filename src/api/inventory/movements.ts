@@ -7,6 +7,7 @@ import { FinanceCore } from '../../lib/finance_core'
 import { logAudit } from '../../lib/audit'
 import { logFinancialWorkflowFailure } from '../../lib/finance/workflow_policy'
 import { enforceDataQualityPolicy } from '../../lib/data_quality'
+import { normalizeIsoDate, isFutureIsoDate, yearMonthParts } from '../../lib/utils/date'
 import {
   enforceInventoryLockDate,
   enqueueInventoryPostingOutbox,
@@ -29,34 +30,6 @@ const SUPPORTED_MOVEMENT_TYPES = new Set([
 function isSupportedMovementType(movementType: string): boolean {
   return SUPPORTED_MOVEMENT_TYPES.has(movementType)
 }
-
-function normalizeIsoDate(value: string): string {
-  const raw = value.trim()
-  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (!m) {
-    throw new Error(`INVALID_MOVEMENT_DATE: expected YYYY-MM-DD, got "${value}"`)
-  }
-  const y = Number(m[1])
-  const mo = Number(m[2])
-  const d = Number(m[3])
-  const dt = new Date(Date.UTC(y, mo - 1, d))
-  const valid = dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d
-  if (!valid) {
-    throw new Error(`INVALID_MOVEMENT_DATE: out-of-range date "${value}"`)
-  }
-  return `${m[1]}-${m[2]}-${m[3]}`
-}
-
-function yearMonthParts(isoDate: string): { year: number; month: number } {
-  const [y, m] = isoDate.split('-')
-  return { year: Number(y), month: Number(m) }
-}
-
-function isFutureIsoDate(isoDate: string): boolean {
-  const today = new Date().toISOString().slice(0, 10)
-  return isoDate > today
-}
-
 // ── Helper: map legacy Arabic / typed movement_type to transaction_type ───────
 function mapToTransactionType(movementType: string): string {
   const MAP: Record<string, string> = {
@@ -145,6 +118,7 @@ async function validateInventoryGovernance(
     statement_text?: string | null
     notes?: string | null
     service_type_code?: string | null
+    work_order_id?: number | null
   },
 ): Promise<{ statementText: string | null; serviceTypeCode: string | null }> {
   const statementText = (input.statement_text ?? input.notes ?? '').trim() || null
@@ -168,6 +142,9 @@ async function validateInventoryGovernance(
     }
     if (!serviceTypeCode) {
       throw new Error('ISSUE_REQUIRES_SERVICE_TYPE')
+    }
+    if (!input.work_order_id) {
+      console.warn(`[inventory] ISSUE movement created without work_order_id (center=${input.center_code}). Traceability reduced.`);
     }
   }
 
@@ -355,6 +332,25 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
       .bind(b.field_id, company_id).first<{ center_code: number }>()
     if (field?.center_code) centerCode = field.center_code
   }
+
+  // Operational context inheritance: when linked to a Work Order,
+  // inherit dimensions (field, season, center) from the WO if not explicitly set.
+  // This ensures inventory consumption always carries full operational attribution
+  // without requiring the operator to re-enter context that exists on the WO.
+  let resolvedFieldId = b.field_id ?? null
+  let resolvedSeasonId = b.season_id ?? null
+  if (b.work_order_id) {
+    const wo = await c.env.DB.prepare(
+      'SELECT field_id, season_id, center_code FROM work_orders WHERE id = ? AND company_id = ?'
+    ).bind(b.work_order_id, company_id).first<{ field_id: number | null; season_id: number | null; center_code: number | null }>()
+    if (!wo) {
+      return c.json({ success: false, error: 'أمر العمل المحدد غير موجود' }, 422)
+    }
+    if (!resolvedFieldId && wo.field_id) resolvedFieldId = wo.field_id
+    if (!resolvedSeasonId && wo.season_id) resolvedSeasonId = wo.season_id
+    if (!centerCode && wo.center_code) centerCode = wo.center_code
+  }
+
   if (centerCode != null) {
     const isValidCenter = await validateActiveCenterCode(c.env.DB, company_id, centerCode)
     if (!isValidCenter) {
@@ -475,7 +471,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
         zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
-      company_id, b.season_id ?? null, b.field_id ?? null, b.work_order_id ?? null,
+      company_id, resolvedSeasonId, resolvedFieldId, b.work_order_id ?? null,
       b.supplier_code ?? null, b.item_code, centerCode ?? null,
       movementDate, b.warehouse, b.movement_type, b.document_number ?? null,
       b.pack_capacity ?? null, b.pack_count ?? null, b.quantity, unitPrice,
@@ -529,7 +525,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
 
   if (b.movement_type === 'GRN' && b.payment_method === 'cash' && valueIn > 0) {
     try {
-      await FinanceCore.recordCashMovement(c.env.DB, {
+      await FinanceCore.prepareCashMovement(c.env.DB, {
         company_id, userId,
         transaction_date: movementDate,
         direction: 'م',
@@ -647,6 +643,22 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
       .bind(b.field_id, company_id).first<{ center_code: number }>()
     if (field?.center_code) centerCode = field.center_code
   }
+
+  // Operational context inheritance from Work Order (same pattern as single handler)
+  let resolvedFieldId = b.field_id ?? null
+  let resolvedSeasonId = b.season_id ?? null
+  if (b.work_order_id) {
+    const wo = await c.env.DB.prepare(
+      'SELECT field_id, season_id, center_code FROM work_orders WHERE id = ? AND company_id = ?'
+    ).bind(b.work_order_id, company_id).first<{ field_id: number | null; season_id: number | null; center_code: number | null }>()
+    if (!wo) {
+      return c.json({ success: false, error: 'أمر العمل المحدد غير موجود' }, 422)
+    }
+    if (!resolvedFieldId && wo.field_id) resolvedFieldId = wo.field_id
+    if (!resolvedSeasonId && wo.season_id) resolvedSeasonId = wo.season_id
+    if (!centerCode && wo.center_code) centerCode = wo.center_code
+  }
+
   if (centerCode != null) {
     const isValidCenter = await validateActiveCenterCode(c.env.DB, company_id, centerCode)
     if (!isValidCenter) {
@@ -796,7 +808,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
         zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
-      company_id, b.season_id ?? null, b.field_id ?? null, b.work_order_id ?? null,
+      company_id, resolvedSeasonId, resolvedFieldId, b.work_order_id ?? null,
       b.supplier_code ?? null, lr.item_code,
       movementDate, b.warehouse, b.movement_type, b.document_number ?? null,
       lr.quantity, lr.unit_price,
@@ -865,7 +877,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
 
   if (b.movement_type === 'GRN' && b.payment_method === 'cash' && totalValue > 0) {
     try {
-      await FinanceCore.recordCashMovement(c.env.DB, {
+      await FinanceCore.prepareCashMovement(c.env.DB, {
         company_id, userId,
         transaction_date: movementDate,
         direction: 'م',

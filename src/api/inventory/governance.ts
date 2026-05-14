@@ -820,4 +820,26 @@ governance.post('/gl-trace/:id/resolve', permissionGuard('inventory', 'create'),
   return c.json({ success: true, action: 'retry', movement_id: movId, outbox: 'enqueued' })
 })
 
+// ── GET /service-types ──────────────────────────────────────────────────────
+// Returns active service types for this company — used by frontend ISSUE form
+governance.get('/service-types', permissionGuard('inventory', 'read'), async (c) => {
+  const { company_id } = getUser(c)
+
+  const tableCheck = await c.env.DB.prepare(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='service_types' LIMIT 1`
+  ).first<{ name: string }>()
+
+  if (!tableCheck) return c.json({ success: true, data: [] })
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT code, name_ar, name_en, service_group, requires_center, requires_document
+     FROM service_types WHERE company_id = ? AND is_active = 1 ORDER BY service_group, name_ar`
+  ).bind(company_id).all<{
+    code: string; name_ar: string; name_en: string | null
+    service_group: string; requires_center: number; requires_document: number
+  }>()
+
+  return c.json({ success: true, data: results })
+})
+
 export default governance

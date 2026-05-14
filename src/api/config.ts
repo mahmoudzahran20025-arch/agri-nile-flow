@@ -148,11 +148,15 @@ config.get('/items', async (c) => {
   const { company_id } = getUser(c)
   const { results } = await c.env.DB
     .prepare(`
-      SELECT i.*, ic.name as category_name 
-      FROM items i 
-      LEFT JOIN item_categories ic ON ic.id = i.category_id 
-      WHERE i.company_id = ? 
-      ORDER BY i.code
+      SELECT i.*, ic.name as category_name,
+             CASE WHEN EXISTS (
+               SELECT 1 FROM inventory_movements im
+               WHERE im.item_code = i.code AND im.company_id = i.company_id
+             ) THEN 1 ELSE 0 END AS has_movements
+      FROM items i
+      LEFT JOIN item_categories ic ON ic.id = i.category_id
+      WHERE i.company_id = ?
+      ORDER BY has_movements DESC, i.code
     `)
     .bind(company_id).all()
   return c.json({ success: true, data: results })

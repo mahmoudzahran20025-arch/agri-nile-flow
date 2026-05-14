@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
+import { getTodayIsoDate } from '../lib/utils/date'
 import { FinanceCore } from '../lib/finance_core'
 import { logAudit } from '../lib/audit'
 
@@ -10,8 +11,11 @@ operations.use('*', authMiddleware)
 operations.use('*', roleGuard(['super_admin', 'company_admin', 'field_supervisor', 'accountant']))
 
 // ── Lifecycle transition rules ────────────────────────────────
+// Operations lifecycle: pending → approved → in_progress → done → costed
+// Quick-ops shortcut: pending → in_progress (skips approval for field urgency)
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
-  pending:     ['in_progress', 'cancelled'],
+  pending:     ['approved', 'in_progress', 'cancelled'],
+  approved:    ['in_progress', 'cancelled'],
   in_progress: ['done', 'cancelled'],
   done:        ['costed', 'in_progress'],  // allow back to in_progress if mistake
   costed:      [],                          // terminal state
@@ -35,7 +39,8 @@ operations.get('/orders', async (c) => {
                s.name AS season_name,
                COALESCE(SUM(wt.quantity * wt.unit_cost), 0) AS labor_cost,
                COALESCE(im_costs.inv_cost, 0)                AS inventory_cost,
-               COALESCE(eq_costs.eq_cost, 0)                 AS equipment_cost
+               COALESCE(eq_costs.eq_cost, 0)                 AS equipment_cost,
+               COALESCE(sup_costs.supplier_cost, 0)          AS supplier_cost
              FROM work_orders wo
              LEFT JOIN fields f ON f.id = wo.field_id AND f.company_id = wo.company_id
              LEFT JOIN seasons s ON s.id = wo.season_id AND s.company_id = wo.company_id
@@ -52,8 +57,14 @@ operations.get('/orders', async (c) => {
                WHERE company_id = ?
                GROUP BY work_order_id
              ) eq_costs ON eq_costs.work_order_id = wo.id
+             LEFT JOIN (
+               SELECT work_order_id, SUM(amount) AS supplier_cost
+               FROM supplier_transactions
+               WHERE company_id = ? AND entry_type = 'د' AND status = 'posted' AND work_order_id IS NOT NULL
+               GROUP BY work_order_id
+             ) sup_costs ON sup_costs.work_order_id = wo.id
              WHERE wo.company_id = ?`
-  const params: unknown[] = [company_id, company_id, company_id]
+  const params: unknown[] = [company_id, company_id, company_id, company_id]
 
   if (season_id) { sql += ' AND wo.season_id = ?'; params.push(Number(season_id)) }
   if (field_id)  { sql += ' AND wo.field_id = ?';  params.push(Number(field_id)) }
@@ -113,15 +124,30 @@ operations.get('/orders/:id', async (c) => {
   ).bind(id, company_id).all()
 
   const { results: equipment } = await c.env.DB.prepare(
-    `SELECT id, equipment_name, task_date, hours_worked, cost_per_hour, total_cost, notes
+    `SELECT id, equipment_name, task_date, hours_worked, cost_per_hour, total_cost, notes,
+            equipment_usage_mode, supplier_code, journal_entry_id
      FROM work_order_equipment
      WHERE work_order_id = ? AND company_id = ?
      ORDER BY task_date, id`
   ).bind(id, company_id).all()
 
+  // Linked supplier invoices (for reconciliation: WO cost vs. actual invoice)
+  const { results: supplierInvoices } = await c.env.DB.prepare(
+    `SELECT st.id, st.transaction_date, st.supplier_code, s.name AS supplier_name,
+            st.amount, st.entry_type, st.status, st.expense_category, st.service_type_code
+     FROM supplier_transactions st
+     LEFT JOIN suppliers s ON s.code = st.supplier_code AND s.company_id = st.company_id
+     WHERE st.work_order_id = ? AND st.company_id = ?
+     ORDER BY st.transaction_date`
+  ).bind(id, company_id).all()
+
   const laborCost     = tasks.reduce((s: number, t: Record<string, unknown>) => s + ((Number(t.quantity) || 0) * (Number(t.unit_cost) || 0)), 0)
   const inventoryCost = inventory.reduce((s: number, r: Record<string, unknown>) => s + (Number(r.cost_consumed) || 0), 0)
   const equipmentCost = equipment.reduce((s: number, r: Record<string, unknown>) => s + (Number(r.total_cost) || 0), 0)
+  const supplierCost  = supplierInvoices.reduce((s: number, r: Record<string, unknown>) => {
+    if (String(r.entry_type) === 'د' && String(r.status) === 'posted') return s + (Number(r.amount) || 0)
+    return s
+  }, 0)
 
   return c.json({
     success: true,
@@ -130,10 +156,14 @@ operations.get('/orders/:id', async (c) => {
       tasks,
       inventory,
       equipment,
+      supplier_invoices: supplierInvoices,
       labor_cost:     laborCost,
       inventory_cost: inventoryCost,
       equipment_cost: equipmentCost,
+      supplier_cost:  supplierCost,
       total_cost:     laborCost + inventoryCost + equipmentCost,
+      // supplier_cost is NOT added to total_cost — it's the AP obligation,
+      // not an additional expense. The operational cost is labor + equipment + inventory.
     },
   })
 })
@@ -147,6 +177,15 @@ operations.post('/orders', async (c) => {
   }>()
   if (!b.name || !b.operation_type || !b.planned_date) {
     return c.json({ success: false, error: 'الاسم والنوع والتاريخ مطلوبة' }, 400)
+  }
+
+  // Operational context: field + season are required for operational attribution.
+  // Without them, costs cannot be attributed to a pivot or season.
+  if (!b.season_id) {
+    return c.json({ success: false, error: 'الموسم مطلوب — لا يمكن إنشاء أمر عمل بدون موسم' }, 422)
+  }
+  if (!b.field_id) {
+    return c.json({ success: false, error: 'الحقل / البيفوت مطلوب — لا يمكن إنشاء أمر عمل بدون تخصيص حقل' }, 422)
   }
 
   // Prefer explicit center_code from form; otherwise inherit from selected field.
@@ -237,7 +276,7 @@ operations.patch('/orders/:id/status', async (c) => {
           company_id,
           ref_id: id,
           amount: totalCost,
-          date: actual_date ?? order?.actual_date ?? new Date().toISOString().slice(0, 10),
+          date: actual_date ?? order?.actual_date ?? getTodayIsoDate(),
           description: equipmentUnposted > 0
             ? `تكلفة عمليات ميدانية (عمالة + معدات غير مُرحّلة): أمر عمل #${id}`
             : `تكلفة عمليات ميدانية (عمالة): أمر عمل #${id}`,
@@ -425,16 +464,18 @@ operations.post('/orders/:id/equipment', async (c) => {
     }, 200)
   }
 
+  const equipmentCost = Math.round(b.hours_worked * b.cost_per_hour * 100) / 100
+
   let equipmentId: number
   try {
     const result = await c.env.DB.prepare(
       `INSERT INTO work_order_equipment
        (work_order_id, company_id, operation_id, equipment_name, task_date, hours_worked, cost_per_hour,
-        equipment_usage_mode, fixed_asset_id, supplier_code, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        total_cost, equipment_usage_mode, fixed_asset_id, supplier_code, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(orderId, company_id, operationId, b.equipment_name.trim(), b.task_date,
-           b.hours_worked, b.cost_per_hour, usageMode, b.fixed_asset_id ?? null,
-           b.supplier_code ?? null, b.notes ?? null).run()
+           b.hours_worked, b.cost_per_hour, equipmentCost, usageMode,
+           b.fixed_asset_id ?? null, b.supplier_code ?? null, b.notes ?? null).run()
 
     equipmentId = Number(result.meta.last_row_id)
   } catch (e: any) {
@@ -461,35 +502,8 @@ operations.post('/orders/:id/equipment', async (c) => {
     }
     throw e
   }
-  const equipmentCost = Math.round(b.hours_worked * b.cost_per_hour * 100) / 100
-
-  if (equipmentCost > 0) {
-    try {
-      const entryId = await FinanceCore.resolveWorkOrderLabor(c.env.DB, {
-        company_id,
-        ref_id: equipmentId,
-        amount: equipmentCost,
-        date: b.task_date,
-        description: `تشغيل معدة: ${b.equipment_name.trim()} | أمر عمل #${orderId}`,
-        created_by: userId,
-        center_code: order?.center_code ?? undefined,
-        season_id: order?.season_id,
-        field_id: order?.field_id,
-      })
-
-      if (entryId) {
-        await c.env.DB.prepare(
-          'UPDATE work_order_equipment SET journal_entry_id = ? WHERE id = ? AND company_id = ?'
-        ).bind(entryId, equipmentId, company_id).run()
-      }
-    } catch (e: any) {
-      await c.env.DB.prepare(
-        'DELETE FROM work_order_equipment WHERE id = ? AND company_id = ?'
-      ).bind(equipmentId, company_id).run()
-      return c.json({ success: false, error: `فشل ترحيل تكلفة المعدة: ${e.message}` }, 400)
-    }
-  }
-
+  // GL posting deferred to WO→COSTED transition — never posted per equipment row.
+  // The COSTED handler sums all work_order_equipment.total_cost in one journal entry.
   return c.json({ success: true, data: { id: equipmentId, operation_id: operationId } }, 201)
 })
 
@@ -499,11 +513,15 @@ operations.delete('/equipment/:id', async (c) => {
   const id = Number(c.req.param('id'))
 
   const row = await c.env.DB.prepare(
-    'SELECT journal_entry_id FROM work_order_equipment WHERE id = ? AND company_id = ?'
-  ).bind(id, company_id).first<{ journal_entry_id: number | null }>()
+    `SELECT woe.id, wo.status AS wo_status
+     FROM work_order_equipment woe
+     JOIN work_orders wo ON wo.id = woe.work_order_id AND wo.company_id = woe.company_id
+     WHERE woe.id = ? AND woe.company_id = ?`
+  ).bind(id, company_id).first<{ id: number; wo_status: string }>()
+
   if (!row) return c.json({ success: false, error: 'سطر المعدة غير موجود' }, 404)
-  if (row.journal_entry_id) {
-    return c.json({ success: false, error: 'لا يمكن حذف سطر معدة مُرحّل محاسبيًا' }, 422)
+  if (row.wo_status === 'costed') {
+    return c.json({ success: false, error: 'لا يمكن حذف سطر معدة من أمر عمل مُكلَّف — القيد المحاسبي على مستوى أمر العمل' }, 422)
   }
 
   await c.env.DB.prepare(

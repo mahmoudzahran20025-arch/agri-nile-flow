@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { authMiddleware, getUser, roleGuard } from '../../middleware/auth'
+import { getTodayIsoDate } from '../../lib/utils/date'
 import { invalidateFlagCache } from '../../lib/hardening'
 import type { HardeningFlagKey } from '../../lib/hardening'
 import { clearPostingEngineCaches } from '../../lib/posting_engine'
@@ -355,7 +356,7 @@ hardening.get('/baseline', financeRead, async (c) => {
 
   return c.json({
     success: true,
-    snapshot_date: new Date().toISOString().slice(0, 10),
+    snapshot_date: getTodayIsoDate(),
     data: {
       posting_success:       postingSuccess,
       dimension_completeness: dimensionCompleteness.results,
@@ -498,6 +499,262 @@ hardening.get('/audit', financeRead, async (c) => {
     success: true,
     data: results,
     pagination: { page, size, total: countRow?.total ?? 0 },
+  })
+})
+
+// ── GET /hardening/health/daily-log ─────────────────────────────────────────
+hardening.get('/health/daily-log', financeRead, async (c) => {
+  const { company_id } = getUser(c)
+  const db   = c.env.DB
+  const days = Math.min(Number(c.req.query('days') ?? 30), 90)
+
+  const { results } = await db.prepare(
+    `SELECT id, run_date, run_at, gl_balance, error_events, stale_balances,
+            zero_jel, pending_outbox, alerts, status
+     FROM daily_finance_health_log
+     WHERE company_id = ?
+     ORDER BY run_at DESC
+     LIMIT ?`
+  ).bind(company_id, days).all()
+
+  return c.json({ success: true, data: results })
+})
+
+// ── POST /hardening/health/run-now ───────────────────────────────────────────
+hardening.post('/health/run-now', adminOnly, async (c) => {
+  const { company_id } = getUser(c)
+  const { runDailyFinanceHealth } = await import('../../lib/daily_finance_health')
+  const result = await runDailyFinanceHealth(c.env.DB, company_id)
+  return c.json({ success: true, data: result })
+})
+
+// ── GET /hardening/verification/checklist ────────────────────────────────────
+// The 9 governance checks from DATA-EXECUTION_PLAN.md Phase 9
+// Returns each check with pass/fail status and offending row count
+hardening.get('/verification/checklist', financeRead, async (c) => {
+  const { company_id } = getUser(c)
+
+  const today = getTodayIsoDate()
+
+  const [
+    postedNoJe,
+    futureJe,
+    postedGrnNoSupplier,
+    postedGrnNoDocument,
+    postedIssueNoCenter,
+    postedIssueNoServiceType,
+    multiServiceBadAccount,
+    glSubledgerGap,
+    zeroValueJel,
+  ] = await Promise.all([
+
+    // Check 1: No posted row without journal_entry_id
+    c.env.DB.prepare(`
+      SELECT (
+        SELECT COUNT(*) FROM supplier_transactions
+        WHERE company_id = ? AND status = 'posted' AND journal_entry_id IS NULL
+          AND (document_type IS NULL OR document_type != 'cash_payment')
+      ) + (
+        SELECT COUNT(*) FROM cash_transactions
+        WHERE company_id = ? AND status = 'posted' AND journal_entry_id IS NULL
+      ) + (
+        SELECT COUNT(*) FROM inventory_movements
+        WHERE company_id = ? AND gl_posted_at IS NULL
+          AND movement_type IN ('GRN','ISSUE')
+          AND movement_date <= ?
+      ) AS n
+    `).bind(company_id, company_id, company_id, today).first<{ n: number }>(),
+
+    // Check 2: No future-dated posted journal entries
+    c.env.DB.prepare(`
+      SELECT COUNT(*) AS n FROM journal_entries
+      WHERE company_id = ? AND is_posted = 1 AND entry_date > ?
+    `).bind(company_id, today).first<{ n: number }>(),
+
+    // Check 3: No posted GRN without supplier_code
+    c.env.DB.prepare(`
+      SELECT COUNT(*) AS n FROM inventory_movements
+      WHERE company_id = ? AND movement_type = 'GRN'
+        AND status = 'posted' AND supplier_code IS NULL
+    `).bind(company_id).first<{ n: number }>(),
+
+    // Check 4: No posted GRN without document_number
+    c.env.DB.prepare(`
+      SELECT COUNT(*) AS n FROM inventory_movements
+      WHERE company_id = ? AND movement_type = 'GRN'
+        AND status = 'posted' AND document_number IS NULL
+    `).bind(company_id).first<{ n: number }>(),
+
+    // Check 5: No posted ISSUE without center_code
+    c.env.DB.prepare(`
+      SELECT COUNT(*) AS n FROM inventory_movements
+      WHERE company_id = ? AND movement_type = 'ISSUE'
+        AND status = 'posted' AND center_code IS NULL
+    `).bind(company_id).first<{ n: number }>(),
+
+    // Check 6: No posted ISSUE without service_type_code
+    c.env.DB.prepare(`
+      SELECT COUNT(*) AS n FROM inventory_movements
+      WHERE company_id = ? AND movement_type = 'ISSUE'
+        AND status = 'posted' AND service_type_code IS NULL
+    `).bind(company_id).first<{ n: number }>(),
+
+    // Check 7: No multi-service supplier posted with a fixed single GL account
+    // (supplier appears in supplier_service_map with >1 active service, but transactions have null service_type_code)
+    c.env.DB.prepare(`
+      SELECT COUNT(*) AS n
+      FROM supplier_transactions st
+      WHERE st.company_id = ? AND st.status = 'posted'
+        AND st.service_type_code IS NULL
+        AND EXISTS (
+          SELECT 1 FROM supplier_service_map ssm
+          WHERE ssm.company_id = st.company_id
+            AND ssm.supplier_code = st.supplier_code
+            AND ssm.is_active = 1
+          GROUP BY ssm.supplier_code
+          HAVING COUNT(*) > 1
+        )
+    `).bind(company_id).first<{ n: number }>(),
+
+    // Check 8: GL vs sub-ledger balance gap (AP)
+    // Compares sum of open supplier AP vs GL AP account balance
+    c.env.DB.prepare(`
+      SELECT ROUND(ABS(
+        COALESCE((
+          SELECT SUM(credit - debit) FROM supplier_transactions
+          WHERE company_id = ? AND status = 'posted'
+        ), 0)
+        -
+        COALESCE((
+          SELECT SUM(jl.credit - jl.debit)
+          FROM journal_entry_lines jl
+          JOIN journal_entries je ON je.id = jl.entry_id AND je.company_id = jl.company_id AND je.is_posted = 1
+          JOIN chart_of_accounts coa ON coa.code = jl.account_code AND coa.company_id = jl.company_id
+          WHERE jl.company_id = ? AND coa.account_type = 'liability'
+            AND jl.account_code LIKE '212%'
+        ), 0)
+      ), 2) AS gap
+    `).bind(company_id, company_id).first<{ gap: number }>(),
+
+    // Check 9: Zero-value JE lines (debit=0 AND credit=0)
+    c.env.DB.prepare(`
+      SELECT COUNT(*) AS n FROM journal_entry_lines
+      WHERE company_id = ? AND debit = 0 AND credit = 0
+    `).bind(company_id).first<{ n: number }>(),
+  ])
+
+  type CheckStatus = 'pass' | 'fail' | 'warning'
+  interface Check {
+    id:          string
+    label:       string
+    description: string
+    value:       number
+    threshold:   number
+    status:      CheckStatus
+    severity:    'blocker' | 'warning'
+  }
+
+  const checks: Check[] = [
+    {
+      id:          'posted_no_je',
+      label:       'Posted without JE',
+      description: 'Posted transactions with no linked journal entry',
+      value:       postedNoJe?.n ?? 0,
+      threshold:   0,
+      status:      (postedNoJe?.n ?? 0) === 0 ? 'pass' : 'fail',
+      severity:    'blocker',
+    },
+    {
+      id:          'future_je',
+      label:       'Future-dated JEs',
+      description: 'Posted journal entries dated after today',
+      value:       futureJe?.n ?? 0,
+      threshold:   0,
+      status:      (futureJe?.n ?? 0) === 0 ? 'pass' : 'fail',
+      severity:    'blocker',
+    },
+    {
+      id:          'grn_no_supplier',
+      label:       'GRN without supplier',
+      description: 'Posted goods receipts missing supplier code',
+      value:       postedGrnNoSupplier?.n ?? 0,
+      threshold:   0,
+      status:      (postedGrnNoSupplier?.n ?? 0) === 0 ? 'pass' : 'fail',
+      severity:    'blocker',
+    },
+    {
+      id:          'grn_no_document',
+      label:       'GRN without document',
+      description: 'Posted goods receipts missing document number',
+      value:       postedGrnNoDocument?.n ?? 0,
+      threshold:   0,
+      status:      (postedGrnNoDocument?.n ?? 0) === 0 ? 'pass' : 'fail',
+      severity:    'blocker',
+    },
+    {
+      id:          'issue_no_center',
+      label:       'ISSUE without cost center',
+      description: 'Posted inventory issues missing cost center',
+      value:       postedIssueNoCenter?.n ?? 0,
+      threshold:   0,
+      status:      (postedIssueNoCenter?.n ?? 0) === 0 ? 'pass' : 'fail',
+      severity:    'blocker',
+    },
+    {
+      id:          'issue_no_service_type',
+      label:       'ISSUE without service type',
+      description: 'Posted inventory issues missing service_type_code',
+      value:       postedIssueNoServiceType?.n ?? 0,
+      threshold:   0,
+      status:      (postedIssueNoServiceType?.n ?? 0) === 0 ? 'pass' : 'fail',
+      severity:    'blocker',
+    },
+    {
+      id:          'multiservice_no_type',
+      label:       'Multi-service supplier unclassified',
+      description: 'Posted supplier transactions for multi-service suppliers with no service_type_code',
+      value:       multiServiceBadAccount?.n ?? 0,
+      threshold:   0,
+      status:      (multiServiceBadAccount?.n ?? 0) === 0 ? 'pass' : 'fail',
+      severity:    'blocker',
+    },
+    {
+      id:          'ap_subledger_gap',
+      label:       'AP sub-ledger gap',
+      description: 'Difference between AP sub-ledger and GL AP accounts (EGP)',
+      value:       glSubledgerGap?.gap ?? 0,
+      threshold:   1,
+      status:      (glSubledgerGap?.gap ?? 0) <= 1 ? 'pass' : 'warning',
+      severity:    'warning',
+    },
+    {
+      id:          'zero_value_jel',
+      label:       'Zero-value JE lines',
+      description: 'Journal entry lines where both debit and credit are zero',
+      value:       zeroValueJel?.n ?? 0,
+      threshold:   0,
+      status:      (zeroValueJel?.n ?? 0) === 0 ? 'pass' : 'warning',
+      severity:    'warning',
+    },
+  ]
+
+  const blockersFailed = checks.filter(ch => ch.severity === 'blocker' && ch.status === 'fail').length
+  const warningsFailed = checks.filter(ch => ch.severity === 'warning' && ch.status !== 'pass').length
+  const passing        = checks.filter(ch => ch.status === 'pass').length
+
+  return c.json({
+    success: true,
+    data: {
+      checks,
+      summary: {
+        total:           checks.length,
+        passing,
+        blockers_failed: blockersFailed,
+        warnings_failed: warningsFailed,
+        clean:           blockersFailed === 0,
+        as_of:           today,
+      },
+    },
   })
 })
 
