@@ -98,7 +98,7 @@ interface Filters {
 }
 
 const EMPTY_FILTERS: Filters = {
-  type: '', warehouse: '', season_id: '', start: '', end: '', unlinked_only: false, negative_only: false,
+  type: '', warehouse: '', season_id: '', start: '', end: new Date().toISOString().slice(0, 10), unlinked_only: false, negative_only: false,
 }
 
 export default function InventoryMovementsPage() {
@@ -112,8 +112,8 @@ export default function InventoryMovementsPage() {
     type: searchParams.get('type') ?? '',
     warehouse: searchParams.get('warehouse') ?? '',
     season_id: searchParams.get('season_id') ?? '',
-    start: searchParams.get('start') ?? '',
-    end: searchParams.get('end') ?? '',
+    start: searchParams.get('start') ?? EMPTY_FILTERS.start,
+    end: searchParams.get('end') ?? EMPTY_FILTERS.end,
     unlinked_only: searchParams.get('unlinked') === '1' || searchParams.get('unlinked_only') === '1',
     negative_only: searchParams.get('negative') === '1' || searchParams.get('negative_only') === '1',
   }))

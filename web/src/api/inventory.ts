@@ -27,16 +27,18 @@ export const inventoryApi = {
   }) => unwrapPaginated<unknown>(api.get(paginatedUrl('/inventory/movements', p))),
 
   createBatch: (body: {
-    movement_date:    string
-    warehouse:        string
-    movement_type:    string
-    supplier_code?:   number
-    document_number?: number
-    field_id?:        number
-    work_order_id?:   number
-    notes?:           string
-    payment_method?:  'cash' | 'credit'
-    center_code?:     number
+    movement_date:      string
+    warehouse:          string
+    movement_type:      string
+    supplier_code?:     number
+    document_number?:   number
+    field_id?:          number
+    work_order_id?:     number
+    notes?:             string
+    payment_method?:    'cash' | 'credit'
+    center_code?:       number
+    service_type_code?: string
+    statement_text?:    string
     items: Array<{ item_code: number; quantity: number; unit_price?: number; notes?: string }>
   }) => api.post('/inventory/movements/batch', body),
 
@@ -343,4 +345,10 @@ export const inventoryApi = {
         movement_date: string; notes: string | null
       }>
     }>(`/inventory/transactions/${id}`)),
+
+  serviceTypes: () =>
+    unwrap(api.get<Array<{
+      code: string; name_ar: string; name_en: string | null
+      service_group: string; requires_center: number; requires_document: number
+    }>>('/inventory/service-types')),
 }

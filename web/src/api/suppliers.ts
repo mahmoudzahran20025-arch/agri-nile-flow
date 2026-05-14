@@ -29,6 +29,15 @@ export const suppliersApi = {
   aging: (asOf?: string) =>
     unwrap(api.get(`/suppliers/aging${asOf ? `?as_of=${asOf}` : ''}`)),
 
+  agingSummary: (asOf?: string) =>
+    unwrap(api.get(`/suppliers/aging-summary${asOf ? `?as_of=${asOf}` : ''}`)),
+
+  supplierOpenItems: (code: string) =>
+    unwrap(api.get(`/suppliers/${code}/open-items`)),
+
+  matchPayment: (code: string, body: { payment_id: number; invoice_ids: number[] }) =>
+    unwrap(api.post(`/suppliers/${code}/match-payment`, body)),
+
   drafts: () => unwrap(api.get<SupplierDraft[]>('/suppliers/drafts')),
 }
 

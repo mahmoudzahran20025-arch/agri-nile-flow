@@ -30,6 +30,9 @@ const GLSettingsPage           = lazy(() => import('./pages/gl/GLSettingsPage'))
 const HardeningDashboardPage   = lazy(() => import('./pages/gl/HardeningDashboardPage'))
 const HealthIntegrityPage      = lazy(() => import('./pages/gl/HealthIntegrityPage'))
 const GlIntegrityAuditPage     = lazy(() => import('./pages/gl/GlIntegrityAuditPage'))
+const JERegenerationPage       = lazy(() => import('./pages/gl/JERegenerationPage'))
+const VerificationDashboardPage = lazy(() => import('./pages/gl/VerificationDashboardPage'))
+const ServiceTypesPage          = lazy(() => import('./pages/gl/ServiceTypesPage'))
 
 // ── Lazy chunks: HR ─────────────────────────────────────────────────────────
 const EmployeeListPage    = lazy(() => import('./pages/hr/EmployeeListPage'))
@@ -48,6 +51,7 @@ const CostCenterReportPage  = lazy(() => import('./pages/reports/CostCenterRepor
 const SuppliersBalancePage  = lazy(() => import('./pages/reports/SuppliersBalancePage'))
 const SeasonSummaryPage     = lazy(() => import('./pages/reports/SeasonSummaryPage'))
 const SeasonPnLPage         = lazy(() => import('./pages/reports/SeasonPnLPage'))
+const PivotCostsPage        = lazy(() => import('./pages/reports/PivotCostsPage'))
 const SeasonClosePage       = lazy(() => import('./pages/reports/SeasonClosePage'))
 const SeasonReadinessPage   = lazy(() => import('./pages/reports/SeasonReadinessPage'))
 const BudgetVsActualPage    = lazy(() => import('./pages/reports/BudgetVsActualPage'))
@@ -57,6 +61,7 @@ const SeasonReportsPage     = lazy(() => import('./pages/reports/SeasonReportsPa
 const SupplierHubPage          = lazy(() => import('./pages/suppliers/SupplierHubPage'))
 const SupplierDetailPage       = lazy(() => import('./pages/suppliers/SupplierDetailPage'))
 const PendingApprovalsPage     = lazy(() => import('./pages/suppliers/PendingApprovalsPage'))
+const APAgingPage              = lazy(() => import('./pages/suppliers/APAgingPage'))
 const TreasuryHubPage          = lazy(() => import('./pages/treasury/TreasuryHubPage'))
 const PartnersPage             = lazy(() => import('./pages/treasury/PartnersPage'))
 const BankReconciliationPage   = lazy(() => import('./pages/treasury/BankReconciliationPage'))
@@ -156,6 +161,7 @@ export default function App() {
 
         {/* Suppliers */}
         <Route path="suppliers"              element={<SupplierHubPage />} />
+        <Route path="suppliers/aging"        element={<APAgingPage />} />
         <Route path="suppliers/pending"      element={<PendingApprovalsPage />} />
         <Route path="suppliers/:code"        element={<SupplierDetailPage />} />
 
@@ -222,12 +228,15 @@ export default function App() {
         <Route path="gl/posting-setup/health" element={<PostingSetupHealthPage />} />
 
         {/* ── GL Hardening workspace (governance + health + integrity) ─────── */}
-        <Route path="gl/hardening"      element={<HardeningDashboardPage />} />
-        <Route path="gl/health-integrity" element={<HealthIntegrityPage />} />
-        <Route path="gl/integrity-audit"  element={<GlIntegrityAuditPage />} />
+        <Route path="gl/hardening"           element={<HardeningDashboardPage />} />
+        <Route path="gl/health-integrity"    element={<HealthIntegrityPage />} />
+        <Route path="gl/integrity-audit"     element={<GlIntegrityAuditPage />} />
+        <Route path="gl/je-regeneration"     element={<JERegenerationPage />} />
+        <Route path="gl/verification"        element={<VerificationDashboardPage />} />
 
         {/* ── GL Settings ─────────────────────────────────────────────────── */}
-        <Route path="gl/settings" element={<GLSettingsPage />} />
+        <Route path="gl/settings"      element={<GLSettingsPage />} />
+        <Route path="gl/service-types" element={<ServiceTypesPage />} />
 
         {/* ── Archived pages: redirect to nearest live workspace ───────────── */}
         <Route path="gl/posting-simulator"   element={<Navigate to="/gl/posting-rules" replace />} />
@@ -252,6 +261,7 @@ export default function App() {
         {/* Keep individual routes for backward-compat */}
         <Route path="reports/season-summary"     element={<SeasonSummaryPage />} />
         <Route path="reports/season-pnl"         element={<SeasonPnLPage />} />
+        <Route path="reports/pivot-costs"        element={<PivotCostsPage />} />
         <Route path="reports/season-close"       element={<SeasonClosePage />} />
         <Route path="reports/season-readiness"   element={<SeasonReadinessPage />} />
         <Route path="reports/budget-vs-actual"   element={<BudgetVsActualPage />} />

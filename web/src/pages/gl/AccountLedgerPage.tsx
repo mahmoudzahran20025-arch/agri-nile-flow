@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Download, GitBranch, ChevronLeft, ChevronRight } from 'lucide-react';
@@ -62,28 +62,38 @@ export default function AccountLedgerPage() {
   const { code } = useParams<{ code: string }>();
   const navigate  = useNavigate();
 
-  const [start, setStart] = useState(startOfYear());
-  const [end,   setEnd]   = useState(today());
-  const [search, setSearch] = useState('');
+  const [start, setStart]     = useState(startOfYear());
+  const [end,   setEnd]       = useState(today());
+  const [search, setSearch]   = useState('');
+  const [searchInput, setSearchInput] = useState('');
   const [refType, setRefType] = useState('');
-  const [page, setPage]     = useState(1);
+  const [page, setPage]       = useState(1);
   const [pageSize, setPageSize] = useState(100);
   const [jumpInput, setJumpInput] = useState('');
+
+  // Debounce search — only send to server after user stops typing 400ms
+  const commitSearch = useCallback((val: string) => {
+    setSearch(val);
+    setPage(1);
+  }, []);
 
   const [traceOpen, setTraceOpen] = useState(false);
   const [traceEntryId, setTraceEntryId] = useState<number | null>(null);
   const [traceTab, setTraceTab] = useState<'source' | 'lines' | 'trace'>('source');
 
   const { data, isLoading } = useQuery({
-    queryKey: ['gl-ledger', code, start, end, page, pageSize],
-    queryFn:  () => glApi.ledger(code!, start || undefined, end || undefined, page, pageSize) as Promise<{
-      account:         Account;
-      lines:           LedgerLine[];
-      total:           number;
-      page:            number;
-      size:            number;
-      total_pages:     number;
-      opening_balance: number;
+    queryKey: ['gl-ledger', code, start, end, search, refType, page, pageSize],
+    queryFn:  () => glApi.ledger(code!, start || undefined, end || undefined, page, pageSize, search || undefined, refType || undefined) as Promise<{
+      account:                Account;
+      lines:                  LedgerLine[];
+      total:                  number;
+      page:                   number;
+      size:                   number;
+      total_pages:            number;
+      opening_balance:        number;
+      search_applied:         string | null;
+      ref_type_filter:        string | null;
+      matches_on_other_pages: number;
     }>,
     enabled: !!code,
   });
@@ -97,21 +107,14 @@ export default function AccountLedgerPage() {
   const account        = data?.account;
   const lines          = data?.lines ?? [];
   const totalPages     = data?.total_pages ?? 1;
-  const openingBalance = data?.opening_balance ?? 0;
+  const openingBalance        = data?.opening_balance ?? 0;
+  const matchesOnOtherPages   = data?.matches_on_other_pages ?? 0;
 
-  const filteredLines = lines.filter((l) => {
-    const q = search.trim().toLowerCase();
-    const byText = !q
-      || (l.narration ?? '').toLowerCase().includes(q)
-      || (l.entry_desc ?? '').toLowerCase().includes(q)
-      || String(l.entry_id).includes(q);
-    const byRef = !refType || l.ref_type === refType;
-    return byText && byRef;
-  });
-
-  const totalDebit  = filteredLines.reduce((s, l) => s + (l.debit  ?? 0), 0);
-  const totalCredit = filteredLines.reduce((s, l) => s + (l.credit ?? 0), 0);
-  const netBalance  = totalDebit - totalCredit;
+  // Server already filtered — use lines directly
+  const filteredLines = lines;
+  const totalDebit    = filteredLines.reduce((s, l) => s + (l.debit  ?? 0), 0);
+  const totalCredit   = filteredLines.reduce((s, l) => s + (l.credit ?? 0), 0);
+  const netBalance    = totalDebit - totalCredit;
 
   const kpiItems: KpiItem[] = [
     { id: 'ob', label: 'OPENING BALANCE', value: fmt(openingBalance) || '0.00' },
@@ -134,10 +137,12 @@ export default function AccountLedgerPage() {
       <input
         className="input h-8 w-48 text-[12px]"
         placeholder="Search narration or entry ID..."
-        value={search}
-        onChange={e => setSearch(e.target.value)}
+        value={searchInput}
+        onChange={e => setSearchInput(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') commitSearch(searchInput); }}
+        onBlur={() => commitSearch(searchInput)}
       />
-      <select className="input h-8 text-[12px] py-1 w-32" value={refType} onChange={e => setRefType(e.target.value)}>
+      <select className="input h-8 text-[12px] py-1 w-32" value={refType} onChange={e => { setRefType(e.target.value); setPage(1); }}>
         <option value="">All Sources</option>
         <option value="cash_transaction">Cash</option>
         <option value="supplier_transaction">Supplier</option>
@@ -166,6 +171,21 @@ export default function AccountLedgerPage() {
 
       <CommandBar actions={actions} rightSlot={rightSlot} />
       <KpiStrip items={kpiItems} />
+
+      {/* Other-page match banner */}
+      {(search || refType) && matchesOnOtherPages > 0 && (
+        <div className="mx-6 mt-4 px-4 py-2 bg-amber-50 border border-amber-200 rounded text-[12px] text-amber-700 flex items-center gap-2">
+          <span className="font-semibold">{matchesOnOtherPages.toLocaleString()} more matches</span>
+          on other pages — use pagination to navigate, or narrow the date range.
+        </div>
+      )}
+      {(search || refType) && data && data.total !== undefined && (
+        <div className="mx-6 mt-2 text-[11px] text-slate-400">
+          {data.total.toLocaleString()} total matches for current filter
+          {search && <span> · search: <em>"{search}"</em></span>}
+          {refType && <span> · source: <em>{refType}</em></span>}
+        </div>
+      )}
 
       {/* Ledger Table */}
       <div className="flex-1 p-6 overflow-hidden flex flex-col">

@@ -1,0 +1,15 @@
+UPDATE items SET name='سلفات ماغنسيوم' WHERE code=1010023 AND company_id=1;
+UPDATE items SET name='سبيد الجاماكس' WHERE code=1010327 AND company_id=1;
+UPDATE items SET name='خل' WHERE code=1020259 AND company_id=1;
+UPDATE items SET name='ساليكس' WHERE code=1020288 AND company_id=1;
+UPDATE items SET name='لفة خرطوم 2"' WHERE code=1050092 AND company_id=1;
+UPDATE items SET name='قفيز 2" حديد' WHERE code=1050149 AND company_id=1;
+UPDATE items SET name='صرف قاعده سوسته' WHERE code=1090228 AND company_id=1;
+UPDATE items SET name='كوع سيفون 4"' WHERE code=1090230 AND company_id=1;
+UPDATE items SET name='ريزوسفير 15' WHERE code=1020380 AND company_id=1;
+UPDATE items SET name='سبلة سير' WHERE code=1010437 AND company_id=1;
+UPDATE items SET name='تقاوي بنجر بريليف' WHERE code=1030274 AND company_id=1;
+UPDATE items SET name='تقاوي بنجر امالدي' WHERE code=1030277 AND company_id=1;
+UPDATE items SET name='هاي كيو' WHERE code=1020393 AND company_id=1;
+UPDATE items SET name='اي جي سي بورامين 15%' WHERE code=1010449 AND company_id=1;
+UPDATE items SET name='لارفا مايورا' WHERE code=1020401 AND company_id=1;

@@ -34,7 +34,8 @@ interface FieldCost {
   labor_cost:         number
   equipment_cost:     number
   cash_cost:          number
-  total_cost:         number   // inv + labor + equipment + cash
+  supplier_cost:      number
+  total_cost:         number   // inv + labor + equipment + cash + supplier
   cost_per_feddan:    number | null
   budget_id:          number | null
   budget_per_feddan:  number | null
@@ -454,6 +455,7 @@ export default function CostByFieldPage() {
                         {row.labor_cost     > 0 && <p className="text-xs text-blue-600">عمالة: {egp(row.labor_cost)}</p>}
                         {row.equipment_cost > 0 && <p className="text-xs text-purple-600">معدات: {egp(row.equipment_cost)}</p>}
                         {row.cash_cost      > 0 && <p className="text-xs text-sky-600">نقدي: {egp(row.cash_cost)}</p>}
+                        {row.supplier_cost  > 0 && <p className="text-xs text-amber-600">موردين: {egp(row.supplier_cost)}</p>}
                       </div>
                     </td>
 
@@ -582,6 +584,9 @@ export default function CostByFieldPage() {
               )}
               {drillRow.cash_cost > 0 && (
                 <div><p className="text-slate-400">نقدي مباشر</p><p className="font-semibold text-sky-600">{egp(drillRow.cash_cost)}</p></div>
+              )}
+              {drillRow.supplier_cost > 0 && (
+                <div><p className="text-slate-400">موردين مباشر</p><p className="font-semibold text-amber-600">{egp(drillRow.supplier_cost)}</p></div>
               )}
             </div>
 

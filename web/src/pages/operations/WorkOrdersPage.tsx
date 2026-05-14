@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Wrench, Plus, Trash2, Clock, PlayCircle, CheckCircle, DollarSign,
   XCircle, Leaf, Package, Users, TrendingUp, ChevronRight, ArrowLeft,
+  Tractor, Droplets, Sprout, CloudRain, Wheat, Truck, ClipboardList, Zap, AlignJustify
 } from 'lucide-react'
 import { operationsApi, fieldsApi, configApi, employeesApi, suppliersApi } from '../../api/client'
 import { assetsApi } from '../../api/assets'
@@ -55,6 +56,19 @@ interface OrderDetail extends WorkOrder {
 
 // ── Constants ────────────────────────────────────────────────
 // OP_TYPES are loaded from the database via GET /config/operation_types
+
+const OP_TYPE_META: Record<string, { icon: React.ReactNode; color: string }> = {
+  'تجهيز أرض':   { icon: <Tractor size={18} />, color: 'text-amber-700 bg-amber-50 border-amber-200' },
+  'تسوية':        { icon: <AlignJustify size={18} />, color: 'text-amber-600 bg-amber-50 border-amber-200' },
+  'زراعة':        { icon: <Leaf size={18} />, color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
+  'رش':           { icon: <Droplets size={18} />, color: 'text-sky-600 bg-sky-50 border-sky-200' },
+  'تسميد':        { icon: <Sprout size={18} />, color: 'text-lime-600 bg-lime-50 border-lime-200' },
+  'ري':           { icon: <CloudRain size={18} />, color: 'text-blue-600 bg-blue-50 border-blue-200' },
+  'حصاد':         { icon: <Wheat size={18} />, color: 'text-yellow-600 bg-yellow-50 border-yellow-200' },
+  'صيانة':        { icon: <Wrench size={18} />, color: 'text-slate-600 bg-slate-50 border-slate-200' },
+  'نقل':          { icon: <Truck size={18} />, color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
+  'إشراف زراعي': { icon: <ClipboardList size={18} />, color: 'text-violet-600 bg-violet-50 border-violet-200' },
+}
 
 const LIFECYCLE: { key: WorkOrder['status']; label: string; icon: React.ReactNode; color: string }[] = [
   { key: 'pending',     label: 'معلق',       icon: <Clock        size={14} />, color: 'text-amber-600  bg-amber-50  border-amber-200'  },
@@ -699,12 +713,18 @@ export default function WorkOrdersPage() {
                   {/* Left: info */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1.5">
+                      {(() => {
+                        const meta = OP_TYPE_META[order.operation_type] ?? { icon: <Zap size={13} />, color: 'text-slate-600 bg-slate-50 border-slate-200' }
+                        return (
+                          <div className={`p-1.5 rounded-lg border shadow-sm ${meta.color} flex items-center justify-center shrink-0`}>
+                            {meta.icon}
+                          </div>
+                        )
+                      })()}
                       <span className="font-semibold text-slate-800 truncate">{order.name}</span>
-                      <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full shrink-0">
-                        {order.operation_type}
-                      </span>
                     </div>
-                    <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 mt-1 pl-9">
+                      <span className="font-medium text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">{order.operation_type}</span>
                       {order.field_name && (
                         <span className="flex items-center gap-1 text-brand-600">
                           <Leaf size={11} />{order.field_name}
@@ -892,13 +912,33 @@ export default function WorkOrdersPage() {
               onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
               placeholder="ري موسم القمح — القطعة A01" />
           </div>
-          <div>
+          <div className="col-span-2">
             <label className="label">نوع العملية <span className="text-red-500">*</span></label>
-            <select className="input" value={form.operation_type}
-              onChange={e => setForm(p => ({ ...p, operation_type: e.target.value }))}>
-              <option value="">— اختر —</option>
-              {opTypes.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
-            </select>
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mt-1">
+              {opTypes.map(t => {
+                const isSelected = form.operation_type === t.name
+                const meta = OP_TYPE_META[t.name] ?? { icon: <Zap size={18} />, color: 'text-slate-600 bg-slate-50 border-slate-200' }
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setForm(p => ({ ...p, operation_type: t.name, name: `${t.name} — ${p.planned_date || new Date().toISOString().slice(0, 10)}` }))}
+                    className={`flex flex-col items-center justify-center gap-2 p-3 rounded-xl border-2 transition-all ${
+                      isSelected 
+                        ? 'border-brand-500 bg-brand-50/50 shadow-sm' 
+                        : 'border-slate-100 bg-white hover:border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className={`p-2 rounded-full ${isSelected ? 'bg-white shadow-sm text-brand-600' : meta.color}`}>
+                      {meta.icon}
+                    </div>
+                    <span className={`text-xs font-semibold text-center ${isSelected ? 'text-brand-800' : 'text-slate-600'}`}>
+                      {t.name}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
           </div>
           <div>
             <label className="label">التاريخ المخطط <span className="text-red-500">*</span></label>

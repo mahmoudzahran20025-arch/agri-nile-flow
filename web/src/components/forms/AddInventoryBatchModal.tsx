@@ -5,35 +5,43 @@ import {
   ChevronRight, ChevronLeft, Package, Warehouse, Info, BookOpen,
 } from 'lucide-react'
 import Modal from '../ui/Modal'
-import { inventoryApi, configApi, suppliersApi, fieldsApi } from '../../api/client'
+import { inventoryApi, configApi, suppliersApi, fieldsApi, operationsApi } from '../../api/client'
 import type { Item } from '../../types'
 
 // ─── Types ────────────────────────────────────────────────────
 
 interface LineItem {
-  id:         string
-  item_code:  string
-  quantity:   string
-  unit_price: string
-  notes:      string
+  id:              string
+  item_code:       string
+  quantity:        string
+  pack_count:      string   // عدد الوحدات/الأكياس
+  unit_price:      string
+  notes:           string
   // runtime
-  available?: number
-  item_name?: string
-  item_unit?: string
-  error?:     string
-  loadingStock?: boolean
+  available?:      number
+  item_name?:      string
+  item_unit?:      string
+  package_type?:   string | null
+  package_capacity?: number | null
+  error?:          string
+  loadingStock?:   boolean
+  itemSearch?:     string   // search text in smart picker
+  showDropdown?:   boolean
 }
 
 interface BatchForm {
-  movement_date:   string
-  movement_type:   'GRN' | 'ISSUE' | 'RETURN_SUPPLIER' | 'RETURN_CUSTOMER' | 'ADJUSTMENT_PROFIT' | 'ADJUSTMENT_LOSS'
-  warehouse:       string
-  supplier_code:   string
-  document_number: string
-  notes:           string
-  center_code:     string
-  payment_method:  'cash' | 'credit'
-  field_id?:       string
+  movement_date:     string
+  movement_type:     'GRN' | 'ISSUE' | 'RETURN_SUPPLIER' | 'RETURN_CUSTOMER' | 'ADJUSTMENT_PROFIT' | 'ADJUSTMENT_LOSS'
+  warehouse:         string
+  supplier_code:     string
+  document_number:   string
+  notes:             string
+  center_code:       string
+  payment_method:    'cash' | 'credit'
+  field_id?:         string
+  work_order_id?:    string
+  service_type_code: string
+  statement_text:    string
 }
 
 interface Props {
@@ -46,7 +54,7 @@ interface Props {
 
 const today     = () => new Date().toISOString().slice(0, 10)
 const uid       = () => Math.random().toString(36).slice(2, 9)
-const newLine   = (): LineItem => ({ id: uid(), item_code: '', quantity: '', unit_price: '', notes: '' })
+const newLine   = (): LineItem => ({ id: uid(), item_code: '', quantity: '', pack_count: '', unit_price: '', notes: '', itemSearch: '', showDropdown: false })
 
 // All 6 supported movement types — matches the backend isSupportedMovementType() list
 const MOVEMENT_TYPES = [
@@ -219,14 +227,16 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
   const [error,  setError]  = useState('')
 
   const [form, setForm] = useState<BatchForm>({
-    movement_date:   today(),
-    movement_type:   'GRN',
-    warehouse:       defaultWarehouse ?? '',
-    supplier_code:   '',
-    document_number: '',
-    notes:           '',
-    center_code:     '',
-    payment_method:  'credit',
+    movement_date:     today(),
+    movement_type:     'GRN',
+    warehouse:         defaultWarehouse ?? '',
+    supplier_code:     '',
+    document_number:   '',
+    notes:             '',
+    center_code:       '',
+    payment_method:    'credit',
+    service_type_code: '',
+    statement_text:    '',
   })
 
   const [lines, setLines] = useState<LineItem[]>([newLine()])
@@ -237,15 +247,18 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
       setStep(1)
       setError('')
       setForm({
-        movement_date:   today(),
-        movement_type:   'GRN',
-        warehouse:       defaultWarehouse ?? '',
-        supplier_code:   '',
-        document_number: '',
-        notes:           '',
-        center_code:     '',
-        payment_method:  'credit',
-        field_id:        '',
+        movement_date:     today(),
+        movement_type:     'GRN',
+        warehouse:         defaultWarehouse ?? '',
+        supplier_code:     '',
+        document_number:   '',
+        notes:             '',
+        center_code:       '',
+        payment_method:    'credit',
+        field_id:          '',
+        work_order_id:     '',
+        service_type_code: '',
+        statement_text:    '',
       })
       setLines([newLine()])
     }
@@ -297,6 +310,23 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
     staleTime: 120_000,
   })
 
+  type ServiceTypeOption = { code: string; name_ar: string; service_group: string }
+  const { data: serviceTypesList = [] } = useQuery({
+    queryKey: ['inventory-service-types'],
+    queryFn:  () => inventoryApi.serviceTypes() as Promise<ServiceTypeOption[]>,
+    enabled:  open && form.movement_type === 'ISSUE',
+    staleTime: 300_000,
+  })
+
+  type WorkOrderOption = { id: number; name: string; field_id?: number; season_id?: number; center_code?: number }
+  const { data: workOrders = [] } = useQuery({
+    queryKey: ['inventory-work-orders'],
+    queryFn:  () => operationsApi.listOrders({ size: 100 }) as unknown as Promise<{ data: WorkOrderOption[] }>,
+    enabled:  open && form.movement_type === 'ISSUE',
+    staleTime: 60_000,
+    select: res => (res as any)?.data ?? res,
+  })
+
   // ─── Form helpers ──────────────────────────────────────────
 
   const setF = (k: keyof BatchForm, v: string) =>
@@ -339,13 +369,21 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
   }, [form.warehouse])
 
   const handleItemChange = useCallback((lineId: string, itemCode: string) => {
-    const info = items.find(i => String(i.code) === itemCode)
+    const info = items.find((i: any) => String(i.code) === itemCode)
+    const cap: number | null = (info as any)?.package_capacity ?? null
     updateLine(lineId, {
-      item_code: itemCode,
-      item_name: info?.name,
-      item_unit: info?.unit ?? undefined,
-      available: undefined,
-      error:     undefined,
+      item_code:        itemCode,
+      item_name:        info?.name,
+      item_unit:        info?.unit ?? undefined,
+      package_type:     (info as any)?.package_type ?? null,
+      package_capacity: cap,
+      available:        undefined,
+      error:            undefined,
+      itemSearch:       info?.name ?? '',
+      showDropdown:     false,
+      // If package_capacity known, reset pack_count and quantity
+      pack_count: '',
+      quantity:   '',
     })
     if (itemCode) fetchStock(lineId, itemCode)
   }, [items, fetchStock])
@@ -382,6 +420,11 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
         setError('التاريخ والمخزن مطلوبان')
         return
       }
+      if (form.movement_type === 'ISSUE') {
+        if (!form.service_type_code) { setError('نوع الخدمة مطلوب لعملية صرف المخزون'); return }
+        if (!form.statement_text.trim()) { setError('البيان / وصف الصرف مطلوب'); return }
+        if (!form.center_code) { setError('مركز التكلفة مطلوب لعملية صرف المخزون'); return }
+      }
       setError(''); setStep(2)
     } else if (step === 2) {
       if (hasDuplicates()) {
@@ -409,20 +452,25 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
     setError('')
     try {
       const res = await inventoryApi.createBatch({
-        movement_date:   form.movement_date,
-        movement_type:   form.movement_type,
-        warehouse:       form.warehouse,
-        supplier_code:   form.supplier_code   ? Number(form.supplier_code)   : undefined,
-        document_number: form.document_number ? Number(form.document_number) : undefined,
-        payment_method:  form.payment_method,
-        center_code:     form.center_code     ? Number(form.center_code)     : undefined,
-        field_id:        form.field_id        ? Number(form.field_id)        : undefined,
-        notes:           form.notes || undefined,
+        movement_date:     form.movement_date,
+        movement_type:     form.movement_type,
+        warehouse:         form.warehouse,
+        supplier_code:     form.supplier_code   ? Number(form.supplier_code)   : undefined,
+        document_number:   form.document_number ? Number(form.document_number) : undefined,
+        payment_method:    form.payment_method,
+        center_code:       form.center_code     ? Number(form.center_code)     : undefined,
+        field_id:          form.field_id        ? Number(form.field_id)        : undefined,
+        work_order_id:     form.work_order_id   ? Number(form.work_order_id)   : undefined,
+        notes:             form.notes || undefined,
+        service_type_code: form.service_type_code || undefined,
+        statement_text:    form.statement_text.trim() || undefined,
         items: lines.map(l => ({
-          item_code:  Number(l.item_code),
-          quantity:   Number(l.quantity),
-          unit_price: l.unit_price ? Number(l.unit_price) : undefined,
-          notes:      l.notes || undefined,
+          item_code:       Number(l.item_code),
+          quantity:        Number(l.quantity),
+          unit_price:      l.unit_price ? Number(l.unit_price) : undefined,
+          notes:           l.notes || undefined,
+          pack_count:      l.pack_count ? Number(l.pack_count) : undefined,
+          pack_capacity:   l.package_capacity ?? undefined,
         })),
       })
 
@@ -538,19 +586,69 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
               )}
             </div>
             
-            {/* Field selection — relevant for ISSUE */}
+            {/* ISSUE-required fields: service type + statement */}
             {form.movement_type === 'ISSUE' && (
-              <div>
-                <label className="label">الحقل / القطعة الزراعية (اختياري)</label>
-                <select className="input" value={form.field_id || ''}
-                  onChange={e => setF('field_id', e.target.value)}>
-                  <option value="">— بدون توجيه لحقل —</option>
-                  {(fieldsList as FieldOption[]).map(f => (
-                    <option key={f.id} value={f.id}>{f.name}</option>
-                  ))}
-                </select>
-                <p className="text-[10px] text-slate-400 mt-1 px-1">سيتم تحميل التكلفة على مركز التكلفة المرتبط بهذا الحقل تلقائياً.</p>
-              </div>
+              <>
+                <div>
+                  <label className="label">نوع الخدمة <span className="text-red-500">*</span></label>
+                  <select
+                    className={`input ${!form.service_type_code ? 'border-amber-400 focus:border-amber-500' : ''}`}
+                    value={form.service_type_code}
+                    onChange={e => setF('service_type_code', e.target.value)}
+                  >
+                    <option value="">— اختر نوع الخدمة —</option>
+                    {(serviceTypesList as ServiceTypeOption[]).map(s => (
+                      <option key={s.code} value={s.code}>{s.name_ar} ({s.code})</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-slate-400 mt-1 px-1">يحدد الحساب المحاسبي للتكلفة (مطلوب للترحيل).</p>
+                </div>
+                <div>
+                  <label className="label">البيان / وصف الصرف <span className="text-red-500">*</span></label>
+                  <input
+                    type="text"
+                    className={`input ${!form.statement_text.trim() ? 'border-amber-400 focus:border-amber-500' : ''}`}
+                    placeholder="مثال: صرف أسمدة لبيفوت 5 — موسم القمح"
+                    value={form.statement_text}
+                    onChange={e => setF('statement_text', e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="label">أمر العمل (للتوجيه التشغيلي) <span className="text-red-500">*</span></label>
+                  <select
+                    className={`input ${!form.work_order_id ? 'border-amber-400 focus:border-amber-500' : ''}`}
+                    value={form.work_order_id || ''}
+                    onChange={e => {
+                      const woId = e.target.value
+                      const wo = (workOrders as WorkOrderOption[]).find(w => String(w.id) === woId)
+                      setForm(f => ({
+                        ...f,
+                        work_order_id: woId,
+                        field_id: wo?.field_id ? String(wo.field_id) : f.field_id,
+                        center_code: wo?.center_code ? String(wo.center_code) : f.center_code,
+                      }))
+                    }}
+                  >
+                    <option value="">— اختر أمر العمل —</option>
+                    {(workOrders as WorkOrderOption[]).map(wo => (
+                      <option key={wo.id} value={wo.id}>{wo.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-slate-400 mt-1 px-1">سيتم تحميل تكلفة المدخلات على هذا الأمر تلقائياً.</p>
+                </div>
+                {!form.work_order_id && (
+                  <div>
+                    <label className="label">الحقل / القطعة الزراعية (اختياري)</label>
+                    <select className="input" value={form.field_id || ''}
+                      onChange={e => setF('field_id', e.target.value)}>
+                      <option value="">— بدون توجيه لحقل —</option>
+                      {(fieldsList as FieldOption[]).map(f => (
+                        <option key={f.id} value={f.id}>{f.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
@@ -590,21 +688,26 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
             </div>
           )}
 
-          {/* Accounting metadata only (optional) */}
+          {/* Accounting metadata */}
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-3">
             <div>
-              <label className="label text-xs">مركز التكلفة (اختياري)</label>
-              <select className="input text-sm" value={form.center_code}
-                onChange={e => setF('center_code', e.target.value)}>
+              <label className="label text-xs">
+                مركز التكلفة
+                {form.movement_type === 'ISSUE' && <span className="text-red-500 ml-1">*</span>}
+                {form.movement_type !== 'ISSUE' && <span className="text-slate-400 ml-1">(اختياري)</span>}
+              </label>
+              <select
+                className={`input text-sm ${form.movement_type === 'ISSUE' && !form.center_code ? 'border-amber-400' : ''}`}
+                value={form.center_code}
+                onChange={e => setF('center_code', e.target.value)}
+                disabled={!!form.work_order_id}
+              >
                 <option value="">— بدون مركز —</option>
                 {(costCenters as CostCenterOption[]).map(cc => (
                   <option key={cc.code} value={cc.code}>{cc.code} — {cc.name}</option>
                 ))}
               </select>
             </div>
-            <p className="text-[11px] text-slate-500">
-              يتم إرسال نفس البيانات المتوقعة من الباك-إند: نوع الحركة، المخزن، التاريخ، المورد/الدفع عند الحاجة، مركز التكلفة، وبنود الأصناف.
-            </p>
           </div>
 
           <div>
@@ -640,8 +743,9 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
 
           {/* Column headers */}
           <div className="grid text-xs font-semibold text-slate-400 uppercase tracking-wide px-2"
-            style={{ gridTemplateColumns: '2fr 90px 100px 120px 28px' }}>
+            style={{ gridTemplateColumns: '2fr 80px 80px 90px 100px 28px' }}>
             <span>الصنف</span>
+            <span className="text-center">ع. الأكياس</span>
             <span className="text-center">الكمية</span>
             <span className="text-center">سعر الوحدة</span>
             <span className="text-center">{!typeIsAdd ? 'الرصيد المتاح' : 'ملاحظة'}</span>
@@ -654,26 +758,86 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
               const qty       = Number(line.quantity) || 0
               const hasErr    = !!line.error
               const stockWarn = !typeIsAdd && line.available !== undefined && qty > line.available
+              const hasPkg    = (line.package_capacity ?? 0) > 0
+              // Filter items for smart picker
+              const searchTerm = (line.itemSearch ?? '').trim()
+              const activeItemCodes = new Set((items as any[]).filter((i:any) => i.has_movements).map((i:any) => i.code))
+              const filteredItems = (items as any[]).filter((i: any) => {
+                if (!searchTerm) {
+                  // No search: show only items that have ever had a movement (active items)
+                  // or the currently selected item
+                  return String(i.code) === line.item_code || activeItemCodes.has(i.code)
+                }
+                if (searchTerm.length < 3) {
+                  // Partial search: only active items matching
+                  return (activeItemCodes.has(i.code) || String(i.code) === line.item_code) &&
+                    (i.name?.includes(searchTerm) || String(i.code).includes(searchTerm))
+                }
+                // Full search (≥3 chars): all items
+                return i.name?.includes(searchTerm) || String(i.code).includes(searchTerm)
+              }).slice(0, 80) // cap dropdown at 80 items
+
               return (
                 <div key={line.id}
                   className={`grid gap-2 items-start p-2.5 rounded-xl border transition-colors
                     ${hasErr ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50 hover:bg-white'}`}
-                  style={{ gridTemplateColumns: '2fr 90px 100px 120px 28px' }}>
+                  style={{ gridTemplateColumns: '2fr 80px 80px 90px 100px 28px' }}>
 
-                  {/* Item selector */}
-                  <div>
-                    <select
+                  {/* Smart item picker */}
+                  <div className="relative">
+                    <input
+                      type="text"
                       className={`input text-sm py-1.5 w-full ${hasErr && !line.item_code ? 'border-red-400' : ''}`}
-                      value={line.item_code}
-                      onChange={e => handleItemChange(line.id, e.target.value)}>
-                      <option value="">-- اختر الصنف --</option>
-                      {items.map(i => (
-                        <option key={i.code} value={i.code}>
-                          {i.name}{i.unit ? ` (${i.unit})` : ''}
-                        </option>
-                      ))}
-                    </select>
+                      placeholder="ابحث عن الصنف (اسم أو كود)..."
+                      value={line.itemSearch ?? ''}
+                      onFocus={() => updateLine(line.id, { showDropdown: true })}
+                      onBlur={() => setTimeout(() => updateLine(line.id, { showDropdown: false }), 180)}
+                      onChange={e => updateLine(line.id, { itemSearch: e.target.value, item_code: '', item_name: undefined, package_capacity: null, pack_count: '', quantity: '' })}
+                    />
+                    {line.item_code && (
+                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-mono">
+                        #{line.item_code}
+                      </span>
+                    )}
+                    {line.showDropdown && filteredItems.length > 0 && (
+                      <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-48 overflow-y-auto">
+                        {!searchTerm && (
+                          <div className="px-3 py-1.5 text-[10px] text-slate-400 bg-slate-50 border-b border-slate-100">
+                            الأصناف النشطة — اكتب 3+ أحرف للبحث في الكتالوج الكامل
+                          </div>
+                        )}
+                        {filteredItems.map((i: any) => (
+                          <button
+                            key={i.code}
+                            type="button"
+                            className="w-full text-right px-3 py-2 text-sm hover:bg-brand-50 flex items-center justify-between gap-2 border-b border-slate-50 last:border-0"
+                            onMouseDown={() => handleItemChange(line.id, String(i.code))}
+                          >
+                            <span className="font-medium text-slate-800 truncate">{i.name}</span>
+                            <span className="text-[11px] text-slate-400 shrink-0">{i.unit ?? ''} #{i.code}</span>
+                          </button>
+                        ))}
+                        {!searchTerm && activeItemCodes.size === 0 && (
+                          <div className="px-3 py-2 text-xs text-slate-400">اكتب للبحث في الكتالوج</div>
+                        )}
+                      </div>
+                    )}
                   </div>
+
+                  {/* Pack count — shown when item has package_capacity */}
+                  <input
+                    type="number" min="1" step="1"
+                    className={`input text-sm py-1.5 text-center ${!hasPkg ? 'opacity-30 cursor-not-allowed' : ''}`}
+                    placeholder={hasPkg ? `× ${line.package_capacity}` : '—'}
+                    disabled={!hasPkg}
+                    title={hasPkg ? `عدد الأكياس — كل كيس ${line.package_capacity} ${line.item_unit ?? ''}` : 'الصنف بدون تعبئة مسبقة'}
+                    value={hasPkg ? line.pack_count : ''}
+                    onChange={e => {
+                      const cnt = e.target.value
+                      const autoQty = cnt && line.package_capacity ? String(Number(cnt) * line.package_capacity) : ''
+                      updateLine(line.id, { pack_count: cnt, quantity: autoQty })
+                    }}
+                  />
 
                   {/* Quantity */}
                   <input

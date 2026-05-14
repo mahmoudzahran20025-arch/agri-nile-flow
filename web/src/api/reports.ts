@@ -186,4 +186,46 @@ export const reportsApi = {
       as_of?:     string
     }>(`/reports/trial-balance?${qs.toString()}`))
   },
+
+  pivotCosts: (season_id: number) =>
+    unwrap(api.get<{
+      season:         { id: number; name: string; start_date: string; end_date: string }
+      service_groups: string[]
+      rows:           Array<{
+        center_code:      number
+        center_name:      string
+        by_service_group: Record<string, number>
+        total:            number
+      }>
+      column_totals: Record<string, number>
+      grand_total:   number
+      meta?: {
+        total_movements: number
+        included_movements: number
+        excluded_movements: number
+        excluded_reasons: {
+          null_season_id: number
+          null_service_type_code: number
+          null_center_code: number
+          future_blocked: number
+        }
+        coverage_pct: string
+      }
+    }>(`/reports/pivot-costs?season_id=${season_id}`)),
+
+  serviceTypeSummary: (season_id: number) =>
+    unwrap(api.get<{
+      season: { id: number; name: string; start_date: string; end_date: string }
+      rows:   Array<{
+        service_type_code: string
+        name_ar:           string
+        service_group:     string
+        ops_total:         number
+        gl_total:          number
+        gap:               number
+        gap_pct:           number
+        txn_count:         number
+      }>
+      totals: { ops_total: number; gl_total: number; gap: number }
+    }>(`/reports/service-type-summary?season_id=${season_id}`)),
 }

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { Info } from 'lucide-react'
 import Modal from '../ui/Modal'
-import { suppliersApi, configApi, financeApi } from '../../api/client'
+import { suppliersApi, configApi, financeApi, operationsApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 
 interface Props { open: boolean; onClose: () => void; supplierCode: number; supplierName: string }
@@ -28,6 +28,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
     notes:            '',
     season_id:        '',
     center_code:      '',
+    work_order_id:    '',
     financial_account_id: '',
     status:           'posted' as 'draft' | 'posted',
   })
@@ -40,7 +41,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
         document_type: '', document_number: '', expense_category: '',
         equipment_type_id: '', equipment_usage_mode: '',
         notes: '',
-        season_id: '', center_code: '', financial_account_id: '', status: 'posted',
+        season_id: '', center_code: '', work_order_id: '', financial_account_id: '', status: 'posted',
       })
       setError('')
     }
@@ -87,6 +88,15 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
     queryFn: financeApi.getBankAccounts as () => Promise<BankAccountOption[]>,
     enabled: open,
     staleTime: 120_000,
+  })
+
+  type WorkOrderOption = { id: number; name: string; field_id?: number; season_id?: number; center_code?: number; total_cost?: number }
+  const { data: workOrders = [] } = useQuery({
+    queryKey: ['supplier-work-orders'],
+    queryFn: () => operationsApi.listOrders({ size: 100 }) as unknown as Promise<{ data: WorkOrderOption[] }>,
+    enabled: open && (form.expense_category === 'SRV_MECH' || form.expense_category === 'SRV_LABOR'),
+    staleTime: 60_000,
+    select: res => (res as any)?.data ?? res,
   })
 
   const selectedEquipmentType = equipmentTypes.find(et => String(et.id) === form.equipment_type_id)
@@ -146,6 +156,7 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
         notes:            form.notes.trim() || undefined,
         season_id:        form.season_id ? Number(form.season_id) : undefined,
         center_code:      form.center_code ? Number(form.center_code) : undefined,
+        work_order_id:    form.work_order_id ? Number(form.work_order_id) : undefined,
         financial_account_id: form.financial_account_id ? Number(form.financial_account_id) : undefined,
         status:           form.status,
       })
@@ -249,7 +260,8 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
           <div>
             <label className="label">الموسم الزراعي {form.status === 'posted' && <span className="text-red-500">*</span>}</label>
             <select className="input" value={form.season_id}
-              onChange={e => set('season_id', e.target.value)}>
+              onChange={e => set('season_id', e.target.value)}
+              disabled={!!form.work_order_id}>
               <option value="">— بدون موسم —</option>
               {(seasons || []).map(s => (
                 <option key={s.id} value={s.id}>
@@ -261,7 +273,8 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
           <div>
             <label className="label">مركز التكلفة {form.status === 'posted' && <span className="text-red-500">*</span>}</label>
             <select className="input" value={form.center_code}
-              onChange={e => set('center_code', e.target.value)}>
+              onChange={e => set('center_code', e.target.value)}
+              disabled={!!form.work_order_id}>
               <option value="">— بدون مركز —</option>
               {(costCenters || []).map(cc => (
                 <option key={cc.code} value={cc.code}>{cc.code} — {cc.name}</option>
@@ -346,10 +359,39 @@ export default function AddSupplierTransactionModal({ open, onClose, supplierCod
             onChange={e => set('expense_category', e.target.value)}>
             <option value="">— اختياري —</option>
             {(expenseTypes || []).map(et => (
-              <option key={et.code} value={et.name}>{et.name}</option>
+              <option key={et.code} value={et.code}>{et.name}</option>
             ))}
           </select>
         </div>
+
+        {(form.expense_category === 'SRV_MECH' || form.expense_category === 'SRV_LABOR') && (
+          <div className="bg-brand-50 border border-brand-200 rounded-xl p-3">
+            <label className="label text-brand-800">أمر العمل المرتبط (التشغيلي) <span className="text-red-500">*</span></label>
+            <select 
+              className={`input ${!form.work_order_id ? 'border-amber-400 focus:border-amber-500' : ''}`}
+              value={form.work_order_id} 
+              onChange={e => {
+                const woId = e.target.value
+                const wo = (workOrders as WorkOrderOption[]).find(w => String(w.id) === woId)
+                setForm(f => ({
+                  ...f,
+                  work_order_id: woId,
+                  season_id: wo?.season_id ? String(wo.season_id) : f.season_id,
+                  center_code: wo?.center_code ? String(wo.center_code) : f.center_code,
+                }))
+              }}
+            >
+              <option value="">— اختر أمر العمل —</option>
+              {(workOrders as WorkOrderOption[]).map(wo => (
+                <option key={wo.id} value={wo.id}>{wo.name} (إجمالي: {wo.total_cost || 0} ج.م)</option>
+              ))}
+            </select>
+            <p className="text-[10px] text-brand-600 mt-1 px-1">
+              يجب ربط المصاريف التشغيلية (ميكنة وعمالة) بأمر عمل لمنع الازدواجية في التكاليف. 
+              فاتورة المورد هنا هي لإثبات المديونية (AP) وليست القيد التشغيلي للمصروف.
+            </p>
+          </div>
+        )}
 
         {/* ── Amount ──────────────────────────────────────── */}
         <div>

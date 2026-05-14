@@ -561,13 +561,32 @@ export const glApi = {
   reverseEntry: (id: number) =>
     unwrap(api.post<{ reversal_entry_id: number }>(`/gl/entries/${id}/reverse`, {})),
 
-  ledger: (code: string, start?: string, end?: string, page = 1, size = 100) => {
+  ledger: (code: string, start?: string, end?: string, page = 1, size = 100, search?: string, refType?: string) => {
     const params = new URLSearchParams()
-    if (start) params.set('start', start)
-    if (end)   params.set('end',   end)
+    if (start)   params.set('start',   start)
+    if (end)     params.set('end',     end)
+    if (search)  params.set('search',  search)
+    if (refType) params.set('refType', refType)
     params.set('page', String(page))
     params.set('size', String(size))
     return unwrap(api.get(`/gl/ledger/${code}?${params.toString()}`))
+  },
+
+  ledgerTraceInfo: (code: string, start?: string, end?: string) => {
+    const params = new URLSearchParams()
+    if (start) params.set('start', start)
+    if (end)   params.set('end',   end)
+    return unwrap(api.get(`/gl/ledger/${code}/trace-info?${params.toString()}`))
+  },
+
+  regenerationProgress: () => unwrap(api.get('/gl/regeneration/progress')),
+  regenerationReport:   () => unwrap(api.get('/gl/regeneration/reconciliation-report')),
+  regenerationRebuild:  (scope?: string, scopeValue?: string, dryRun = false) => {
+    const params = new URLSearchParams()
+    if (scope)      params.set('scope',       scope)
+    if (scopeValue) params.set('scope_value', scopeValue)
+    if (dryRun)     params.set('dry_run',     'true')
+    return unwrap(api.post(`/gl/regeneration/rebuild?${params.toString()}`, {}))
   },
 
   trialBalance:    (start?: string, end?: string) =>
@@ -836,6 +855,54 @@ export const glApi = {
       diff: number
     }>
   }>('/gl/orphans')),
+
+  serviceTypes: () => unwrap(api.get<Array<{
+    id: number; code: string; name_ar: string; name_en: string | null
+    service_group: string; default_expense_account_code: string | null
+    default_ap_account_code: string | null; requires_supplier: number
+    requires_document: number; requires_center: number; is_active: number
+  }>>('/gl/service-types')),
+
+  createServiceType: (body: {
+    code: string; name_ar: string; name_en?: string; service_group: string
+    default_expense_account_code?: string; default_ap_account_code?: string
+    requires_supplier?: number; requires_document?: number; requires_center?: number
+  }) => unwrap(api.post('/gl/service-types', body)),
+
+  updateServiceType: (id: number, body: Record<string, unknown>) =>
+    unwrap(api.patch(`/gl/service-types/${id}`, body)),
+
+  supplierServiceMap: () => unwrap(api.get<Array<{
+    id: number; supplier_code: number; supplier_name: string | null
+    service_type_code: string; default_ap_account_code: string | null
+    default_expense_account_code: string | null; is_primary: number; is_active: number
+  }>>('/gl/supplier-service-map')),
+
+  addSupplierServiceMap: (body: {
+    supplier_code: number; service_type_code: string
+    default_ap_account_code?: string; is_primary?: number
+  }) => unwrap(api.post('/gl/supplier-service-map', body)),
+
+  removeSupplierServiceMap: (id: number) =>
+    unwrap(api.delete(`/gl/supplier-service-map/${id}`)),
+
+  controlAccounts: () => unwrap(api.get<Array<{
+    mapping_key: string; id: number | null; account_code: string | null
+    is_active: number; updated_at: string | null; seeded: boolean
+  }>>('/gl/control-accounts')),
+
+  upsertControlAccount: (mapping_key: string, account_code: string) =>
+    unwrap(api.post('/gl/control-accounts', { mapping_key, account_code })),
+
+  deleteControlAccount: (mapping_key: string) =>
+    unwrap(api.delete(`/gl/control-accounts/${mapping_key}`)),
+
+  verificationChecklist: () => unwrap(api.get('/gl/hardening/verification/checklist')),
+
+  healthDailyLog: (limit = 30) =>
+    unwrap(api.get(`/gl/hardening/health/daily-log?limit=${limit}`)),
+  healthRunNow: () =>
+    unwrap(api.post('/gl/hardening/health/run-now', {})),
 }
 
 // ── Reconciliation types (shared with ReconciliationPage, PeriodCloseCockpit) ─
