@@ -103,7 +103,7 @@ purchasing.post('/purchase-orders', zValidator('json', poCreateSchema), async (c
     return `PO-${yr}-${String((cnt?.n ?? 0) + 1).padStart(4, '0')}`
   })()
 
-  const totalAmount = b.items.reduce((s, i) => s + i.qty_ordered * i.unit_price, 0)
+  const totalAmount = b.items.reduce((s, i) => s + i.qty_ordered * (i.unit_price || 0), 0)
 
   const poRes = await c.env.DB.prepare(
     `INSERT INTO purchase_orders
@@ -182,7 +182,7 @@ purchasing.patch('/purchase-orders/:id/receive', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
   const { items } = await c.req.json<{
-    items: Array<{ item_id: number; qty_received: number; warehouse?: string }>
+    items: Array<{ item_id: number; qty_received: number; warehouse_id?: number }>
   }>()
 
   if (!items?.length) return c.json({ success: false, error: 'البنود مطلوبة' }, 400)
@@ -208,30 +208,31 @@ purchasing.patch('/purchase-orders/:id/receive', async (c) => {
     item_name: string
     qty_received: number
     unit_price: number
-    warehouse: string
+    warehouse_id: number
   }> = []
 
   for (const recv of items.filter(i => i.qty_received > 0)) {
     const poItem = await c.env.DB.prepare(
-      `SELECT id, item_code, item_name, unit_price, warehouse
-       FROM purchase_order_items
-       WHERE id = ? AND po_id = ? AND company_id = ?`
+      `SELECT id, item_code, item_name, unit_price FROM purchase_order_items WHERE id = ? AND po_id = ? AND company_id = ?`
     ).bind(recv.item_id, id, company_id).first<{
       id: number
       item_code: string | null
       item_name: string
       unit_price: number
-      warehouse: string | null
     }>()
 
     if (!poItem) {
       return c.json({ success: false, error: `بند الاستلام ${recv.item_id} غير موجود في أمر الشراء` }, 404)
     }
 
-    const warehouse = (recv.warehouse ?? poItem.warehouse ?? '').trim()
+    const warehouseId = recv.warehouse_id
+    if (!warehouseId) {
+      return c.json({ success: false, error: `المخزن مطلوب للبند ${recv.item_id}` }, 400)
+    }
+
     const itemCodeNum = poItem.item_code ? Number(poItem.item_code) : NaN
-    if (!warehouse || isNaN(itemCodeNum) || itemCodeNum <= 0) {
-      return c.json({ success: false, error: `بيانات البند ${recv.item_id} غير مكتملة (المخزن أو كود الصنف)` }, 400)
+    if (isNaN(itemCodeNum) || itemCodeNum <= 0) {
+      return c.json({ success: false, error: `بيانات البند ${recv.item_id} غير مكتملة (كود الصنف)` }, 400)
     }
 
     receiveRows.push({
@@ -240,7 +241,7 @@ purchasing.patch('/purchase-orders/:id/receive', async (c) => {
       item_name: poItem.item_name,
       qty_received: recv.qty_received,
       unit_price: poItem.unit_price ?? 0,
-      warehouse,
+      warehouse_id: warehouseId,
     })
   }
 
@@ -297,304 +298,6 @@ purchasing.get('/cash-tx-search', async (c) => {
   ).bind(...binds).all()
 
   return c.json({ success: true, data: results })
-})
-
-// ═══════════════════════════════════════════════════════════
-// SUPPLIER INVOICES — المطابقة الثلاثية (PO → GR → Invoice)
-// ═══════════════════════════════════════════════════════════
-
-purchasing.get('/purchase-orders/:id/match', async (c) => {
-  const { company_id } = getUser(c)
-  const poId = Number(c.req.param('id'))
-
-  const po = await c.env.DB.prepare(
-    'SELECT * FROM purchase_orders WHERE id = ? AND company_id = ?'
-  ).bind(poId, company_id).first()
-  if (!po) return c.json({ success: false, error: 'طلب الشراء غير موجود' }, 404)
-
-  const [items, invoices] = await Promise.all([
-    c.env.DB.prepare(
-      'SELECT * FROM purchase_order_items WHERE po_id = ? AND company_id = ? ORDER BY id'
-    ).bind(poId, company_id).all(),
-
-    c.env.DB.prepare(`
-      SELECT si.id AS invoice_id, si.invoice_number, si.invoice_date,
-             si.total_amount, si.notes AS invoice_notes,
-             sii.po_item_id, sii.qty_invoiced, sii.unit_price AS invoice_unit_price
-      FROM supplier_invoices si
-      JOIN supplier_invoice_items sii ON sii.invoice_id = si.id
-      WHERE si.po_id = ? AND si.company_id = ?
-      ORDER BY si.invoice_date DESC, si.id DESC
-    `).bind(poId, company_id).all<{
-      invoice_id: number; invoice_number: string; invoice_date: string
-      total_amount: number; invoice_notes: string | null
-      po_item_id: number; qty_invoiced: number; invoice_unit_price: number
-    }>(),
-  ])
-
-  const invoicedByItem = new Map<number, { qty: number; price: number; invoice_id: number; invoice_number: string }>()
-  for (const row of invoices.results) {
-    const existing = invoicedByItem.get(row.po_item_id)
-    if (existing) {
-      existing.qty += row.qty_invoiced
-    } else {
-      invoicedByItem.set(row.po_item_id, {
-        qty:            row.qty_invoiced,
-        price:          row.invoice_unit_price,
-        invoice_id:     row.invoice_id,
-        invoice_number: row.invoice_number,
-      })
-    }
-  }
-
-  const matchRows = (items.results as Array<{
-    id: number; item_name: string; unit: string | null
-    qty_ordered: number; qty_received: number; unit_price: number
-  }>).map(item => {
-    const inv = invoicedByItem.get(item.id)
-    const qtyInv  = inv?.qty   ?? 0
-    const priceInv = inv?.price ?? item.unit_price
-
-    let match_status: 'matched' | 'price_variance' | 'qty_variance' | 'over_invoiced' | 'pending_invoice' | 'no_gr'
-    if (item.qty_received === 0) {
-      match_status = 'no_gr'
-    } else if (qtyInv === 0) {
-      match_status = 'pending_invoice'
-    } else if (qtyInv > item.qty_received) {
-      match_status = 'over_invoiced'
-    } else if (Math.abs(qtyInv - item.qty_received) > 0.001) {
-      match_status = 'qty_variance'
-    } else if (Math.abs(priceInv - item.unit_price) > 0.01) {
-      match_status = 'price_variance'
-    } else {
-      match_status = 'matched'
-    }
-
-    return {
-      po_item_id:     item.id,
-      item_name:      item.item_name,
-      unit:           item.unit,
-      qty_ordered:    item.qty_ordered,
-      qty_received:   item.qty_received,
-      qty_invoiced:   qtyInv,
-      po_unit_price:  item.unit_price,
-      inv_unit_price: priceInv,
-      match_status,
-      invoice_id:     inv?.invoice_id     ?? null,
-      invoice_number: inv?.invoice_number ?? null,
-    }
-  })
-
-  const uniqueInvoices = [...new Map(
-    invoices.results.map(r => [r.invoice_id, {
-      id: r.invoice_id, number: r.invoice_number,
-      date: r.invoice_date, total: r.total_amount,
-    }])
-  ).values()]
-
-  return c.json({ success: true, data: { po, match_rows: matchRows, invoices: uniqueInvoices } })
-})
-
-purchasing.post('/purchase-orders/:id/invoices', async (c) => {
-  const { company_id, sub: userId } = getUser(c)
-  const poId = Number(c.req.param('id'))
-
-  const b = await c.req.json<{
-    invoice_number: string; invoice_date: string; notes?: string
-    items: Array<{ po_item_id: number; qty_invoiced: number; unit_price: number }>
-  }>()
-
-  if (!b.invoice_number || !b.invoice_date || !b.items?.length) {
-    return c.json({ success: false, error: 'رقم الفاتورة والتاريخ والبنود مطلوبة' }, 400)
-  }
-
-  const dupCheck = await c.env.DB.prepare(
-    'SELECT id FROM supplier_invoices WHERE company_id = ? AND invoice_number = ?'
-  ).bind(company_id, b.invoice_number).first()
-  if (dupCheck) {
-    return c.json({ success: false, error: `رقم الفاتورة "${b.invoice_number}" مستخدم مسبقاً` }, 409)
-  }
-
-  const po = await c.env.DB.prepare(
-    'SELECT id, supplier_code FROM purchase_orders WHERE id = ? AND company_id = ?'
-  ).bind(poId, company_id).first<{ id: number; supplier_code: number | null }>()
-  if (!po) return c.json({ success: false, error: 'طلب الشراء غير موجود' }, 404)
-
-  const periodId = await getOpenPeriod(c.env.DB, company_id, b.invoice_date)
-  if (!periodId) {
-    return c.json({ success: false, error: `لا توجد فترة مالية مفتوحة للتاريخ ${b.invoice_date}` }, 400)
-  }
-
-  for (const item of b.items) {
-    const poItem = await c.env.DB.prepare(
-      `SELECT item_name, qty_received, (SELECT COALESCE(SUM(qty_invoiced),0) FROM supplier_invoice_items WHERE po_item_id = ?) AS already_invoiced
-       FROM purchase_order_items WHERE id = ? AND po_id = ? AND company_id = ?`
-    ).bind(item.po_item_id, item.po_item_id, poId, company_id).first<{ item_name: string; qty_received: number; already_invoiced: number }>()
-
-    if (!poItem) return c.json({ success: false, error: `البند ${item.po_item_id} غير موجود` }, 404)
-
-    const remainingToInvoice = poItem.qty_received - poItem.already_invoiced
-    if (item.qty_invoiced > remainingToInvoice) {
-      return c.json({
-        success: false,
-        error: `الكمية المفوترة (${item.qty_invoiced}) تتجاوز المتبقي من الاستلام (${remainingToInvoice}) لبند ${poItem.item_name}. المطابقة الثلاثية مطلوبة.`
-      }, 409)
-    }
-  }
-
-  const totalAmount = b.items.reduce((s, i) => s + i.qty_invoiced * i.unit_price, 0)
-
-  const invRes = await c.env.DB.prepare(
-    `INSERT INTO supplier_invoices
-     (company_id, po_id, invoice_number, invoice_date, supplier_code, total_amount, notes, created_by)
-     VALUES (?,?,?,?,?,?,?,?)`
-  ).bind(company_id, poId, b.invoice_number, b.invoice_date,
-         po.supplier_code ?? null, totalAmount, b.notes ?? null, userId).run()
-
-  const invoiceId = invRes.meta.last_row_id
-
-  await c.env.DB.batch(b.items.map(i =>
-    c.env.DB.prepare(
-      `INSERT INTO supplier_invoice_items (invoice_id, po_item_id, company_id, qty_invoiced, unit_price)
-       VALUES (?,?,?,?,?)`
-    ).bind(invoiceId, i.po_item_id, company_id, i.qty_invoiced, i.unit_price)
-  ))
-
-  const glEntryId = await FinanceCore.resolveSupplierInvoice(c.env.DB, {
-    company_id,
-    ref_id: invoiceId,
-    supplier_code: po.supplier_code ?? null,
-    amount: totalAmount,
-    date: b.invoice_date,
-    description: `فاتورة مورد: ${b.invoice_number}`,
-    created_by: userId,
-  })
-
-  if (glEntryId) {
-    await c.env.DB.prepare('UPDATE supplier_invoices SET journal_entry_id = ? WHERE id = ?')
-      .bind(glEntryId, invoiceId).run()
-  }
-
-  void logAudit(c.env.DB, {
-    user_id: userId, company_id, action: 'CREATE',
-    table_name: 'supplier_invoices', record_id: invoiceId,
-    new_value: { po_id: poId, invoice_number: b.invoice_number, total: totalAmount, gl_entry_id: glEntryId },
-  })
-
-  return c.json({ success: true, data: { id: invoiceId, gl_entry_id: glEntryId } }, 201)
-})
-
-// ═══════════════════════════════════════════════════════════
-// AP AGING — شيخوخة الذمم الدائنة
-// ═══════════════════════════════════════════════════════════
-
-purchasing.get('/ap-aging', async (c) => {
-  const { company_id } = getUser(c)
-
-  const { results } = await c.env.DB.prepare(`
-    SELECT
-      si.id,
-      si.invoice_number,
-      si.invoice_date,
-      si.supplier_code,
-      COALESCE(si.due_date_days, 30)             AS due_date_days,
-      DATE(si.invoice_date, '+' || COALESCE(si.due_date_days,30) || ' days') AS due_date,
-      si.total_amount,
-      COALESCE(si.paid_amount, 0)                AS paid_amount,
-      si.total_amount - COALESCE(si.paid_amount, 0) AS outstanding,
-      si.payment_date,
-      si.payment_ref,
-      po.po_number,
-      COALESCE(s.name, po.supplier_name)         AS supplier_name,
-      COALESCE(CAST(
-        julianday('now') -
-        julianday(DATE(si.invoice_date, '+' || COALESCE(si.due_date_days,30) || ' days'))
-        AS INTEGER
-      ), 0) AS days_overdue
-    FROM supplier_invoices si
-    LEFT JOIN purchase_orders po ON po.id = si.po_id AND po.company_id = si.company_id
-    LEFT JOIN suppliers s ON s.code = si.supplier_code AND s.company_id = si.company_id
-    WHERE si.company_id = ?
-      AND si.total_amount > COALESCE(si.paid_amount, 0)
-    ORDER BY due_date ASC
-  `).bind(company_id).all()
-
-  return c.json({ success: true, data: results })
-})
-
-// ═══════════════════════════════════════════════════════════
-// SUPPLIER INVOICE PAYMENT
-// ═══════════════════════════════════════════════════════════
-
-purchasing.patch('/supplier-invoices/:id/pay', async (c) => {
-  const { company_id, sub: userId } = getUser(c)
-  const id = Number(c.req.param('id'))
-  const b = await c.req.json<{
-    paid_amount: number; payment_date?: string; payment_ref?: string
-    financial_account_id?: number; center_code?: number; season_id?: number
-  }>()
-
-  if (!b.financial_account_id) {
-    return c.json({ success: false, error: 'يجب تحديد الحساب (الخزينة/البنك) لسداد الفاتورة' }, 400)
-  }
-
-  const inv = await c.env.DB.prepare(
-    `SELECT id, invoice_number, total_amount, COALESCE(paid_amount,0) AS paid_amount,
-            supplier_code, payment_date, payment_ref
-     FROM supplier_invoices WHERE id = ? AND company_id = ?`
-  ).bind(id, company_id).first<{
-    id: number; invoice_number: string; total_amount: number; paid_amount: number
-    supplier_code: number | null; payment_date: string | null; payment_ref: string | null
-  }>()
-  if (!inv) return c.json({ success: false, error: 'الفاتورة غير موجودة' }, 404)
-
-  const paymentAmount = Math.min(
-    Number(b.paid_amount) || 0,
-    inv.total_amount - inv.paid_amount,
-  )
-  if (paymentAmount <= 0) {
-    return c.json({ success: false, error: 'لا يوجد مبلغ صالح للدفع — الفاتورة مسددة بالكامل' }, 400)
-  }
-
-  const today = b.payment_date ?? getTodayIsoDate()
-  const narration = `سداد فاتورة مورد #${inv.invoice_number}${b.payment_ref ? ` (${b.payment_ref})` : ''}`
-
-  try {
-    await FinanceCore.prepareCashMovement(c.env.DB, {
-      company_id,
-      userId,
-      transaction_date: today,
-      direction: 'م',
-      amount: paymentAmount,
-      narration,
-      supplier_code: inv.supplier_code ?? undefined,
-      financial_account_id: b.financial_account_id,
-      center_code: b.center_code ?? null,
-      season_id: b.season_id ?? null,
-      status: 'posted',
-      skipSupplierMirror: true, // supplier_transactions already has the original invoice
-    })
-
-    await c.env.DB.prepare(
-      `UPDATE supplier_invoices
-       SET paid_amount    = paid_amount + ?,
-           payment_date   = COALESCE(?, payment_date),
-           payment_ref    = COALESCE(?, payment_ref)
-       WHERE id = ? AND company_id = ?`
-    ).bind(paymentAmount, b.payment_date ?? null, b.payment_ref ?? null, id, company_id).run()
-
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : 'فشل تسجيل الدفعة'
-    return c.json({ success: false, error: msg }, 400)
-  }
-
-  void logAudit(c.env.DB, {
-    user_id: userId, company_id, action: 'UPDATE',
-    table_name: 'supplier_invoices', record_id: id,
-    new_value: { paid_amount: paymentAmount, payment_date: today, account: b.financial_account_id },
-  })
-
-  return c.json({ success: true, data: null })
 })
 
 export default purchasing

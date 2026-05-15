@@ -1,20 +1,10 @@
 import type { D1Database } from '@cloudflare/workers-types'
 import {
   resolveWorkOrderLabor as peResolveWorkOrderLabor,
-  resolveControlAccount,
+  resolveContractAdvance as peResolveContractAdvance,
 } from '../../posting_engine'
 import { postFromBusinessEvent } from '../business_events'
-
-async function requireControlMapping(
-  db: D1Database,
-  companyId: number,
-  key: string,
-  context: string,
-): Promise<string> {
-  const code = await resolveControlAccount(db, companyId, key)
-  if (code) return code
-  throw new Error(`COA_CONTROL_UNRESOLVED: ${context}. Missing active mapping for key [${key}].`)
-}
+import { resolveControlAccount } from '../../posting_engine'
 
 export async function resolveWorkOrderLabor(
   db: D1Database,
@@ -26,29 +16,24 @@ export async function resolveWorkOrderLabor(
     description: string
     created_by?: number
     center_code?: number
-    season_id?: number | null
-    field_id?: number | null
+    season_id?: number
+    field_id?: number
   },
 ): Promise<number | null> {
-  const cogsAcc = await requireControlMapping(
-    db,
-    opts.company_id,
-    'labor_expense',
-    'Work order labor debit account'
-  )
-  const wagesPayableAcc = await requireControlMapping(
-    db,
-    opts.company_id,
-    'wages_payable',
-    'Work order labor credit account'
-  )
+  const [cogsAcc, wagesPayableAcc] = await Promise.all([
+    resolveControlAccount(db, opts.company_id, 'inventory_cogs_adjustment'),
+    resolveControlAccount(db, opts.company_id, 'wages_payable'),
+  ])
+
   const blueprint = await peResolveWorkOrderLabor(
-    db,
-    opts.company_id,
-    cogsAcc,
-    wagesPayableAcc,
+    db, 
+    opts.company_id, 
+    cogsAcc || '', 
+    wagesPayableAcc || '', 
     opts.amount,
+    opts.description
   )
+  
   if (blueprint.isBlocked || !blueprint.lines.length) {
     throw new Error(`WORK_ORDER_LABOR_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
@@ -58,21 +43,22 @@ export async function resolveWorkOrderLabor(
     event_type:    'work_order_labor',
     source_module: 'operations',
     source_id:     opts.ref_id,
+    source_link_id: opts.ref_id,
     event_date:    opts.date,
-    description:   `عمليات إنتاج | ${opts.description}`,
+    description:   `تكلفة عمالة/معدات | ${opts.description}`,
     created_by:    opts.created_by,
-    payload:       { amount: opts.amount, season_id: opts.season_id, field_id: opts.field_id },
+    payload:       { amount: opts.amount },
     trace:         blueprint.trace ?? null,
-    lines:         blueprint.lines.map((l) => ({
+    lines:         blueprint.lines.map((l: any) => ({
       account_code:  l.account_code!,
       debit:         l.debit ?? 0,
       credit:        l.credit ?? 0,
-      description:   l.description ?? `عمليات إنتاج | ${opts.description}`,
+      description:   l.description ?? `تكلفة عمالة/معدات | ${opts.description}`,
       center_code:   opts.center_code,
-      season_id:     opts.season_id ?? undefined,
-      field_id:      opts.field_id ?? undefined,
+      season_id:     opts.season_id,
+      field_id:      opts.field_id,
       rule_slot:     l.rule_slot,
-      source_ledger: 'manual' as const,
+      source_ledger: 'manual', 
       source_record_id: opts.ref_id,
     })),
   })
@@ -86,26 +72,43 @@ export async function resolveContractAdvance(
     amount: number
     date: string
     description: string
+    contract_id: number
     created_by?: number
   },
 ): Promise<number | null> {
-  // Customer pays us in advance → DR Cash / CR Deferred Revenue (liability)
-  // deferred_revenue maps to 21300001 (migration 0073)
-  const cashAcc           = await resolveControlAccount(db, opts.company_id, 'cash')            || '11010001'
-  const deferredRevenueAcc = await resolveControlAccount(db, opts.company_id, 'deferred_revenue') || '21300001'
+  const [cashAcc, deferredAcc] = await Promise.all([
+    resolveControlAccount(db, opts.company_id, 'cash'),
+    resolveControlAccount(db, opts.company_id, 'deferred_revenue'), // or similar for contract advances
+  ])
+
+  const blueprint = await peResolveContractAdvance(
+    db, 
+    opts.company_id, 
+    cashAcc || '', 
+    deferredAcc || '', 
+    opts.amount,
+    opts.description
+  )
 
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'contract_advance',
     source_module: 'contracts',
     source_id:     opts.ref_id,
+    source_link_id: opts.ref_id,
     event_date:    opts.date,
-    description:   `دفعة مقدمة عقد بيع | ${opts.description}`,
+    description:   `دفعة مقدمة عقد | ${opts.description}`,
     created_by:    opts.created_by,
-    payload:       { amount: opts.amount },
-    lines:         [
-      { account_code: cashAcc,            debit: opts.amount, credit: 0,           description: `دفعة مقدمة عقد بيع | ${opts.description}`, rule_slot: 'cash' },
-      { account_code: deferredRevenueAcc, debit: 0,           credit: opts.amount, description: `دفعة مقدمة عقد بيع | ${opts.description}`, rule_slot: 'deferred_revenue' },
-    ],
+    payload:       { contract_id: opts.contract_id, amount: opts.amount },
+    trace:         blueprint.trace ?? null,
+    lines:         blueprint.lines.map((l: any) => ({
+      account_code:  l.account_code!,
+      debit:         l.debit ?? 0,
+      credit:        l.credit ?? 0,
+      description:   l.description ?? `دفعة مقدمة عقد | ${opts.description}`,
+      rule_slot:     l.rule_slot,
+      source_ledger: 'manual',
+      source_record_id: opts.ref_id,
+    })),
   })
 }

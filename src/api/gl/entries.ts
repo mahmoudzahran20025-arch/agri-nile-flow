@@ -380,9 +380,10 @@ entries.post('/:id/reverse', async (c) => {
   try {
     const revEntryId = await FinanceCore.postManualReversal(c.env.DB, {
       company_id,
+      ref_id: id,
       original_entry_id: id,
       date: today,
-      reason,
+      description: `${reason} (عكس قيد رقم #${id})`,
       lines: revLines,
       created_by: userId
     })
@@ -468,6 +469,8 @@ entries.post('/manual-entries', roleGuard(['super_admin', 'company_admin', 'acco
   try {
     const entryId = await FinanceCore.postManualEntry(c.env.DB, {
       company_id,
+      ref_id: 0,
+      amount: totalDr,
       date: body.entry_date,
       description: body.description,
       lines: body.lines.map(l => ({

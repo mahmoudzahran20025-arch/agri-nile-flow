@@ -33,7 +33,7 @@ reconciliationStatus.get('/reconciliation-status', async (c) => {
       `SELECT
          COALESCE(SUM(jel.credit - jel.debit), 0) AS balance
        FROM journal_entry_lines jel
-       JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.company_id = jel.company_id
+       JOIN journal_entries je ON je.id = jel.entry_id AND je.company_id = jel.company_id
        WHERE je.company_id = ?
          AND jel.account_code LIKE '2120%'
          AND je.status = 'posted'`
@@ -51,7 +51,7 @@ reconciliationStatus.get('/reconciliation-status', async (c) => {
       `SELECT
          COALESCE(SUM(jel.debit - jel.credit), 0) AS balance
        FROM journal_entry_lines jel
-       JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.company_id = jel.company_id
+       JOIN journal_entries je ON je.id = jel.entry_id AND je.company_id = jel.company_id
        WHERE je.company_id = ?
          AND jel.account_code LIKE '1407%'
          AND je.status = 'posted'`
@@ -69,7 +69,7 @@ reconciliationStatus.get('/reconciliation-status', async (c) => {
       `SELECT
          COALESCE(SUM(jel.credit - jel.debit), 0) AS balance
        FROM journal_entry_lines jel
-       JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.company_id = jel.company_id
+       JOIN journal_entries je ON je.id = jel.entry_id AND je.company_id = jel.company_id
        WHERE je.company_id = ?
          AND jel.account_code = '21200001'
          AND je.status = 'posted'`

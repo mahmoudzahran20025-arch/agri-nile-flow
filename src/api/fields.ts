@@ -132,9 +132,9 @@ fields.post('/harvest', async (c) => {
   try {
     await FinanceCore.postHarvestLedger(c.env.DB, {
       company_id,
-      userId,
+      user_id: Number(userId),
       harvest_id: harvestId,
-      harvest_date: b.harvest_date,
+      date: b.harvest_date,
       crop_name: b.crop_name,
       field_name: field.name,
       center_code: field.center_code,
@@ -224,9 +224,9 @@ fields.patch('/harvest/:id', async (c) => {
       try {
         await FinanceCore.postHarvestLedger(c.env.DB, {
           company_id,
-          userId: Number(getUser(c).sub),
+          user_id: Number(getUser(c).sub),
           harvest_id: id,
-          harvest_date: after.harvest_date,
+          date: after.harvest_date,
           crop_name: after.crop_name,
           field_name: before.field_name,
           center_code: before.center_code,
@@ -281,9 +281,9 @@ fields.post('/harvest/:id/repost', roleGuard(['super_admin', 'company_admin', 'a
   try {
     await FinanceCore.postHarvestLedger(c.env.DB, {
       company_id,
-      userId: Number(userId),
+      user_id: Number(userId),
       harvest_id: harvest.id,
-      harvest_date: harvest.harvest_date,
+      date: harvest.harvest_date,
       crop_name: harvest.crop_name,
       total_revenue: harvest.revenue ?? 0,
       total_actual_cost: harvest.actual_cost ?? 0,

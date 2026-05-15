@@ -779,3 +779,53 @@ export async function resolveContractAdvance(
   const errors = await validateAccounts(db, company_id, [cash_account, deferred_account])
   return { lines, validationErrors: errors, warnings: [], isBlocked: errors.length > 0, trace }
 }
+
+// ── Public: resolvePartnerCapital ────────────────────────────────────────────
+
+export async function resolvePartnerCapital(
+  db: D1Database, company_id: number,
+  cash_account: string, equity_account: string,
+  amount: number, isReceipt = true,
+  description?: string, dimensions?: DimOpts,
+): Promise<JournalBlueprint> {
+  const trace = buildTrace('partner_capital', null, null, null, 0, null,
+    { cash_account, equity_account })
+  
+  const lines: JournalLine[] = isReceipt 
+    ? [
+        { account_code: cash_account,   debit: amount, credit: 0,      description, ...dimensions, rule_slot: 'cash_account' },
+        { account_code: equity_account, debit: 0,      credit: amount, description, ...dimensions, rule_slot: 'equity_account' },
+      ]
+    : [
+        { account_code: equity_account, debit: amount, credit: 0,      description, ...dimensions, rule_slot: 'equity_account' },
+        { account_code: cash_account,   debit: 0,      credit: amount, description, ...dimensions, rule_slot: 'cash_account' },
+      ]
+
+  const errors = await validateAccounts(db, company_id, [cash_account, equity_account])
+  return { lines, validationErrors: errors, warnings: [], isBlocked: errors.length > 0, trace }
+}
+
+// ── Public: resolvePartnerCurrent ────────────────────────────────────────────
+
+export async function resolvePartnerCurrent(
+  db: D1Database, company_id: number,
+  cash_account: string, current_account: string,
+  amount: number, isReceipt = false,
+  description?: string, dimensions?: DimOpts,
+): Promise<JournalBlueprint> {
+  const trace = buildTrace('partner_current', null, null, null, 0, null,
+    { cash_account, current_account })
+  
+  const lines: JournalLine[] = isReceipt 
+    ? [
+        { account_code: cash_account,    debit: amount, credit: 0,      description, ...dimensions, rule_slot: 'cash_account' },
+        { account_code: current_account, debit: 0,      credit: amount, description, ...dimensions, rule_slot: 'partner_current_account' },
+      ]
+    : [
+        { account_code: current_account, debit: amount, credit: 0,      description, ...dimensions, rule_slot: 'partner_current_account' },
+        { account_code: cash_account,    debit: 0,      credit: amount, description, ...dimensions, rule_slot: 'cash_account' },
+      ]
+
+  const errors = await validateAccounts(db, company_id, [cash_account, current_account])
+  return { lines, validationErrors: errors, warnings: [], isBlocked: errors.length > 0, trace }
+}

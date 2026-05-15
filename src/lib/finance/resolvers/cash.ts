@@ -19,6 +19,8 @@ export async function resolveCashLedger(
     description: string
     created_by?: number
     center_code?: number
+    season_id?: number
+    field_id?: number
     expense_code?: string | null
     supplier_code?: number | null
     partner_id?: number | null
@@ -29,9 +31,8 @@ export async function resolveCashLedger(
     ? (await db.prepare('SELECT gl_account_code FROM bank_accounts WHERE id = ?').bind(opts.financial_account_id).first<{ gl_account_code: string }>())?.gl_account_code || ''
     : (await resolveControlAccount(db, opts.company_id, 'cash')) || ''
 
-  // Determine contra account — explicit resolution chain with audit trail
   let contraAcc = opts.contra_account || ''
-  let contraResolution = opts.contra_account ? `explicit:${opts.contra_account}` : ''  // tracks how contra was resolved, stored in payload
+  let contraResolution = opts.contra_account ? `explicit:${opts.contra_account}` : ''
 
   if (!contraAcc && opts.expense_code) {
     const et = await db.prepare('SELECT gl_account_code, name FROM expense_types WHERE code = ? AND company_id = ?')
@@ -40,16 +41,11 @@ export async function resolveCashLedger(
       contraAcc = et.gl_account_code
       contraResolution = `expense_code:${opts.expense_code}(${et.name})`
     } else {
-      throw new Error(
-        `CASH_EXPENSE_ACCOUNT_MISSING: expense_code="${opts.expense_code}" not found in expense_types for company_id=${opts.company_id}. Configure a GL account for this expense type before posting.`
-      )
+      throw new Error(`CASH_EXPENSE_ACCOUNT_MISSING: expense_code="${opts.expense_code}" not found.`)
     }
   }
 
   if (!contraAcc) {
-    // Partner inflows = capital injection → equity; partner outflows = current account
-    // Supplier outflows = AP clearing; no-party inflows = revenue; no-party outflows = expense
-    // equity = partner capital inflow; partner_current_account = partner withdrawal/loan
     const key = opts.partner_id && opts.direction === 'د'
       ? 'equity'
       : opts.partner_id
@@ -59,7 +55,6 @@ export async function resolveCashLedger(
           : opts.direction === 'د' ? 'revenue_default' : 'expense_default'
     contraAcc = (await resolveControlAccount(db, opts.company_id, key)) || ''
     if (!contraAcc && opts.partner_id) {
-      // Final fallback: equity account covers both directions if current_account missing
       contraAcc = (await resolveControlAccount(db, opts.company_id, 'equity')) || ''
       contraResolution = `control:equity(${key}:missing)`
     } else {
@@ -67,36 +62,46 @@ export async function resolveCashLedger(
     }
   }
 
+  const dims = {
+    center_code: opts.center_code,
+    season_id:   opts.season_id,
+    field_id:    opts.field_id,
+  }
+
   const blueprint = await peResolveCash(
-    db,
-    opts.company_id,
-    cashAcc,
-    contraAcc,
-    opts.amount,
-    opts.direction === 'د', // isReceipt
+    db, 
+    opts.company_id, 
+    cashAcc, 
+    contraAcc, 
+    opts.amount, 
+    opts.direction === 'د',
+    opts.description,
+    dims
   )
+  
   if (blueprint.isBlocked || !blueprint.lines.length) {
     throw new Error(`CASH_LEDGER_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
-
-  const lines = blueprint.lines
 
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'cash_transaction',
     source_module: 'treasury',
     source_id:     opts.ref_id,
+    source_link_id: opts.ref_id,
     event_date:    opts.date,
     description:   `${opts.direction === 'د' ? 'قبض' : 'صرف'} | ${opts.description}`,
     created_by:    opts.created_by,
     payload:       { direction: opts.direction, amount: opts.amount, financial_account_id: opts.financial_account_id, contra_resolution: contraResolution },
     trace:         blueprint.trace ?? null,
-    lines:         lines.map((l) => ({
+    lines:         blueprint.lines.map((l: any) => ({
       account_code:  l.account_code!,
       debit:         l.debit ?? 0,
       credit:        l.credit ?? 0,
       description:   l.description ?? `${opts.direction === 'د' ? 'قبض' : 'صرف'} | ${opts.description}`,
       center_code:   opts.center_code,
+      season_id:     opts.season_id,
+      field_id:      opts.field_id,
       rule_slot:     l.rule_slot,
       source_ledger: 'cash' as const,
       source_record_id: opts.ref_id,
@@ -112,82 +117,69 @@ export async function resolveExpensePosting(
     amount: number
     date: string
     description: string
-    created_by?: number
+    financial_account_id?: number
     center_code?: number
-    // Explicit expense account overrides the control-account fallback.
-    // Pass the GL account code resolved from expense_types or a posting rule.
-    expense_account?: string | null
-    // Optional posting group codes — when provided, the cascade may find a
-    // more specific expense account from the posting rules matrix.
-    bus_posting_group_code?: string | null
-    prod_posting_group_code?: string | null
+    season_id?: number
+    field_id?: number
+    created_by?: number
+    bpg_code?: string | null
+    ppg_code?: string | null
   },
 ): Promise<number | null> {
-  const cashAcc = await resolveControlAccount(db, opts.company_id, 'cash')
+  const [cashAccRow] = await Promise.all([
+    opts.financial_account_id
+      ? db.prepare('SELECT gl_account_code FROM bank_accounts WHERE id = ? AND company_id = ?').bind(opts.financial_account_id, opts.company_id).first<{ gl_account_code: string }>()
+      : Promise.resolve(null),
+  ])
 
-  // Resolve the expense (debit) account: explicit > posting-group cascade > default
-  let expAcc: string | null = opts.expense_account || null
-
-  if (!expAcc && (opts.bus_posting_group_code || opts.prod_posting_group_code)) {
-    // Try the posting-group cascade when group codes are available
-    const blueprint = await peResolveExpense(
-      db,
-      opts.company_id,
-      opts.bus_posting_group_code ?? null,
-      opts.prod_posting_group_code ?? null,
-      cashAcc || '',
-      opts.amount,
-    )
-    if (!blueprint.isBlocked && blueprint.lines.length) {
-      const expLine = blueprint.lines.find((l) => l.rule_slot?.includes('expense'))
-      if (expLine?.account_code) expAcc = expLine.account_code
-    }
+  const cashAcc = cashAccRow?.gl_account_code || (await resolveControlAccount(db, opts.company_id, 'cash')) || ''
+  
+  const dims = {
+    center_code: opts.center_code,
+    season_id:   opts.season_id,
+    field_id:    opts.field_id,
   }
 
-  // Final fallback: expense_default control account
-  if (!expAcc) {
-    expAcc = await resolveControlAccount(db, opts.company_id, 'expense_default')
-  }
+  // Resolve from posting engine using BPG/PPG
+  const blueprint = await peResolveExpense(
+    db, 
+    opts.company_id, 
+    opts.bpg_code ?? null, 
+    opts.ppg_code ?? null, 
+    cashAcc, 
+    opts.amount,
+    undefined, 
+    opts.description,
+    dims
+  )
 
-  if (!expAcc || !cashAcc) {
-    throw new Error('EXPENSE_POSTING_BLOCKED: لا يوجد حساب مصروف أو حساب نقدية محدد')
+  if (blueprint.isBlocked || !blueprint.lines.length) {
+    throw new Error(`EXPENSE_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
-
-  // Build the two-line entry directly — no engine ambiguity
-  const lines = [
-    {
-      account_code:     expAcc,
-      debit:            opts.amount,
-      credit:           0,
-      description:      `مصروفات | ${opts.description}`,
-      center_code:      opts.center_code,
-      rule_slot:        'expense',
-      source_ledger:    'cash' as const,
-      source_record_id: opts.ref_id,
-    },
-    {
-      account_code:     cashAcc,
-      debit:            0,
-      credit:           opts.amount,
-      description:      `مصروفات | ${opts.description}`,
-      center_code:      opts.center_code,
-      rule_slot:        'cash',
-      source_ledger:    'cash' as const,
-      source_record_id: opts.ref_id,
-    },
-  ]
 
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'expense',
     source_module: 'treasury',
     source_id:     opts.ref_id,
+    source_link_id: opts.ref_id,
     event_date:    opts.date,
-    description:   `مصروفات | ${opts.description}`,
+    description:   `مصروف | ${opts.description}`,
     created_by:    opts.created_by,
-    payload:       { amount: opts.amount, expense_account: expAcc, cash_account: cashAcc },
-    trace:         null,
-    lines,
+    payload:       { amount: opts.amount, financial_account_id: opts.financial_account_id },
+    trace:         blueprint.trace ?? null,
+    lines:         blueprint.lines.map((l: any) => ({
+      account_code:  l.account_code!,
+      debit:         l.debit ?? 0,
+      credit:        l.credit ?? 0,
+      description:   l.description ?? `مصروف | ${opts.description}`,
+      center_code:   opts.center_code,
+      season_id:     opts.season_id,
+      field_id:      opts.field_id,
+      rule_slot:     l.rule_slot,
+      source_ledger: 'cash' as const,
+      source_record_id: opts.ref_id,
+    })),
   })
 }
 
@@ -199,83 +191,67 @@ export async function resolveSalesRevenue(
     amount: number
     date: string
     description: string
-    created_by?: number
+    financial_account_id?: number
     center_code?: number
     season_id?: number
     field_id?: number
-    // Optional posting group codes for cascade-based revenue account resolution
-    bus_posting_group_code?: string | null
-    prod_posting_group_code?: string | null
-    // Explicit revenue account overrides cascade
-    revenue_account?: string | null
+    created_by?: number
+    bpg_code?: string | null
+    ppg_code?: string | null
   },
 ): Promise<number | null> {
-  const cashAcc = await resolveControlAccount(db, opts.company_id, 'cash')
+  const [cashAccRow] = await Promise.all([
+    opts.financial_account_id
+      ? db.prepare('SELECT gl_account_code FROM bank_accounts WHERE id = ? AND company_id = ?').bind(opts.financial_account_id, opts.company_id).first<{ gl_account_code: string }>()
+      : Promise.resolve(null),
+  ])
 
-  // Resolve revenue (credit) account: explicit > posting-group cascade > default
-  let revAcc: string | null = opts.revenue_account || null
-
-  if (!revAcc && (opts.bus_posting_group_code || opts.prod_posting_group_code)) {
-    const blueprint = await peResolveSalesRevenue(
-      db,
-      opts.company_id,
-      opts.bus_posting_group_code ?? null,
-      opts.prod_posting_group_code ?? null,
-      cashAcc || '',
-      opts.amount,
-    )
-    if (!blueprint.isBlocked && blueprint.lines.length) {
-      const revLine = blueprint.lines.find((l) => l.rule_slot?.includes('sales') || l.rule_slot?.includes('revenue'))
-      if (revLine?.account_code) revAcc = revLine.account_code
-    }
+  const cashAcc = cashAccRow?.gl_account_code || (await resolveControlAccount(db, opts.company_id, 'cash')) || ''
+  
+  const dims = {
+    center_code: opts.center_code,
+    season_id:   opts.season_id,
+    field_id:    opts.field_id,
   }
 
-  if (!revAcc) {
-    revAcc = await resolveControlAccount(db, opts.company_id, 'revenue_default')
-  }
+  // Resolve from posting engine
+  const blueprint = await peResolveSalesRevenue(
+    db, 
+    opts.company_id, 
+    opts.bpg_code ?? null, 
+    opts.ppg_code ?? null, 
+    cashAcc, 
+    opts.amount,
+    opts.description,
+    dims
+  )
 
-  if (!revAcc || !cashAcc) {
-    throw new Error('SALES_REVENUE_POSTING_BLOCKED: لا يوجد حساب إيرادات أو حساب نقدية محدد')
+  if (blueprint.isBlocked || !blueprint.lines.length) {
+    throw new Error(`REVENUE_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
-
-  // Build the two-line entry directly
-  const lines = [
-    {
-      account_code:     cashAcc,
-      debit:            opts.amount,
-      credit:           0,
-      description:      `إيرادات | ${opts.description}`,
-      center_code:      opts.center_code,
-      season_id:        opts.season_id,
-      field_id:         opts.field_id,
-      rule_slot:        'cash',
-      source_ledger:    'cash' as const,
-      source_record_id: opts.ref_id,
-    },
-    {
-      account_code:     revAcc,
-      debit:            0,
-      credit:           opts.amount,
-      description:      `إيرادات | ${opts.description}`,
-      center_code:      opts.center_code,
-      season_id:        opts.season_id,
-      field_id:         opts.field_id,
-      rule_slot:        'sales',
-      source_ledger:    'cash' as const,
-      source_record_id: opts.ref_id,
-    },
-  ]
 
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'revenue',
-    source_module: 'operations',
+    source_module: 'treasury',
     source_id:     opts.ref_id,
+    source_link_id: opts.ref_id,
     event_date:    opts.date,
-    description:   `إيرادات | ${opts.description}`,
+    description:   `إيراد | ${opts.description}`,
     created_by:    opts.created_by,
-    payload:       { amount: opts.amount, revenue_account: revAcc, season_id: opts.season_id, field_id: opts.field_id },
-    trace:         null,
-    lines,
+    payload:       { amount: opts.amount, financial_account_id: opts.financial_account_id },
+    trace:         blueprint.trace ?? null,
+    lines:         blueprint.lines.map((l: any) => ({
+      account_code:  l.account_code!,
+      debit:         l.debit ?? 0,
+      credit:        l.credit ?? 0,
+      description:   l.description ?? `إيراد | ${opts.description}`,
+      center_code:   opts.center_code,
+      season_id:     opts.season_id,
+      field_id:      opts.field_id,
+      rule_slot:     l.rule_slot,
+      source_ledger: 'cash' as const,
+      source_record_id: opts.ref_id,
+    })),
   })
 }

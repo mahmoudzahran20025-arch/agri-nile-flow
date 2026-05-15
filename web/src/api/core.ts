@@ -4,9 +4,7 @@
  */
 import type { ApiResult } from '../types'
 
-export const BASE_URL = window.location.hostname.endsWith('pages.dev')
-  ? 'https://agri-nile-flow.mahm-zahran22.workers.dev/api'
-  : '/api'
+export const BASE_URL = 'https://agri-nile-flow.mahm-zahran22.workers.dev/api'
 
 function getToken(): string | null {
   return localStorage.getItem('agro_token')

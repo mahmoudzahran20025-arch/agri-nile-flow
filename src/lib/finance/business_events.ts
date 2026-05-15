@@ -53,6 +53,7 @@ export interface EventBackedPostOpts {
   event_type: string
   source_module: string
   source_id: number
+  source_link_id?: number | null // NEW: for native traceability
   event_date: string
   description: string
   created_by?: number
@@ -367,6 +368,7 @@ export async function postFromBusinessEvent(
       description:        opts.description,
       ref_type:           'business_event',
       ref_id:             eventId,
+      source_link_id:     opts.source_link_id ?? null,
       created_by:         opts.created_by,
       posting_rule_trace: opts.trace ? JSON.stringify(opts.trace) : undefined,
       lines:              opts.lines,

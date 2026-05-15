@@ -15,7 +15,7 @@ interface FormTemplate {
   requires_season: number
   requires_supplier: number
   requires_equipment: number
-  target_api_endpoint: string | null
+  target_endpoint: string | null
   notes: string | null
 }
 
@@ -58,7 +58,7 @@ forms.get('/', async (c) => {
        ft.requires_season,
        ft.requires_supplier,
        ft.requires_equipment,
-       ft.target_api_endpoint,
+       ft.target_endpoint,
        ft.notes
      FROM form_templates ft
      JOIN service_types st ON st.code = ft.service_type_code
@@ -86,7 +86,7 @@ forms.get('/:service_type', async (c) => {
          ft.requires_season,
          ft.requires_supplier,
          ft.requires_equipment,
-         ft.target_api_endpoint,
+         ft.target_endpoint,
          ft.notes
        FROM form_templates ft
        JOIN service_types st ON st.code = ft.service_type_code
@@ -150,7 +150,7 @@ forms.get('/:service_type', async (c) => {
       amount_formula:      template.amount_formula,
       default_unit_code:   template.default_unit_code,
       dimensions,
-      target_api_endpoint: template.target_api_endpoint,
+      target_api_endpoint: template.target_endpoint,
       notes:               template.notes,
       fields,
       unit_types:          unitResult.results,

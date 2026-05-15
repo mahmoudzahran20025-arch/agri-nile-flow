@@ -266,9 +266,10 @@ operations.patch('/orders/:id/status', async (c) => {
         try {
           await FinanceCore.postManualReversal(c.env.DB, {
             company_id,
+            ref_id: id,
             original_entry_id: origEntry.id,
             date: actual_date ?? getTodayIsoDate(),
-            reason: `إلغاء أمر عمل #${id} — عكس تكاليف الإنتاج`,
+            description: `إلغاء أمر عمل #${id} — عكس تكاليف الإنتاج`,
             lines: origLines.map((l) => ({
               account_code: l.account_code,
               debit:        l.credit,   // flip DR↔CR
@@ -327,8 +328,8 @@ operations.patch('/orders/:id/status', async (c) => {
             : `تكلفة عمليات ميدانية (عمالة): أمر عمل #${id}`,
           created_by: userId,
           center_code: centerCode ?? undefined,
-          season_id: order?.season_id,
-          field_id: order?.field_id,
+          season_id: order?.season_id ?? undefined,
+          field_id: order?.field_id ?? undefined,
         })
 
         if (equipmentUnposted > 0 && entryId) {

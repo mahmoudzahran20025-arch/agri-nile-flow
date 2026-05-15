@@ -95,13 +95,13 @@ export async function readInventoryBalance(
   db: D1Database,
   companyId: number,
   itemCode: number,
-  warehouse: string,
+  warehouseId: number,
 ): Promise<{ balance_qty: number; balance_value: number }> {
   const snap = await db.prepare(
     `SELECT balance_qty, balance_value, is_stale
      FROM inventory_balances
-     WHERE company_id = ? AND item_code = ? AND warehouse = ?`
-  ).bind(companyId, itemCode, warehouse)
+     WHERE company_id = ? AND item_code = ? AND warehouse_id = ?`
+  ).bind(companyId, itemCode, warehouseId)
     .first<{ balance_qty: number; balance_value: number; is_stale: number }>()
 
   if (snap && !snap.is_stale) {
@@ -115,8 +115,8 @@ export async function readInventoryBalance(
        COALESCE(SUM(value_in) - SUM(value_out), 0) AS balance_value,
        MAX(id) AS last_movement_id
      FROM inventory_movements
-     WHERE company_id = ? AND item_code = ? AND warehouse = ?`
-  ).bind(companyId, itemCode, warehouse)
+     WHERE company_id = ? AND item_code = ? AND warehouse_id = ?`
+  ).bind(companyId, itemCode, warehouseId)
     .first<{ balance_qty: number; balance_value: number; last_movement_id: number | null }>()
 
   const balQty = ledger?.balance_qty ?? 0
@@ -126,16 +126,16 @@ export async function readInventoryBalance(
   // Heal the snapshot (fire-and-forget — caller already has correct values)
   await db.prepare(
     `INSERT INTO inventory_balances
-       (company_id, item_code, warehouse, balance_qty, balance_value, version, last_movement_id, last_updated, is_stale)
+       (company_id, item_code, warehouse_id, balance_qty, balance_value, version, last_movement_id, last_updated, is_stale)
      VALUES (?, ?, ?, ?, ?, 1, ?, datetime('now'), 0)
-     ON CONFLICT(company_id, item_code, warehouse) DO UPDATE SET
+     ON CONFLICT(company_id, item_code, warehouse_id) DO UPDATE SET
        balance_qty      = excluded.balance_qty,
        balance_value    = excluded.balance_value,
        version          = inventory_balances.version + 1,
        last_movement_id = excluded.last_movement_id,
        last_updated     = excluded.last_updated,
        is_stale         = 0`
-  ).bind(companyId, itemCode, warehouse, balQty, balVal, lastId).run()
+  ).bind(companyId, itemCode, warehouseId, balQty, balVal, lastId).run()
 
   return { balance_qty: balQty, balance_value: balVal }
 }
@@ -151,21 +151,21 @@ export async function upsertInventoryBalance(
   db: D1Database,
   companyId: number,
   itemCode: number,
-  warehouse: string,
+  warehouseId: number,
   balQty: number,
   balVal: number,
   movementId: number,
 ): Promise<void> {
   await db.prepare(
     `INSERT INTO inventory_balances
-       (company_id, item_code, warehouse, balance_qty, balance_value, version, last_movement_id, last_updated, is_stale)
+       (company_id, item_code, warehouse_id, balance_qty, balance_value, version, last_movement_id, last_updated, is_stale)
      VALUES (?, ?, ?, ?, ?, 1, ?, datetime('now'), 0)
-     ON CONFLICT(company_id, item_code, warehouse) DO UPDATE SET
+     ON CONFLICT(company_id, item_code, warehouse_id) DO UPDATE SET
        balance_qty      = excluded.balance_qty,
        balance_value    = excluded.balance_value,
        version          = inventory_balances.version + 1,
        last_movement_id = excluded.last_movement_id,
        last_updated     = excluded.last_updated,
        is_stale         = 0`
-  ).bind(companyId, itemCode, warehouse, balQty, balVal, movementId).run()
+  ).bind(companyId, itemCode, warehouseId, balQty, balVal, movementId).run()
 }

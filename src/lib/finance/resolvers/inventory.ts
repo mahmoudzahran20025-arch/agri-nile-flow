@@ -8,6 +8,7 @@ import { postFromBusinessEvent } from '../business_events'
 import { normalizeIsoDate, yearMonthParts } from '../../utils/date'
 import { readInventoryBalance, upsertInventoryBalance, enqueueInventoryPostingOutbox } from '../../inventory_posting'
 import { resolveSupplierPayableAccount } from './supplier_payable_account'
+import { resolveUnitFactor } from '../../finance_core'
 
 export async function resolveInventoryMovement(
   db: D1Database,
@@ -15,9 +16,11 @@ export async function resolveInventoryMovement(
     company_id: number
     ref_id: number
     item_code: number
-    warehouse: string
+    warehouse_id: number
     movement_type: string
-    value: number
+    quantity: number      // Quantity in the transaction unit
+    unit?: string         // Unit in the transaction
+    unit_price: number    // Price per transaction unit
     date: string
     item_name: string
     created_by?: number
@@ -27,42 +30,39 @@ export async function resolveInventoryMovement(
     supplier_code?: number | string
     payment_method?: string
     work_order_id?: number
-    warehouse_id?: number | null
+    batch_number?: string
+    expiry_date?: string
   },
 ): Promise<number | null> {
-  // Resolve IPG/PPG from DB so the posting_engine cascade uses Steps 1-7, not always Step 8.
-  const [itemRow, movementRow] = await Promise.all([
-    db.prepare(
-      'SELECT prod_posting_group_code, inv_posting_group_code FROM items WHERE company_id = ? AND code = ? LIMIT 1'
-    ).bind(opts.company_id, opts.item_code).first<{ prod_posting_group_code: string | null; inv_posting_group_code: string | null }>(),
-    db.prepare(
-      'SELECT warehouse_id, warehouse FROM inventory_movements WHERE company_id = ? AND id = ? LIMIT 1'
-    ).bind(opts.company_id, opts.ref_id).first<{ warehouse_id: number | null; warehouse: string | null }>(),
-  ])
+  // Resolve base unit and posting groups
+  const itemRow = await db.prepare(
+    'SELECT unit, prod_posting_group_code, inv_posting_group_code FROM items WHERE company_id = ? AND code = ? LIMIT 1'
+  ).bind(opts.company_id, opts.item_code).first<{ unit: string | null; prod_posting_group_code: string | null; inv_posting_group_code: string | null }>()
 
-  const effectiveWarehouseId = opts.warehouse_id ?? movementRow?.warehouse_id ?? null
-  const effectiveWarehouseName = (opts.warehouse && opts.warehouse.trim()) || movementRow?.warehouse || null
+  if (!itemRow) throw new Error(`ITEM_NOT_FOUND: ${opts.item_code}`)
 
-  const warehouseRow = effectiveWarehouseId != null
-    ? await db.prepare(
-      'SELECT inv_posting_group_code FROM warehouses WHERE company_id = ? AND id = ? AND is_active = 1 LIMIT 1'
-    ).bind(opts.company_id, effectiveWarehouseId).first<{ inv_posting_group_code: string | null }>()
-    : (effectiveWarehouseName
-      ? await db.prepare(
-        'SELECT inv_posting_group_code FROM warehouses WHERE company_id = ? AND name = ? AND is_active = 1 LIMIT 1'
-      ).bind(opts.company_id, effectiveWarehouseName).first<{ inv_posting_group_code: string | null }>()
-      : null)
+  // UOM Engine: Resolve factor
+  const factor = (opts.unit && itemRow.unit) 
+    ? await resolveUnitFactor(db, opts.company_id, opts.unit, itemRow.unit, opts.item_code)
+    : 1
 
-  // Warehouse IPG takes precedence over item-level IPG (warehouse is the physical location context)
-  const ipg = warehouseRow?.inv_posting_group_code ?? itemRow?.inv_posting_group_code ?? null
-  const ppg = itemRow?.prod_posting_group_code ?? null
+  const baseQty = opts.quantity * factor
+  const totalValue = Math.round(opts.quantity * opts.unit_price * 100) / 100
+
+  // Resolve IPG from warehouse
+  const warehouseRow = await db.prepare(
+    'SELECT inv_posting_group_code, name FROM warehouses WHERE company_id = ? AND id = ? AND is_active = 1 LIMIT 1'
+  ).bind(opts.company_id, opts.warehouse_id).first<{ inv_posting_group_code: string | null; name: string }>()
+
+  const ipg = warehouseRow?.inv_posting_group_code ?? itemRow.inv_posting_group_code ?? null
+  const ppg = itemRow.prod_posting_group_code ?? null
 
   const blueprint = await peResolveInventory(
     db,
     opts.company_id,
     ipg,
     ppg,
-    opts.value,
+    totalValue,
     opts.movement_type,
   )
   if (blueprint.isBlocked || !blueprint.lines.length) {
@@ -80,15 +80,23 @@ export async function resolveInventoryMovement(
     event_type:    'inventory_movement',
     source_module: 'inventory',
     source_id:     opts.ref_id,
+    source_link_id: opts.ref_id, // 1:1 link
     event_date:    opts.date,
-    description:   `${opts.movement_type} مخزني | ${opts.item_name} | ${opts.warehouse}`,
+    description:   `${opts.movement_type} مخزني | ${opts.item_name} | ${warehouseRow?.name ?? opts.warehouse_id}`,
     created_by:    opts.created_by,
     payload:       {
       item_code: opts.item_code,
-      warehouse: opts.warehouse,
-      warehouse_id: effectiveWarehouseId,
+      warehouse_id: opts.warehouse_id,
       movement_type: opts.movement_type,
-      value: opts.value, item_name: opts.item_name, ipg, ppg,
+      quantity: opts.quantity,
+      unit: opts.unit,
+      factor,
+      base_qty: baseQty,
+      value: totalValue, 
+      item_name: opts.item_name, 
+      ipg, ppg,
+      batch_number: opts.batch_number,
+      expiry_date: opts.expiry_date,
     },
     trace:         blueprint.trace ?? null,
     lines:         blueprint.lines.map((l) => ({
@@ -110,8 +118,8 @@ export async function resolveInventoryTransfer(
     company_id: number
     ref_id: number
     item_code: number
-    from_warehouse: string
-    to_warehouse: string
+    from_warehouse_id: number
+    to_warehouse_id: number
     quantity?: number
     value: number
     date: string
@@ -127,11 +135,11 @@ export async function resolveInventoryTransfer(
       'SELECT prod_posting_group_code FROM items WHERE company_id = ? AND code = ? LIMIT 1'
     ).bind(opts.company_id, opts.item_code).first<{ prod_posting_group_code: string | null }>(),
     db.prepare(
-      'SELECT inv_posting_group_code FROM warehouses WHERE company_id = ? AND name = ? AND is_active = 1 LIMIT 1'
-    ).bind(opts.company_id, opts.from_warehouse).first<{ inv_posting_group_code: string | null }>(),
+      'SELECT inv_posting_group_code, name FROM warehouses WHERE company_id = ? AND id = ? AND is_active = 1 LIMIT 1'
+    ).bind(opts.company_id, opts.from_warehouse_id).first<{ inv_posting_group_code: string | null; name: string }>(),
     db.prepare(
-      'SELECT inv_posting_group_code FROM warehouses WHERE company_id = ? AND name = ? AND is_active = 1 LIMIT 1'
-    ).bind(opts.company_id, opts.to_warehouse).first<{ inv_posting_group_code: string | null }>(),
+      'SELECT inv_posting_group_code, name FROM warehouses WHERE company_id = ? AND id = ? AND is_active = 1 LIMIT 1'
+    ).bind(opts.company_id, opts.to_warehouse_id).first<{ inv_posting_group_code: string | null; name: string }>(),
   ])
 
   const ppg    = itemRow?.prod_posting_group_code ?? null
@@ -155,12 +163,13 @@ export async function resolveInventoryTransfer(
     event_type:    'inventory_transfer',
     source_module: 'inventory',
     source_id:     opts.ref_id,
+    source_link_id: opts.ref_id,
     event_date:    opts.date,
-    description:   `تحويل مخزني | ${opts.item_name} | ${opts.from_warehouse} → ${opts.to_warehouse}`,
+    description:   `تحويل مخزني | ${opts.item_name} | ${srcRow?.name} → ${dstRow?.name}`,
     created_by:    opts.created_by,
     payload:       {
-      item_code: opts.item_code, from_warehouse: opts.from_warehouse,
-      to_warehouse: opts.to_warehouse, quantity: opts.quantity, value: opts.value,
+      item_code: opts.item_code, from_warehouse_id: opts.from_warehouse_id,
+      to_warehouse_id: opts.to_warehouse_id, quantity: opts.quantity, value: opts.value,
       src_ipg: srcIpg, dst_ipg: dstIpg, ppg,
     },
     trace:         blueprint.trace ?? null,
@@ -186,8 +195,7 @@ export async function resolvePurchaseReceipt(
     ref_id: number
     po_id?: number
     supplier_code?: number
-    warehouse?: string
-    warehouse_id?: number | null
+    warehouse_id: number
     item_code?: number | null
     total_amount: number
     date: string
@@ -196,17 +204,9 @@ export async function resolvePurchaseReceipt(
     created_by?: number
   },
 ): Promise<number | null> {
-  // Resolve IPG from warehouse and PPG from item so the engine uses the correct
-  // inventory account (step 1/2 of cascade) rather than always falling through to
-  // the NULL×NULL catch-all (step 8 → 14070106 مخزن متنوع).
   const [warehouseRow, itemRow] = await Promise.all([
-    opts.warehouse_id != null
-      ? db.prepare('SELECT inv_posting_group_code FROM warehouses WHERE company_id=? AND id=? AND is_active=1 LIMIT 1')
-          .bind(opts.company_id, opts.warehouse_id).first<{ inv_posting_group_code: string | null }>()
-      : opts.warehouse
-        ? db.prepare('SELECT inv_posting_group_code FROM warehouses WHERE company_id=? AND name=? AND is_active=1 LIMIT 1')
-            .bind(opts.company_id, opts.warehouse).first<{ inv_posting_group_code: string | null }>()
-        : Promise.resolve(null),
+    db.prepare('SELECT inv_posting_group_code, name FROM warehouses WHERE company_id=? AND id=? AND is_active=1 LIMIT 1')
+      .bind(opts.company_id, opts.warehouse_id).first<{ inv_posting_group_code: string | null; name: string }>(),
     opts.item_code != null
       ? db.prepare('SELECT prod_posting_group_code FROM items WHERE company_id=? AND code=? LIMIT 1')
           .bind(opts.company_id, opts.item_code).first<{ prod_posting_group_code: string | null }>()
@@ -238,7 +238,7 @@ export async function resolvePurchaseReceipt(
     'استلام مشتريات',
     supplierName ? `مورد ${supplierName}` : null,
     opts.po_id ? `أمر شراء #${opts.po_id}` : null,
-    opts.warehouse ? `مخزن ${opts.warehouse}` : null,
+    warehouseRow?.name ? `مخزن ${warehouseRow.name}` : null,
     opts.description?.trim() || null,
   ].filter(Boolean).join(' | ')
 
@@ -247,10 +247,11 @@ export async function resolvePurchaseReceipt(
     event_type:    'purchase_receipt',
     source_module: 'inventory',
     source_id:     opts.ref_id,
+    source_link_id: opts.ref_id,
     event_date:    opts.date,
     description:   entryDescription,
     created_by:    opts.created_by,
-    payload:       { po_id: opts.po_id, supplier_code: opts.supplier_code, warehouse: opts.warehouse ?? '', total_amount: opts.total_amount, ipg, ppg, item_code: opts.item_code ?? null },
+    payload:       { po_id: opts.po_id, supplier_code: opts.supplier_code, warehouse_id: opts.warehouse_id, total_amount: opts.total_amount, ipg, ppg, item_code: opts.item_code ?? null },
     trace:         blueprint.trace ?? null,
     lines:         blueprint.lines.map((l) => ({
       account_code:  l.account_code!,
@@ -264,12 +265,6 @@ export async function resolvePurchaseReceipt(
   })
 }
 
-/**
- * processPOReceiptOrchestrated — high-level PO receipt orchestrator.
- * Creates inventory movements, updates PO item quantities, updates PO status,
- * and posts a GL entry via resolvePurchaseReceipt.
- * Returns { movements: count, status: new_po_status }.
- */
 export async function processPOReceiptOrchestrated(
   db: D1Database,
   opts: {
@@ -285,18 +280,18 @@ export async function processPOReceiptOrchestrated(
       item_name: string
       qty_received: number
       unit_price: number
-      warehouse: string
+      warehouse_id: number
     }>
   },
 ): Promise<{ movements: number; status: string }> {
   const receiptDate = normalizeIsoDate(opts.received_date)
   const ym = yearMonthParts(receiptDate)
   const localIdBase = `por_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+  const transactionId = Math.floor(Date.now() / 1000) * 1000 + Math.floor(Math.random() * 1000)
   let movCount = 0
 
   for (const item of opts.items) {
-    // Use authoritative balance snapshot (with staleness-heal fallback)
-    const prev    = await readInventoryBalance(db, opts.company_id, item.item_code, item.warehouse)
+    const prev    = await readInventoryBalance(db, opts.company_id, item.item_code, item.warehouse_id)
     const valueIn = item.qty_received * item.unit_price
     const balQty  = prev.balance_qty + item.qty_received
     const balVal  = prev.balance_value + valueIn
@@ -304,20 +299,18 @@ export async function processPOReceiptOrchestrated(
 
     const insertResult = await db.prepare(
       `INSERT INTO inventory_movements
-       (company_id, item_code, movement_date, warehouse, movement_type,
+       (company_id, item_code, movement_date, warehouse_id, movement_type,
         quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
-        year, month, created_by_user_id, local_id, gl_posting_status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`
+        year, month, created_by_user_id, local_id, gl_posting_status, transaction_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
-      opts.company_id, item.item_code, receiptDate, item.warehouse, 'GRN',
+      opts.company_id, item.item_code, receiptDate, item.warehouse_id, 'GRN',
       item.qty_received, item.unit_price, item.qty_received, 0, balQty, valueIn, 0, balVal,
-      ym.year, ym.month, opts.userId, localId,
+      ym.year, ym.month, opts.userId, localId, 'pending', transactionId
     ).run()
 
     const movementId = insertResult.meta.last_row_id as number
-
-    // Keep snapshot current so next item in the loop reads the correct balance
-    await upsertInventoryBalance(db, opts.company_id, item.item_code, item.warehouse, balQty, balVal, movementId)
+    await upsertInventoryBalance(db, opts.company_id, item.item_code, item.warehouse_id, balQty, balVal, movementId)
 
     await db.prepare(
       `UPDATE purchase_order_items SET qty_received = qty_received + ? WHERE id = ? AND company_id = ?`
@@ -326,19 +319,14 @@ export async function processPOReceiptOrchestrated(
     movCount++
   }
 
-  // Determine new PO status
   const remaining = await db.prepare(
     `SELECT SUM(qty_ordered - qty_received) AS rem
      FROM purchase_order_items WHERE po_id = ? AND company_id = ?`
   ).bind(opts.po_id, opts.company_id).first<{ rem: number }>()
   const newStatus = (remaining?.rem ?? 1) <= 0 ? 'received' : 'partial'
 
-  await db.prepare(
-    `UPDATE purchase_orders SET status = ? WHERE id = ? AND company_id = ?`
-  ).bind(newStatus, opts.po_id, opts.company_id).run()
+  await db.prepare(`UPDATE purchase_orders SET status = ? WHERE id = ? AND company_id = ?`).bind(newStatus, opts.po_id, opts.company_id).run()
 
-  // Post GL per line — each item posts with its own PPG so the correct inventory
-  // and purchases accounts are selected (fixes the single-PPG bug for mixed POs).
   const itemSummary = opts.items.length === 1 ? opts.items[0].item_name : `${opts.items.length} أصناف`
   const receiptDescription = [itemSummary, opts.notes?.trim() || null].filter(Boolean).join(' | ')
 
@@ -356,7 +344,7 @@ export async function processPOReceiptOrchestrated(
         ref_id:            movRow?.id ?? opts.po_id,
         po_id:             opts.po_id,
         supplier_code:     opts.supplier_code,
-        warehouse:         item.warehouse,
+        warehouse_id:      item.warehouse_id,
         item_code:         item.item_code,
         total_amount:      lineAmount,
         date:              receiptDate,
@@ -373,7 +361,7 @@ export async function processPOReceiptOrchestrated(
         ).bind(errMsg, movRow.id, opts.company_id).run()
         await enqueueInventoryPostingOutbox(db, opts.company_id, 'inventory_movement', movRow.id, {
           company_id: opts.company_id, ref_id: movRow.id, item_code: item.item_code,
-          warehouse: item.warehouse, movement_type: 'GRN',
+          warehouse_id: item.warehouse_id, movement_type: 'GRN',
           value: lineAmount, date: receiptDate,
         })
       }

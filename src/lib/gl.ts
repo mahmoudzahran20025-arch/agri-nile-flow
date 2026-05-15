@@ -19,6 +19,7 @@ interface PostEntryOpts {
   description:        string
   ref_type:           string
   ref_id:             number
+  source_link_id?:    number | null // NEW: for native traceability
   lines:              GLLine[]
   expected_minimum_lines?: number
   created_by?:        number
@@ -108,10 +109,10 @@ export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promis
     // line persistence + invariant checks pass.
     const entry = await db
       .prepare(`INSERT INTO journal_entries
-                (company_id, period_id, entry_date, description, ref_type, ref_id, is_posted, created_by, posting_rule_trace)
-                VALUES (?,?,?,?,?,?,0,?,?)`)
+                (company_id, period_id, entry_date, description, ref_type, ref_id, source_link_id, is_posted, created_by, posting_rule_trace)
+                VALUES (?,?,?,?,?,?,?,0,?,?)`)
       .bind(opts.company_id, periodId, opts.entry_date, opts.description,
-            opts.ref_type, opts.ref_id, opts.created_by ?? null,
+            opts.ref_type, opts.ref_id, opts.source_link_id ?? null, opts.created_by ?? null,
             opts.posting_rule_trace ?? null).run()
 
     entryId = Number(entry.meta.last_row_id)

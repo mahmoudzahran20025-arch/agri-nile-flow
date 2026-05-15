@@ -167,6 +167,7 @@ contracts.post('/sales/:id/receive-advance', async (c) => {
     glId = await FinanceCore.resolveContractAdvance(c.env.DB, {
       company_id,
       ref_id: id,
+      contract_id: id,
       amount,
       date: receipt_date,
       description: `دفعة مقدمة عقد بيع #${contract.contract_number}${notes ? ` — ${notes}` : ''}`,

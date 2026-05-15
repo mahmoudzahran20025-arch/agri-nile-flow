@@ -8,6 +8,18 @@ import { resolveControlAccount } from '../../lib/posting_engine'
 
 const receipts = new Hono<{ Bindings: Env }>()
 
+async function resolveWarehouse(db: Env['DB'], companyId: number, id?: number, name?: string): Promise<{ id: number, name: string } | null> {
+  if (id) {
+    const wh = await db.prepare("SELECT id, name FROM warehouses WHERE id = ? AND company_id = ? AND is_active = 1").bind(id, companyId).first<{ id: number, name: string }>()
+    return wh ?? null
+  }
+  if (name) {
+    const wh = await db.prepare("SELECT id, name FROM warehouses WHERE name = ? AND company_id = ? AND is_active = 1").bind(name, companyId).first<{ id: number, name: string }>()
+    return wh ?? null
+  }
+  return null
+}
+
 receipts.post('/receive-po/:po_id', permissionGuard('inventory', 'create'), async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const poId = Number(c.req.param('po_id'))
@@ -18,7 +30,8 @@ receipts.post('/receive-po/:po_id', permissionGuard('inventory', 'create'), asyn
     items: Array<{
       po_item_id:   number
       qty_received: number
-      warehouse:    string
+      warehouse?:    string
+      warehouse_id?: number
       unit_price?:  number
     }>
   }>()
@@ -51,10 +64,13 @@ receipts.post('/receive-po/:po_id', permissionGuard('inventory', 'create'), asyn
 
   const enrichedLines: Array<{
     po_item_id: number; item_code: number; item_name: string
-    qty_received: number; unit_price: number; warehouse: string
+    qty_received: number; unit_price: number; warehouse_id: number
   }> = []
 
   for (const item of b.items) {
+    const wh = await resolveWarehouse(c.env.DB, company_id, item.warehouse_id, item.warehouse)
+    if (!wh) return c.json({ success: false, error: 'المخزن غير موجود أو غير نشط' }, 422)
+
     const poItem = await c.env.DB.prepare(
       `SELECT id, item_code, item_name, unit_price, qty_ordered, qty_received
        FROM purchase_order_items WHERE id = ? AND po_id = ? AND company_id = ?`
@@ -74,7 +90,7 @@ receipts.post('/receive-po/:po_id', permissionGuard('inventory', 'create'), asyn
       item_name:    poItem.item_name,
       qty_received: item.qty_received,
       unit_price:   item.unit_price ?? poItem.unit_price,
-      warehouse:    item.warehouse
+      warehouse_id: wh.id
     })
   }
 

@@ -4,7 +4,7 @@ import { normalizeIsoDate, yearMonthParts } from '../utils/date'
 import { resolveCashLedger } from './resolvers/cash'
 import { logFinancialWorkflowFailure } from './workflow_policy'
 
-interface CashMovementInput {
+export interface CashMovementInput {
   company_id: number
   userId: number
   transaction_date: string
@@ -13,7 +13,7 @@ interface CashMovementInput {
   narration: string
   statement_text?: string | null
   recipient_name?: string | null
-  document_number?: number | null
+  document_number?: string | number | null
   supplier_code?: number | null
   center_code?: number | null
   field_id?: number | null
@@ -31,7 +31,7 @@ interface CashMovementInput {
   skipGlPosting?: boolean
 }
 
-interface CashDraftRow {
+export interface CashDraftRow {
   id: number
   transaction_date: string
   direction: 'د' | 'م'
@@ -46,7 +46,7 @@ interface CashDraftRow {
   field_id?: number | null
   notes?: string | null
   document_type?: string | null
-  document_number?: number | null
+  document_number?: string | number | null
   recipient_name?: string | null
 }
 
@@ -143,7 +143,7 @@ export async function prepareCashMovement(
     opts.financial_account_id ?? null,
     postingDate,
     opts.direction,
-    opts.document_number ?? null,
+    opts.document_number != null ? String(opts.document_number) : null,
     opts.recipient_name ?? null,
     opts.narration,
     opts.amount,
