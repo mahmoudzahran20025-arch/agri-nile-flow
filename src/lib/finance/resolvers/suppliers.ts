@@ -31,6 +31,9 @@ export async function resolveSupplierInvoice(
     expense_category?: string | null
     service_type_code?: string | null
     created_by?: number
+    center_code?: number
+    season_id?: number
+    field_id?: number
   },
 ): Promise<number | null> {
   const [apCode, bpgCode] = await Promise.all([
@@ -68,6 +71,9 @@ export async function resolveSupplierInvoice(
       rule_slot:     l.rule_slot,
       source_ledger: 'supplier' as const,
       source_record_id: opts.ref_id,
+      center_code:   opts.center_code,
+      season_id:     opts.season_id,
+      field_id:      opts.field_id,
     })),
   })
 }
@@ -82,6 +88,8 @@ export async function resolveSupplierPayment(
     description: string
     created_by?: number
     center_code?: number
+    season_id?: number
+    field_id?: number
     supplier_code?: number | null
     expense_category?: string | null
     service_type_code?: string | null
@@ -126,6 +134,8 @@ export async function resolveSupplierPayment(
       source_ledger: 'supplier' as const,
       source_record_id: opts.ref_id,
       center_code:   opts.center_code,
+      season_id:     opts.season_id,
+      field_id:      opts.field_id,
     })),
   })
 }

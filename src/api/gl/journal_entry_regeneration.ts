@@ -23,10 +23,10 @@ journalEntryEngine.use('*', roleGuard(['super_admin', 'company_admin', 'accounta
 interface BusinessEvent {
   id: number
   company_id: number
-  ref_type: string
-  ref_id: number
+  event_type: string
+  source_module: string
+  source_id: number
   event_date: string
-  amount: number
 }
 
 interface PostingRule {
@@ -88,28 +88,29 @@ async function regenerateSingleJournalEntry(
 ): Promise<{ jeCreated: number; linesCreated: number }> {
   let jeCreated = 0
 
+  // journal_entries links back via ref_type='business_event' and ref_id=event.id
   const existingJE = await db
-    .prepare(`SELECT id FROM journal_entries WHERE company_id = ? AND ref_type = ? AND ref_id = ? LIMIT 1`)
-    .bind(companyId, event.ref_type, event.ref_id)
+    .prepare(`SELECT id FROM journal_entries WHERE company_id = ? AND ref_type = 'business_event' AND ref_id = ? LIMIT 1`)
+    .bind(companyId, event.id)
     .first<{ id: number }>()
 
   if (existingJE) {
     await db
       .prepare(`UPDATE journal_entries SET business_event_id = ?, business_event_type = ?, generated_by = 'engine-regeneration-' || datetime('now') WHERE id = ?`)
-      .bind(String(event.id), event.ref_type, existingJE.id)
+      .bind(String(event.id), event.event_type, existingJE.id)
       .run()
   } else {
-    const postingRuleId = determinePostingRule(event.ref_type)
+    const postingRuleId = determinePostingRule(event.event_type)
     await db
-      .prepare(`INSERT INTO journal_entries (company_id, entry_date, description, ref_type, ref_id, is_posted, created_by, posting_rule_trace, business_event_id, business_event_type, posting_rule_id, generated_by) VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?)`)
-      .bind(companyId, event.event_date, `${event.ref_type} #${event.ref_id}`, event.ref_type, event.ref_id, postingRuleId, String(event.id), event.ref_type, postingRuleId, 'engine-' + new Date().toISOString())
+      .prepare(`INSERT INTO journal_entries (company_id, entry_date, description, ref_type, ref_id, is_posted, created_by, posting_rule_trace, business_event_id, business_event_type, posting_rule_id, generated_by) VALUES (?, ?, ?, 'business_event', ?, 1, 1, ?, ?, ?, ?, ?)`)
+      .bind(companyId, event.event_date, `${event.event_type} #${event.source_id}`, event.id, postingRuleId, String(event.id), event.event_type, postingRuleId, 'engine-' + new Date().toISOString())
       .run()
     jeCreated = 1
   }
 
   const je = await db
-    .prepare(`SELECT id, posting_rule_trace FROM journal_entries WHERE company_id = ? AND ref_type = ? AND ref_id = ? LIMIT 1`)
-    .bind(companyId, event.ref_type, event.ref_id)
+    .prepare(`SELECT id, posting_rule_trace FROM journal_entries WHERE company_id = ? AND ref_type = 'business_event' AND ref_id = ? LIMIT 1`)
+    .bind(companyId, event.id)
     .first<{ id: number; posting_rule_trace: string | null }>()
 
   if (!je) throw new Error(`Could not find journal entry for event ${event.id}`)
@@ -127,7 +128,7 @@ async function regenerateSingleJournalEntry(
     const ruleClassification = line.debit > 0 ? 'debit' : line.credit > 0 ? 'credit' : 'balancing'
     await db
       .prepare(`UPDATE journal_entry_lines SET business_event_id = ?, source_module = ?, source_record_id = ?, posting_rule_id = ?, rule_classification = ?, generated_at = datetime('now') WHERE id = ? AND entry_id = ?`)
-      .bind(String(event.id), event.ref_type, event.ref_id, postingRule?.id ?? null, ruleClassification, line.id, je.id)
+      .bind(String(event.id), event.source_module, event.source_id, postingRule?.id ?? null, ruleClassification, line.id, je.id)
       .run()
   }
 
@@ -140,11 +141,11 @@ async function fetchBusinessEventsInScope(
   scope: string | undefined,
   scopeValue: string | undefined,
 ): Promise<BusinessEvent[]> {
-  let query = `SELECT id, company_id, ref_type, ref_id, event_date, amount FROM business_events WHERE company_id = ?`
+  let query = `SELECT id, company_id, event_type, source_module, source_id, event_date FROM business_events WHERE company_id = ? AND status = 'posted'`
   const params: unknown[] = [companyId]
 
   if (scope === 'by_source' && scopeValue) {
-    query += ` AND ref_type = ?`
+    query += ` AND event_type = ?`
     params.push(scopeValue)
   } else if (scope === 'by_period' && scopeValue) {
     const [start, end] = scopeValue.split('|')
@@ -165,13 +166,17 @@ async function fetchPostingRule(db: D1Database, companyId: number, ruleId: strin
   return rule ?? null
 }
 
-function determinePostingRule(refType: string): string {
+function determinePostingRule(eventType: string): string {
   const ruleMap: Record<string, string> = {
-    inventory_movement: 'PR-INV-001',
-    cash_transaction: 'PR-CASH-001',
-    supplier_transaction: 'PR-SUPP-001',
+    inventory_movement:  'PR-INV-001',
+    purchase_receipt:    'PR-INV-001',
+    cash_transaction:    'PR-CASH-001',
+    expense:             'PR-CASH-001',
+    revenue:             'PR-CASH-001',
+    supplier_invoice:    'PR-SUPP-001',
+    supplier_payment:    'PR-SUPP-001',
   }
-  return ruleMap[refType] ?? 'PR-MANUAL-001'
+  return ruleMap[eventType] ?? 'PR-MANUAL-001'
 }
 
 // =====================================================================

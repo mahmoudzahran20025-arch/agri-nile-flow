@@ -131,10 +131,6 @@ async function linkJournalEntryToSource(
       db.prepare('UPDATE supplier_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
         .bind(entryId, opts.source_id, opts.company_id)
     )
-    stmts.push(
-      db.prepare('UPDATE supplier_invoices SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
-        .bind(entryId, opts.source_id, opts.company_id)
-    )
   }
 
   if (opts.event_type === 'supplier_payment') {

@@ -218,6 +218,9 @@ invoices.post('/:code/transactions', financeOnly, async (c) => {
           expense_category: b.expense_category,
           service_type_code: b.service_type_code,
           created_by: userId,
+          center_code: b.center_code || undefined,
+          season_id:   b.season_id   || undefined,
+          field_id:    b.field_id    || undefined,
         })
       } else {
         glId = await FinanceCore.resolveSupplierPayment(c.env.DB, {
@@ -228,6 +231,9 @@ invoices.post('/:code/transactions', financeOnly, async (c) => {
           service_type_code: b.service_type_code,
           financial_account_id: b.financial_account_id,
           created_by: userId,
+          center_code: b.center_code || undefined,
+          season_id:   b.season_id   || undefined,
+          field_id:    b.field_id    || undefined,
         })
       }
 
@@ -273,6 +279,9 @@ invoices.patch('/transactions/:id/post', financeOnly, async (c) => {
         expense_category: tx.expense_category,
         service_type_code: tx.service_type_code,
         created_by: userId,
+        center_code: tx.center_code || undefined,
+        season_id:   tx.season_id   || undefined,
+        field_id:    tx.field_id    || undefined,
       })
     } else {
       glId = await FinanceCore.resolveSupplierPayment(c.env.DB, {
@@ -283,6 +292,9 @@ invoices.patch('/transactions/:id/post', financeOnly, async (c) => {
         service_type_code: tx.service_type_code,
         financial_account_id: tx.financial_account_id,
         created_by: userId,
+        center_code: tx.center_code || undefined,
+        season_id:   tx.season_id   || undefined,
+        field_id:    tx.field_id    || undefined,
       })
     }
     if (glId) {

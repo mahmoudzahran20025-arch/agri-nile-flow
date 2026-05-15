@@ -282,12 +282,11 @@ config.get('/seasons/:id/close-check', async (c) => {
          AND statement_date BETWEEN ? AND ?`
     ).bind(company_id, season.start_date, season.end_date).first<{ n: number }>(),
 
-    // Unpaid supplier invoices linked to this season's POs
+    // Open AP balance: unmatched supplier invoices (entry_type='د', is_matched=0)
     c.env.DB.prepare(
-      `SELECT COUNT(*) AS n, COALESCE(SUM(si.total_amount - COALESCE(si.paid_amount,0)),0) AS total
-       FROM supplier_invoices si
-       JOIN purchase_orders po ON po.id = si.po_id AND po.company_id = si.company_id
-       WHERE si.company_id = ? AND si.total_amount > COALESCE(si.paid_amount, 0)`
+      `SELECT COUNT(*) AS n, COALESCE(SUM(sal.net_ap_balance), 0) AS total
+       FROM supplier_ap_ledger sal
+       WHERE sal.company_id = ? AND sal.net_ap_balance > 0`
     ).bind(company_id).first<{ n: number; total: number }>(),
   ])
 
