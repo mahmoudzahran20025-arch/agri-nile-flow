@@ -12,7 +12,7 @@ import { treasuryApi, glApi, suppliersApi, downloadCsv } from '../../api/client'
 import { financeApi, type PurchaseOrder, type POItem } from '../../api/finance'
 import type { BankAccount } from '../../api/gl'
 import { usePermission } from '../../hooks/usePermission'
-import DataTable, { type Column, type SortState } from '../../components/ui/DataTable'
+import DataTableV2, { type ColumnV2 } from '../../components/ui/DataTableV2'
 import AddCashTransactionModal from '../../components/forms/AddCashTransactionModal'
 import type { CashTransaction } from '../../types'
 import { useToast } from '../../contexts/ToastContext'
@@ -195,7 +195,6 @@ function JournalTab({
   const [status,       setStatus]       = useState('')
   const [month,        setMonth]        = useState('')
   const [year,         setYear]         = useState('')
-  const [sort,         setSort]         = useState<SortState | undefined>(undefined)
   const [search,       setSearch]       = useState('')
   const [selectedIds,  setSelectedIds]  = useState<Set<number>>(new Set())
   const [accountId,    setAccountId]    = useState('')
@@ -268,32 +267,21 @@ function JournalTab({
     },
   })
 
-  const sortedData = useMemo(() => {
-    const rows = data?.data ?? []
-    if (!sort) return rows
-    const k = sort.key as keyof CashTransaction
-    return [...rows].sort((a, b) => {
-      const av = a[k] ?? ''
-      const bv = b[k] ?? ''
-      const cmp = typeof av === 'string' ? av.localeCompare(String(bv), 'ar') : Number(av) - Number(bv)
-      return sort.dir === 'asc' ? cmp : -cmp
-    })
-  }, [data, sort])
+  const allRows    = data?.data ?? []
 
   const anomalyIds = useMemo(() => {
     const ids = new Set<number>()
-    sortedData.forEach((r, i) => { if (isBalanceAnomaly(sortedData, i)) ids.add(r.id) })
+    allRows.forEach((r, i) => { if (isBalanceAnomaly(allRows, i)) ids.add(r.id) })
     return ids
-  }, [sortedData])
+  }, [allRows])
 
-  const allRows    = data?.data ?? []
   const draftCount = allRows.filter(r => r.status === 'draft').length
   const cashIn     = allRows.filter(r => r.direction === 'د' && r.status === 'posted').reduce((s, r) => s + r.amount, 0)
   const cashOut    = allRows.filter(r => r.direction === 'م' && r.status === 'posted').reduce((s, r) => s + r.amount, 0)
   const netView    = cashIn - cashOut
   const hasFilters = !!(direction || month || year || status || search.trim() || accountId || supplierCode)
 
-  const COLUMNS: Column<CashTransaction>[] = [
+  const COLUMNS: ColumnV2<CashTransaction>[] = [
     {
       key: 'id', header: '', width: '36px',
       render: r => r.status === 'draft' ? (
@@ -597,25 +585,24 @@ function JournalTab({
         title="سجل حركات الخزينة"
         icon={<Wallet size={15} />}
         action={
-          sortedData.some((_, i) => isBalanceAnomaly(sortedData, i)) ? (
+          allRows.some((_, i) => isBalanceAnomaly(allRows, i)) ? (
             <span className="flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
               <AlertTriangle size={10} /> يوجد قفزات في الرصيد
             </span>
           ) : undefined
         }
       >
-        <DataTable<CashTransaction>
+        <DataTableV2<CashTransaction>
           columns={COLUMNS}
-          data={sortedData}
+          data={allRows}
           loading={isLoading}
           total={data?.total ?? 0}
           page={page}
           pageSize={100}
           onPage={setPage}
           rowKey={r => r.id}
-          sort={sort}
-          onSort={setSort}
           emptyText="لا توجد حركات بالفلاتر المحددة"
+          exportFilename="سجل_الخزينة"
         />
       </SectionCard>
     </div>
@@ -1003,37 +990,32 @@ function PORow({
             <div className="flex justify-center py-6"><Loader2 className="animate-spin text-slate-400" size={20} /></div>
           ) : (
             <>
-              {detail?.items && detail.items.length > 0 && (
-                <table className="w-full text-sm mb-4">
-                  <thead>
-                    <tr className="text-xs text-slate-500 font-medium border-b border-slate-200">
-                      <th className="text-right pb-2">الصنف</th>
-                      <th className="text-center pb-2">الوحدة</th>
-                      <th className="text-center pb-2">مطلوب</th>
-                      <th className="text-center pb-2">مستلم</th>
-                      <th className="text-left pb-2">إجمالي</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {detail.items.map(item => {
-                      const pct = item.qty_ordered > 0 ? (item.qty_received / item.qty_ordered) * 100 : 0
-                      return (
-                        <tr key={item.id}>
-                          <td className="py-1.5 text-slate-800 font-medium">{item.item_name}</td>
-                          <td className="py-1.5 text-center text-slate-500">{item.unit ?? '—'}</td>
-                          <td className="py-1.5 text-center">{item.qty_ordered}</td>
-                          <td className="py-1.5 text-center">
-                            <span className={pct >= 100 ? 'text-emerald-600 font-medium' : pct > 0 ? 'text-amber-600' : 'text-slate-400'}>
-                              {item.qty_received}
-                            </span>
-                          </td>
-                          <td className="py-1.5 text-left text-slate-700">{fmtNum(item.total_price)} ج.م</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              )}
+              {detail?.items && detail.items.length > 0 && (() => {
+                const poItemCols: ColumnV2<POItem>[] = [
+                  { key: 'item_name',   header: 'الصنف',   render: i => <span className="font-medium text-slate-800">{i.item_name}</span>, csvValue: i => i.item_name },
+                  { key: 'unit',        header: 'الوحدة',  align: 'center', render: i => i.unit ?? '—', csvValue: i => i.unit ?? '' },
+                  { key: 'qty_ordered', header: 'مطلوب',   align: 'center', sortable: true, csvValue: i => String(i.qty_ordered),
+                    render: i => String(i.qty_ordered) },
+                  { key: 'qty_received', header: 'مستلم',  align: 'center', sortable: true,
+                    render: i => {
+                      const pct = i.qty_ordered > 0 ? (i.qty_received / i.qty_ordered) * 100 : 0
+                      return <span className={pct >= 100 ? 'text-emerald-600 font-medium' : pct > 0 ? 'text-amber-600' : 'text-slate-400'}>{i.qty_received}</span>
+                    }, csvValue: i => String(i.qty_received) },
+                  { key: 'total_price', header: 'الإجمالي', align: 'left', sortable: true,
+                    render: i => <span className="text-slate-700">{fmtNum(i.total_price)} ج.م</span>, csvValue: i => String(i.total_price) },
+                ]
+                return (
+                  <div className="mb-4">
+                    <DataTableV2<POItem>
+                      columns={poItemCols}
+                      data={detail.items}
+                      rowKey={i => i.id}
+                      emptyText="لا توجد بنود"
+                      exportFilename={`po_items_${po.po_number}`}
+                    />
+                  </div>
+                )
+              })()}
 
               <div className="flex flex-wrap gap-2 mt-4">
                 {canSend && (

@@ -10,7 +10,7 @@ import { Link } from 'react-router-dom'
 import { treasuryApi, glApi, suppliersApi, configApi, downloadCsv } from '../../api/client'
 import type { BankAccount } from '../../api/gl'
 import { usePermission } from '../../hooks/usePermission'
-import DataTable, { type Column, type SortState } from '../../components/ui/DataTable'
+import DataTableV2, { type ColumnV2 } from '../../components/ui/DataTableV2'
 import AddCashTransactionModal from '../../components/forms/AddCashTransactionModal'
 import type { CashTransaction } from '../../types'
 import { useToast } from '../../contexts/ToastContext'
@@ -49,7 +49,6 @@ export default function CashJournalPage() {
   const [month,        setMonth]        = useState('')
   const [year,         setYear]         = useState('')
   const [addOpen,      setAddOpen]      = useState(false)
-  const [sort,         setSort]         = useState<SortState | undefined>(undefined)
   const [search,       setSearch]       = useState('')
   const [selectedIds,  setSelectedIds]  = useState<Set<number>>(new Set())
   const [accountId,    setAccountId]    = useState('')
@@ -142,26 +141,15 @@ export default function CashJournalPage() {
     },
   })
 
-  const sortedData = useMemo(() => {
-    const rows = data?.data ?? []
-    if (!sort) return rows
-    const k = sort.key as keyof CashTransaction
-    return [...rows].sort((a, b) => {
-      const av = a[k] ?? ''
-      const bv = b[k] ?? ''
-      const cmp = typeof av === 'string' ? av.localeCompare(String(bv), 'ar') : Number(av) - Number(bv)
-      return sort.dir === 'asc' ? cmp : -cmp
-    })
-  }, [data, sort])
+  const allRows = useMemo(() => data?.data ?? [], [data])
 
-  // Precompute anomaly flags so render functions don't need idx
   const anomalyIds = useMemo(() => {
     const ids = new Set<number>()
-    sortedData.forEach((r, i) => { if (isBalanceAnomaly(sortedData, i)) ids.add(r.id) })
+    allRows.forEach((r, i) => { if (isBalanceAnomaly(allRows, i)) ids.add(r.id) })
     return ids
-  }, [sortedData])
+  }, [allRows])
 
-  const COLUMNS: Column<CashTransaction>[] = [
+  const COLUMNS: ColumnV2<CashTransaction>[] = [
     {
       key: 'id', header: '', width: '36px',
       render: r => r.status === 'draft' ? (
@@ -335,7 +323,6 @@ export default function CashJournalPage() {
   ]
 
   const bal        = (balance as { balance: number } | null)?.balance
-  const allRows    = data?.data ?? []
   const draftCount = allRows.filter(r => r.status === 'draft').length
   const cashIn     = allRows.filter(r => r.direction === 'د' && r.status === 'posted').reduce((s, r) => s + r.amount, 0)
   const cashOut    = allRows.filter(r => r.direction === 'م' && r.status === 'posted').reduce((s, r) => s + r.amount, 0)
@@ -554,28 +541,25 @@ export default function CashJournalPage() {
           title="سجل حركات الخزينة"
           icon={<Wallet size={15} />}
           action={
-            sortedData.some((_, i) => isBalanceAnomaly(sortedData, i)) ? (
+            allRows.some((_, i) => isBalanceAnomaly(allRows, i)) ? (
               <span className="flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
                 <AlertTriangle size={10} /> يوجد قفزات في الرصيد
               </span>
             ) : undefined
           }
         >
-          <div className="overflow-x-auto">
-            <DataTable<CashTransaction>
-              columns={COLUMNS}
-              data={sortedData}
-              loading={isLoading}
-              total={data?.total ?? 0}
-              page={page}
-              pageSize={100}
-              onPage={setPage}
-              rowKey={r => r.id}
-              sort={sort}
-              onSort={setSort}
-              emptyText="لا توجد حركات بالفلاتر المحددة"
-            />
-          </div>
+          <DataTableV2<CashTransaction>
+            columns={COLUMNS}
+            data={allRows}
+            loading={isLoading}
+            total={data?.total ?? 0}
+            page={page}
+            pageSize={100}
+            onPage={setPage}
+            rowKey={r => r.id}
+            emptyText="لا توجد حركات بالفلاتر المحددة"
+            exportFilename="دفتر_اليومية"
+          />
         </SectionCard>
 
         <AddCashTransactionModal open={addOpen} onClose={() => setAddOpen(false)} />

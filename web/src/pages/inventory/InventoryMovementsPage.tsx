@@ -3,12 +3,12 @@ import { useQuery } from '@tanstack/react-query'
 import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import {
   ArrowDownCircle, ArrowUpCircle, Download, Filter, X,
-  Link2, AlertTriangle, ChevronLeft, ChevronRight,
+  Link2, AlertTriangle,
 } from 'lucide-react'
 import { inventoryApi, configApi, downloadCsv } from '../../api/client'
-import { TableSkeleton } from '../../components/ui/Skeleton'
 import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
 import AddInventoryBatchModal from '../../components/forms/AddInventoryBatchModal'
+import DataTableV2, { type ColumnV2 } from '../../components/ui/DataTableV2'
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -156,8 +156,7 @@ export default function InventoryMovementsPage() {
     })
   }, [data, filters.unlinked_only, filters.negative_only])
 
-  const total      = data?.total ?? 0
-  const totalPages = Math.ceil(total / PAGE_SIZE)
+  const total = data?.total ?? 0
 
   const activeFiltersCount = Object.entries(filters).filter(([k, v]) =>
     k !== 'unlinked_only' ? Boolean(v) : v === true
@@ -368,109 +367,90 @@ export default function InventoryMovementsPage() {
 
       {/* ── Table ── */}
       <div className="flex-1 overflow-auto px-6 py-4">
-        {isLoading ? (
-          <TableSkeleton rows={10} cols={7} />
-        ) : rows.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48 text-slate-400 gap-2">
-            <ArrowDownCircle size={32} strokeWidth={1} />
-            <p className="text-sm">لا توجد حركات تطابق معايير البحث</p>
-          </div>
-        ) : (
-          <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <table className="w-full text-[13px]">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200">
-                  <th className="text-left px-4 py-3 font-semibold text-slate-600">التاريخ</th>
-                  <th className="text-left px-4 py-3 font-semibold text-slate-600">الصنف</th>
-                  <th className="text-center px-4 py-3 font-semibold text-slate-600">النوع</th>
-                  <th className="text-left px-4 py-3 font-semibold text-slate-600">المخزن</th>
-                  <th className="text-right px-4 py-3 font-semibold text-slate-600">الكمية</th>
-                  <th className="text-right px-4 py-3 font-semibold text-slate-600">القيمة</th>
-                  <th className="text-right px-4 py-3 font-semibold text-slate-600">الرصيد</th>
-                  <th className="text-left px-4 py-3 font-semibold text-slate-600">مركز التكلفة</th>
-                  <th className="text-left px-4 py-3 font-semibold text-slate-600">الحقل</th>
-                  <th className="text-center px-4 py-3 font-semibold text-slate-600">قيد GL</th>
-                  <th className="text-left px-4 py-3 font-semibold text-slate-600">ملاحظات</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {rows.map(row => (
-                  <tr key={row.id} className="hover:bg-slate-50 transition-colors group">
-                    <td className="px-4 py-3 text-slate-700 whitespace-nowrap font-mono text-[12px]">
-                      {row.movement_date}
-                    </td>
-                    <td className="px-4 py-3">
-                      <button
-                        onClick={() => navigate(`/inventory/item/${row.item_code}`)}
-                        className="text-left hover:text-[#0F2D5C] hover:underline transition-colors"
-                      >
-                        <span className="font-medium text-slate-800">{row.item_name ?? `#${row.item_code}`}</span>
-                        {row.unit && <span className="text-slate-400 ml-1 text-[11px]">({row.unit})</span>}
-                      </button>
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <TypeBadge type={row.movement_type} />
-                    </td>
-                    <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{row.warehouse}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      <span className={IN_TYPES.has(row.movement_type) ? 'text-emerald-700 font-semibold' : 'text-rose-700 font-semibold'}>
-                        {IN_TYPES.has(row.movement_type) ? '+' : '−'}{NUM(row.quantity)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                      {EGP(IN_TYPES.has(row.movement_type) ? row.value_in : row.value_out)}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      <span className={row.balance_qty < 0 ? 'text-red-600 font-bold' : 'text-slate-600'}>
-                        {NUM(row.balance_qty)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-slate-500 text-[12px]">
-                      {row.center_name ?? (row.center_code ? `#${row.center_code}` : <span className="text-slate-300">—</span>)}
-                    </td>
-                    <td className="px-4 py-3 text-slate-500 text-[12px]">
-                      {row.field_name ?? (row.field_id ? `#${row.field_id}` : <span className="text-slate-300">—</span>)}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <GlBadge entryId={row.journal_entry_id} />
-                    </td>
-                    <td className="px-4 py-3 text-slate-400 text-[12px] max-w-[160px] truncate" title={row.notes ?? ''}>
-                      {row.notes ?? <span className="text-slate-200">—</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* ── Pagination ── */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between mt-4 px-1">
-            <span className="text-[12px] text-slate-500">
-              عرض {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} من {total.toLocaleString()} حركة
-            </span>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setPage(p => Math.max(1, p - 1))}
-                disabled={page === 1}
-                className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-              >
-                <ChevronRight size={16} />
-              </button>
-              <span className="text-[12px] font-medium text-slate-600 px-2">
-                {page} / {totalPages}
-              </span>
-              <button
-                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                disabled={page === totalPages}
-                className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-              >
-                <ChevronLeft size={16} />
-              </button>
-            </div>
-          </div>
-        )}
+        {(() => {
+          const movCols: ColumnV2<Movement>[] = [
+            {
+              key: 'movement_date', header: 'التاريخ', sortable: true,
+              render: r => <span className="text-slate-700 whitespace-nowrap font-mono text-[12px]">{r.movement_date}</span>,
+              csvValue: r => r.movement_date,
+            },
+            {
+              key: 'item_name', header: 'الصنف',
+              render: r => (
+                <button onClick={() => navigate(`/inventory/item/${r.item_code}`)} className="text-left hover:text-[#0F2D5C] hover:underline transition-colors">
+                  <span className="font-medium text-slate-800">{r.item_name ?? `#${r.item_code}`}</span>
+                  {r.unit && <span className="text-slate-400 ml-1 text-[11px]">({r.unit})</span>}
+                </button>
+              ),
+              csvValue: r => r.item_name ?? String(r.item_code),
+            },
+            {
+              key: 'movement_type', header: 'النوع', align: 'center',
+              render: r => <TypeBadge type={r.movement_type} />,
+              csvValue: r => r.movement_type,
+            },
+            {
+              key: 'warehouse', header: 'المخزن', sortable: true,
+              render: r => <span className="text-slate-600 whitespace-nowrap">{r.warehouse}</span>,
+              csvValue: r => r.warehouse,
+            },
+            {
+              key: 'quantity', header: 'الكمية', align: 'right', sortable: true,
+              render: r => (
+                <span className={IN_TYPES.has(r.movement_type) ? 'text-emerald-700 font-semibold tabular-nums' : 'text-rose-700 font-semibold tabular-nums'}>
+                  {IN_TYPES.has(r.movement_type) ? '+' : '−'}{NUM(r.quantity)}
+                </span>
+              ),
+              csvValue: r => String(r.quantity),
+            },
+            {
+              key: 'value_in', header: 'القيمة', align: 'right', sortable: true,
+              render: r => <span className="tabular-nums text-slate-700">{EGP(IN_TYPES.has(r.movement_type) ? r.value_in : r.value_out)}</span>,
+              csvValue: r => String(IN_TYPES.has(r.movement_type) ? r.value_in : r.value_out),
+            },
+            {
+              key: 'balance_qty', header: 'الرصيد', align: 'right', sortable: true,
+              render: r => <span className={`tabular-nums ${r.balance_qty < 0 ? 'text-red-600 font-bold' : 'text-slate-600'}`}>{NUM(r.balance_qty)}</span>,
+              csvValue: r => String(r.balance_qty),
+            },
+            {
+              key: 'center_name', header: 'مركز التكلفة',
+              render: r => <span className="text-slate-500 text-[12px]">{r.center_name ?? (r.center_code ? `#${r.center_code}` : <span className="text-slate-300">—</span>)}</span>,
+              csvValue: r => r.center_name ?? (r.center_code ? String(r.center_code) : ''),
+            },
+            {
+              key: 'field_name', header: 'الحقل',
+              render: r => <span className="text-slate-500 text-[12px]">{r.field_name ?? (r.field_id ? `#${r.field_id}` : <span className="text-slate-300">—</span>)}</span>,
+              csvValue: r => r.field_name ?? (r.field_id ? String(r.field_id) : ''),
+            },
+            {
+              key: 'journal_entry_id', header: 'قيد GL', align: 'center',
+              render: r => <GlBadge entryId={r.journal_entry_id} />,
+              csvValue: r => r.journal_entry_id ? String(r.journal_entry_id) : '',
+            },
+            {
+              key: 'notes', header: 'ملاحظات',
+              render: r => <span className="text-slate-400 text-[12px] max-w-[160px] truncate block" title={r.notes ?? ''}>{r.notes ?? <span className="text-slate-200">—</span>}</span>,
+              csvValue: r => r.notes ?? '',
+            },
+          ]
+          return (
+            <DataTableV2<Movement>
+              columns={movCols}
+              data={rows}
+              rowKey={r => r.id}
+              loading={isLoading}
+              total={total}
+              page={page}
+              pageSize={PAGE_SIZE}
+              onPage={setPage}
+              onRowClick={r => navigate(`/inventory/item/${r.item_code}`)}
+              emptyText="لا توجد حركات تطابق معايير البحث"
+              exportFilename="inventory_movements"
+              searchPlaceholder="بحث في الصنف أو المخزن..."
+            />
+          )
+        })()}
       </div>
 
       {/* ── Add modal ── */}
