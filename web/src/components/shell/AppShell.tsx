@@ -84,8 +84,8 @@ const navSections: { title: string; items: NavItem[] }[] = [
     items: [
       { label: 'Suppliers Hub',     path: '/suppliers',              icon: <Users         size={18} /> },
       { label: 'Procurement',       path: '/suppliers/procurement',  icon: <ShoppingCart  size={18} /> },
-      { label: 'AP Aging',          path: '/treasury/ap',            icon: <Clock         size={18} /> },
-      { label: 'Purchase Orders', path: '/treasury/po',   icon: <ClipboardList size={18} /> },
+      { label: 'AP Aging',          path: '/suppliers/aging',        icon: <Clock         size={18} /> },
+      { label: 'Purchase Orders', path: '/suppliers/procurement',  icon: <ClipboardList size={18} /> },
       { label: 'Cash & Banks',    path: '/treasury',      icon: <Wallet        size={18} /> },
       { label: 'Bank Reconcile',  path: '/treasury/bank', icon: <ArrowLeftRight size={18} /> },
     ],

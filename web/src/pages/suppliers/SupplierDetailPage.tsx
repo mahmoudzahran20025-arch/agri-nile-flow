@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { suppliersApi, reportsApi, configApi, downloadCsv } from '../../api/client'
 import { usePermission } from '../../hooks/usePermission'
-import DataTable, { type Column } from '../../components/ui/DataTable'
+import DataTableV2, { type ColumnV2 } from '../../components/ui/DataTableV2'
 import AddSupplierTransactionModal from '../../components/forms/AddSupplierTransactionModal'
 import EditSupplierModal from '../../components/forms/EditSupplierModal'
 import type { Supplier, SupplierTransaction } from '../../types'
@@ -184,7 +184,7 @@ export default function SupplierDetailPage() {
     onError: (err: { message?: string }) => toast(err.message || 'فشل حذف الحركة', 'error')
   })
 
-  const TXNS_COLS: Column<SupplierTransaction>[] = [
+  const TXNS_COLS: ColumnV2<SupplierTransaction>[] = [
     {
       key: 'id', header: '', width: '36px',
       render: r => r.status === 'draft' && canWrite('suppliers') ? (
@@ -203,8 +203,9 @@ export default function SupplierDetailPage() {
         />
       ) : <span className="block w-3.5 h-3.5" />,
     },
-    { key: 'transaction_date', header: 'التاريخ', width: '100px',
-      render: r => new Date(r.transaction_date).toLocaleDateString('en-US') },
+    { key: 'transaction_date', header: 'التاريخ', width: '100px', sortable: true,
+      render: r => new Date(r.transaction_date).toLocaleDateString('en-US'),
+      csvValue: r => r.transaction_date },
     {
       key: 'status', header: 'الحالة', width: '85px',
       render: r => (
@@ -238,10 +239,11 @@ export default function SupplierDetailPage() {
         )
       }
     },
-    { key: 'document_number',  header: 'رقم',      width: '65px',  render: r => r.document_number ?? '—' },
-    { key: 'expense_category', header: 'الخدمة',                   render: r => r.expense_category ?? '—' },
-    { key: 'amount', header: 'القيمة', width: '110px',
-      render: r => <span className="font-semibold tabular-nums">{egp(r.amount)}</span> },
+    { key: 'document_number',  header: 'رقم',      width: '65px',  render: r => r.document_number ?? '—', csvValue: r => String(r.document_number ?? '') },
+    { key: 'expense_category', header: 'الخدمة',                   render: r => r.expense_category ?? '—', csvValue: r => r.expense_category ?? '' },
+    { key: 'amount', header: 'القيمة', width: '110px', sortable: true,
+      render: r => <span className="font-semibold tabular-nums">{egp(r.amount)}</span>,
+      csvValue: r => String(r.amount ?? '') },
     {
       key: 'journal_entry_id', header: 'القيد اليومية', width: '115px', align: 'center',
       render: r => (
@@ -258,11 +260,14 @@ export default function SupplierDetailPage() {
         )
       )
     },
-    { key: 'credit', header: 'دائن ↑', width: '110px',
-      render: r => r.credit ? <span className="text-amber-700 font-semibold tabular-nums">{egp(r.credit)}</span> : <span className="text-slate-200">—</span> },
-    { key: 'debit',  header: 'مدين ↓', width: '110px',
-      render: r => r.debit ? <span className="text-blue-700 font-semibold tabular-nums">{egp(r.debit)}</span> : <span className="text-slate-200">—</span> },
-    { key: 'balance_with_checks', header: 'الرصيد', width: '120px',
+    { key: 'credit', header: 'دائن ↑', width: '110px', sortable: true,
+      render: r => r.credit ? <span className="text-amber-700 font-semibold tabular-nums">{egp(r.credit)}</span> : <span className="text-slate-200">—</span>,
+      csvValue: r => String(r.credit ?? '') },
+    { key: 'debit',  header: 'مدين ↓', width: '110px', sortable: true,
+      render: r => r.debit ? <span className="text-blue-700 font-semibold tabular-nums">{egp(r.debit)}</span> : <span className="text-slate-200">—</span>,
+      csvValue: r => String(r.debit ?? '') },
+    { key: 'balance_with_checks', header: 'الرصيد', width: '120px', sortable: true,
+      csvValue: r => r.status === 'draft' ? 'مسودة' : String(r.balance_with_checks ?? ''),
       render: r => {
         if (r.status === 'draft') return <span className="text-slate-300 italic text-[10px]">بانتظار الترحيل</span>
         const b = r.balance_with_checks ?? 0
@@ -541,7 +546,7 @@ export default function SupplierDetailPage() {
               </div>
             )}
             <div ref={tableRef}>
-              <DataTable<SupplierTransaction>
+              <DataTableV2<SupplierTransaction>
                 columns={TXNS_COLS}
                 data={allTxns}
                 loading={isLoading}
@@ -552,8 +557,10 @@ export default function SupplierDetailPage() {
                 rowKey={r => r.id}
                 rowClassName={r => highlightId === r.id
                   ? 'bg-amber-50 ring-1 ring-inset ring-amber-300'
-                  : (allTxns.indexOf(r) % 2 === 0 ? 'bg-white' : 'bg-slate-50/50')}
+                  : ''}
                 emptyText="لا توجد معاملات لهذا المورد"
+                exportFilename={`كشف_حساب_${code}`}
+                searchPlaceholder="بحث في الحركات..."
               />
             </div>
           </div>

@@ -252,9 +252,9 @@ export default function App() {
         <Route path="gl/master-data"         element={<Navigate to="/gl/settings"      replace />} />
         <Route path="gl/exchange-rates"      element={<Navigate to="/gl/settings"      replace />} />
         <Route path="gl/account-role-policy" element={<Navigate to="/gl/hardening"     replace />} />
-        {/* /treasury/ap and /treasury/po redirect into the Hub with the correct tab */}
-        <Route path="treasury/ap"     element={<Navigate to="/treasury?tab=ap"  replace />} />
-        <Route path="treasury/po"     element={<Navigate to="/treasury?tab=po"  replace />} />
+        {/* legacy treasury sub-routes — redirect to live destinations */}
+        <Route path="treasury/ap"  element={<Navigate to="/suppliers/aging"        replace />} />
+        <Route path="treasury/po"  element={<Navigate to="/suppliers/procurement"  replace />} />
 
         {/* Finance */}
         <Route path="treasury/bank"      element={<BankReconciliationPage />} />

@@ -11,6 +11,7 @@ import type { FixedAsset } from '../../api/assets'
 import Modal from '../../components/ui/Modal'
 import SidePanel from '../../components/ui/SidePanel'
 import { usePermission } from '../../hooks/usePermission'
+import DataTableV2, { type ColumnV2 } from '../../components/ui/DataTableV2'
 
 // ── Types ────────────────────────────────────────────────────
 interface WorkOrder {
@@ -230,83 +231,44 @@ function CostBreakdown({
       </div>
 
       {/* ── Labor tab ─────────────────────────────────────── */}
-      {tab === 'labor' && (
-        detail.tasks.length === 0 ? (
-          <p className="text-sm text-slate-400 text-center py-4">لا توجد مهام عمالة مسجلة</p>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border border-slate-200">
-            <table className="w-full text-xs">
-              <thead className="bg-slate-50">
-                <tr>
-                  {['التاريخ','الوصف','الموظف','الكمية','التكلفة',''].map(h => (
-                    <th key={h} className="py-2 px-3 text-right text-slate-500 font-semibold">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {detail.tasks.map(t => (
-                  <tr key={t.id} className="hover:bg-slate-50">
-                    <td className="py-2 px-3 text-slate-500 whitespace-nowrap">{t.task_date}</td>
-                    <td className="py-2 px-3 font-medium">{t.description}</td>
-                    <td className="py-2 px-3 text-slate-500">{t.employee_name ?? '—'}</td>
-                    <td className="py-2 px-3">{t.quantity ? `${num(t.quantity, 1)} ${t.unit ?? ''}` : '—'}</td>
-                    <td className="py-2 px-3 font-bold text-brand-700">{egp(t.total_cost)}</td>
-                    <td className="py-2 px-3">
-                      {canEdit && <DeleteTaskBtn taskId={t.id} />}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot className="bg-slate-50 border-t-2 border-slate-200">
-                <tr>
-                  <td colSpan={4} className="py-2 px-3 font-semibold text-slate-600">الإجمالي</td>
-                  <td className="py-2 px-3 font-bold text-brand-700">{egp(detail.labor_cost)}</td>
-                  <td />
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+      {tab === 'labor' && (() => {
+        const laborCols: ColumnV2<WorkTask>[] = [
+          { key: 'task_date',    header: 'التاريخ',  sortable: true, render: t => <span className="text-slate-500 whitespace-nowrap font-mono text-xs">{t.task_date}</span>, csvValue: t => t.task_date },
+          { key: 'description', header: 'الوصف',    render: t => <span className="font-medium">{t.description}</span>, csvValue: t => t.description },
+          { key: 'employee_name', header: 'الموظف', render: t => t.employee_name ?? '—', csvValue: t => t.employee_name ?? '' },
+          { key: 'quantity',    header: 'الكمية',   render: t => t.quantity ? `${num(t.quantity, 1)} ${t.unit ?? ''}` : '—', csvValue: t => t.quantity ? String(t.quantity) : '' },
+          { key: 'total_cost',  header: 'التكلفة',  sortable: true, render: t => <span className="font-bold text-brand-700">{egp(t.total_cost)}</span>, csvValue: t => String(t.total_cost) },
+          ...(canEdit ? [{ key: 'del', header: '' as React.ReactNode, render: (t: WorkTask) => <DeleteTaskBtn taskId={t.id} /> }] : []),
+        ]
+        return (
+          <DataTableV2<WorkTask>
+            columns={laborCols}
+            data={detail.tasks}
+            rowKey={t => t.id}
+            emptyText="لا توجد مهام عمالة مسجلة"
+            exportFilename={`labor_tasks_${detail.id}`}
+          />
         )
-      )}
+      })()}
 
       {/* ── Inventory tab ─────────────────────────────────── */}
-      {tab === 'inventory' && (
-        detail.inventory.length === 0 ? (
-          <div className="text-center py-6 space-y-1">
-            <Package size={28} className="mx-auto text-slate-300" />
-            <p className="text-sm text-slate-400">لا توجد مدخلات مخزنية مرتبطة</p>
-            <p className="text-xs text-slate-300">اربط حركات الصرف بهذا الأمر عند تسجيل حركة مخزنية</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border border-slate-200">
-            <table className="w-full text-xs">
-              <thead className="bg-slate-50">
-                <tr>
-                  {['الصنف','الوحدة','الكمية المُصرفة','التكلفة'].map(h => (
-                    <th key={h} className="py-2 px-3 text-right text-slate-500 font-semibold">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {detail.inventory.map(inv => (
-                  <tr key={inv.item_code} className="hover:bg-slate-50">
-                    <td className="py-2 px-3 font-medium">{inv.item_name ?? `#${inv.item_code}`}</td>
-                    <td className="py-2 px-3 text-slate-500">{inv.unit ?? '—'}</td>
-                    <td className="py-2 px-3">{num(inv.qty_consumed)}</td>
-                    <td className="py-2 px-3 font-bold text-orange-700">{egp(inv.cost_consumed)}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot className="bg-slate-50 border-t-2 border-slate-200">
-                <tr>
-                  <td colSpan={3} className="py-2 px-3 font-semibold text-slate-600">الإجمالي</td>
-                  <td className="py-2 px-3 font-bold text-orange-700">{egp(detail.inventory_cost)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+      {tab === 'inventory' && (() => {
+        const invCols: ColumnV2<InventoryLine>[] = [
+          { key: 'item_name',    header: 'الصنف',           render: inv => <span className="font-medium">{inv.item_name ?? `#${inv.item_code}`}</span>, csvValue: inv => inv.item_name ?? String(inv.item_code) },
+          { key: 'unit',         header: 'الوحدة',          render: inv => inv.unit ?? '—', csvValue: inv => inv.unit ?? '' },
+          { key: 'qty_consumed', header: 'الكمية المُصرفة', sortable: true, render: inv => num(inv.qty_consumed), csvValue: inv => String(inv.qty_consumed) },
+          { key: 'cost_consumed',header: 'التكلفة',         sortable: true, render: inv => <span className="font-bold text-orange-700">{egp(inv.cost_consumed)}</span>, csvValue: inv => String(inv.cost_consumed) },
+        ]
+        return (
+          <DataTableV2<InventoryLine>
+            columns={invCols}
+            data={detail.inventory}
+            rowKey={inv => inv.item_code}
+            emptyText="لا توجد مدخلات مخزنية مرتبطة"
+            exportFilename={`inventory_${detail.id}`}
+          />
         )
-      )}
+      })()}
 
       {/* ── Equipment tab ─────────────────────────────────── */}
       {tab === 'equipment' && (
@@ -330,55 +292,26 @@ function CostBreakdown({
                 </button>
               )}
             </div>
-          ) : (
-            <div className="overflow-x-auto rounded-xl border border-slate-200">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-50">
-                  <tr>
-                    {['التاريخ','المعدة','الساعات','تكلفة/ساعة','الإجمالي','ملاحظات',''].map(h => (
-                      <th key={h} className="py-2 px-3 text-right text-slate-500 font-semibold">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {detail.equipment.map(eq => (
-                    <tr key={eq.id} className="hover:bg-violet-50/30">
-                      <td className="py-2 px-3 text-slate-500 whitespace-nowrap">{eq.task_date}</td>
-                      <td className="py-2 px-3 font-semibold text-slate-800 flex items-center gap-1.5">
-                        <Wrench size={11} className="text-violet-400 shrink-0" />
-                        {eq.equipment_name}
-                      </td>
-                      <td className="py-2 px-3 tabular-nums">
-                        <span className="font-medium text-violet-700">{num(eq.hours_worked, 1)}</span>
-                        <span className="text-slate-400 mr-0.5">س</span>
-                      </td>
-                      <td className="py-2 px-3 tabular-nums text-slate-600">{egp(eq.cost_per_hour)}/س</td>
-                      <td className="py-2 px-3 font-bold text-violet-700">{egp(eq.total_cost)}</td>
-                      <td className="py-2 px-3 text-slate-400 max-w-[100px] truncate" title={eq.notes ?? ''}>
-                        {eq.notes ?? '—'}
-                      </td>
-                      <td className="py-2 px-3">
-                        {canEdit && <DeleteEquipmentBtn equipmentId={eq.id} />}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot className="bg-slate-50 border-t-2 border-slate-200">
-                  <tr>
-                    <td colSpan={2} className="py-2 px-3 font-semibold text-slate-600">
-                      الإجمالي ({detail.equipment.length} عملية)
-                    </td>
-                    <td className="py-2 px-3 tabular-nums font-semibold text-violet-700">
-                      {num(detail.equipment.reduce((s, e) => s + e.hours_worked, 0), 1)} س
-                    </td>
-                    <td />
-                    <td className="py-2 px-3 font-bold text-violet-700">{egp(detail.equipment_cost)}</td>
-                    <td colSpan={2} />
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          )}
+          ) : (() => {
+            const eqCols: ColumnV2<EquipmentLine>[] = [
+              { key: 'task_date',       header: 'التاريخ',    sortable: true, render: eq => <span className="text-slate-500 whitespace-nowrap font-mono text-xs">{eq.task_date}</span>, csvValue: eq => eq.task_date },
+              { key: 'equipment_name', header: 'المعدة',     render: eq => <span className="font-semibold text-slate-800 flex items-center gap-1.5"><Wrench size={11} className="text-violet-400 shrink-0" />{eq.equipment_name}</span>, csvValue: eq => eq.equipment_name },
+              { key: 'hours_worked',   header: 'الساعات',    sortable: true, render: eq => <span className="font-medium text-violet-700 tabular-nums">{num(eq.hours_worked, 1)} س</span>, csvValue: eq => String(eq.hours_worked) },
+              { key: 'cost_per_hour',  header: 'تكلفة/ساعة', render: eq => <span className="text-slate-600 tabular-nums">{egp(eq.cost_per_hour)}/س</span>, csvValue: eq => String(eq.cost_per_hour) },
+              { key: 'total_cost',     header: 'الإجمالي',   sortable: true, render: eq => <span className="font-bold text-violet-700">{egp(eq.total_cost)}</span>, csvValue: eq => String(eq.total_cost) },
+              { key: 'notes',          header: 'ملاحظات',    render: eq => <span className="text-slate-400 max-w-[100px] truncate block" title={eq.notes ?? ''}>{eq.notes ?? '—'}</span>, csvValue: eq => eq.notes ?? '' },
+              ...(canEdit ? [{ key: 'del', header: '' as React.ReactNode, render: (eq: EquipmentLine) => <DeleteEquipmentBtn equipmentId={eq.id} /> }] : []),
+            ]
+            return (
+              <DataTableV2<EquipmentLine>
+                columns={eqCols}
+                data={detail.equipment}
+                rowKey={eq => eq.id}
+                emptyText="لا توجد معدات"
+                exportFilename={`equipment_${detail.id}`}
+              />
+            )
+          })()}
         </div>
       )}
     </div>

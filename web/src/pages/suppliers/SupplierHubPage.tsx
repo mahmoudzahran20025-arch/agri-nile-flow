@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import SupplierListPage   from './SupplierListPage'
-import APAgingPage        from '../treasury/APAgingPage'
+import APAgingPage        from './APAgingPage'
 import SuppliersBalancePage from '../reports/SuppliersBalancePage'
 import { reportsApi } from '../../api/client'
 import { assetsApi } from '../../api/assets'

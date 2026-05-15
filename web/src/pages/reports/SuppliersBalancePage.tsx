@@ -29,7 +29,7 @@ export default function SuppliersBalancePage() {
   const [seasonId, setSeasonId]   = useState<number | undefined>(undefined)
   const [sortKey, setSortKey]     = useState<'name' | 'credit' | 'debit' | 'balance'>('balance')
   const [selected, setSelected]   = useState<BalanceRow | null>(null)
-  const [sourceFilter, setSourceFilter] = useState<'all' | 'supplier_transactions' | 'supplier_invoices'>('all')
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'supplier_transactions'>('all')
 
   const { data: seasons } = useQuery({
     queryKey: ['config', 'seasons'],
@@ -279,7 +279,6 @@ export default function SuppliersBalancePage() {
                 {([
                   { id: 'all', label: 'الكل' },
                   { id: 'supplier_transactions', label: 'حركات المورد' },
-                  { id: 'supplier_invoices', label: 'فواتير المورد' },
                 ] as const).map(opt => (
                   <button
                     key={opt.id}

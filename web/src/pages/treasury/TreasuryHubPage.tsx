@@ -1,19 +1,19 @@
 import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useSearchParams, Link, useNavigate } from 'react-router-dom'
+import { useSearchParams, Link } from 'react-router-dom'
 import {
-  Wallet, ShoppingCart, CreditCard, Plus, RefreshCw, Download,
+  Wallet, ShoppingCart, Plus, RefreshCw, Download,
   TrendingUp, TrendingDown, ShieldCheck, Clock, CheckCircle2,
   AlertTriangle, Search, Users, Tag, Eye, EyeOff, X,
-  Send, Truck, Package, FileText, AlertOctagon, ChevronDown, ChevronUp,
-  ExternalLink, ArrowRight, Loader2, CheckCircle,
+  Send, Truck, Package, ChevronDown, ChevronUp,
+  Loader2,
 } from 'lucide-react'
 import { treasuryApi, glApi, suppliersApi, downloadCsv } from '../../api/client'
-import { financeApi, type APAgingRow, type PurchaseOrder, type POItem, type MatchStatus } from '../../api/finance'
+import { financeApi, type PurchaseOrder, type POItem } from '../../api/finance'
 import type { BankAccount } from '../../api/gl'
 import { usePermission } from '../../hooks/usePermission'
 import DataTable, { type Column, type SortState } from '../../components/ui/DataTable'
-import AddCashTransactionModal, { type CashTransactionPrefill } from '../../components/forms/AddCashTransactionModal'
+import AddCashTransactionModal from '../../components/forms/AddCashTransactionModal'
 import type { CashTransaction } from '../../types'
 import { useToast } from '../../contexts/ToastContext'
 import { CommandBar } from '../../components/shell/CommandBar'
@@ -34,7 +34,7 @@ const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','
 const CURRENT_YEAR = new Date().getFullYear()
 const YEARS = Array.from({ length: 4 }, (_, i) => CURRENT_YEAR - 1 + i)
 
-type Tab = 'journal' | 'ap' | 'po'
+type Tab = 'journal' | 'po'
 
 // ─── Balance anomaly detection ─────────────────────────────────
 function isBalanceAnomaly(rows: CashTransaction[], idx: number): boolean {
@@ -44,15 +44,6 @@ function isBalanceAnomaly(rows: CashTransaction[], idx: number): boolean {
   const diff = Math.abs(cur - prev)
   const base = Math.abs(prev) || 1
   return diff / base > 5 || diff > 500_000
-}
-
-// ─── AP helpers ────────────────────────────────────────────────
-function ageBucket(days: number) {
-  if (days <= 0)  return { label: 'جاري',       color: 'text-emerald-700', bg: 'bg-emerald-50',  border: 'border-emerald-200', icon: <CheckCircle2 size={12} /> }
-  if (days <= 30) return { label: '1–30 يوم',   color: 'text-blue-700',    bg: 'bg-blue-50',     border: 'border-blue-200',    icon: <Clock size={12} /> }
-  if (days <= 60) return { label: '31–60 يوم',  color: 'text-amber-700',   bg: 'bg-amber-50',    border: 'border-amber-200',   icon: <AlertTriangle size={12} /> }
-  if (days <= 90) return { label: '61–90 يوم',  color: 'text-orange-700',  bg: 'bg-orange-50',   border: 'border-orange-200',  icon: <AlertTriangle size={12} /> }
-  return               { label: '+90 يوم',      color: 'text-red-700',     bg: 'bg-red-50',      border: 'border-red-200',     icon: <AlertOctagon size={12} /> }
 }
 
 // ─── PO helpers ────────────────────────────────────────────────
@@ -65,43 +56,19 @@ const PO_STATUS: Record<string, { label: string; color: string; icon: React.Reac
   closed:    { label: 'مغلق',          color: 'bg-slate-100 text-slate-500',     icon: <CheckCircle2 size={11} /> },
 }
 
-const MATCH_STATUS: Record<MatchStatus, { label: string; color: string; icon: React.ReactNode }> = {
-  matched:         { label: 'مطابق',        color: 'bg-emerald-100 text-emerald-700', icon: <CheckCircle size={11} /> },
-  price_variance:  { label: 'فرق سعر',      color: 'bg-amber-100 text-amber-700',    icon: <AlertTriangle size={11} /> },
-  qty_variance:    { label: 'فرق كمية',     color: 'bg-orange-100 text-orange-700',  icon: <AlertTriangle size={11} /> },
-  over_invoiced:   { label: 'زيادة فوترة',  color: 'bg-red-100 text-red-700',        icon: <AlertOctagon size={11} /> },
-  pending_invoice: { label: 'ينتظر فاتورة', color: 'bg-blue-100 text-blue-700',      icon: <FileText size={11} /> },
-  no_gr:           { label: 'لم يُستلم',     color: 'bg-gray-100 text-gray-500',      icon: <Package size={11} /> },
-}
-
 // ══════════════════════════════════════════════════════════════
 // Main Hub
 // ══════════════════════════════════════════════════════════════
 export default function TreasuryHubPage() {
   const { canWrite, role } = usePermission()
   const queryClient        = useQueryClient()
-  const navigate           = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
   const activeTab = (searchParams.get('tab') as Tab) ?? 'journal'
   const setTab = (t: Tab) => setSearchParams({ tab: t }, { replace: true })
 
   // ── Shared modal state ──────────────────────────────────────
-  const [addOpen,       setAddOpen]       = useState(false)
-  const [cashPrefill,   setCashPrefill]   = useState<CashTransactionPrefill | undefined>()
-  const [cashContext,   setCashContext]   = useState<string | undefined>()
-
-  function openPayModal(prefill: CashTransactionPrefill, context: string) {
-    setCashPrefill(prefill)
-    setCashContext(context)
-    setAddOpen(true)
-  }
-
-  function closeAddModal() {
-    setAddOpen(false)
-    setCashPrefill(undefined)
-    setCashContext(undefined)
-  }
+  const [addOpen, setAddOpen] = useState(false)
 
   // ── Shared data ─────────────────────────────────────────────
   const { data: accounts = [] } = useQuery({
@@ -115,24 +82,8 @@ export default function TreasuryHubPage() {
     queryFn:  () => treasuryApi.balance(),
   })
 
-  const { data: apData = [] } = useQuery({
-    queryKey: ['ap-aging'],
-    queryFn:  financeApi.getAPAging,
-    staleTime: 30_000,
-  })
-
-  const { data: poData = [] } = useQuery({
-    queryKey: ['purchase-orders', ''],
-    queryFn:  () => financeApi.getPurchaseOrders(),
-    staleTime: 30_000,
-  })
-
   // ── Shared KPIs ─────────────────────────────────────────────
-  const totalBalance   = (balance as { balance: number } | null)?.balance
-  const totalAP        = (apData as APAgingRow[]).reduce((s, r) => s + r.outstanding, 0)
-  const overdueAP      = (apData as APAgingRow[]).filter(r => r.days_overdue > 30).reduce((s, r) => s + r.outstanding, 0)
-  const openPOs        = (poData as PurchaseOrder[]).filter(o => ['draft','sent','partial'].includes(o.status)).length
-  const pendingInvPOs  = (poData as PurchaseOrder[]).filter(o => ['partial','received'].includes(o.status)).length
+  const totalBalance = (balance as { balance: number } | null)?.balance
 
   const hubKpis: KpiItem[] = [
     {
@@ -142,36 +93,17 @@ export default function TreasuryHubPage() {
       onClick: () => setTab('journal'),
     },
     {
-      id: 'ap', label: 'ذمم دائنة مستحقة',
-      value: egp(totalAP),
-      variant: totalAP > 0 ? 'warning' : 'success',
-      onClick: () => setTab('ap'),
-    },
-    {
-      id: 'overdue', label: 'متأخر +30 يوم',
-      value: egp(overdueAP),
-      variant: overdueAP > 0 ? 'error' : 'default',
-      onClick: () => setTab('ap'),
-    },
-    {
-      id: 'po', label: 'طلبات شراء مفتوحة',
-      value: String(openPOs),
-      variant: openPOs > 0 ? 'default' : 'success',
-      onClick: () => setTab('po'),
-    },
-    {
-      id: 'pending-inv', label: 'بانتظار فاتورة',
-      value: String(pendingInvPOs),
-      variant: pendingInvPOs > 0 ? 'warning' : 'default',
+      id: 'po', label: 'طلبات الشراء',
+      value: '—',
+      variant: 'default',
       onClick: () => setTab('po'),
     },
   ]
 
   // ── Tab config ──────────────────────────────────────────────
   const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: 'journal', label: 'سجل الخزينة',       icon: <Wallet size={15} /> },
-    { id: 'ap',      label: 'الذمم الدائنة (AP)', icon: <CreditCard size={15} /> },
-    { id: 'po',      label: 'طلبات الشراء (PO)',  icon: <ShoppingCart size={15} /> },
+    { id: 'journal', label: 'سجل الخزينة',      icon: <Wallet size={15} /> },
+    { id: 'po',      label: 'طلبات الشراء (PO)', icon: <ShoppingCart size={15} /> },
   ]
 
   return (
@@ -181,13 +113,7 @@ export default function TreasuryHubPage() {
         ...(activeTab === 'journal' && canWrite('treasury') ? [{
           id: 'add', label: 'حركة جديدة',
           icon: <Plus size={14} />,
-          onClick: () => { setCashPrefill(undefined); setCashContext(undefined); setAddOpen(true) },
-          variant: 'primary' as const,
-        }] : []),
-        ...(activeTab === 'po' ? [{
-          id: 'new-po', label: 'طلب شراء جديد',
-          icon: <Plus size={14} />,
-          onClick: () => navigate('/treasury/po?new=1'),
+          onClick: () => setAddOpen(true),
           variant: 'primary' as const,
         }] : []),
         {
@@ -195,7 +121,6 @@ export default function TreasuryHubPage() {
           icon: <RefreshCw size={14} />,
           onClick: () => {
             queryClient.invalidateQueries({ queryKey: ['treasury'] })
-            queryClient.invalidateQueries({ queryKey: ['ap-aging'] })
             queryClient.invalidateQueries({ queryKey: ['purchase-orders'] })
           },
           variant: 'secondary' as const,
@@ -239,39 +164,15 @@ export default function TreasuryHubPage() {
           />
         )}
 
-        {activeTab === 'ap' && (
-          <APTab
-            rows={apData as APAgingRow[]}
-            onPay={(row) => openPayModal(
-              {
-                supplier_code:   row.supplier_code,
-                supplier_name:   row.supplier_name ?? undefined,
-                amount:          row.outstanding,
-                narration:       `سداد ${row.supplier_name ?? 'مورد'} — فاتورة ${row.invoice_number}`,
-                document_type:   'فاتورة',
-                document_number: row.invoice_number,
-                direction:       'م',
-                invoice_id:      row.id,
-                invoice_number:  row.invoice_number,
-              },
-              `سداد فاتورة: ${row.invoice_number} — ${row.supplier_name ?? 'مورد'}`
-            )}
-            onGLLink={(row) => navigate(`/gl/entries?ref_type=supplier_transaction&source_code=${row.supplier_code}`)}
-            onViewSupplier={(code) => navigate(`/suppliers/${code}`)}
-          />
-        )}
-
         {activeTab === 'po' && (
-          <POTab onGoToAP={() => setTab('ap')} />
+          <POTab />
         )}
       </div>
 
       {/* ── Shared Cash Modal ─────────────────────────────── */}
       <AddCashTransactionModal
         open={addOpen}
-        onClose={closeAddModal}
-        prefill={cashPrefill}
-        contextLabel={cashContext}
+        onClose={() => setAddOpen(false)}
       />
     </div>
   )
@@ -722,174 +623,9 @@ function JournalTab({
 }
 
 // ══════════════════════════════════════════════════════════════
-// Tab 2 — AP Aging
+// Tab 2 — Purchase Orders
 // ══════════════════════════════════════════════════════════════
-function APTab({
-  rows, onPay, onGLLink, onViewSupplier,
-}: {
-  rows: APAgingRow[]
-  onPay: (row: APAgingRow) => void
-  onGLLink: (row: APAgingRow) => void
-  onViewSupplier: (code: number) => void
-}) {
-  const [bucketFilter, setBucketFilter] = useState('')
-
-  const buckets = [
-    { key: '',      label: 'الكل' },
-    { key: 'cur',   label: 'جاري',       filter: (r: APAgingRow) => r.days_overdue <= 0 },
-    { key: '1-30',  label: '1–30 يوم',   filter: (r: APAgingRow) => r.days_overdue > 0  && r.days_overdue <= 30 },
-    { key: '31-90', label: '31–90 يوم',  filter: (r: APAgingRow) => r.days_overdue > 30 && r.days_overdue <= 90 },
-    { key: '90+',   label: '+90 يوم',    filter: (r: APAgingRow) => r.days_overdue > 90 },
-  ]
-
-  const displayRows = bucketFilter === ''
-    ? rows
-    : rows.filter(buckets.find(b => b.key === bucketFilter)!.filter!)
-
-  const total     = rows.reduce((s, r) => s + r.outstanding, 0)
-  const overdue90 = rows.filter(r => r.days_overdue > 90).reduce((s, r) => s + r.outstanding, 0)
-
-  return (
-    <div className="space-y-3">
-      {/* AP mini KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {buckets.slice(1).map(b => {
-          const bRows = rows.filter(b.filter!)
-          const bTotal = bRows.reduce((s, r) => s + r.outstanding, 0)
-          const isOver = b.key === '90+'
-          return (
-            <button key={b.key} onClick={() => setBucketFilter(bucketFilter === b.key ? '' : b.key)}
-              className={`text-right bg-white rounded-xl border px-4 py-3 shadow-sm transition-all hover:shadow-md ${
-                bucketFilter === b.key ? 'border-[#0F2D5C] ring-2 ring-[#0F2D5C]/20' :
-                isOver && bTotal > 0 ? 'border-red-200' : 'border-slate-200'
-              }`}>
-              <p className={`text-[11px] font-medium ${isOver && bTotal > 0 ? 'text-red-600' : 'text-slate-500'}`}>{b.label}</p>
-              <p className={`text-base font-bold tabular-nums ${isOver && bTotal > 0 ? 'text-red-700' : 'text-slate-800'}`}>
-                {egp(bTotal)}
-              </p>
-              <p className="text-[10px] text-slate-400">{bRows.length} فاتورة</p>
-            </button>
-          )
-        })}
-      </div>
-
-      {overdue90 > 0 && (
-        <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 text-red-800 text-xs font-semibold">
-          <AlertOctagon size={13} className="text-red-500 shrink-0" />
-          تنبيه: {egp(overdue90)} متأخرة أكثر من 90 يوماً — يُنصح بالتسوية الفورية
-        </div>
-      )}
-
-      <SectionCard title="مستحقات الموردين (AP Aging)" icon={<CreditCard size={15} />}
-        action={
-          <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
-            {buckets.map(b => (
-              <button key={b.key} onClick={() => setBucketFilter(b.key)}
-                className={`px-2.5 py-1 text-[10px] font-bold rounded-md transition-all ${
-                  bucketFilter === b.key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
-                {b.label}
-              </button>
-            ))}
-          </div>
-        }
-      >
-        {rows.length === 0 ? (
-          <div className="text-center py-16">
-            <CheckCircle2 size={40} className="mx-auto mb-3 text-emerald-400 opacity-60" />
-            <p className="font-semibold text-slate-600">لا توجد ذمم مستحقة</p>
-            <p className="text-sm text-slate-400 mt-1">جميع فواتير الموردين مسددة</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-100 text-xs text-slate-500 font-semibold">
-                  <th className="text-right px-5 py-3">المورد</th>
-                  <th className="text-right px-4 py-3">الفاتورة</th>
-                  <th className="text-center px-4 py-3">الاستحقاق</th>
-                  <th className="text-center px-4 py-3">الحالة</th>
-                  <th className="text-left px-4 py-3">الإجمالي</th>
-                  <th className="text-left px-4 py-3">مسدد</th>
-                  <th className="text-left px-4 py-3">المتبقي</th>
-                  <th className="px-4 py-3 text-center">إجراء</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {displayRows.map(row => {
-                  const bucket = ageBucket(row.days_overdue)
-                  return (
-                    <tr key={row.id} className="hover:bg-slate-50 transition-colors group">
-                      <td className="px-5 py-3">
-                        {row.supplier_code ? (
-                          <button onClick={() => onViewSupplier(row.supplier_code!)}
-                            className="font-medium text-indigo-700 hover:text-indigo-900 hover:underline text-sm transition-colors flex items-center gap-1">
-                            <Users size={12} className="text-indigo-400" />
-                            {row.supplier_name ?? '—'}
-                          </button>
-                        ) : (
-                          <p className="font-medium text-slate-800 text-sm">{row.supplier_name ?? '—'}</p>
-                        )}
-                        {row.po_number && (
-                          <p className="text-xs text-slate-400 mt-0.5 flex items-center gap-1">
-                            <ShoppingCart size={10} /> {row.po_number}
-                          </p>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-700">{row.invoice_number}</td>
-                      <td className="px-4 py-3 text-center text-slate-500 text-xs">{row.due_date}</td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={`inline-flex items-center gap-1 text-xs rounded-full px-2.5 py-1 font-medium border ${bucket.bg} ${bucket.color} ${bucket.border}`}>
-                          {bucket.icon}
-                          {row.days_overdue > 0 ? `${row.days_overdue} يوم` : bucket.label}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-left font-medium text-slate-700">{egp(row.total_amount)}</td>
-                      <td className="px-4 py-3 text-left">
-                        <span className={row.paid_amount > 0 ? 'text-emerald-600 font-medium' : 'text-slate-300'}>
-                          {egp(row.paid_amount)}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-left font-bold text-slate-900">{egp(row.outstanding)}</td>
-                      <td className="px-4 py-3 text-center">
-                        <div className="flex items-center justify-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button onClick={() => onPay(row)}
-                            className="flex items-center gap-1 text-xs bg-[#0F2D5C] hover:bg-[#1a3f7c] text-white rounded-lg px-2.5 py-1.5 transition-colors whitespace-nowrap shadow-sm">
-                            <Wallet size={11} /> سداد من الخزينة
-                          </button>
-                          <button onClick={() => onGLLink(row)}
-                            className="flex items-center gap-1 text-xs text-indigo-600 hover:bg-indigo-50 border border-indigo-200 rounded-lg px-2 py-1.5 transition-colors"
-                            title="عرض في دفتر الأستاذ">
-                            <ExternalLink size={11} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-              <tfoot>
-                <tr className="bg-slate-50 border-t-2 border-slate-200 font-bold text-sm">
-                  <td colSpan={4} className="px-5 py-3 text-slate-600">
-                    الإجمالي ({displayRows.length} فاتورة{bucketFilter ? ' — مفلترة' : ''})
-                  </td>
-                  <td className="px-4 py-3 text-left text-slate-700">{egp(displayRows.reduce((s,r)=>s+r.total_amount,0))}</td>
-                  <td className="px-4 py-3 text-left text-emerald-700">{egp(displayRows.reduce((s,r)=>s+r.paid_amount,0))}</td>
-                  <td className="px-4 py-3 text-left text-slate-900">{egp(total)}</td>
-                  <td />
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        )}
-      </SectionCard>
-    </div>
-  )
-}
-
-// ══════════════════════════════════════════════════════════════
-// Tab 3 — Purchase Orders
-// ══════════════════════════════════════════════════════════════
-function POTab({ onGoToAP }: { onGoToAP: () => void }) {
+function POTab() {
   const qc = useQueryClient()
   const { toast } = useToast()
   const [filterStatus, setFilterStatus] = useState('')
@@ -901,9 +637,6 @@ function POTab({ onGoToAP }: { onGoToAP: () => void }) {
     po_item_id: number; item_name: string; qty_ordered: number
     qty_received_so_far: number; qty_to_receive: string; warehouse: string
   }>>([])
-  const [showInvoice,  setShowInvoice]  = useState<number | null>(null)
-  const [recentInvoicedPO, setRecentInvoicedPO] = useState<number | null>(null)
-
   const [form, setForm] = useState({
     supplier_code: '' as string, supplier_name: '',
     order_date: new Date().toISOString().slice(0, 10), expected_date: '', notes: '',
@@ -1016,21 +749,6 @@ function POTab({ onGoToAP }: { onGoToAP: () => void }) {
         ))}
       </div>
 
-      {/* AP nudge — show after invoicing */}
-      {recentInvoicedPO && (
-        <div className="flex items-center gap-3 bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-2.5 text-sm text-indigo-800">
-          <FileText size={14} className="shrink-0 text-indigo-500" />
-          <span className="font-semibold">تم تسجيل الفاتورة — الآن تظهر في الذمم الدائنة</span>
-          <button onClick={() => { setRecentInvoicedPO(null); onGoToAP() }}
-            className="mr-auto flex items-center gap-1 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg px-3 py-1.5 transition-colors">
-            عرض AP وسداد <ArrowRight size={11} />
-          </button>
-          <button onClick={() => setRecentInvoicedPO(null)} className="text-indigo-400 hover:text-indigo-600">
-            <X size={14} />
-          </button>
-        </div>
-      )}
-
       <SectionCard title="طلبات الشراء (PO)" icon={<ShoppingCart size={15} />}
         action={
           <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
@@ -1072,7 +790,6 @@ function POTab({ onGoToAP }: { onGoToAP: () => void }) {
                   onToggle={() => setExpandedId(expandedId === po.id ? null : po.id)}
                   onStatus={(status) => statusMut.mutate({ id: po.id, status })}
                   onReceive={() => openReceive(po)}
-                  onInvoice={() => setShowInvoice(po.id)}
                   statusPending={statusMut.isPending}
                 />
               ))}
@@ -1233,20 +950,6 @@ function POTab({ onGoToAP }: { onGoToAP: () => void }) {
         </Modal>
       )}
 
-      {/* Invoice Modal */}
-      {showInvoice && (
-        <InvoiceModal
-          poId={showInvoice}
-          onClose={() => setShowInvoice(null)}
-          onSuccess={(poId) => {
-            setShowInvoice(null)
-            setRecentInvoicedPO(poId)
-            qc.invalidateQueries({ queryKey: ['purchase-orders'] })
-            qc.invalidateQueries({ queryKey: ['po-match', poId] })
-            qc.invalidateQueries({ queryKey: ['ap-aging'] })
-          }}
-        />
-      )}
     </div>
   )
 }
@@ -1254,7 +957,7 @@ function POTab({ onGoToAP }: { onGoToAP: () => void }) {
 // ── PO Row ─────────────────────────────────────────────────────
 function PORow({
   po, expanded, detail, detailLoading,
-  onToggle, onStatus, onReceive, onInvoice, statusPending,
+  onToggle, onStatus, onReceive, statusPending,
 }: {
   po: PurchaseOrder
   expanded: boolean
@@ -1263,14 +966,12 @@ function PORow({
   onToggle: () => void
   onStatus: (status: string) => void
   onReceive: () => void
-  onInvoice: () => void
   statusPending: boolean
 }) {
   const s = PO_STATUS[po.status] ?? { label: po.status, color: 'bg-gray-100 text-gray-500', icon: null }
   const canSend    = po.status === 'draft'
   const canReceive = ['sent', 'partial'].includes(po.status)
   const canCancel  = ['draft', 'sent'].includes(po.status)
-  const showMatch  = ['partial', 'received', 'closed'].includes(po.status)
 
   return (
     <div>
@@ -1334,8 +1035,6 @@ function PORow({
                 </table>
               )}
 
-              {showMatch && <ThreeWayMatchSection poId={po.id} onInvoice={onInvoice} />}
-
               <div className="flex flex-wrap gap-2 mt-4">
                 {canSend && (
                   <button onClick={() => onStatus('sent')} disabled={statusPending}
@@ -1373,202 +1072,3 @@ function PORow({
   )
 }
 
-// ── Three-Way Match ────────────────────────────────────────────
-function ThreeWayMatchSection({ poId, onInvoice }: { poId: number; onInvoice: () => void }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ['po-match', poId],
-    queryFn:  () => financeApi.getPOMatch(poId),
-    staleTime: 30_000,
-  })
-
-  if (isLoading) return <div className="flex justify-center py-4"><Loader2 className="animate-spin text-slate-400" size={18} /></div>
-  if (!data) return null
-
-  const { match_rows, invoices, po } = data
-  const canInvoice  = ['partial', 'received'].includes(po.status)
-  const allMatched  = match_rows.every(r => r.match_status === 'matched')
-  const hasVariance = match_rows.some(r => ['price_variance','qty_variance','over_invoiced'].includes(r.match_status))
-
-  return (
-    <div className="mt-3 border border-indigo-100 rounded-xl overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2.5 bg-indigo-50 border-b border-indigo-100">
-        <div className="flex items-center gap-2">
-          <FileText size={13} className="text-indigo-600" />
-          <span className="text-sm font-semibold text-indigo-800">مطابقة ثلاثية: PO → استلام → فاتورة</span>
-          {allMatched  && <span className="text-xs bg-emerald-100 text-emerald-700 rounded-full px-2 py-0.5 font-medium">✓ مطابق تام</span>}
-          {hasVariance && <span className="text-xs bg-amber-100  text-amber-700  rounded-full px-2 py-0.5 font-medium">⚠ يوجد فروقات</span>}
-        </div>
-        {canInvoice && (
-          <button onClick={onInvoice}
-            className="flex items-center gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg px-3 py-1.5 transition-colors">
-            <Plus size={11} /> تسجيل فاتورة
-          </button>
-        )}
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="bg-slate-50 text-slate-500 font-medium border-b border-slate-100">
-              <th className="text-right px-4 py-2">الصنف</th>
-              <th className="text-center px-3 py-2">مطلوب</th>
-              <th className="text-center px-3 py-2">مستلم</th>
-              <th className="text-center px-3 py-2">مُفوتر</th>
-              <th className="text-center px-3 py-2">سعر PO</th>
-              <th className="text-center px-3 py-2">سعر فاتورة</th>
-              <th className="text-center px-4 py-2">الحالة</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-50">
-            {match_rows.map(row => {
-              const cfg = MATCH_STATUS[row.match_status] ?? MATCH_STATUS.pending_invoice
-              const priceDiff = row.inv_unit_price > 0 ? row.inv_unit_price - row.po_unit_price : 0
-              return (
-                <tr key={row.po_item_id} className="hover:bg-slate-50">
-                  <td className="px-4 py-2.5 font-medium text-slate-800">{row.item_name}</td>
-                  <td className="px-3 py-2.5 text-center text-slate-600">{row.qty_ordered} {row.unit ?? ''}</td>
-                  <td className="px-3 py-2.5 text-center">
-                    <span className={row.qty_received >= row.qty_ordered ? 'text-emerald-600 font-medium' : row.qty_received > 0 ? 'text-amber-600' : 'text-slate-400'}>
-                      {row.qty_received}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2.5 text-center">
-                    <span className={row.qty_invoiced > 0 ? 'text-indigo-600 font-medium' : 'text-slate-400'}>
-                      {row.qty_invoiced}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2.5 text-center text-slate-600">{fmtNum(row.po_unit_price)}</td>
-                  <td className="px-3 py-2.5 text-center">
-                    {row.inv_unit_price > 0 ? (
-                      <span className={priceDiff !== 0 ? (priceDiff > 0 ? 'text-red-600 font-medium' : 'text-emerald-600 font-medium') : 'text-slate-600'}>
-                        {fmtNum(row.inv_unit_price)}
-                        {priceDiff !== 0 && <span className="mr-1 text-[10px]">({priceDiff > 0 ? '+' : ''}{fmtNum(priceDiff)})</span>}
-                      </span>
-                    ) : <span className="text-slate-300">—</span>}
-                  </td>
-                  <td className="px-4 py-2.5 text-center">
-                    <span className={`inline-flex items-center gap-1 text-xs rounded-full px-2 py-0.5 font-medium ${cfg.color}`}>
-                      {cfg.icon} {cfg.label}
-                    </span>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-      {invoices.length > 0 && (
-        <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-100">
-          <p className="text-xs text-slate-500 font-medium mb-1.5">الفواتير المسجلة:</p>
-          <div className="flex flex-wrap gap-2">
-            {invoices.map(inv => (
-              <span key={inv.id} className="text-xs bg-white border border-slate-200 rounded-lg px-3 py-1 text-slate-700">
-                <span className="font-medium">{inv.number}</span>
-                <span className="text-slate-400 mr-1">· {inv.date} · {fmtNum(inv.total)} ج.م</span>
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Invoice Modal ──────────────────────────────────────────────
-interface InvItem { po_item_id: number; item_name: string; qty_invoiced: string; unit_price: string }
-
-function InvoiceModal({ poId, onClose, onSuccess }: { poId: number; onClose: () => void; onSuccess: (poId: number) => void }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ['po-match', poId],
-    queryFn:  () => financeApi.getPOMatch(poId),
-    staleTime: 30_000,
-  })
-
-  const [form, setForm] = useState({ invoice_number: '', invoice_date: new Date().toISOString().slice(0, 10), notes: '' })
-  const [items, setItems] = useState<InvItem[] | null>(null)
-
-  if (data && !items) {
-    setItems(
-      data.match_rows.filter(r => r.match_status !== 'no_gr').map(r => ({
-        po_item_id:   r.po_item_id,
-        item_name:    r.item_name,
-        qty_invoiced: String(Math.max(0, r.qty_received - r.qty_invoiced)),
-        unit_price:   String(r.po_unit_price),
-      }))
-    )
-  }
-
-  const mut = useMutation({
-    mutationFn: () => financeApi.createInvoice(poId, {
-      invoice_number: form.invoice_number,
-      invoice_date:   form.invoice_date,
-      notes:          form.notes || undefined,
-      items: (items ?? []).filter(i => Number(i.qty_invoiced) > 0).map(i => ({
-        po_item_id:   i.po_item_id,
-        qty_invoiced: Number(i.qty_invoiced),
-        unit_price:   Number(i.unit_price),
-      })),
-    }),
-    onSuccess: () => onSuccess(poId),
-  })
-
-  const total     = (items ?? []).reduce((s, i) => s + (Number(i.qty_invoiced)||0)*(Number(i.unit_price)||0), 0)
-  const hasAnyQty = (items ?? []).some(i => Number(i.qty_invoiced) > 0)
-
-  return (
-    <Modal open onClose={onClose} title="تسجيل فاتورة مورد">
-      {isLoading || !items ? (
-        <div className="flex justify-center py-10"><Loader2 className="animate-spin text-slate-400" size={24} /></div>
-      ) : (
-        <div className="space-y-4 p-1 max-h-[72vh] overflow-y-auto">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">رقم الفاتورة *</label>
-              <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500"
-                placeholder="INV-2024-001" value={form.invoice_number}
-                onChange={e => setForm(f => ({ ...f, invoice_number: e.target.value }))} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">تاريخ الفاتورة</label>
-              <input type="date" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500"
-                value={form.invoice_date}
-                onChange={e => setForm(f => ({ ...f, invoice_date: e.target.value }))} />
-            </div>
-          </div>
-          <div className="space-y-2">
-            {items.map((item, idx) => (
-              <div key={item.po_item_id} className="grid grid-cols-12 gap-1.5 items-center bg-slate-50 rounded-lg p-2">
-                <span className="col-span-4 text-sm text-slate-800 font-medium">{item.item_name}</span>
-                <input type="number" min="0" step="any"
-                  className="col-span-3 border border-gray-300 rounded px-2 py-1.5 text-sm text-center focus:ring-1 focus:ring-indigo-500"
-                  value={item.qty_invoiced}
-                  onChange={e => setItems(its => its!.map((it, i) => i === idx ? { ...it, qty_invoiced: e.target.value } : it))} />
-                <input type="number" min="0" step="any"
-                  className="col-span-3 border border-gray-300 rounded px-2 py-1.5 text-sm text-center focus:ring-1 focus:ring-indigo-500"
-                  value={item.unit_price}
-                  onChange={e => setItems(its => its!.map((it, i) => i === idx ? { ...it, unit_price: e.target.value } : it))} />
-                <span className="col-span-2 text-left text-xs text-slate-600 font-medium">
-                  {fmtNum((Number(item.qty_invoiced)||0)*(Number(item.unit_price)||0))}
-                </span>
-              </div>
-            ))}
-          </div>
-          <div className="flex justify-end text-sm font-bold text-slate-800">
-            إجمالي الفاتورة: {fmtNum(total)} ج.م
-          </div>
-          {mut.isError && (
-            <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">فشل الحفظ — تأكد من رقم الفاتورة والكميات</p>
-          )}
-          <div className="flex gap-3 pt-2 sticky bottom-0 bg-white pb-1">
-            <button onClick={() => mut.mutate()}
-              disabled={!form.invoice_number.trim() || !hasAnyQty || mut.isPending}
-              className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg py-2 text-sm font-medium flex items-center justify-center gap-2">
-              {mut.isPending ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
-              حفظ الفاتورة
-            </button>
-            <button onClick={onClose} className="px-4 border border-gray-300 rounded-lg text-sm text-gray-600 hover:bg-gray-50">إلغاء</button>
-          </div>
-        </div>
-      )}
-    </Modal>
-  )
-}

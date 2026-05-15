@@ -42,6 +42,7 @@ interface BatchForm {
   work_order_id?:    string
   service_type_code: string
   statement_text:    string
+  season_id:         string
 }
 
 interface Props {
@@ -237,6 +238,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
     payment_method:    'credit',
     service_type_code: '',
     statement_text:    '',
+    season_id:         '',
   })
 
   const [lines, setLines] = useState<LineItem[]>([newLine()])
@@ -259,6 +261,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
         work_order_id:     '',
         service_type_code: '',
         statement_text:    '',
+        season_id:         '',
       })
       setLines([newLine()])
     }
@@ -325,6 +328,15 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
     enabled:  open && form.movement_type === 'ISSUE',
     staleTime: 60_000,
     select: res => (res as any)?.data ?? res,
+  })
+
+  type SeasonOption = { id: number; name: string; status: string }
+  const { data: seasonsList = [] } = useQuery({
+    queryKey: ['config', 'seasons'],
+    queryFn:  () => configApi.seasons() as Promise<SeasonOption[]>,
+    enabled:  open && form.movement_type === 'ISSUE',
+    staleTime: 300_000,
+    select: (res: any) => (res?.data ?? res ?? []).filter((s: SeasonOption) => s.status !== 'closed' && s.status !== 'cancelled'),
   })
 
   // ─── Form helpers ──────────────────────────────────────────
@@ -421,6 +433,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
         return
       }
       if (form.movement_type === 'ISSUE') {
+        if (!form.season_id) { setError('الموسم مطلوب لعملية صرف المخزون'); return }
         if (!form.service_type_code) { setError('نوع الخدمة مطلوب لعملية صرف المخزون'); return }
         if (!form.statement_text.trim()) { setError('البيان / وصف الصرف مطلوب'); return }
         if (!form.center_code) { setError('مركز التكلفة مطلوب لعملية صرف المخزون'); return }
@@ -459,6 +472,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
         document_number:   form.document_number ? Number(form.document_number) : undefined,
         payment_method:    form.payment_method,
         center_code:       form.center_code     ? Number(form.center_code)     : undefined,
+        season_id:         form.season_id       ? Number(form.season_id)       : undefined,
         field_id:          form.field_id        ? Number(form.field_id)        : undefined,
         work_order_id:     form.work_order_id   ? Number(form.work_order_id)   : undefined,
         notes:             form.notes || undefined,
@@ -586,9 +600,26 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
               )}
             </div>
             
-            {/* ISSUE-required fields: service type + statement */}
+            {/* ISSUE-required fields: season + service type + statement */}
             {form.movement_type === 'ISSUE' && (
               <>
+                <div>
+                  <label className="label">الموسم <span className="text-red-500">*</span></label>
+                  <select
+                    className={`input ${!form.season_id ? 'border-amber-400 focus:border-amber-500' : ''}`}
+                    value={form.season_id}
+                    onChange={e => setF('season_id', e.target.value)}
+                    disabled={!!form.work_order_id}
+                  >
+                    <option value="">— اختر الموسم —</option>
+                    {(seasonsList as SeasonOption[]).map(s => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                  {!!form.work_order_id && form.season_id && (
+                    <p className="text-[10px] text-slate-400 mt-1 px-1">تم تعيينه تلقائياً من أمر العمل.</p>
+                  )}
+                </div>
                 <div>
                   <label className="label">نوع الخدمة <span className="text-red-500">*</span></label>
                   <select
@@ -626,6 +657,7 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
                         work_order_id: woId,
                         field_id: wo?.field_id ? String(wo.field_id) : f.field_id,
                         center_code: wo?.center_code ? String(wo.center_code) : f.center_code,
+                        season_id: wo?.season_id ? String(wo.season_id) : f.season_id,
                       }))
                     }}
                   >
@@ -961,6 +993,14 @@ export default function AddInventoryBatchModal({ open, onClose, defaultWarehouse
                   <span className="text-slate-500">طريقة الدفع:</span>
                   <span className={`font-bold ${form.payment_method === 'cash' ? 'text-green-600' : 'text-brand-600'}`}>
                     {form.payment_method === 'cash' ? '💵 نقدي' : '💳 آجل'}
+                  </span>
+                </div>
+              )}
+              {form.season_id && (
+                <div className="flex gap-2">
+                  <span className="text-slate-500">الموسم:</span>
+                  <span className="font-medium text-emerald-700">
+                    {(seasonsList as SeasonOption[]).find(s => String(s.id) === form.season_id)?.name ?? `#${form.season_id}`}
                   </span>
                 </div>
               )}

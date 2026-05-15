@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { glApi } from '../../api/client'
 import { reportsApi } from '../../api/reports'
-import { CheckCircle, XCircle, Download, RefreshCw } from 'lucide-react'
+import { CheckCircle, XCircle, Download, RefreshCw, Search, X } from 'lucide-react'
 
 type AccountType = 'asset' | 'liability' | 'equity' | 'revenue' | 'expense'
 
@@ -28,6 +28,7 @@ export default function TrialBalancePage() {
   const [periodId, setPeriodId] = useState<number | null>(null)
   const [asOf, setAsOf]       = useState('')
   const [showZero, setShowZero] = useState(false)
+  const [search, setSearch] = useState('')
 
   const { data: periods } = useQuery({
     queryKey: ['gl', 'periods'],
@@ -51,9 +52,19 @@ export default function TrialBalancePage() {
   const rows = data?.data ?? []
   const summary = data?.summary
 
-  const filteredRows = showZero
-    ? rows
-    : rows.filter(r => r.opening_balance !== 0 || r.period_debit !== 0 || r.period_credit !== 0 || r.closing_balance !== 0)
+  const filteredRows = useMemo(() => {
+    let result = showZero
+      ? rows
+      : rows.filter(r => r.opening_balance !== 0 || r.period_debit !== 0 || r.period_credit !== 0 || r.closing_balance !== 0)
+    if (search.trim()) {
+      const q = search.trim().toLowerCase()
+      result = result.filter(r =>
+        r.account_code?.toLowerCase().includes(q) ||
+        r.account_name?.toLowerCase().includes(q)
+      )
+    }
+    return result
+  }, [rows, showZero, search])
 
   const grouped = ACCOUNT_TYPE_ORDER.reduce<Record<string, typeof rows>>((acc, t) => {
     acc[t] = filteredRows.filter(r => r.account_type === t)
@@ -147,6 +158,22 @@ export default function TrialBalancePage() {
           />
           عرض الحسابات صفرية الرصيد
         </label>
+
+        <div className="relative flex-1 min-w-[200px]">
+          <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="بحث بكود أو اسم الحساب..."
+            className="w-full bg-slate-700 text-slate-100 rounded-lg pr-8 pl-8 py-1.5 text-sm border border-slate-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          />
+          {search && (
+            <button onClick={() => setSearch('')} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200">
+              <X size={13} />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Balance status banner */}
@@ -189,9 +216,10 @@ export default function TrialBalancePage() {
       {/* Main table */}
       {data && (
         <div className="bg-slate-800/60 border border-slate-700 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto max-h-[calc(100vh-22rem)] overflow-y-auto">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-700 bg-slate-800/80">
+            <thead className="sticky top-0 z-10">
+              <tr className="border-b border-slate-700 bg-slate-800">
                 <th className="px-4 py-3 text-right text-slate-400 font-medium w-28">الكود</th>
                 <th className="px-4 py-3 text-right text-slate-400 font-medium">اسم الحساب</th>
                 <th className="px-4 py-3 text-left  text-slate-400 font-medium w-36">رصيد افتتاحي</th>
@@ -269,9 +297,10 @@ export default function TrialBalancePage() {
 
           {filteredRows.length === 0 && params && !isLoading && (
             <div className="text-center py-10 text-slate-500 text-sm">
-              لا توجد حسابات بأرصدة في هذه الفترة
+              {search ? `لا نتائج للبحث "${search}"` : 'لا توجد حسابات بأرصدة في هذه الفترة'}
             </div>
           )}
+          </div>
         </div>
       )}
 
