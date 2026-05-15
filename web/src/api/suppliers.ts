@@ -35,7 +35,7 @@ export const suppliersApi = {
   supplierOpenItems: (code: string) =>
     unwrap(api.get(`/suppliers/${code}/open-items`)),
 
-  matchPayment: (code: string, body: { payment_id: number; invoice_ids: number[] }) =>
+  matchPayment: (code: number | string, body: { payment_id: number; invoice_id?: number; allow_partial?: boolean }) =>
     unwrap(api.post(`/suppliers/${code}/match-payment`, body)),
 
   drafts: () => unwrap(api.get<SupplierDraft[]>('/suppliers/drafts')),

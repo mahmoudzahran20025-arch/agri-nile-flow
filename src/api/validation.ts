@@ -24,12 +24,13 @@ app.post('/financial-consistency', async (c) => {
     const invGL = await db
       .prepare(
         `SELECT COUNT(*) as line_count,
-                SUM(CASE WHEN debit_amount > 0 THEN debit_amount ELSE 0 END) as total_debits,
-                SUM(CASE WHEN credit_amount > 0 THEN credit_amount ELSE 0 END) as total_credits,
-                SUM(debit_amount - credit_amount) as net_balance
+                SUM(CASE WHEN debit > 0 THEN debit ELSE 0 END) as total_debits,
+                SUM(CASE WHEN credit > 0 THEN credit ELSE 0 END) as total_credits,
+                SUM(debit - credit) as net_balance
          FROM journal_entry_lines jel
-         JOIN journal_entries je ON je.id = jel.journal_entry_id
-         WHERE jel.account_code IN (SELECT account_code FROM gl_mappings WHERE mapping_key = 'inventory')`
+         JOIN journal_entries je ON je.id = jel.entry_id AND je.company_id = jel.company_id
+         JOIN chart_of_accounts coa ON coa.code = jel.account_code AND coa.company_id = jel.company_id
+         WHERE coa.code LIKE '1407%'`
       )
       .first<{
         line_count: number
@@ -82,12 +83,13 @@ app.post('/financial-consistency', async (c) => {
       .prepare(
         `SELECT COUNT(*) as line_count,
                 COUNT(DISTINCT account_code) as unique_accounts,
-                SUM(CASE WHEN debit_amount > 0 THEN debit_amount ELSE 0 END) as total_debits,
-                SUM(CASE WHEN credit_amount > 0 THEN credit_amount ELSE 0 END) as total_credits,
-                SUM(debit_amount - credit_amount) as net_balance
+                SUM(CASE WHEN debit > 0 THEN debit ELSE 0 END) as total_debits,
+                SUM(CASE WHEN credit > 0 THEN credit ELSE 0 END) as total_credits,
+                SUM(debit - credit) as net_balance
          FROM journal_entry_lines jel
-         JOIN journal_entries je ON je.id = jel.journal_entry_id
-         WHERE jel.account_code IN (SELECT account_code FROM gl_mappings WHERE mapping_key = 'accounts_payable')`
+         JOIN journal_entries je ON je.id = jel.entry_id AND je.company_id = jel.company_id
+         JOIN chart_of_accounts coa ON coa.code = jel.account_code AND coa.company_id = jel.company_id
+         WHERE coa.code LIKE '2120%'`
       )
       .first<{
         line_count: number
@@ -148,12 +150,13 @@ app.post('/financial-consistency', async (c) => {
     const cashGL = await db
       .prepare(
         `SELECT COUNT(*) as line_count,
-                SUM(CASE WHEN debit_amount > 0 THEN debit_amount ELSE 0 END) as total_debits,
-                SUM(CASE WHEN credit_amount > 0 THEN credit_amount ELSE 0 END) as total_credits,
-                SUM(debit_amount - credit_amount) as net_balance
+                SUM(CASE WHEN debit > 0 THEN debit ELSE 0 END) as total_debits,
+                SUM(CASE WHEN credit > 0 THEN credit ELSE 0 END) as total_credits,
+                SUM(debit - credit) as net_balance
          FROM journal_entry_lines jel
-         JOIN journal_entries je ON je.id = jel.journal_entry_id
-         WHERE jel.account_code IN (SELECT account_code FROM gl_mappings WHERE mapping_key IN ('cash', 'bank'))`
+         JOIN journal_entries je ON je.id = jel.entry_id AND je.company_id = jel.company_id
+         JOIN chart_of_accounts coa ON coa.code = jel.account_code AND coa.company_id = jel.company_id
+         WHERE coa.code LIKE '1401%'`
       )
       .first<{
         line_count: number
@@ -257,12 +260,13 @@ app.post('/financial-consistency', async (c) => {
       .prepare(`SELECT COUNT(*) as count FROM items WHERE inv_posting_group_code IS NULL`)
       .first<{ count: number }>()
 
+    // Orphan lines: journal_entry_lines whose parent journal_entries row is missing
+    // (indicates data integrity issue — lines written without a header)
     const orphanLines = await db
       .prepare(
         `SELECT COUNT(*) as count FROM journal_entry_lines jel
-         LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id
-         LEFT JOIN business_events be ON be.id = je.business_event_id
-         WHERE be.id IS NULL AND je.source_module NOT IN ('manual', 'adjustment')`
+         LEFT JOIN journal_entries je ON je.id = jel.entry_id AND je.company_id = jel.company_id
+         WHERE je.id IS NULL`
       )
       .first<{ count: number }>()
 

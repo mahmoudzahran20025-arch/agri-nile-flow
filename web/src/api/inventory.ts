@@ -32,6 +32,7 @@ export const inventoryApi = {
     movement_type:      string
     supplier_code?:     number
     document_number?:   number
+    season_id?:         number
     field_id?:          number
     work_order_id?:     number
     notes?:             string
@@ -39,11 +40,12 @@ export const inventoryApi = {
     center_code?:       number
     service_type_code?: string
     statement_text?:    string
-    items: Array<{ item_code: number; quantity: number; unit_price?: number; notes?: string }>
+    items: Array<{ item_code: number; quantity: number; unit_price?: number; notes?: string; pack_count?: number; pack_capacity?: number }>
   }) => api.post('/inventory/movements/batch', body),
 
   transferBatch: (body: {
-    movement_date: string; from_warehouse: string; to_warehouse: string; notes?: string
+    movement_date: string; from_warehouse: string; to_warehouse: string
+    season_id?: number; center_code?: number; notes?: string
     items: Array<{ item_code: number; quantity: number }>
   }) => api.post('/inventory/movements/transfer-batch', body),
 

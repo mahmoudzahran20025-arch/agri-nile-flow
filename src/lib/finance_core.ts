@@ -1,13 +1,6 @@
 /**
  * FinanceCore - Facade/Factory Pattern
  * ====================================
- * This file serves as the main entry point for all finance-related operations.
- * It re-exports all functions from the modularized finance directory.
- * 
- * The actual implementations have been split into:
- * - business_events.ts: Core business event posting logic
- * - cash_movement.ts: Cash transaction operations
- * - resolvers/: Domain-specific resolver functions
  */
 
 import type { D1Database } from '@cloudflare/workers-types'
@@ -30,7 +23,6 @@ async function resolveUnitFactor(
   const t = (toUnit || '').trim().toUpperCase()
   if (!f || !t || f === t) return 1
 
-  // 1. Check item-specific conversion
   if (itemCode) {
     const itemConv = await db.prepare(
       `SELECT factor FROM unit_conversions 
@@ -39,7 +31,6 @@ async function resolveUnitFactor(
     ).bind(companyId, itemCode, f, t).first<{ factor: number }>()
     if (itemConv) return itemConv.factor
 
-    // Reverse check: if we have KG -> TON (0.001) but need TON -> KG
     const itemConvRev = await db.prepare(
       `SELECT factor FROM unit_conversions 
        WHERE company_id = ? AND item_code = ? AND UPPER(from_unit) = ? AND UPPER(to_unit) = ? AND is_active = 1
@@ -48,7 +39,6 @@ async function resolveUnitFactor(
     if (itemConvRev) return 1 / itemConvRev.factor
   }
 
-  // 2. Check global conversion
   const globalConv = await db.prepare(
     `SELECT factor FROM unit_conversions 
      WHERE company_id = ? AND item_code IS NULL AND UPPER(from_unit) = ? AND UPPER(to_unit) = ? AND is_active = 1
@@ -63,7 +53,6 @@ async function resolveUnitFactor(
   ).bind(companyId, t, f).first<{ factor: number }>()
   if (globalConvRev) return 1 / globalConvRev.factor
 
-  // 🔴 HIGH FIX: Graceful fallback instead of throwing
   console.warn(`UOM_CONVERSION_MISSING: No factor found for "${fromUnit}" -> "${toUnit}". Falling back to 1:1.`)
   return 1
 }
@@ -83,40 +72,29 @@ async function requireControlAccount(
 
 // Import all modules from the finance directory
 import {
-  // Business Events
   postFromBusinessEvent,
   syncSourceDocumentBridge,
-  // Cash Movement
   prepareCashMovement,
   commitCashDrafts,
   postCashMovement,
-  // Inventory Resolvers
   resolveInventoryMovement,
   resolveInventoryTransfer,
   resolvePurchaseReceipt,
   processPOReceiptOrchestrated,
-  // Supplier Resolvers
   resolveSupplierInvoice,
   resolveSupplierPayment,
-  // Cash & Revenue Resolvers
   resolveCashLedger,
   resolveExpensePosting,
   resolveSalesRevenue,
-  // Payroll Resolvers
   resolvePayrollPosting,
   resolvePayrollPayment,
-  // Operations Resolvers
   resolveWorkOrderLabor,
   resolveContractAdvance,
-  // Partner Resolvers
   resolvePartnerCapital,
   resolvePartnerCurrent,
-  // Manual Entry Resolvers
   postManualEntry,
   postManualReversal,
 } from './finance'
-
-// ── Domain-specific orchestrators not covered by resolvers ────────────────
 
 async function postMonthlyDepreciation(
   db: D1Database,
@@ -214,12 +192,19 @@ async function postHarvestLedger(
   db: D1Database,
   opts: { 
     company_id: number; user_id: number;
-    harvest_id: number; date: string; amount: number; description: string;
+    harvest_id: number; date: string; 
+    amount?: number; // legacy cost param
+    description?: string; // legacy desc param
+    total_revenue: number; 
+    total_actual_cost: number;
     crop_name?: string; field_name?: string; center_code?: number | null;
+    season_id?: number | null; field_id?: number | null;
   },
 ): Promise<number | null> {
   const inventoryAcc = await requireControlAccount(db, opts.company_id, ['inventory'], 'Harvest inventory account')
   const revenueAcc   = await requireControlAccount(db, opts.company_id, ['harvest_revenue', 'revenue_default'], 'Harvest revenue account')
+
+  const desc = opts.description || `إثبات إنتاج محصول: ${opts.crop_name || ''} (${opts.field_name || ''})`
 
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
@@ -228,74 +213,48 @@ async function postHarvestLedger(
     source_id:     opts.harvest_id,
     source_link_id: opts.harvest_id,
     event_date:    opts.date,
-    description:   `إثبات إنتاج محصول: ${opts.description}`,
+    description:   desc,
     created_by:    opts.user_id,
     payload:       { 
-      harvest_id: opts.harvest_id, amount: opts.amount, 
-      crop: opts.crop_name, field: opts.field_name, center: opts.center_code 
+      harvest_id: opts.harvest_id, revenue: opts.total_revenue, cost: opts.total_actual_cost,
+      crop: opts.crop_name, field: opts.field_name, center: opts.center_code,
+      season: opts.season_id, field_id: opts.field_id
     },
     lines: [
-      { account_code: inventoryAcc, debit: opts.amount, credit: 0,           description: `إثبات مخزون إنتاج`, rule_slot: 'inventory',   source_ledger: 'harvest' as const, source_record_id: opts.harvest_id },
-      { account_code: revenueAcc,   debit: 0,           credit: opts.amount, description: `إيراد إنتاج محاصيل`, rule_slot: 'revenue_default', source_ledger: 'harvest' as const, source_record_id: opts.harvest_id },
+      { account_code: inventoryAcc, debit: opts.total_revenue, credit: 0,           description: `إثبات مخزون إنتاج`, rule_slot: 'inventory',   source_ledger: 'harvest' as const, source_record_id: opts.harvest_id, center_code: opts.center_code ?? undefined, season_id: opts.season_id ?? undefined, field_id: opts.field_id ?? undefined },
+      { account_code: revenueAcc,   debit: 0,                  credit: opts.total_revenue, description: `إيراد إنتاج محاصيل`, rule_slot: 'revenue_default', source_ledger: 'harvest' as const, source_record_id: opts.harvest_id, center_code: opts.center_code ?? undefined, season_id: opts.season_id ?? undefined, field_id: opts.field_id ?? undefined },
     ],
   })
 }
 
-/**
- * FinanceCore - The main facade for all finance operations
- * All functions are delegated to their respective modules
- */
 export const FinanceCore = {
-  // UOM Engine
   resolveUnitFactor,
-
-  // Cash Operations
   prepareCashMovement,
   commitCashDrafts,
   postCashMovement,
-
-  // Inventory Resolvers
   resolveInventoryMovement,
   resolveInventoryTransfer,
   resolvePurchaseReceipt,
-  // Full PO receipt orchestrator (creates inventory movements + GL)
   processPOReceipt: processPOReceiptOrchestrated,
-
-  // Domain orchestrators
   postMonthlyDepreciation,
   carryForwardWIP,
   postHarvestLedger,
-
-  // Supplier Resolvers
   resolveSupplierInvoice,
   resolveSupplierPayment,
-
-  // Cash & Revenue Resolvers
   resolveCashLedger,
   resolveExpensePosting,
   resolveSalesRevenue,
-
-  // Payroll Resolvers
   resolvePayrollPosting,
   resolvePayrollPayment,
-
-  // Operations Resolvers
   resolveWorkOrderLabor,
   resolveContractAdvance,
-
-  // Partner Resolvers
   resolvePartnerCapital,
   resolvePartnerCurrent,
-
-  // Manual Entry Resolvers
   postManualEntry,
   postManualReversal,
-
-  // Period utilities
   getOpenPeriod,
 } as const
 
-// Also export individual functions for direct import
 export {
   resolveUnitFactor,
   postFromBusinessEvent,

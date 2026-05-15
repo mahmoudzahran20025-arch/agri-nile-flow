@@ -157,3 +157,78 @@ export async function enforceGrnDimensions(
     throw { status: 422, error: `الموسم ${input.season_id} غير موجود أو مغلق`, code: 'INVALID_SEASON' }
   }
 }
+
+// ── Composite: Supplier Invoice dimension guard ───────────────────────────────
+// Validates mandatory dimensions per TARGET_ARCHITECTURE §3.3 and §4.5.
+// entry_type='د' (invoice): requires season_id, center_code, service_type_code,
+//   document_number, due_date.
+// entry_type='م' (payment): requires season_id, financial_account_id.
+
+export async function enforceSupplierTxnDimensions(
+  db: D1Database,
+  companyId: number,
+  input: {
+    entry_type:         string
+    season_id?:         number
+    center_code?:       number
+    service_type_code?: string
+    document_number?:   string | number
+    due_date?:          string
+    financial_account_id?: number
+  },
+): Promise<void> {
+  const isInvoice = input.entry_type === 'د'
+  const isPayment = input.entry_type === 'م'
+
+  if (!isInvoice && !isPayment) {
+    throw { status: 400, error: `entry_type غير صحيح: ${input.entry_type}`, code: 'INVALID_ENTRY_TYPE' }
+  }
+
+  if (!input.season_id) {
+    throw { status: 422, error: 'season_id مطلوب في جميع معاملات الموردين', code: 'SUPPLIER_TXN_REQUIRES_SEASON' }
+  }
+
+  if (isInvoice) {
+    if (!input.center_code) {
+      throw { status: 422, error: 'center_code مطلوب في فاتورة المورد', code: 'INVOICE_REQUIRES_CENTER' }
+    }
+    if (!input.service_type_code?.trim()) {
+      throw { status: 422, error: 'service_type_code مطلوب في فاتورة المورد', code: 'INVOICE_REQUIRES_SERVICE_TYPE' }
+    }
+    if (!input.document_number) {
+      throw { status: 422, error: 'رقم المستند مطلوب في فاتورة المورد', code: 'INVOICE_REQUIRES_DOCUMENT' }
+    }
+    if (!input.due_date) {
+      throw { status: 422, error: 'due_date مطلوب في فاتورة المورد (لحساب الذمم المتأخرة)', code: 'INVOICE_REQUIRES_DUE_DATE' }
+    }
+  }
+
+  if (isPayment && !input.financial_account_id) {
+    throw { status: 422, error: 'financial_account_id مطلوب في سداد المورد (الحساب المدفوع منه)', code: 'PAYMENT_REQUIRES_ACCOUNT' }
+  }
+
+  // Async validations
+  const checks: Promise<void>[] = [
+    isActiveSeason(db, companyId, input.season_id).then(ok => {
+      if (!ok) throw { status: 422, error: `الموسم ${input.season_id} غير موجود أو مغلق`, code: 'INVALID_SEASON' }
+    }),
+  ]
+
+  if (isInvoice && input.center_code) {
+    checks.push(
+      isActiveCenterCode(db, companyId, input.center_code).then(ok => {
+        if (!ok) throw { status: 422, error: 'مركز التكلفة غير موجود أو غير نشط', code: 'INVALID_CENTER' }
+      }),
+    )
+  }
+
+  if (isInvoice && input.service_type_code?.trim()) {
+    checks.push(
+      isKnownServiceType(db, companyId, input.service_type_code.trim()).then(ok => {
+        if (!ok) throw { status: 422, error: `service_type_code '${input.service_type_code}' غير معروف`, code: 'UNKNOWN_SERVICE_TYPE_CODE' }
+      }),
+    )
+  }
+
+  await Promise.all(checks)
+}
