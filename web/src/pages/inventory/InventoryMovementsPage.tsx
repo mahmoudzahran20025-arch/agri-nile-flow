@@ -7,7 +7,6 @@ import {
 } from 'lucide-react'
 import { inventoryApi, configApi, downloadCsv } from '../../api/client'
 import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
-import AddInventoryBatchModal from '../../components/forms/AddInventoryBatchModal'
 import DataTableV2, { type ColumnV2 } from '../../components/ui/DataTableV2'
 
 
@@ -105,7 +104,6 @@ export default function InventoryMovementsPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const [page, setPage] = useState(1)
-  const [addOpen, setAddOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [filters, setFilters] = useState<Filters>(() => ({
@@ -177,7 +175,7 @@ export default function InventoryMovementsPage() {
       label: 'حركة جديدة',
       icon: <ArrowDownCircle size={15} />,
       variant: 'primary',
-      onClick: () => setAddOpen(true),
+      onClick: () => navigate('/inventory/workspace/create'),
     },
     {
       id: 'filter',
@@ -452,14 +450,6 @@ export default function InventoryMovementsPage() {
           )
         })()}
       </div>
-
-      {/* ── Add modal ── */}
-      {addOpen && (
-        <AddInventoryBatchModal
-          open={addOpen}
-          onClose={() => setAddOpen(false)}
-        />
-      )}
     </div>
   )
 }

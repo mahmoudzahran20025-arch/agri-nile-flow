@@ -127,24 +127,25 @@ integrity.get('/integrity-check', async (c) => {
 
   const healthScore = Math.max(0, 100 - (criticalCount * 25) - (highCount * 10) - (mediumCount * 5))
 
-  // Persist result to finance_health_log (fire-and-forget, never block the response)
-  void c.env.DB.prepare(`
-    INSERT INTO finance_health_log
-      (company_id, health_score, total_issues, critical_count, high_count, medium_count, checks_json, triggered_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
-    company_id,
-    healthScore,
-    totalIssues,
-    criticalCount,
-    highCount,
-    mediumCount,
-    JSON.stringify(checks.map(ch => ({ name: ch.name, severity: ch.severity, count: ch.count }))),
-    'api',
-  ).run().catch((err: unknown) => {
-    // Log but don't surface — health_log write failure must not break the integrity check response
-    console.error('finance_health_log insert failed:', err)
-  })
+  // Persist result to finance_health_log — errors are caught so they never break the caller
+  try {
+    await c.env.DB.prepare(`
+      INSERT INTO finance_health_log
+        (company_id, health_score, total_issues, critical_count, high_count, medium_count, checks_json, triggered_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      company_id,
+      healthScore,
+      totalIssues,
+      criticalCount,
+      highCount,
+      mediumCount,
+      JSON.stringify(checks.map(ch => ({ name: ch.name, severity: ch.severity, count: ch.count }))),
+      'api',
+    ).run()
+  } catch (err: unknown) {
+    console.error('finance_health_log insert failed (non-fatal):', err)
+  }
 
   return c.json({
     success: true,

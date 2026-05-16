@@ -1,10 +1,20 @@
+/**
+ * @legacy
+ * @deprecated
+ * DO NOT IMPORT
+ *
+ * Legacy Movement Modal
+ * This component is architecturally unsafe and has been soft-isolated.
+ * All new inventory movements must go through the Workspace Orchestrator architecture.
+ * TODO(remove-after-stabilization): Delete this file once Phase 3 is complete.
+ */
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
 import {
   Plus, Trash2, AlertTriangle, CheckCircle,
   ChevronRight, ChevronLeft, Package, Warehouse, Info, BookOpen,
 } from 'lucide-react'
-import Modal from '../ui/Modal'
+import Modal from '../../components/ui/Modal'
 import { inventoryApi, configApi, suppliersApi, fieldsApi, operationsApi } from '../../api/client'
 import type { Item } from '../../types'
 

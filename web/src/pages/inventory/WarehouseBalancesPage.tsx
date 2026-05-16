@@ -3,8 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { Package, ChevronDown, ChevronUp, Plus, Download, ExternalLink, AlertTriangle, X, Wrench, ArrowRightLeft, Activity, ShieldCheck, Link2Off, Boxes, CircleDollarSign } from 'lucide-react'
 import { inventoryApi, downloadCsv } from '../../api/client'
-import AddInventoryBatchModal from '../../components/forms/AddInventoryBatchModal'
-import InternalTransferModal from '../../components/forms/InternalTransferModal'
+
 import { TableSkeleton } from '../../components/ui/Skeleton'
 import type { } from '../../types'
 import { usePermission } from '../../hooks/usePermission'
@@ -21,15 +20,7 @@ export default function WarehouseBalancesPage() {
   const navigate     = useNavigate()
   const [activeWarehouse,    setActiveWarehouse]    = useState<string | null>(null)
   const [expanded,           setExpanded]           = useState<Set<string>>(new Set())
-  const [addOpen,            setAddOpen]            = useState(false)
   const [reorderDismissed,   setReorderDismissed]   = useState(false)
-  const [transferData, setTransferData] = useState<{
-    open: boolean;
-    itemCode: number;
-    itemName: string;
-    sourceWarehouse: string;
-    maxQuantity: number;
-  }>({ open: false, itemCode: 0, itemName: '', sourceWarehouse: '', maxQuantity: 0 })
 
   const { data: warehouses } = useQuery({
     queryKey: ['warehouses'],
@@ -143,11 +134,11 @@ export default function WarehouseBalancesPage() {
             <>
               <button
                 className="btn-secondary gap-2"
-                onClick={() => setTransferData({ open: true, itemCode: 0, itemName: '', sourceWarehouse: '', maxQuantity: 0 })}
+                onClick={() => navigate('/inventory/workspace/new?type=TRANSFER_OUT')}
               >
                 <ArrowRightLeft size={16} /> تحويل بين المخازن
               </button>
-              <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
+              <button className="btn-primary gap-2" onClick={() => navigate('/inventory/workspace/new')}>
                 <Plus size={16} />
                 حركة جديدة
               </button>
@@ -417,13 +408,7 @@ export default function WarehouseBalancesPage() {
                                   title="تحويل مخزني"
                                   onClick={(e) => { 
                                     e.stopPropagation(); 
-                                    setTransferData({
-                                      open: true,
-                                      itemCode: item.item_code,
-                                      itemName: item.item_name ?? `#${item.item_code}`,
-                                      sourceWarehouse: warehouse,
-                                      maxQuantity: item.balance_qty
-                                    });
+                                    navigate(`/inventory/workspace/new?type=TRANSFER_OUT&warehouse=${warehouse}`);
                                   }}
                                 >
                                   <ArrowRightLeft size={14} />
@@ -451,21 +436,7 @@ export default function WarehouseBalancesPage() {
         </div>
       )}
 
-      <AddInventoryBatchModal
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        defaultWarehouse={activeWarehouse ?? undefined}
-      />
 
-      {transferData.open && (
-        <InternalTransferModal
-          open={transferData.open}
-          onClose={() => setTransferData({ ...transferData, open: false })}
-          initialItemCode={transferData.itemCode}
-          initialItemName={transferData.itemName}
-          initialSourceWarehouse={transferData.sourceWarehouse}
-        />
-      )}
     </div>
   )
 }

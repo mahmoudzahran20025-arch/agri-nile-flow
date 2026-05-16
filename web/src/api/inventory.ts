@@ -1,4 +1,5 @@
 import { api, unwrap, unwrapPaginated, paginatedUrl } from './core'
+import { normalizeMovementPayload } from '../schema/normalizeMovementPayload'
 
 export const inventoryApi = {
   balances: (warehouse?: string | number) => {
@@ -26,22 +27,11 @@ export const inventoryApi = {
     field_id?: number; season_id?: number; work_order_id?: number
   }) => unwrapPaginated<unknown>(api.get(paginatedUrl('/inventory/movements', p))),
 
-  createBatch: (body: {
-    movement_date:      string
-    warehouse:          string
-    movement_type:      string
-    supplier_code?:     number
-    document_number?:   number
-    season_id?:         number
-    field_id?:          number
-    work_order_id?:     number
-    notes?:             string
-    payment_method?:    'cash' | 'credit'
-    center_code?:       number
-    service_type_code?: string
-    statement_text?:    string
-    items: Array<{ item_code: number; quantity: number; unit_price?: number; notes?: string; pack_count?: number; pack_capacity?: number }>
-  }) => api.post('/inventory/movements/batch', body),
+  createBatch: (body: any) => {
+    // Normalization enforces Canonical Schema ownership
+    const normalized = normalizeMovementPayload(body)
+    return api.post('/inventory/movements/batch', normalized)
+  },
 
   transferBatch: (body: {
     movement_date: string; from_warehouse: string; to_warehouse: string
@@ -71,10 +61,7 @@ export const inventoryApi = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   adjustmentDetail: (id: number) => unwrap(api.get<any>(`/inventory/adjustments/${id}`)),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  createAdjustment: (body: any) => api.post('/inventory/adjustments', body),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   saveAdjustmentLines: (id: number, lines: any[]) => api.put(`/inventory/adjustments/${id}/lines`, { lines }),
-  postAdjustment:   (id: number) => api.post(`/inventory/adjustments/${id}/post`, {}),
 
   // ── Governance / Financial Integrity ────────────────────────────────────
 

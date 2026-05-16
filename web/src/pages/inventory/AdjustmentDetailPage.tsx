@@ -61,15 +61,11 @@ export default function AdjustmentDetailPage() {
   })
 
   const postMutation = useMutation({
-    mutationFn: () => inventoryApi.postAdjustment(Number(id)),
-    onSuccess: (res: any) => {
-      if (res.success === false) { toast(res.error || 'خطأ', 'error'); return }
-      toast('تم ترحيل التسوية وتحديث الأرصدة بنجاح', 'success')
-      qc.invalidateQueries({ queryKey: ['inventory-adjustment', id] })
-      qc.invalidateQueries({ queryKey: ['inventory-balances'] })
-      navigate('/inventory/adjustments')
+    mutationFn: async () => {
+      throw new Error('تم تعطيل ترحيل التسويات القديمة (Legacy Adjustments). يرجى استخدام واجهة الجرد الفعلي لإنشاء تسويات معتمدة عبر مساحة العمل.');
     },
-    onError: () => toast('فشل في الترحيل', 'error')
+    onSuccess: () => {},
+    onError: (err: any) => toast(err.message, 'error')
   })
 
   const addLine = () => {

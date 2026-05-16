@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { inventoryApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
+import { useMovementPostingPipeline } from '../../hooks/workspace/useMovementPostingPipeline'
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -74,8 +75,8 @@ export default function PhysicalCountPage() {
   const [lines,        setLines]        = useState<CountLine[]>([])
   const [saving,       setSaving]       = useState(false)
   const [error,        setError]        = useState('')
-  const [adjId,        setAdjId]        = useState<number | null>(null)
-  const [posted,       setPosted]       = useState(false)
+  const [adjId, setAdjId] = useState<string | null>(null)
+  const [posted, setPosted] = useState(false)
   const [onlyVariance, setOnlyVariance] = useState(false)
 
   // ─── Queries ─────────────────────────────────────────────
@@ -145,81 +146,86 @@ export default function PhysicalCountPage() {
     setStep(3)
   }
 
-  // ─── Submit: create adjustment + lines ───────────────────
+  const { post } = useMovementPostingPipeline()
+
+  const dispatchBatch = async (type: 'ADJUSTMENT_PROFIT' | 'ADJUSTMENT_LOSS', validLines: typeof profitLines) => {
+    if (validLines.length === 0) return true
+
+    // Create a command-derived draft snapshot
+    const snapshot = {
+      id: `adj-${Date.now()}`,
+      version: 1,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      header: {
+        movement_date: countDate,
+        warehouse_id: warehouseId,
+        movement_type: type,
+        notes: notes || 'تسوية جرد آلي',
+        payment_method: 'credit' as const,
+        supplier_code: null,
+        document_number: '',
+        target_warehouse_id: null,
+      },
+      dimensions: {
+        season_id: null,
+        field_id: null,
+        work_order_id: null,
+        center_code: null,
+        service_type_code: '',
+        statement_text: '',
+      },
+      lines: validLines.map(l => ({
+        id: `line-${l.item_code}`,
+        item_code: l.item_code,
+        quantity: Math.abs(l.difference),
+        pack_count: null,
+        unit_price: null,
+        notes: '',
+        package_capacity: null,
+        available: l.theoretical_qty,
+      })),
+      meta: {}
+    } as any
+
+    const res = await post(snapshot, (status) => {
+      console.log(`[Draft ${snapshot.id}] status changed: ${status}`)
+    })
+
+    if (!res.success) {
+      throw new Error(String(res.error || `فشل ترحيل ${type}`))
+    }
+    
+    // In new batch architecture, we might have multiple IDs, but for simplicity
+    // we capture the last successful one or the batch ID.
+    setAdjId(String(res.data?.id || 'BATCH-PROCESSED'))
+    return true
+  }
 
   const handleSaveDraft = async () => {
-    if (!warehouseId) return
-    setSaving(true); setError('')
-    try {
-      const payload = {
-        warehouse_id:    warehouseId,
-        adjustment_date: countDate,
-        notes:           notes || 'جرد مخزني دوري',
-        lines: lines.map(l => ({
-          item_code:       l.item_code,
-          theoretical_qty: l.theoretical_qty,
-          counted_qty:     Number(l.counted_qty) || 0,
-          notes:           undefined,
-        })),
-      }
-      const res = await inventoryApi.createAdjustment(payload) as { success: boolean; id: number; error?: string }
-      if (!res.success) { setError(res.error ?? 'حدث خطأ'); return }
-      setAdjId(res.id)
-      toast('تم حفظ ورقة الجرد كمسودة بنجاح', 'success')
-    } catch {
-      setError('خطأ في الاتصال بالخادم')
-    } finally {
-      setSaving(false)
-    }
+    toast('هذه الميزة تم استبدالها بمسودة الـ Workspace.', 'error')
   }
 
   const handlePost = async () => {
-    if (!adjId) return
-    setSaving(true); setError('')
-    try {
-      const res = await inventoryApi.postAdjustment(adjId) as { success: boolean; error?: string }
-      if (!res.success) { setError(res.error ?? 'فشل الترحيل'); return }
-      setPosted(true)
-      await qc.invalidateQueries({ queryKey: ['inventory'], refetchType: 'active' })
-      toast('تم ترحيل تسوية الجرد بنجاح — تم تحديث الأرصدة', 'success')
-    } catch {
-      setError('خطأ في الاتصال بالخادم')
-    } finally {
-      setSaving(false)
-    }
+    toast('هذه الميزة تم استبدالها بترحيل الـ Workspace المباشر.', 'error')
   }
-
-  // ─── Post directly after create (single action) ───────────
 
   const handleCreateAndPost = async () => {
     if (!warehouseId) return
     setSaving(true); setError('')
     try {
-      const payload = {
-        warehouse_id:    warehouseId,
-        adjustment_date: countDate,
-        notes:           notes || 'جرد مخزني دوري',
-        lines: lines.map(l => ({
-          item_code:       l.item_code,
-          theoretical_qty: l.theoretical_qty,
-          counted_qty:     Number(l.counted_qty) || 0,
-        })),
+      if (profitLines.length > 0) {
+        await dispatchBatch('ADJUSTMENT_PROFIT', profitLines)
       }
-      const createRes = await inventoryApi.createAdjustment(payload) as { success: boolean; id: number; error?: string }
-      if (!createRes.success) { setError(createRes.error ?? 'حدث خطأ في الإنشاء'); return }
-
-      const postRes = await inventoryApi.postAdjustment(createRes.id) as { success: boolean; error?: string }
-      if (!postRes.success) {
-        setError(`تم الحفظ (ID: ${createRes.id}) لكن فشل الترحيل: ${postRes.error ?? ''}`)
-        setAdjId(createRes.id)
-        return
+      if (lossLines.length > 0) {
+        await dispatchBatch('ADJUSTMENT_LOSS', lossLines)
       }
-      setAdjId(createRes.id)
+      
       setPosted(true)
       await qc.invalidateQueries({ queryKey: ['inventory'], refetchType: 'active' })
-      toast('تم ترحيل تسوية الجرد بنجاح — تم تحديث الأرصدة', 'success')
-    } catch {
-      setError('خطأ في الاتصال بالخادم')
+      toast('تم ترحيل التسوية بنجاح عبر Workspace Pipeline', 'success')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'حدث خطأ غير متوقع')
     } finally {
       setSaving(false)
     }

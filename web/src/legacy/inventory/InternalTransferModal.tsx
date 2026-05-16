@@ -1,8 +1,18 @@
+/**
+ * @legacy
+ * @deprecated
+ * DO NOT IMPORT
+ *
+ * Legacy Internal Transfer Modal
+ * This component is architecturally unsafe and has been soft-isolated.
+ * All new inventory movements must go through the Workspace Orchestrator architecture.
+ * TODO(remove-after-stabilization): Delete this file once Phase 3 is complete.
+ */
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { inventoryApi, configApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
-import Modal from '../ui/Modal'
+import Modal from '../../components/ui/Modal'
 import { ArrowRightLeft, Package, Plus, Trash2, CheckCircle } from 'lucide-react'
 
 interface Props {

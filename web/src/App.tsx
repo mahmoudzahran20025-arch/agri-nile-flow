@@ -72,6 +72,7 @@ const PartnersPage             = lazy(() => import('./pages/treasury/PartnersPag
 const BankReconciliationPage   = lazy(() => import('./pages/treasury/BankReconciliationPage'))
 const WarehouseBalancesPage    = lazy(() => import('./pages/inventory/WarehouseBalancesPage'))
 const WarehousesPage           = lazy(() => import('./pages/inventory/WarehousesPage'))
+const MovementWorkspacePage    = lazy(() => import('./pages/inventory/MovementWorkspacePage'))
 const InventoryMovementsPage   = lazy(() => import('./pages/inventory/InventoryMovementsPage'))
 const TransactionHistoryPage   = lazy(() => import('./pages/inventory/TransactionHistoryPage'))
 const ItemCardPage             = lazy(() => import('./pages/inventory/ItemCardPage'))
@@ -183,6 +184,7 @@ export default function App() {
         <Route path="inventory/adjustments"      element={<InventoryAdjustmentsPage />} />
         <Route path="inventory/adjustments/:id"  element={<AdjustmentDetailPage />} />
         <Route path="inventory/setup"            element={<WarehousesPage />} />
+        <Route path="inventory/workspace/create"    element={<MovementWorkspacePage />} />
         <Route path="inventory/movements"        element={<InventoryMovementsPage />} />
         <Route path="inventory/transactions"     element={<TransactionHistoryPage />} />
         <Route path="inventory/item/:code"       element={<ItemCardPage />} />

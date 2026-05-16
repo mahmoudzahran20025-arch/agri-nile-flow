@@ -1,42 +1,17 @@
 import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { ClipboardCheck, Plus, Calendar, Warehouse, ArrowRight, CheckCircle2, Clock, AlertTriangle } from 'lucide-react'
 import { inventoryApi } from '../../api/client'
-import { useToast } from '../../contexts/ToastContext'
 import Modal from '../../components/ui/Modal'
 
 export default function InventoryAdjustmentsPage() {
   const navigate = useNavigate()
-  const qc = useQueryClient()
-  const { toast } = useToast()
   const [open, setOpen] = useState(false)
-  const [form, setForm] = useState({ 
-    warehouse_id: '', 
-    adjustment_date: new Date().toISOString().split('T')[0], 
-    notes: '' 
-  })
 
   const { data: adjustments, isLoading } = useQuery({
     queryKey: ['inventory-adjustments'],
     queryFn: () => inventoryApi.adjustments(),
-  })
-
-  const { data: warehouses } = useQuery({
-    queryKey: ['inventory-warehouses'],
-    queryFn: () => inventoryApi.warehousesSetup(),
-  })
-
-  const createMutation = useMutation({
-    mutationFn: (body: any) => inventoryApi.createAdjustment(body),
-    onSuccess: (res: any) => {
-      if (res.success === false) { toast(res.error || 'خطأ', 'error'); return }
-      toast('تم إنشاء مسودة التسوية الجردية', 'success')
-      setOpen(false)
-      qc.invalidateQueries({ queryKey: ['inventory-adjustments'] })
-      navigate(`/inventory/adjustments/${res.id}`) // Navigate to detail to add lines
-    },
-    onError: () => toast('فشل الاتصال بالخادم', 'error')
   })
 
   return (
@@ -130,48 +105,17 @@ export default function InventoryAdjustmentsPage() {
 
       <Modal open={open} onClose={() => setOpen(false)} title="بدء جرد مخزني جديد">
         <div className="space-y-4">
-          <div>
-            <label className="label">التاريخ *</label>
-            <input 
-              type="date"
-              className="input" 
-              value={form.adjustment_date}
-              onChange={e => setForm({...form, adjustment_date: e.target.value})}
-            />
+          <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-800">
+            تم دمج أداة التسوية الجردية مع مساحة العمل الموحدة.
+            برجاء الانتقال إلى واجهة الجرد الفعلي الجديدة.
           </div>
-
-          <div>
-            <label className="label">المخزن المراد جرده *</label>
-            <select 
-              className="input"
-              value={form.warehouse_id}
-              onChange={e => setForm({...form, warehouse_id: e.target.value})}
-            >
-              <option value="">-- اختر المخزن --</option>
-              {(warehouses as any)?.entities?.map((w: any) => (
-                <option key={w.id} value={w.id}>{w.name}</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="label">ملاحظات</label>
-            <textarea 
-              className="input min-h-[80px]" 
-              placeholder="وصف العملية أو سبب الجرد..."
-              value={form.notes}
-              onChange={e => setForm({...form, notes: e.target.value})}
-            />
-          </div>
-
           <div className="flex gap-3 pt-4">
             <button className="btn-secondary flex-1" onClick={() => setOpen(false)}>إلغاء</button>
             <button 
               className="btn-primary flex-1" 
-              disabled={createMutation.isPending || !form.warehouse_id || !form.adjustment_date}
-              onClick={() => createMutation.mutate(form)}
+              onClick={() => navigate('/inventory/physical-count')}
             >
-              {createMutation.isPending ? 'جاري البدء...' : 'بدء عملية الجرد'}
+              الانتقال لورقة الجرد
             </button>
           </div>
         </div>

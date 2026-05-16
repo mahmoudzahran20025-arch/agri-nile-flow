@@ -17,7 +17,7 @@ interface FABAction {
 
 const ACTIONS: FABAction[] = [
   { label: 'معاملة نقدية', icon: <Banknote      size={16} />, iconBg: 'bg-emerald-100 text-emerald-700', path: '/treasury',            module: 'treasury'   },
-  { label: 'حركة مخزون',   icon: <Package       size={16} />, iconBg: 'bg-blue-100    text-blue-700',    path: '/inventory/movements', module: 'inventory'  },
+  { label: 'حركة مخزون',   icon: <Package       size={16} />, iconBg: 'bg-blue-100    text-blue-700',    path: '/inventory/workspace/create', module: 'inventory'  },
   { label: 'أمر شغل',      icon: <Wrench        size={16} />, iconBg: 'bg-amber-100   text-amber-700',   path: '/operations',          module: 'operations' },
   { label: 'سجل حصاد',     icon: <Wheat         size={16} />, iconBg: 'bg-lime-100    text-lime-700',    path: '/fields/harvest',      module: 'fields'     },
   { label: 'طلب إجازة',    icon: <Users         size={16} />, iconBg: 'bg-purple-100  text-purple-700',  path: '/hr/leaves',           module: 'hr'         },

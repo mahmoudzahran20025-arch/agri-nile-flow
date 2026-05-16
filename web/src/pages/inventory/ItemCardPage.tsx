@@ -7,7 +7,6 @@ import {
   BarChart3, Download, Plus,
 } from 'lucide-react'
 import { inventoryApi, configApi, downloadCsv } from '../../api/client'
-import AddInventoryBatchModal from '../../components/forms/AddInventoryBatchModal'
 import { usePermission } from '../../hooks/usePermission'
 import type { Item } from '../../types'
 
@@ -81,7 +80,6 @@ export default function ItemCardPage() {
   const { canWrite } = usePermission()
 
   const itemCode    = Number(code)
-  const [addOpen,   setAddOpen]   = useState(false)
   const [warehouse, setWarehouse] = useState('')
 
   // Item meta
@@ -171,7 +169,7 @@ export default function ItemCardPage() {
             <Download size={15} /> تصدير CSV
           </button>
           {canWrite('inventory') && (
-            <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
+            <button className="btn-primary gap-2" onClick={() => navigate('/inventory/workspace/create' + (warehouse ? '?warehouse=' + encodeURIComponent(warehouse) : ''))}>
               <Plus size={15} /> حركة جديدة
             </button>
           )}
@@ -400,12 +398,6 @@ export default function ItemCardPage() {
         className="btn-secondary gap-2 text-sm">
         <ArrowRight size={14} /> العودة إلى أرصدة المخازن
       </button>
-
-      <AddInventoryBatchModal
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        defaultWarehouse={warehouse || undefined}
-      />
     </div>
   )
 }
