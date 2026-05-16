@@ -160,6 +160,29 @@ movements.get('/movements', permissionGuard('inventory', 'read'), async (c) => {
   })
 })
 
+// ── GET /movements/:id ────────────────────────────────────────
+
+movements.get('/movements/:id', permissionGuard('inventory', 'read'), async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  if (!id) return c.json({ success: false, error: 'معرف الحركة غير صحيح' }, 400)
+
+  const row = await c.env.DB.prepare(
+    `SELECT im.*,
+            i.name AS item_name, i.unit,
+            w.name AS warehouse_name,
+            je.is_posted AS je_is_posted
+     FROM inventory_movements im
+     LEFT JOIN items i ON i.code = im.item_code AND i.company_id = im.company_id
+     LEFT JOIN warehouses w ON w.id = im.warehouse_id AND w.company_id = im.company_id
+     LEFT JOIN journal_entries je ON je.id = im.journal_entry_id AND je.company_id = im.company_id
+     WHERE im.id = ? AND im.company_id = ? LIMIT 1`
+  ).bind(id, company_id).first()
+
+  if (!row) return c.json({ success: false, error: 'الحركة غير موجودة' }, 404)
+  return c.json({ success: true, data: row })
+})
+
 // ── POST /movements (single) ──────────────────────────────────
 
 movements.post('/movements', permissionGuard('inventory', 'create'), async (c) => {
@@ -314,6 +337,133 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
   }
 
   return c.json({ success: true, data: { id: movId } }, 201)
+})
+
+// ── POST /movements/batch ─────────────────────────────────────
+// Handles multiple movements in a single request.
+// Used by the manual entry UI for bulk GRN/ISSUE.
+
+movements.post('/movements/batch', permissionGuard('inventory', 'create'), async (c) => {
+  const { company_id, sub: userId, role } = getUser(c)
+  
+  // Accept BOTH structures: Flat array (movements[]) or Header-Lines (items[])
+  const b = await c.req.json<{
+    movements?: any[]
+    items?: any[]
+    // Header fields (for items structure)
+    movement_date?: string; warehouse?: string; warehouse_id?: number; movement_type?: string
+    supplier_code?: number; document_number?: string; notes?: string
+    statement_text?: string; service_type_code?: string
+    season_id?: number; field_id?: number; work_order_id?: number
+    center_code?: number; payment_method?: 'cash' | 'credit'
+  }>()
+
+  const items = b.movements ?? b.items
+  if (!Array.isArray(items) || items.length === 0) {
+    return c.json({ success: false, error: 'أضف حركة واحدة على الأقل' }, 400)
+  }
+
+  const results: number[] = []
+  const controls = await getInventoryPostingControls(c.env.DB, company_id)
+
+  for (const item of items) {
+    // Resolve fields: use item-specific value OR fallback to header value
+    const mDate = item.movement_date ?? b.movement_date
+    const mType = item.movement_type ?? b.movement_type
+    const whId  = item.warehouse_id  ?? b.warehouse_id
+    const whName= item.warehouse     ?? b.warehouse
+
+    if (!mDate || (!whId && !whName) || !mType || !item.item_code || !item.quantity) {
+      throw new Error(`MISSING_FIELDS_FOR_ITEM:${item.item_code}`)
+    }
+
+    const movementDate = normalizeIsoDate(mDate)
+    if (isFutureIsoDate(movementDate)) throw new Error(`FUTURE_DATE_NOT_ALLOWED:${item.item_code}`)
+
+    const wh = await resolveWarehouse(c.env.DB, company_id, whId, whName)
+    if (!wh) throw new Error(`UNKNOWN_WAREHOUSE:${item.item_code}`)
+    const warehouseId = wh.id
+
+    const isInbound = resolveMovementDirection(mType) === 'IN'
+    enforceInventoryLockDate(controls, movementDate)
+
+    const periodId = await getOpenPeriod(c.env.DB, company_id, movementDate)
+    if (!periodId) throw new Error(`PERIOD_CLOSED:${movementDate}`)
+
+    const prev = await readInventoryBalance(c.env.DB, company_id, item.item_code, warehouseId)
+    if (!isInbound && item.quantity > prev.balance_qty) {
+      throw new Error(`INSUFFICIENT_STOCK:${item.item_code} (Available: ${prev.balance_qty})`)
+    }
+
+    const unitPrice = item.unit_price ?? (prev.balance_qty > 0 ? prev.balance_value / prev.balance_qty : 0)
+    const movementValue = item.quantity * unitPrice
+    validateZeroValuePolicy(controls, role, movementValue, item.zero_value_reason ?? b.notes)
+
+    const localId = `inv_batch_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`
+    const ym = yearMonthParts(movementDate)
+    const transactionId = Math.floor(Date.now() / 1000) * 1000 + Math.floor(Math.random() * 1000)
+
+    const qtyIn = isInbound ? item.quantity : 0
+    const qtyOut = isInbound ? 0 : item.quantity
+    const valueIn = isInbound ? movementValue : 0
+    const valueOut = isInbound ? 0 : movementValue
+
+    // Merge dimensions
+    const centerCode = item.center_code ?? b.center_code
+    const supplierCode = item.supplier_code ?? b.supplier_code
+    const docNum = item.document_number ?? b.document_number
+    const seasonId = item.season_id ?? b.season_id
+    const fieldId = item.field_id ?? b.field_id
+    const woId = item.work_order_id ?? b.work_order_id
+    const sText = item.statement_text ?? b.statement_text
+    const notes = item.notes ?? b.notes
+    const sType = item.service_type_code ?? b.service_type_code
+
+    const { statementText, serviceTypeCode } = await validateInventoryGovernance(c.env.DB, company_id, {
+      movement_type: mType, supplier_code: supplierCode, document_number: docNum,
+      center_code: centerCode, statement_text: sText, notes: notes, service_type_code: sType,
+    })
+
+    const insertRes = await c.env.DB.prepare(
+      `INSERT INTO inventory_movements
+       (company_id, season_id, field_id, work_order_id, supplier_code, item_code, center_code,
+        movement_date, warehouse_id, movement_type, document_number, batch_number, expiry_date,
+        pack_capacity, pack_count, quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
+        notes, statement_text, service_type_code, year, month, created_by_user_id, local_id,
+        zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(
+      company_id, seasonId ?? null, fieldId ?? null, woId ?? null,
+      supplierCode ?? null, item.item_code, centerCode ?? null,
+      movementDate, warehouseId, mType, docNum ?? null,
+      item.batch_number ?? null, item.expiry_date ?? null,
+      item.pack_capacity ?? null, item.pack_count ?? null, item.quantity, unitPrice,
+      qtyIn, qtyOut, prev.balance_qty + qtyIn - qtyOut, valueIn, valueOut, prev.balance_value + valueIn - valueOut,
+      notes ?? null, statementText, serviceTypeCode, ym.year, ym.month, userId, localId,
+      movementValue === 0 ? (item.zero_value_reason ?? b.notes) : null,
+      movementValue === 0 ? role : null,
+      controls.posting_mode,
+      movementValue === 0 ? 'exempt_zero_value' : 'pending',
+      transactionId,
+    ).run()
+
+    const movId = Number(insertRes.meta.last_row_id)
+    results.push(movId)
+
+    await upsertInventoryBalance(c.env.DB, company_id, item.item_code, warehouseId, prev.balance_qty + qtyIn - qtyOut, prev.balance_value + valueIn - valueOut, movId)
+
+    if (movementValue > 0) {
+      const itemRow = await c.env.DB.prepare('SELECT name FROM items WHERE code = ? AND company_id = ?').bind(item.item_code, company_id).first<{name:string}>()
+      await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', movId, {
+        company_id, ref_id: movId, item_code: item.item_code, warehouse_id: warehouseId,
+        movement_type: mType, value: movementValue, date: movementDate,
+        item_name: itemRow?.name ?? String(item.item_code), created_by: userId,
+        center_code: centerCode, supplier_code: supplierCode, work_order_id: woId,
+      })
+    }
+  }
+
+  return c.json({ success: true, count: results.length, ids: results })
 })
 
 export default movements

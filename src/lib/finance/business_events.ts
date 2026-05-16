@@ -71,6 +71,12 @@ export interface EventBackedPostOpts {
     source_ledger?: 'cash' | 'supplier' | 'inventory' | 'payroll' | 'manual' | 'adjustment' | 'harvest'
     source_record_id?: number | null
   }>
+  /**
+   * Domain-owned callback invoked after the journal entry is committed.
+   * When provided, the legacy linkJournalEntryToSource switch-case is skipped
+   * for this call, making business_events.ts independent of source table schemas.
+   */
+  onJournalEntryPosted?: (entryId: number) => Promise<void>
 }
 
 async function logPostingResolution(
@@ -371,7 +377,11 @@ export async function postFromBusinessEvent(
     })
 
     if (entryId) {
-      await linkJournalEntryToSource(db, opts, entryId)
+      if (opts.onJournalEntryPosted) {
+        await opts.onJournalEntryPosted(entryId)
+      } else {
+        await linkJournalEntryToSource(db, opts, entryId)
+      }
     }
 
     await db.prepare(

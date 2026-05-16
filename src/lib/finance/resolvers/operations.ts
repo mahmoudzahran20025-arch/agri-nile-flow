@@ -38,12 +38,13 @@ export async function resolveWorkOrderLabor(
     throw new Error(`WORK_ORDER_LABOR_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
 
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'work_order_labor',
     source_module: 'operations',
-    source_id:     opts.ref_id,
-    source_link_id: opts.ref_id,
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
     description:   `تكلفة عمالة/معدات | ${opts.description}`,
     created_by:    opts.created_by,
@@ -58,9 +59,13 @@ export async function resolveWorkOrderLabor(
       season_id:     opts.season_id,
       field_id:      opts.field_id,
       rule_slot:     l.rule_slot,
-      source_ledger: 'manual', 
-      source_record_id: opts.ref_id,
+      source_ledger: 'manual',
+      source_record_id: refId,
     })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE work_tasks SET journal_entry_id = ? WHERE work_order_id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
 }
 
@@ -90,12 +95,13 @@ export async function resolveContractAdvance(
     opts.description
   )
 
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'contract_advance',
     source_module: 'contracts',
-    source_id:     opts.ref_id,
-    source_link_id: opts.ref_id,
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
     description:   `دفعة مقدمة عقد | ${opts.description}`,
     created_by:    opts.created_by,
@@ -108,7 +114,11 @@ export async function resolveContractAdvance(
       description:   l.description ?? `دفعة مقدمة عقد | ${opts.description}`,
       rule_slot:     l.rule_slot,
       source_ledger: 'manual',
-      source_record_id: opts.ref_id,
+      source_record_id: refId,
     })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
 }

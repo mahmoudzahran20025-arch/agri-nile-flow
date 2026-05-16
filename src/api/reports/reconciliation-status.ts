@@ -39,10 +39,10 @@ reconciliationStatus.get('/reconciliation-status', async (c) => {
          AND je.status = 'posted'`
     ).bind(company_id).first<{ balance: number }>(),
 
-    // ── Inventory running balance (source: inventory_running_balances) ────────
+    // ── Inventory running balance (source: inventory_balances snapshot) ──────
     c.env.DB.prepare(
-      `SELECT COALESCE(SUM(running_balance_value), 0) AS total
-       FROM inventory_running_balances
+      `SELECT COALESCE(SUM(balance_value), 0) AS total
+       FROM inventory_balances
        WHERE company_id = ?`
     ).bind(company_id).first<{ total: number }>(),
 
@@ -54,7 +54,7 @@ reconciliationStatus.get('/reconciliation-status', async (c) => {
        JOIN journal_entries je ON je.id = jel.entry_id AND je.company_id = jel.company_id
        WHERE je.company_id = ?
          AND jel.account_code LIKE '1407%'
-         AND je.status = 'posted'`
+         AND je.is_posted = 1`
     ).bind(company_id).first<{ balance: number }>(),
 
     // ── Approved-but-unpaid payroll (sub-ledger for wages payable) ───────────
@@ -72,14 +72,14 @@ reconciliationStatus.get('/reconciliation-status', async (c) => {
        JOIN journal_entries je ON je.id = jel.entry_id AND je.company_id = jel.company_id
        WHERE je.company_id = ?
          AND jel.account_code = '21200001'
-         AND je.status = 'posted'`
+         AND je.is_posted = 1`
     ).bind(company_id).first<{ balance: number }>(),
 
     // ── Ghost entries: posted GL with no business_event backlink ─────────────
     c.env.DB.prepare(
       `SELECT COUNT(*) AS n
        FROM journal_entries je
-       WHERE je.company_id = ? AND je.status = 'posted'
+       WHERE je.company_id = ? AND je.is_posted = 1
          AND je.source_module IS NOT NULL
          AND NOT EXISTS (
            SELECT 1 FROM business_events be

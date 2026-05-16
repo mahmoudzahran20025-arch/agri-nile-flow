@@ -322,19 +322,21 @@ governance.get('/posting-health', permissionGuard('inventory', 'read'), async (c
   // All unique warehouse × PPG combos that have actual movements
   const { results: combos } = await c.env.DB.prepare(
     `SELECT
-       im.warehouse,
+       im.warehouse_id,
+       w.name AS warehouse_name,
        w.inv_posting_group_code AS ipg,
        i.prod_posting_group_code AS ppg,
        COUNT(*) AS movement_count,
        SUM(im.value_in + im.value_out) AS total_value
      FROM inventory_movements im
-     LEFT JOIN warehouses w ON w.company_id = im.company_id AND w.name = im.warehouse AND w.is_active = 1
-     LEFT JOIN items i ON i.company_id = im.company_id AND i.code = im.item_code
+     LEFT JOIN warehouses w ON w.id = im.warehouse_id AND w.company_id = im.company_id
+     LEFT JOIN items i ON i.code = im.item_code AND i.company_id = im.company_id
      WHERE im.company_id = ?
-     GROUP BY im.warehouse, w.inv_posting_group_code, i.prod_posting_group_code
+     GROUP BY im.warehouse_id, w.name, w.inv_posting_group_code, i.prod_posting_group_code
      ORDER BY total_value DESC`
   ).bind(company_id).all<{
-    warehouse: string
+    warehouse_id: number
+    warehouse_name: string
     ipg: string | null
     ppg: string | null
     movement_count: number
@@ -375,6 +377,7 @@ governance.get('/posting-health', permissionGuard('inventory', 'read'), async (c
 
     return {
       ...combo,
+      warehouse: combo.warehouse_name, // maintain compatibility with UI
       has_exact_setup: !!exactRow,
       has_fallback_setup: covered && !exactRow,
       is_covered: covered,

@@ -92,12 +92,13 @@ export async function resolvePayrollPayment(
     throw new Error(`PAYROLL_PAYMENT_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
 
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'payroll_payment',
     source_module: 'payroll',
-    source_id:     opts.ref_id,
-    source_link_id: opts.ref_id,
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
     description:   `صرف رواتب | ${opts.description}`,
     created_by:    opts.created_by,
@@ -110,7 +111,11 @@ export async function resolvePayrollPayment(
       description:   l.description ?? `صرف رواتب | ${opts.description}`,
       rule_slot:     l.rule_slot,
       source_ledger: 'cash',
-      source_record_id: opts.ref_id,
+      source_record_id: refId,
     })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE payroll_runs SET payment_gl_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
 }

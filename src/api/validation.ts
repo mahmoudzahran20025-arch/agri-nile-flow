@@ -66,15 +66,16 @@ app.post('/financial-consistency', async (c) => {
       .prepare(
         `SELECT COUNT(*) as row_count,
                 COUNT(DISTINCT supplier_code) as unique_suppliers,
-                SUM(balance_with_checks) as total_balance,
+                SUM(credit) - SUM(debit) as net_ap_balance,
                 SUM(debit) as total_debits,
                 SUM(credit) as total_credits
-         FROM supplier_transactions`
+         FROM supplier_transactions
+         WHERE status = 'posted'`
       )
       .first<{
         row_count: number
         unique_suppliers: number
-        total_balance: number
+        net_ap_balance: number
         total_debits: number
         total_credits: number
       }>()
@@ -85,48 +86,42 @@ app.post('/financial-consistency', async (c) => {
                 COUNT(DISTINCT account_code) as unique_accounts,
                 SUM(CASE WHEN debit > 0 THEN debit ELSE 0 END) as total_debits,
                 SUM(CASE WHEN credit > 0 THEN credit ELSE 0 END) as total_credits,
-                SUM(debit - credit) as net_balance
+                SUM(credit) - SUM(debit) as net_ap_balance
          FROM journal_entry_lines jel
          JOIN journal_entries je ON je.id = jel.entry_id AND je.company_id = jel.company_id
          JOIN chart_of_accounts coa ON coa.code = jel.account_code AND coa.company_id = jel.company_id
-         WHERE coa.code LIKE '2120%'`
+         WHERE coa.code LIKE '2120%' AND je.is_posted = 1`
       )
       .first<{
         line_count: number
         unique_accounts: number
         total_debits: number
         total_credits: number
-        net_balance: number
+        net_ap_balance: number
       }>()
 
-    // Top mismatched suppliers
+    // Per-supplier net balance (credit - debit) for top outstanding
     const mismatchedSuppliers = await db
       .prepare(
-        `SELECT supplier_code, SUM(balance_with_checks) as balance, COUNT(*) as txn_count
-         FROM supplier_transactions
+        `SELECT supplier_code, SUM(credit) - SUM(debit) as balance, COUNT(*) as txn_count
+         FROM supplier_transactions WHERE status = 'posted'
          GROUP BY supplier_code
          ORDER BY balance DESC
          LIMIT 10`
       )
       .all<{ supplier_code: string; balance: number; txn_count: number }>()
 
+    const apSubLedger = supMovements?.net_ap_balance ?? 0
+    const apGL        = supGL?.net_ap_balance ?? 0
     results.suppliers = {
       movements: supMovements,
       gl: supGL,
-      difference:
-        (supMovements?.total_balance ?? 0) - (supGL?.net_balance ?? 0),
+      difference: apSubLedger - apGL,
       variance_pct:
-        supGL?.net_balance && supMovements?.total_balance
-          ? Math.abs(
-              (((supMovements.total_balance - supGL.net_balance) /
-                supGL.net_balance) *
-                100)
-            ).toFixed(2)
+        apGL !== 0
+          ? Math.abs(((apSubLedger - apGL) / apGL) * 100).toFixed(2)
           : 'N/A',
-      status:
-        supMovements?.total_balance === supGL?.net_balance
-          ? 'MATCH'
-          : 'MISMATCH',
+      status: apSubLedger === apGL ? 'MATCH' : 'MISMATCH',
       top_suppliers: mismatchedSuppliers.results || [],
     }
 
@@ -137,9 +132,22 @@ app.post('/financial-consistency', async (c) => {
     const cashMovements = await db
       .prepare(
         `SELECT COUNT(*) as row_count,
-                MAX(running_balance) as final_balance,
-                MAX(transaction_date) as latest_date
-         FROM cash_transactions`
+                SUM(last_balance) as final_balance,
+                MAX(latest_date) as latest_date
+         FROM (
+           SELECT financial_account_id,
+                  running_balance as last_balance,
+                  transaction_date as latest_date
+           FROM cash_transactions ct
+           WHERE status = 'posted'
+             AND id = (
+               SELECT id FROM cash_transactions
+               WHERE company_id = ct.company_id
+                 AND financial_account_id IS NOT DISTINCT FROM ct.financial_account_id
+                 AND status = 'posted'
+               ORDER BY transaction_date DESC, id DESC LIMIT 1
+             )
+         )`
       )
       .first<{
         row_count: number
@@ -152,36 +160,30 @@ app.post('/financial-consistency', async (c) => {
         `SELECT COUNT(*) as line_count,
                 SUM(CASE WHEN debit > 0 THEN debit ELSE 0 END) as total_debits,
                 SUM(CASE WHEN credit > 0 THEN credit ELSE 0 END) as total_credits,
-                SUM(debit - credit) as net_balance
+                SUM(debit) - SUM(credit) as net_cash_balance
          FROM journal_entry_lines jel
          JOIN journal_entries je ON je.id = jel.entry_id AND je.company_id = jel.company_id
          JOIN chart_of_accounts coa ON coa.code = jel.account_code AND coa.company_id = jel.company_id
-         WHERE coa.code LIKE '1401%'`
+         WHERE coa.code LIKE '1401%' AND je.is_posted = 1`
       )
       .first<{
         line_count: number
         total_debits: number
         total_credits: number
-        net_balance: number
+        net_cash_balance: number
       }>()
 
+    const cashSubLedger = cashMovements?.final_balance ?? 0
+    const cashGLBalance = cashGL?.net_cash_balance ?? 0
     results.cash = {
       movements: cashMovements,
       gl: cashGL,
-      difference:
-        (cashMovements?.final_balance ?? 0) - (cashGL?.net_balance ?? 0),
+      difference: cashSubLedger - cashGLBalance,
       variance_pct:
-        cashGL?.net_balance && cashMovements?.final_balance
-          ? Math.abs(
-              (((cashMovements.final_balance - cashGL.net_balance) /
-                cashGL.net_balance) *
-                100)
-            ).toFixed(2)
+        cashGLBalance !== 0
+          ? Math.abs(((cashSubLedger - cashGLBalance) / cashGLBalance) * 100).toFixed(2)
           : 'N/A',
-      status:
-        cashMovements?.final_balance === cashGL?.net_balance
-          ? 'MATCH'
-          : 'MISMATCH',
+      status: cashSubLedger === cashGLBalance ? 'MATCH' : 'MISMATCH',
     }
 
     // ========================================================================
@@ -206,7 +208,8 @@ app.post('/financial-consistency', async (c) => {
         coverage_pct: number
       }>()
 
-    // Supplier trace
+    // Supplier trace — excludes cash-mirror entries (document_type='cash_payment')
+    // which are shadow rows inserted by prepareCashMovement and carry no direct business event
     const supTrace = await db
       .prepare(
         `SELECT
@@ -215,7 +218,8 @@ app.post('/financial-consistency', async (c) => {
            COUNT(DISTINCT st.id) - COUNT(DISTINCT be.id) as orphan_count,
            ROUND(100.0 * COUNT(DISTINCT be.id) / NULLIF(COUNT(DISTINCT st.id), 0), 2) as coverage_pct
          FROM supplier_transactions st
-         LEFT JOIN business_events be ON be.source_id = st.id AND be.source_module IN ('supplier_invoice', 'supplier_payment')`
+         LEFT JOIN business_events be ON be.source_id = st.id AND be.source_module IN ('supplier_invoice', 'supplier_payment', 'suppliers')
+         WHERE (st.document_type IS NULL OR st.document_type != 'cash_payment')`
       )
       .first<{
         total_transactions: number
@@ -233,7 +237,7 @@ app.post('/financial-consistency', async (c) => {
            COUNT(DISTINCT ct.id) - COUNT(DISTINCT be.id) as orphan_count,
            ROUND(100.0 * COUNT(DISTINCT be.id) / NULLIF(COUNT(DISTINCT ct.id), 0), 2) as coverage_pct
          FROM cash_transactions ct
-         LEFT JOIN business_events be ON be.source_id = ct.id AND be.source_module = 'cash'`
+         LEFT JOIN business_events be ON be.source_id = ct.id AND be.source_module IN ('cash', 'treasury')`
       )
       .first<{
         total_transactions: number
@@ -256,8 +260,9 @@ app.post('/financial-consistency', async (c) => {
       .prepare(`SELECT COUNT(*) as count FROM items WHERE prod_posting_group_code IS NULL`)
       .first<{ count: number }>()
 
+    // inv_posting_group_code lives on warehouses, not items — check active warehouses missing it
     const missingInvGroup = await db
-      .prepare(`SELECT COUNT(*) as count FROM items WHERE inv_posting_group_code IS NULL`)
+      .prepare(`SELECT COUNT(*) as count FROM warehouses WHERE is_active = 1 AND inv_posting_group_code IS NULL`)
       .first<{ count: number }>()
 
     // Orphan lines: journal_entry_lines whose parent journal_entries row is missing
@@ -282,7 +287,10 @@ app.post('/financial-consistency', async (c) => {
 
     const allTraces = [invTrace, supTrace, cashTrace]
     const hasOrphans = allTraces.some((t) => (t?.orphan_count ?? 0) > 0)
-    const lowCoverage = allTraces.some((t) => (t?.coverage_pct ?? 0) < 90)
+    // coverage_pct is NULL when the source table is empty — skip the check in that case
+    const lowCoverage = allTraces.some(
+      (t) => t?.coverage_pct != null && t.coverage_pct < 90
+    )
     const hasDataQualityIssues =
       (missingProdGroup?.count ?? 0) > 0 ||
       (missingInvGroup?.count ?? 0) > 0 ||

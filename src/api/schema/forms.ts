@@ -170,7 +170,7 @@ forms.get('/:service_type/options/:source_table', async (c) => {
     seasons:        `SELECT id AS value, name AS label FROM seasons WHERE company_id = ? ORDER BY start_date DESC`,
     suppliers:      `SELECT id AS value, name AS label FROM suppliers WHERE company_id = ? AND is_active = 1 ORDER BY name`,
     warehouses:     `SELECT id AS value, name AS label FROM warehouses WHERE company_id = ? ORDER BY name`,
-    employees:      `SELECT id AS value, (first_name || ' ' || last_name) AS label FROM employees WHERE company_id = ? AND is_active = 1 ORDER BY first_name`,
+    employees:      `SELECT id AS value, name AS label FROM employees WHERE company_id = ? AND is_active = 1 ORDER BY name`,
     cost_centers:   `SELECT code AS value, name_ar AS label FROM cost_centers WHERE company_id = ? ORDER BY code`,
     unit_types:     `SELECT code AS value, name_ar AS label FROM unit_types WHERE is_active = 1 ORDER BY code`,
     operation_types:`SELECT id AS value, name AS label FROM operation_types WHERE company_id = ? AND is_active = 1 ORDER BY sort_order, name`,

@@ -75,12 +75,13 @@ export async function resolveInventoryMovement(
     field_id:    opts.field_id,
   }
 
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'inventory_movement',
     source_module: 'inventory',
-    source_id:     opts.ref_id,
-    source_link_id: opts.ref_id, // 1:1 link
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
     description:   `${opts.movement_type} مخزني | ${opts.item_name} | ${warehouseRow?.name ?? opts.warehouse_id}`,
     created_by:    opts.created_by,
@@ -92,8 +93,8 @@ export async function resolveInventoryMovement(
       unit: opts.unit,
       factor,
       base_qty: baseQty,
-      value: totalValue, 
-      item_name: opts.item_name, 
+      value: totalValue,
+      item_name: opts.item_name,
       ipg, ppg,
       batch_number: opts.batch_number,
       expiry_date: opts.expiry_date,
@@ -106,9 +107,13 @@ export async function resolveInventoryMovement(
       description:     l.description ?? `${opts.movement_type} مخزني | ${opts.item_name}`,
       rule_slot:       l.rule_slot,
       source_ledger:   'inventory' as const,
-      source_record_id: opts.ref_id,
+      source_record_id: refId,
       ...dims,
     })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE inventory_movements SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
 }
 
@@ -158,12 +163,13 @@ export async function resolveInventoryTransfer(
     throw new Error(`INVENTORY_TRANSFER_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
 
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'inventory_transfer',
     source_module: 'inventory',
-    source_id:     opts.ref_id,
-    source_link_id: opts.ref_id,
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
     description:   `تحويل مخزني | ${opts.item_name} | ${srcRow?.name} → ${dstRow?.name}`,
     created_by:    opts.created_by,
@@ -180,11 +186,15 @@ export async function resolveInventoryTransfer(
       description:     l.description ?? `تحويل مخزني | ${opts.item_name}`,
       rule_slot:       l.rule_slot,
       source_ledger:   'inventory' as const,
-      source_record_id: opts.ref_id,
+      source_record_id: refId,
       center_code:     opts.center_code,
       season_id:       opts.season_id,
       field_id:        opts.field_id,
     })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE inventory_movements SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
 }
 
@@ -242,12 +252,13 @@ export async function resolvePurchaseReceipt(
     opts.description?.trim() || null,
   ].filter(Boolean).join(' | ')
 
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'purchase_receipt',
     source_module: 'inventory',
-    source_id:     opts.ref_id,
-    source_link_id: opts.ref_id,
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
     description:   entryDescription,
     created_by:    opts.created_by,
@@ -260,9 +271,84 @@ export async function resolvePurchaseReceipt(
       description:   l.description ?? entryDescription,
       rule_slot:     l.rule_slot,
       source_ledger: 'inventory' as const,
-      source_record_id: opts.ref_id,
+      source_record_id: refId,
     })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE inventory_movements SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
+}
+
+async function resolveWarehouse(
+  db: D1Database,
+  companyId: number,
+  id?: number,
+  name?: string,
+): Promise<{ id: number; name: string } | null> {
+  if (id) {
+    return db.prepare('SELECT id, name FROM warehouses WHERE id = ? AND company_id = ? AND is_active = 1').bind(id, companyId).first<{ id: number; name: string }>() ?? null
+  }
+  if (name) {
+    return db.prepare('SELECT id, name FROM warehouses WHERE name = ? AND company_id = ? AND is_active = 1').bind(name, companyId).first<{ id: number; name: string }>() ?? null
+  }
+  return null
+}
+
+export interface RawPOReceiptItem {
+  po_item_id: number
+  qty_received: number
+  warehouse?: string
+  warehouse_id?: number
+  unit_price?: number
+}
+
+export interface EnrichedPOReceiptItem {
+  po_item_id: number
+  item_code: number
+  item_name: string
+  qty_received: number
+  unit_price: number
+  warehouse_id: number
+}
+
+export async function enrichPOReceiptItems(
+  db: D1Database,
+  companyId: number,
+  poId: number,
+  rawItems: RawPOReceiptItem[],
+): Promise<EnrichedPOReceiptItem[]> {
+  const enriched: EnrichedPOReceiptItem[] = []
+  for (const item of rawItems) {
+    const wh = await resolveWarehouse(db, companyId, item.warehouse_id, item.warehouse)
+    if (!wh) throw Object.assign(new Error('المخزن غير موجود أو غير نشط'), { status: 422 })
+
+    const poItem = await db.prepare(
+      `SELECT id, item_code, item_name, unit_price, qty_ordered, qty_received
+       FROM purchase_order_items WHERE id = ? AND po_id = ? AND company_id = ?`
+    ).bind(item.po_item_id, poId, companyId)
+      .first<{ id: number; item_code: number; item_name: string; unit_price: number; qty_ordered: number; qty_received: number }>()
+
+    if (!poItem) throw Object.assign(new Error(`البند ${item.po_item_id} غير موجود`), { status: 404 })
+
+    const remaining = poItem.qty_ordered - poItem.qty_received
+    if (item.qty_received > remaining) {
+      throw Object.assign(
+        new Error(`الكمية المستلمة (${item.qty_received}) تتجاوز المتبقي (${remaining}) لبند ${poItem.item_name}`),
+        { status: 409 }
+      )
+    }
+
+    enriched.push({
+      po_item_id:   item.po_item_id,
+      item_code:    poItem.item_code,
+      item_name:    poItem.item_name,
+      qty_received: item.qty_received,
+      unit_price:   item.unit_price ?? poItem.unit_price,
+      warehouse_id: wh.id,
+    })
+  }
+  return enriched
 }
 
 export async function processPOReceiptOrchestrated(
@@ -283,12 +369,13 @@ export async function processPOReceiptOrchestrated(
       warehouse_id: number
     }>
   },
-): Promise<{ movements: number; status: string }> {
+): Promise<{ movements: number; movement_ids: number[]; status: string }> {
   const receiptDate = normalizeIsoDate(opts.received_date)
   const ym = yearMonthParts(receiptDate)
   const localIdBase = `por_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
   const transactionId = Math.floor(Date.now() / 1000) * 1000 + Math.floor(Math.random() * 1000)
   let movCount = 0
+  const movementIds: number[] = []
 
   for (const item of opts.items) {
     const prev    = await readInventoryBalance(db, opts.company_id, item.item_code, item.warehouse_id)
@@ -310,6 +397,7 @@ export async function processPOReceiptOrchestrated(
     ).run()
 
     const movementId = insertResult.meta.last_row_id as number
+    movementIds.push(movementId)
     await upsertInventoryBalance(db, opts.company_id, item.item_code, item.warehouse_id, balQty, balVal, movementId)
 
     await db.prepare(
@@ -339,7 +427,7 @@ export async function processPOReceiptOrchestrated(
     ).bind(opts.company_id, `${localIdBase}_${item.po_item_id}`).first<{ id: number }>()
 
     try {
-      await resolvePurchaseReceipt(db, {
+      const jeId = await resolvePurchaseReceipt(db, {
         company_id:        opts.company_id,
         ref_id:            movRow?.id ?? opts.po_id,
         po_id:             opts.po_id,
@@ -352,6 +440,12 @@ export async function processPOReceiptOrchestrated(
         service_type_code: 'SRV_SUPPLY',
         created_by:        opts.userId,
       })
+      if (movRow?.id && jeId) {
+        await db.prepare(
+          `UPDATE inventory_movements SET gl_posting_status = 'posted', journal_entry_id = ?
+           WHERE id = ? AND company_id = ?`
+        ).bind(jeId, movRow.id, opts.company_id).run()
+      }
     } catch (err: unknown) {
       const errMsg = String((err as Error)?.message ?? err)
       if (movRow?.id) {
@@ -368,5 +462,5 @@ export async function processPOReceiptOrchestrated(
     }
   }
 
-  return { movements: movCount, status: newStatus }
+  return { movements: movCount, movement_ids: movementIds, status: newStatus }
 }

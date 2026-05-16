@@ -44,12 +44,13 @@ export async function resolvePartnerCapital(
     throw new Error(`PARTNER_CAPITAL_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
 
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'partner_capital',
     source_module: 'treasury',
-    source_id:     opts.ref_id,
-    source_link_id: opts.ref_id,
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
     description:   `رأس مال شريك | ${opts.description}`,
     created_by:    opts.created_by,
@@ -62,8 +63,12 @@ export async function resolvePartnerCapital(
       description:   l.description ?? `رأس مال شريك | ${opts.description}`,
       rule_slot:     l.rule_slot,
       source_ledger: 'cash',
-      source_record_id: opts.ref_id,
+      source_record_id: refId,
     })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
 }
 
@@ -105,12 +110,13 @@ export async function resolvePartnerCurrent(
     throw new Error(`PARTNER_CURRENT_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
 
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'partner_current',
     source_module: 'treasury',
-    source_id:     opts.ref_id,
-    source_link_id: opts.ref_id,
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
     description:   `جاري شريك | ${opts.description}`,
     created_by:    opts.created_by,
@@ -123,7 +129,11 @@ export async function resolvePartnerCurrent(
       description:   l.description ?? `جاري شريك | ${opts.description}`,
       rule_slot:     l.rule_slot,
       source_ledger: 'cash',
-      source_record_id: opts.ref_id,
+      source_record_id: refId,
     })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
 }

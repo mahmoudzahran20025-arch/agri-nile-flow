@@ -75,6 +75,19 @@ gl.route('/', preview)
 // Depreciation: Monthly batch depreciation posting and schedule view
 gl.route('/', depreciation)
 
+// Schema migrations registry — read-only admin visibility
+gl.get('/migrations/registry', async (c) => {
+  const db = c.env.DB
+  try {
+    const rows = await db
+      .prepare('SELECT id, filename, name, source, applied_at FROM schema_migrations ORDER BY id ASC')
+      .all<{ id: number; filename: string; name: string; source: string; applied_at: string }>()
+    return c.json({ success: true, data: { total: rows.results.length, migrations: rows.results } })
+  } catch {
+    return c.json({ success: false, error: 'schema_migrations table not found — migration 0126 not applied' }, 404)
+  }
+})
+
 // Health check endpoint for the GL module
 gl.get('/health', (c) => {
   return c.json({

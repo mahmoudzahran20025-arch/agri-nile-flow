@@ -83,12 +83,13 @@ export async function resolveCashLedger(
     throw new Error(`CASH_LEDGER_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
 
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'cash_transaction',
     source_module: 'treasury',
-    source_id:     opts.ref_id,
-    source_link_id: opts.ref_id,
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
     description:   `${opts.direction === 'د' ? 'قبض' : 'صرف'} | ${opts.description}`,
     created_by:    opts.created_by,
@@ -104,8 +105,12 @@ export async function resolveCashLedger(
       field_id:      opts.field_id,
       rule_slot:     l.rule_slot,
       source_ledger: 'cash' as const,
-      source_record_id: opts.ref_id,
+      source_record_id: refId,
     })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
 }
 
@@ -157,12 +162,13 @@ export async function resolveExpensePosting(
     throw new Error(`EXPENSE_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
 
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'expense',
     source_module: 'treasury',
-    source_id:     opts.ref_id,
-    source_link_id: opts.ref_id,
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
     description:   `مصروف | ${opts.description}`,
     created_by:    opts.created_by,
@@ -178,8 +184,12 @@ export async function resolveExpensePosting(
       field_id:      opts.field_id,
       rule_slot:     l.rule_slot,
       source_ledger: 'cash' as const,
-      source_record_id: opts.ref_id,
+      source_record_id: refId,
     })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
 }
 

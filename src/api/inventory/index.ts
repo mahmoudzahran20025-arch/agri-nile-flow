@@ -17,7 +17,8 @@ const inventory = new Hono<{ Bindings: Env }>()
 inventory.use('*', authMiddleware)
 
 // All sub-routers define full paths, mounted at '/'.
-inventory.route('/', items)
+inventory.route('/items', items)
+inventory.route('/item',  items)
 inventory.route('/', movements)
 inventory.route('/', receipts)
 inventory.route('/', adjustments)

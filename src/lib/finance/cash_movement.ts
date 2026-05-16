@@ -3,6 +3,11 @@ import { getOpenPeriod } from '../gl'
 import { normalizeIsoDate, yearMonthParts } from '../utils/date'
 import { resolveCashLedger } from './resolvers/cash'
 import { logFinancialWorkflowFailure } from './workflow_policy'
+import {
+  resolveCashTransaction as peResolveCash,
+  resolveExpensePosting as peResolveExpense,
+  resolveControlAccount,
+} from '../posting_engine'
 
 export interface CashMovementInput {
   company_id: number
@@ -51,14 +56,69 @@ export interface CashDraftRow {
 }
 
 let cachedCashTransactionColumns: Set<string> | null = null
+let columnCacheExpiresAt = 0
+const COLUMN_CACHE_TTL_MS = 10 * 60 * 1000 // 10 minutes — limits stale schema reads after migrations
 
 async function getCashTransactionColumns(db: D1Database): Promise<Set<string>> {
-  if (cachedCashTransactionColumns) return cachedCashTransactionColumns
+  const now = Date.now()
+  if (cachedCashTransactionColumns && now < columnCacheExpiresAt) return cachedCashTransactionColumns
   const { results } = await db
     .prepare('PRAGMA table_info(cash_transactions)')
     .all<{ name: string }>()
   cachedCashTransactionColumns = new Set((results ?? []).map((r) => r.name))
+  columnCacheExpiresAt = now + COLUMN_CACHE_TTL_MS
   return cachedCashTransactionColumns
+}
+
+async function preValidateCashGlBlueprint(
+  db: D1Database,
+  opts: CashMovementInput,
+  postingDate: string,
+): Promise<void> {
+  if (opts.skipGlPosting) return
+
+  const accountId = opts.financial_account_id ?? null
+  const cashAcc = accountId
+    ? (await db.prepare('SELECT gl_account_code FROM bank_accounts WHERE id = ?').bind(accountId).first<{ gl_account_code: string }>())?.gl_account_code || ''
+    : (await resolveControlAccount(db, opts.company_id, 'cash')) || ''
+
+  let contraAcc = opts.contraAccount || ''
+
+  if (!contraAcc && opts.expense_code) {
+    const et = await db.prepare('SELECT gl_account_code FROM expense_types WHERE code = ? AND company_id = ?')
+      .bind(opts.expense_code, opts.company_id).first<{ gl_account_code: string }>()
+    if (et?.gl_account_code) {
+      contraAcc = et.gl_account_code
+    } else {
+      throw new Error(`CASH_EXPENSE_ACCOUNT_MISSING: expense_code="${opts.expense_code}" not found.`)
+    }
+  }
+
+  if (!contraAcc) {
+    const key = opts.partner_id && opts.direction === 'د'
+      ? 'equity'
+      : opts.partner_id
+        ? 'partner_current_account'
+        : opts.supplier_code
+          ? 'accounts_payable'
+          : opts.direction === 'د' ? 'revenue_default' : 'expense_default'
+    contraAcc = (await resolveControlAccount(db, opts.company_id, key)) || ''
+  }
+
+  const blueprint = await peResolveCash(
+    db,
+    opts.company_id,
+    cashAcc,
+    contraAcc,
+    opts.amount,
+    opts.direction === 'د',
+    opts.narration,
+    { center_code: opts.center_code ?? undefined, season_id: opts.season_id ?? undefined, field_id: opts.field_id ?? undefined },
+  )
+
+  if (blueprint.isBlocked || !blueprint.lines.length) {
+    throw new Error(`GL_BLUEPRINT_INVALID: Cash posting blueprint blocked before write: ${blueprint.validationErrors.join(', ')}`)
+  }
 }
 
 export async function prepareCashMovement(
@@ -79,6 +139,9 @@ export async function prepareCashMovement(
   if (isPosted) {
     periodId = await getOpenPeriod(db, opts.company_id, postingDate)
     if (!periodId) throw new Error(`PERIOD_CLOSED: No open period for ${postingDate}`)
+
+    // Pre-validate GL blueprint before any writes — prevents orphaned cash rows on GL failure
+    await preValidateCashGlBlueprint(db, opts, postingDate)
 
     const accountId = opts.financial_account_id ?? null
 
@@ -260,15 +323,15 @@ export async function prepareCashMovement(
         description: opts.narration,
         created_by: opts.userId,
         center_code: opts.center_code ?? undefined,
+        season_id:   opts.season_id   ?? undefined,
+        field_id:    opts.field_id    ?? undefined,
         expense_code: opts.expense_code,
         supplier_code: opts.supplier_code,
         partner_id: opts.partner_id,
         contra_account: opts.contraAccount,
       })
 
-      if (journalEntryId) {
-        await db.prepare('UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ?').bind(journalEntryId, inserted.id).run()
-      }
+      // journal_entry_id writeback is handled by resolveCashLedger's onJournalEntryPosted callback
     } catch (error) {
       await logFinancialWorkflowFailure(db, {
         company_id: opts.company_id,
@@ -386,6 +449,8 @@ export async function commitCashDrafts(
           description: draft.narration,
           created_by: opts.userId,
           center_code: draft.center_code ?? undefined,
+          season_id:   draft.season_id  ?? undefined,
+          field_id:    draft.field_id   ?? undefined,
           expense_code: draft.expense_code,
           supplier_code: draft.supplier_code,
           partner_id: draft.partner_id,

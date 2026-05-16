@@ -133,7 +133,7 @@ analytics.get('/reorder-alerts', permissionGuard('inventory', 'read'), async (c)
        FROM inventory_movements im2
        JOIN work_orders wo2 ON wo2.id = im2.work_order_id AND wo2.company_id = im2.company_id
        WHERE im2.item_code = lb.item_code AND im2.company_id = ?
-        AND im2.movement_type IN ('صرف', 'ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS')
+        AND im2.movement_type IN ('ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS')
          AND wo2.status IN ('pending', 'in_progress', 'done')
       ) AS active_order_count
     FROM last_balance lb

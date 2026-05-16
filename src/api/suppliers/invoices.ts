@@ -128,6 +128,7 @@ invoices.post('/:code/transactions', financeOnly, async (c) => {
     unit?: string; quantity?: number; unit_price?: number; amount: number
     credit?: number; debit?: number; check_amount?: number; due_date?: string
     notes?: string; season_id?: number; center_code?: number; account_code?: number
+    field_id?: number;
     statement_text?: string; notes_internal?: string; service_type_code?: string
     financial_account_id?: number; equipment_usage_mode?: 'owned' | 'rental'
     work_order_id?: number; status?: 'draft' | 'posted'

@@ -55,6 +55,7 @@ journalEntryEngine.post('/rebuild', async (c) => {
       business_events_processed: 0,
       journal_entries_created: 0,
       journal_entry_lines_created: 0,
+      skipped_posted: 0,
       errors: [] as string[],
     }
 
@@ -67,9 +68,10 @@ journalEntryEngine.post('/rebuild', async (c) => {
 
     for (const event of businessEvents) {
       try {
-        const { jeCreated, linesCreated } = await regenerateSingleJournalEntry(db, cidParam, event)
+        const { jeCreated, linesCreated, skipped } = await regenerateSingleJournalEntry(db, cidParam, event)
         results.journal_entries_created += jeCreated
         results.journal_entry_lines_created += linesCreated
+        results.skipped_posted += skipped
       } catch (err) {
         results.errors.push(`Event ${event.id}: ${err instanceof Error ? err.message : String(err)}`)
       }
@@ -85,20 +87,26 @@ async function regenerateSingleJournalEntry(
   db: D1Database,
   companyId: number,
   event: BusinessEvent,
-): Promise<{ jeCreated: number; linesCreated: number }> {
+): Promise<{ jeCreated: number; linesCreated: number; skipped: number }> {
   let jeCreated = 0
 
   // journal_entries links back via ref_type='business_event' and ref_id=event.id
   const existingJE = await db
-    .prepare(`SELECT id FROM journal_entries WHERE company_id = ? AND ref_type = 'business_event' AND ref_id = ? LIMIT 1`)
+    .prepare(`SELECT id, is_posted FROM journal_entries WHERE company_id = ? AND ref_type = 'business_event' AND ref_id = ? LIMIT 1`)
     .bind(companyId, event.id)
-    .first<{ id: number }>()
+    .first<{ id: number; is_posted: number }>()
 
   if (existingJE) {
+    // Tag trace metadata on the header (safe — trigger only blocks line modifications)
     await db
       .prepare(`UPDATE journal_entries SET business_event_id = ?, business_event_type = ?, generated_by = 'engine-regeneration-' || datetime('now') WHERE id = ?`)
       .bind(String(event.id), event.event_type, existingJE.id)
       .run()
+
+    // Lines of posted entries cannot be modified — tag them only if the entry is unposted
+    if (existingJE.is_posted) {
+      return { jeCreated: 0, linesCreated: 0, skipped: 1 }
+    }
   } else {
     const postingRuleId = determinePostingRule(event.event_type)
     await db
@@ -132,7 +140,7 @@ async function regenerateSingleJournalEntry(
       .run()
   }
 
-  return { jeCreated, linesCreated: lines.results.length }
+  return { jeCreated, linesCreated: lines.results.length, skipped: 0 }
 }
 
 async function fetchBusinessEventsInScope(

@@ -52,12 +52,13 @@ export async function resolveSupplierInvoice(
     throw new Error(`SUPPLIER_INVOICE_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
 
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'supplier_invoice',
     source_module: 'suppliers',
-    source_id:     opts.ref_id,
-    source_link_id: opts.ref_id,
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
     description:   `فاتورة مورد | ${opts.description}`,
     created_by:    opts.created_by,
@@ -70,11 +71,15 @@ export async function resolveSupplierInvoice(
       description:   l.description ?? `فاتورة مورد | ${opts.description}`,
       rule_slot:     l.rule_slot,
       source_ledger: 'supplier' as const,
-      source_record_id: opts.ref_id,
+      source_record_id: refId,
       center_code:   opts.center_code,
       season_id:     opts.season_id,
       field_id:      opts.field_id,
     })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE supplier_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
 }
 
@@ -114,12 +119,13 @@ export async function resolveSupplierPayment(
     throw new Error(`SUPPLIER_PAYMENT_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
 
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'supplier_payment',
     source_module: 'suppliers',
-    source_id:     opts.ref_id,
-    source_link_id: opts.ref_id,
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
     description:   `سداد مورد | ${opts.description}`,
     created_by:    opts.created_by,
@@ -132,10 +138,14 @@ export async function resolveSupplierPayment(
       description:   l.description ?? `سداد مورد | ${opts.description}`,
       rule_slot:     l.rule_slot,
       source_ledger: 'supplier' as const,
-      source_record_id: opts.ref_id,
+      source_record_id: refId,
       center_code:   opts.center_code,
       season_id:     opts.season_id,
       field_id:      opts.field_id,
     })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE supplier_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
 }

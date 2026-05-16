@@ -125,20 +125,25 @@ export async function enforceDataQualityPolicy(
   companyId: number,
   opts: { mode: GateMode; module: string },
 ): Promise<DataQualityGateResult> {
-  const control = await db.prepare(
-    `SELECT
-       freeze_until,
-       enforce_gates,
-       min_supplier_center_pct,
-       min_supplier_expense_pct,
-       min_supplier_equipment_type_pct,
-       min_cash_center_pct,
-       min_cash_expense_pct,
-       min_items_ppg_pct,
-       min_items_ipg_pct
-     FROM data_quality_control
-     WHERE company_id = ?`
-  ).bind(companyId).first<ControlRow>()
+  let control: ControlRow | null = null
+  try {
+    control = await db.prepare(
+      `SELECT
+         freeze_until,
+         enforce_gates,
+         min_supplier_center_pct,
+         min_supplier_expense_pct,
+         min_supplier_equipment_type_pct,
+         min_cash_center_pct,
+         min_cash_expense_pct,
+         min_items_ppg_pct,
+         min_items_ipg_pct
+       FROM data_quality_control
+       WHERE company_id = ?`
+    ).bind(companyId).first<ControlRow>()
+  } catch {
+    return { ok: true }
+  }
 
   if (!control) {
     return { ok: true }

@@ -5,20 +5,9 @@ import { getOpenPeriod } from '../../lib/gl'
 import { FinanceCore } from '../../lib/finance_core'
 import { logAudit } from '../../lib/audit'
 import { resolveControlAccount } from '../../lib/posting_engine'
+import { enrichPOReceiptItems } from '../../lib/finance'
 
 const receipts = new Hono<{ Bindings: Env }>()
-
-async function resolveWarehouse(db: Env['DB'], companyId: number, id?: number, name?: string): Promise<{ id: number, name: string } | null> {
-  if (id) {
-    const wh = await db.prepare("SELECT id, name FROM warehouses WHERE id = ? AND company_id = ? AND is_active = 1").bind(id, companyId).first<{ id: number, name: string }>()
-    return wh ?? null
-  }
-  if (name) {
-    const wh = await db.prepare("SELECT id, name FROM warehouses WHERE name = ? AND company_id = ? AND is_active = 1").bind(name, companyId).first<{ id: number, name: string }>()
-    return wh ?? null
-  }
-  return null
-}
 
 receipts.post('/receive-po/:po_id', permissionGuard('inventory', 'create'), async (c) => {
   const { company_id, sub: userId } = getUser(c)
@@ -62,39 +51,15 @@ receipts.post('/receive-po/:po_id', permissionGuard('inventory', 'create'), asyn
     return c.json({ success: false, error: 'GL_MAPPING_MISSING: حسابات التحكم (المخزون/الموردين) غير مربوطة في posting_rules.' }, 400)
   }
 
-  const enrichedLines: Array<{
-    po_item_id: number; item_code: number; item_name: string
-    qty_received: number; unit_price: number; warehouse_id: number
-  }> = []
-
-  for (const item of b.items) {
-    const wh = await resolveWarehouse(c.env.DB, company_id, item.warehouse_id, item.warehouse)
-    if (!wh) return c.json({ success: false, error: 'المخزن غير موجود أو غير نشط' }, 422)
-
-    const poItem = await c.env.DB.prepare(
-      `SELECT id, item_code, item_name, unit_price, qty_ordered, qty_received
-       FROM purchase_order_items WHERE id = ? AND po_id = ? AND company_id = ?`
-    ).bind(item.po_item_id, poId, company_id)
-      .first<{ id: number; item_code: number; item_name: string; unit_price: number; qty_ordered: number; qty_received: number }>()
-
-    if (!poItem) return c.json({ success: false, error: `البند ${item.po_item_id} غير موجود` }, 404)
-
-    const remaining = poItem.qty_ordered - poItem.qty_received
-    if (item.qty_received > remaining) {
-      return c.json({ success: false, error: `الكمية المستلمة (${item.qty_received}) تتجاوز المتبقي (${remaining}) لبند ${poItem.item_name}` }, 409)
-    }
-
-    enrichedLines.push({
-      po_item_id:   item.po_item_id,
-      item_code:    poItem.item_code,
-      item_name:    poItem.item_name,
-      qty_received: item.qty_received,
-      unit_price:   item.unit_price ?? poItem.unit_price,
-      warehouse_id: wh.id
-    })
+  let enrichedLines: Awaited<ReturnType<typeof enrichPOReceiptItems>>
+  try {
+    enrichedLines = await enrichPOReceiptItems(c.env.DB, company_id, poId, b.items)
+  } catch (err: unknown) {
+    const e = err as Error & { status?: number }
+    return c.json({ success: false, error: e.message }, (e.status ?? 422) as 404 | 409 | 422)
   }
 
-  const { movements, status: newStatus } = await FinanceCore.processPOReceipt(c.env.DB, {
+  const { movements, movement_ids, status: newStatus } = await FinanceCore.processPOReceipt(c.env.DB, {
     company_id, userId, po_id: poId,
     received_date: b.received_date,
     supplier_code: po.supplier_code ?? undefined,
@@ -110,7 +75,7 @@ receipts.post('/receive-po/:po_id', permissionGuard('inventory', 'create'), asyn
 
   return c.json({
     success: true,
-    data: { po_id: poId, status: newStatus, movements_created: movements },
+    data: { po_id: poId, status: newStatus, movements_created: movements, movement_ids },
   }, 201)
 })
 

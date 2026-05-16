@@ -123,19 +123,72 @@ integrity.get('/integrity-check', async (c) => {
   const criticalCount = checks.filter(c => c.severity === 'critical' && c.count > 0).length
   const highCount = checks.filter(c => c.severity === 'high' && c.count > 0).length
   const mediumCount = checks.filter(c => c.severity === 'medium' && c.count > 0).length
+  const totalIssues = checks.reduce((s, c) => s + c.count, 0)
 
   const healthScore = Math.max(0, 100 - (criticalCount * 25) - (highCount * 10) - (mediumCount * 5))
+
+  // Persist result to finance_health_log (fire-and-forget, never block the response)
+  void c.env.DB.prepare(`
+    INSERT INTO finance_health_log
+      (company_id, health_score, total_issues, critical_count, high_count, medium_count, checks_json, triggered_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    company_id,
+    healthScore,
+    totalIssues,
+    criticalCount,
+    highCount,
+    mediumCount,
+    JSON.stringify(checks.map(ch => ({ name: ch.name, severity: ch.severity, count: ch.count }))),
+    'api',
+  ).run().catch((err: unknown) => {
+    // Log but don't surface — health_log write failure must not break the integrity check response
+    console.error('finance_health_log insert failed:', err)
+  })
 
   return c.json({
     success: true,
     health_score: healthScore,
     summary: {
-      total_issues: checks.reduce((s, c) => s + c.count, 0),
+      total_issues: totalIssues,
       critical: criticalCount,
       high: highCount,
       medium: mediumCount,
     },
     checks,
+  })
+})
+
+// GET /api/gl/health-history
+integrity.get('/health-history', async (c) => {
+  const { company_id } = getUser(c)
+  const days = Math.min(90, Math.max(1, Number(c.req.query('days') ?? 7)))
+
+  const rows = await c.env.DB.prepare(`
+    SELECT id, checked_at, health_score, total_issues, critical_count, high_count, medium_count, triggered_by
+    FROM finance_health_log
+    WHERE company_id = ?
+      AND checked_at >= datetime('now', ? || ' days')
+    ORDER BY checked_at DESC
+    LIMIT 500
+  `).bind(company_id, `-${days}`).all<{
+    id: number
+    checked_at: string
+    health_score: number
+    total_issues: number
+    critical_count: number
+    high_count: number
+    medium_count: number
+    triggered_by: string
+  }>()
+
+  return c.json({
+    success: true,
+    data: {
+      days,
+      total: rows.results.length,
+      entries: rows.results,
+    },
   })
 })
 
