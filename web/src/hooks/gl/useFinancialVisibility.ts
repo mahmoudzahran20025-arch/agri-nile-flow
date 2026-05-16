@@ -21,7 +21,7 @@ export interface FinancialVisibilityResult {
 
 // In a real implementation, we would query an endpoint that gathers outbox, business event, and movement statuses.
 // For now, we mock the retrieval of the PostingStateInputs using existing movement data.
-export function useFinancialVisibility({ movementId, sourceModule = 'inventory', companyId }: UseFinancialVisibilityProps): FinancialVisibilityResult {
+export function useFinancialVisibility({ movementId, sourceModule = 'inventory', companyId: _companyId }: UseFinancialVisibilityProps): FinancialVisibilityResult {
   
   // Here we use a hypothetical endpoint that gives us the aggregated posting state.
   // We'll map this to `inventoryApi.transactions` for now to check status, but ideally
@@ -49,9 +49,9 @@ export function useFinancialVisibility({ movementId, sourceModule = 'inventory',
       return resolveFinancialPostingState(inputs);
     },
     enabled: !!movementId,
-    refetchInterval: (data) => {
-      // Poll if we are in a processing state
-      return data && (data.status === 'queued' || data.status === 'processing') ? 2000 : false;
+    refetchInterval: (query) => {
+      const d = (query as any).state?.data
+      return d && (d.status === 'queued' || d.status === 'processing') ? 2000 : false
     }
   });
 

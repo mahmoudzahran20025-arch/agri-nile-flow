@@ -28,7 +28,7 @@ interface SpreadsheetLookupCellProps {
 const SpreadsheetLookupCell = memo(function SpreadsheetLookupCell({
   rowId,
   field,
-  value,
+  value: _value,
   displayValue,
   isActive = false,
   isEditing = false,
@@ -52,8 +52,9 @@ const SpreadsheetLookupCell = memo(function SpreadsheetLookupCell({
       // In a real app, this hits the API. For now, hitting inventoryApi items.
       // (Assuming configApi.items is available, or an endpoint exists)
       // Hardcoding a mock filter for the architecture demonstration, or calling API.
-      const res = await inventoryApi.items() as unknown as ItemOption[]
-      return res.filter(i => i.name.includes(q) || String(i.code).includes(q)).slice(0, 50)
+      const res = await inventoryApi.itemsMaster({ search: q, size: 50 })
+      const items = (res as any)?.data ?? []
+      return (items as ItemOption[]).filter(i => i.name.includes(q) || String(i.code).includes(q)).slice(0, 50)
     },
     debounceMs: 250
   })

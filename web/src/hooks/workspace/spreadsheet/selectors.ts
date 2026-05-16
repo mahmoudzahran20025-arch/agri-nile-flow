@@ -1,4 +1,4 @@
-import type { LineItem, MovementType } from '../../../components/workspace/types'
+import type { LineItem } from '../../../components/workspace/types'
 
 export interface RowTotals {
   value: number

@@ -9,7 +9,7 @@ interface LineRowProps {
   onRemove: (key: string) => void
 }
 
-const LineRow = memo(function LineRow({ line, idx, isIn, isOnlyLine, onRemove }: LineRowProps) {
+const LineRow = memo(function LineRow({ line, idx, isIn: _isIn, isOnlyLine, onRemove }: LineRowProps) {
   const qty   = line.quantity ?? 0
   const price = line.unit_price ?? 0
   const total = qty * price

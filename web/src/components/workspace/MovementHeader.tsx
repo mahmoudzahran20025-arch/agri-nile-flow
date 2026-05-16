@@ -59,7 +59,7 @@ export default function MovementHeaderPanel({ header, onChange }: Props) {
     staleTime: 120_000,
   })
   
-  const warehouses = whResponse?.entities || []
+  const warehouses = (whResponse as any)?.entities || []
 
   const showSupplier = isSupplierType(header.movement_type)
   const showTransfer = isTransferType(header.movement_type)
