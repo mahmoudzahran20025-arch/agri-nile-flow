@@ -175,6 +175,7 @@ export async function enforceSupplierTxnDimensions(
     document_number?:   string | number
     due_date?:          string
     financial_account_id?: number
+    statement_text?:    string
   },
 ): Promise<void> {
   const isInvoice = input.entry_type === 'د'
@@ -189,6 +190,9 @@ export async function enforceSupplierTxnDimensions(
   }
 
   if (isInvoice) {
+    if (!input.statement_text?.trim() || input.statement_text.trim().length < 3) {
+      throw { status: 422, error: 'البيان مطلوب في فاتورة المورد ولا يقل عن 3 أحرف', code: 'INVOICE_REQUIRES_STATEMENT' }
+    }
     if (!input.center_code) {
       throw { status: 422, error: 'center_code مطلوب في فاتورة المورد', code: 'INVOICE_REQUIRES_CENTER' }
     }

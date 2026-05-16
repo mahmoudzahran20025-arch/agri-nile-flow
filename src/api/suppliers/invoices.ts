@@ -157,6 +157,7 @@ invoices.post('/:code/transactions', financeOnly, async (c) => {
         center_code:         b.center_code,
         service_type_code:   b.service_type_code,
         document_number:     b.document_number,
+        statement_text:      b.statement_text ?? b.notes,
         due_date:            b.due_date,
         financial_account_id: b.financial_account_id,
       })

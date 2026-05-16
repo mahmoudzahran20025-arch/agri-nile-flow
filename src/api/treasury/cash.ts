@@ -14,6 +14,7 @@ import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { authMiddleware, getUser, roleGuard } from '../../middleware/auth'
 import { FinanceCore } from '../../lib/finance_core'
+import { queryTransactionLedger } from '../../lib/treasury/transactions'
 import { logAudit } from '../../lib/audit'
 import { enforceDataQualityPolicy } from '../../lib/data_quality'
 import { isFutureIsoDate } from '../../lib/utils/date'
@@ -35,86 +36,29 @@ cash.use('*', roleGuard(['super_admin', 'company_admin', 'accountant']))
 // ── GET /transactions ─────────────────────────────────────────────────────────
 cash.get('/transactions', async (c) => {
   const { company_id } = getUser(c)
-  const page      = Math.max(1, Number(c.req.query('page') ?? 1))
-  const size      = Math.min(200, Number(c.req.query('size') ?? 100))
-  const direction = c.req.query('direction')
-  const seasonId  = c.req.query('season_id')
-  const status    = c.req.query('status')
-  const month     = c.req.query('month')
-  const year      = c.req.query('year')
-  const search    = c.req.query('search')
-  const accountId = c.req.query('account_id')
-  const partnerId = c.req.query('partner_id')
-  const supplierCode = c.req.query('supplier_code')
-  const offset    = (page - 1) * size
+  const page = Math.max(1, Number(c.req.query('page') ?? 1))
+  const size = Math.min(200, Number(c.req.query('size') ?? 100))
 
-  let filters = ''
-  const filterBinds: unknown[] = []
-
-  if (direction)    { filters += ' AND ct.direction = ?';             filterBinds.push(direction) }
-  if (seasonId)     { filters += ' AND ct.season_id = ?';             filterBinds.push(seasonId) }
-  if (status)       { filters += ' AND ct.status = ?';                filterBinds.push(status) }
-  if (month)        { filters += ' AND ct.month = ?';                 filterBinds.push(Number(month)) }
-  if (year)         { filters += ' AND ct.year = ?';                  filterBinds.push(Number(year)) }
-  if (accountId)    { filters += ' AND ct.financial_account_id = ?';  filterBinds.push(Number(accountId)) }
-  if (partnerId)    { filters += ' AND ct.partner_id = ?';            filterBinds.push(Number(partnerId)) }
-  if (supplierCode) { filters += ' AND ct.supplier_code = ?';         filterBinds.push(Number(supplierCode)) }
-  if (search) {
-    filters += ' AND (ct.narration LIKE ? OR ct.recipient_name LIKE ? OR s.name LIKE ?)'
-    const like = `%${search}%`
-    filterBinds.push(like, like, like)
-  }
-
-  const [rows, cnt] = await Promise.all([
-    c.env.DB.prepare(
-      `WITH ledger AS (
-         SELECT ct0.id,
-                CASE
-                  WHEN ct0.status = 'posted' THEN
-                    SUM(
-                      CASE
-                        WHEN ct0.status = 'posted' AND ct0.direction = 'د' THEN ct0.amount
-                        WHEN ct0.status = 'posted' AND ct0.direction = 'م' THEN -ct0.amount
-                        ELSE 0
-                      END
-                    ) OVER (
-                      PARTITION BY COALESCE(ct0.financial_account_id, -1)
-                      ORDER BY ct0.transaction_date ASC, ct0.id ASC
-                      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                    )
-                  ELSE NULL
-                END AS derived_running_balance
-         FROM cash_transactions ct0
-         WHERE ct0.company_id = ?
-       )
-       SELECT ct.id, ct.transaction_date, ct.direction, ct.document_number, ct.recipient_name,
-              ct.narration, ct.amount, ct.debit, ct.credit,
-              COALESCE(ct.running_balance, ledger.derived_running_balance) AS running_balance,
-              ct.year, ct.month,
-              ct.notes, ct.status, ct.field_id, ct.center_code, ct.season_id, ct.document_type,
-              ct.financial_account_id, ct.partner_id, ct.journal_entry_id,
-              ct.supplier_code, ct.expense_code,
-              s.name  AS supplier_name,
-              et.name AS expense_name
-       FROM cash_transactions ct
-       LEFT JOIN ledger         ON ledger.id = ct.id
-       LEFT JOIN suppliers     s  ON s.code  = ct.supplier_code AND s.company_id = ct.company_id
-       LEFT JOIN expense_types et ON et.code = ct.expense_code  AND et.company_id = ct.company_id AND et.is_deprecated = 0
-       WHERE ct.company_id = ? ${filters}
-       ORDER BY ct.transaction_date ASC, ct.id ASC LIMIT ? OFFSET ?`
-    ).bind(company_id, company_id, ...filterBinds, size, offset).all(),
-
-    c.env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM cash_transactions ct
-       LEFT JOIN suppliers s ON s.code = ct.supplier_code AND s.company_id = ct.company_id
-       WHERE ct.company_id = ? ${filters}`
-    ).bind(company_id, ...filterBinds).first<{ n: number }>(),
-  ])
+  const { rows, total } = await queryTransactionLedger(c.env.DB, company_id, {
+    page,
+    size,
+    filters: {
+      direction:    c.req.query('direction'),
+      seasonId:     c.req.query('season_id'),
+      status:       c.req.query('status'),
+      month:        c.req.query('month')        ? Number(c.req.query('month'))        : undefined,
+      year:         c.req.query('year')         ? Number(c.req.query('year'))         : undefined,
+      accountId:    c.req.query('account_id')   ? Number(c.req.query('account_id'))   : undefined,
+      partnerId:    c.req.query('partner_id')   ? Number(c.req.query('partner_id'))   : undefined,
+      supplierCode: c.req.query('supplier_code')? Number(c.req.query('supplier_code')): undefined,
+      search:       c.req.query('search'),
+    },
+  })
 
   return c.json({
-    success: true, data: rows.results,
-    total: cnt?.n ?? 0, page, page_size: size,
-    has_more: offset + size < (cnt?.n ?? 0),
+    success: true, data: rows,
+    total, page, page_size: size,
+    has_more: (page - 1) * size + size < total,
   })
 })
 

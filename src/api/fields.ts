@@ -346,7 +346,7 @@ fields.get('/harvest/cost-estimate', async (c) => {
   if (!field_id || !season_id)
     return c.json({ success: false, error: 'field_id و season_id مطلوبان' }, 400)
 
-  const [field, materialsRow, laborRow, equipmentRow, cashRow] = await Promise.all([
+  const [field, materialsRow, laborRow, equipmentRow, cashRow, payrollRow] = await Promise.all([
     c.env.DB.prepare(
       'SELECT area_feddan, rent_per_feddan, name, code FROM fields WHERE id = ? AND company_id = ?'
     ).bind(field_id, company_id).first<{ area_feddan: number; rent_per_feddan: number; name: string; code: string }>(),
@@ -377,6 +377,13 @@ fields.get('/harvest/cost-estimate', async (c) => {
        FROM cash_transactions
        WHERE company_id = ? AND field_id = ? AND season_id = ? AND direction = 'م' AND status = 'posted'`
     ).bind(company_id, field_id, season_id).first<{ total: number }>(),
+
+    // Payroll runs attributed to this season (approved or paid)
+    c.env.DB.prepare(
+      `SELECT COALESCE(SUM(total_net), 0) AS total
+       FROM payroll_runs
+       WHERE company_id = ? AND season_id = ? AND status IN ('approved','paid')`
+    ).bind(company_id, season_id).first<{ total: number }>(),
   ])
 
   if (!field) return c.json({ success: false, error: 'القطعة غير موجودة' }, 404)
@@ -385,8 +392,9 @@ fields.get('/harvest/cost-estimate', async (c) => {
   const labor_cost      = laborRow?.total      ?? 0
   const equipment_cost  = equipmentRow?.total  ?? 0
   const cash_cost       = cashRow?.total       ?? 0
+  const payroll_cost    = payrollRow?.total    ?? 0
   const land_rent       = (field.rent_per_feddan ?? 0) * (field.area_feddan ?? 0)
-  const total_cost      = materials_cost + labor_cost + equipment_cost + cash_cost + land_rent
+  const total_cost      = materials_cost + labor_cost + equipment_cost + cash_cost + payroll_cost + land_rent
 
   return c.json({
     success: true,
@@ -400,6 +408,7 @@ fields.get('/harvest/cost-estimate', async (c) => {
       labor_cost,
       equipment_cost,
       cash_cost,
+      payroll_cost,
       land_rent,
       total_cost,
     }
