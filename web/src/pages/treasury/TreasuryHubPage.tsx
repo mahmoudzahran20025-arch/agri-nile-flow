@@ -645,11 +645,12 @@ function POTab() {
     staleTime: 120_000,
   })
 
-  const { data: seasons = [] } = useQuery({
+  const { data: seasonsRaw } = useQuery({
     queryKey: ['seasons'],
     queryFn:  configApi.seasons,
     staleTime: 300_000,
   })
+  const seasons = (seasonsRaw as Array<{ id: number; name: string }> | undefined) ?? []
 
   const { data: detail, isLoading: detailLoading } = useQuery({
     queryKey: ['purchase-order', expandedId],
@@ -907,7 +908,7 @@ function POTab() {
                   value={receiveSeasonId ?? ''}
                   onChange={e => setReceiveSeasonId(e.target.value ? Number(e.target.value) : undefined)}>
                   <option value="">— بدون موسم —</option>
-                  {seasons.map((s: { id: number; name: string }) => (
+                  {seasons.map((s) => (
                     <option key={s.id} value={s.id}>{s.name}</option>
                   ))}
                 </select>
