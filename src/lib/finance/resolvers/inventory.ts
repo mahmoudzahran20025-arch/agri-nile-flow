@@ -360,6 +360,9 @@ export async function processPOReceiptOrchestrated(
     received_date: string
     supplier_code?: number
     notes?: string
+    season_id?: number
+    center_code?: number
+    field_id?: number
     items: Array<{
       po_item_id: number
       item_code: number
@@ -388,12 +391,14 @@ export async function processPOReceiptOrchestrated(
       `INSERT INTO inventory_movements
        (company_id, item_code, movement_date, warehouse_id, movement_type,
         quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
-        year, month, created_by_user_id, local_id, gl_posting_status, transaction_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        year, month, created_by_user_id, local_id, gl_posting_status, transaction_id,
+        season_id, center_code, field_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
       opts.company_id, item.item_code, receiptDate, item.warehouse_id, 'GRN',
       item.qty_received, item.unit_price, item.qty_received, 0, balQty, valueIn, 0, balVal,
-      ym.year, ym.month, opts.userId, localId, 'pending', transactionId
+      ym.year, ym.month, opts.userId, localId, 'pending', transactionId,
+      opts.season_id ?? null, opts.center_code ?? null, opts.field_id ?? null
     ).run()
 
     const movementId = insertResult.meta.last_row_id as number

@@ -8,7 +8,7 @@ import {
   Send, Truck, Package, ChevronDown, ChevronUp,
   Loader2,
 } from 'lucide-react'
-import { treasuryApi, glApi, suppliersApi, downloadCsv } from '../../api/client'
+import { treasuryApi, glApi, suppliersApi, downloadCsv, configApi } from '../../api/client'
 import { financeApi, type PurchaseOrder, type POItem } from '../../api/finance'
 import type { BankAccount } from '../../api/gl'
 import { usePermission } from '../../hooks/usePermission'
@@ -618,8 +618,9 @@ function POTab() {
   const [filterStatus, setFilterStatus] = useState('')
   const [expandedId,   setExpandedId]   = useState<number | null>(null)
   const [showCreate,   setShowCreate]   = useState(false)
-  const [showReceive,  setShowReceive]  = useState<PurchaseOrder | null>(null)
-  const [receiveDate,  setReceiveDate]  = useState(new Date().toISOString().slice(0, 10))
+  const [showReceive,     setShowReceive]     = useState<PurchaseOrder | null>(null)
+  const [receiveDate,     setReceiveDate]     = useState(new Date().toISOString().slice(0, 10))
+  const [receiveSeasonId, setReceiveSeasonId] = useState<number | undefined>(undefined)
   const [receiveItems, setReceiveItems] = useState<Array<{
     po_item_id: number; item_name: string; qty_ordered: number
     qty_received_so_far: number; qty_to_receive: string; warehouse: string
@@ -642,6 +643,12 @@ function POTab() {
     queryKey: ['suppliers-list-po'],
     queryFn:  () => suppliersApi.list({ size: 200 }),
     staleTime: 120_000,
+  })
+
+  const { data: seasons = [] } = useQuery({
+    queryKey: ['seasons'],
+    queryFn:  configApi.seasons,
+    staleTime: 300_000,
   })
 
   const { data: detail, isLoading: detailLoading } = useQuery({
@@ -687,12 +694,13 @@ function POTab() {
   })
 
   const receiveMut = useMutation({
-    mutationFn: ({ poId, received_date, items }: { poId: number; received_date: string; items: Array<{ po_item_id: number; qty_received: number; warehouse: string }> }) =>
-      financeApi.receivePO(poId, { received_date, items }),
+    mutationFn: ({ poId, received_date, season_id, items }: { poId: number; received_date: string; season_id?: number; items: Array<{ po_item_id: number; qty_received: number; warehouse: string }> }) =>
+      financeApi.receivePO(poId, { received_date, season_id, items }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['purchase-orders'] })
       qc.invalidateQueries({ queryKey: ['purchase-order', expandedId] })
       setShowReceive(null)
+      setReceiveSeasonId(undefined)
       toast('تم تسجيل الاستلام — يمكنك الآن تسجيل الفاتورة', 'success')
     },
     onError: (err: { message?: string }) => toast(err.message || 'فشل تسجيل الاستلام', 'error'),
@@ -887,10 +895,23 @@ function POTab() {
       {showReceive && (
         <Modal open onClose={() => setShowReceive(null)} title={`استلام — ${showReceive.po_number}`}>
           <div className="space-y-4 p-1">
-            <div>
-              <label className="text-xs text-gray-500 mb-0.5 block font-medium">تاريخ الاستلام</label>
-              <input type="date" className="w-44 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-brand-500"
-                value={receiveDate} onChange={e => setReceiveDate(e.target.value)} />
+            <div className="flex gap-3 flex-wrap">
+              <div>
+                <label className="text-xs text-gray-500 mb-0.5 block font-medium">تاريخ الاستلام</label>
+                <input type="date" className="w-44 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-brand-500"
+                  value={receiveDate} onChange={e => setReceiveDate(e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 mb-0.5 block font-medium">الموسم</label>
+                <select className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-brand-500"
+                  value={receiveSeasonId ?? ''}
+                  onChange={e => setReceiveSeasonId(e.target.value ? Number(e.target.value) : undefined)}>
+                  <option value="">— بدون موسم —</option>
+                  {seasons.map((s: { id: number; name: string }) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
             </div>
             <div className="space-y-3">
               {receiveItems.map((item, idx) => (
@@ -920,6 +941,7 @@ function POTab() {
               <button onClick={() => receiveMut.mutate({
                   poId: showReceive.id,
                   received_date: receiveDate,
+                  season_id: receiveSeasonId,
                   items: receiveItems.filter(i => Number(i.qty_to_receive) > 0).map(i => ({
                     po_item_id:   i.po_item_id,
                     qty_received: Number(i.qty_to_receive),

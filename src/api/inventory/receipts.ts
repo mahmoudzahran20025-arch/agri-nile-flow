@@ -16,6 +16,9 @@ receipts.post('/receive-po/:po_id', permissionGuard('inventory', 'create'), asyn
   const b = await c.req.json<{
     received_date: string
     notes?: string
+    season_id?:   number
+    center_code?: number
+    field_id?:    number
     items: Array<{
       po_item_id:   number
       qty_received: number
@@ -63,7 +66,10 @@ receipts.post('/receive-po/:po_id', permissionGuard('inventory', 'create'), asyn
     company_id, userId, po_id: poId,
     received_date: b.received_date,
     supplier_code: po.supplier_code ?? undefined,
-    notes: b.notes,
+    notes:        b.notes,
+    season_id:    b.season_id,
+    center_code:  b.center_code,
+    field_id:     b.field_id,
     items: enrichedLines
   })
 

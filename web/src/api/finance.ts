@@ -135,7 +135,7 @@ export const financeApi = {
     unwrap(api.patch<null>(`/finance/purchase-orders/${id}/status`, { status, notes })),
   
   // Realignment: PO Receipt moves to /inventory
-  receivePO: (id: number, b: { received_date: string; items: Array<{ po_item_id: number; qty_received: number; warehouse: string }> }) =>
+  receivePO: (id: number, b: { received_date: string; season_id?: number; items: Array<{ po_item_id: number; qty_received: number; warehouse: string }> }) =>
     unwrap(api.post<{status:string}>(`/inventory/receive-po/${id}`, b)),
 
   // Realignment: PO matching and Invoicing moves to /suppliers (Modular Context)
