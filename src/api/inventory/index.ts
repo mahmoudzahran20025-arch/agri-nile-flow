@@ -17,8 +17,10 @@ const inventory = new Hono<{ Bindings: Env }>()
 inventory.use('*', authMiddleware)
 
 // All sub-routers define full paths, mounted at '/'.
-inventory.route('/items', items)
-inventory.route('/item',  items)
+// items defines /warehouses, /item/:code/stock, /item/:code/card, /balances, /categories
+// — all must resolve under /inventory/*, so mount at root.
+inventory.route('/items', items)   // /inventory/items/* (new callers)
+inventory.route('/', items)        // /inventory/warehouses, /inventory/item/:code/* (backward compat)
 inventory.route('/', movements)
 inventory.route('/', receipts)
 inventory.route('/', adjustments)
