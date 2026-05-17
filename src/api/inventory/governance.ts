@@ -37,11 +37,10 @@ governance.post('/gl-preview', permissionGuard('inventory', 'read'), async (c) =
 
   // 1. Resolve item and warehouse IPG
   const item = await c.env.DB.prepare(
-    'SELECT name, unit, prod_posting_group_code, inv_posting_group_code FROM items WHERE company_id = ? AND code = ?'
+    'SELECT name, unit, prod_posting_group_code FROM items WHERE company_id = ? AND code = ?'
   ).bind(company_id, b.item_code).first<{
     name: string; unit: string | null
     prod_posting_group_code: string | null
-    inv_posting_group_code: string | null
   }>()
 
   if (!item) return c.json({ success: false, error: 'الصنف غير موجود' }, 404)
@@ -76,8 +75,10 @@ governance.post('/gl-preview', permissionGuard('inventory', 'read'), async (c) =
   // Do NOT read balance_qty from inventory_movements — it is a stale running total
   // that becomes incorrect after any dedup or retroactive insert.
   const lastRow = await c.env.DB.prepare(
-    `SELECT balance_qty, balance_value FROM inventory_balances
-     WHERE company_id = ? AND item_code = ? AND warehouse = ?`
+    `SELECT ib.balance_qty, ib.balance_value
+     FROM inventory_balances ib
+     LEFT JOIN warehouses w ON w.id = ib.warehouse_id AND w.company_id = ib.company_id
+     WHERE ib.company_id = ? AND ib.item_code = ? AND w.name = ?`
   ).bind(company_id, b.item_code, b.warehouse).first<{ balance_qty: number; balance_value: number }>()
 
   const avgCost = (lastRow?.balance_qty ?? 0) > 0
@@ -164,8 +165,6 @@ governance.get('/items-master', permissionGuard('inventory', 'read'), async (c) 
 
   if (filterStatus === 'missing_ppg') {
     conditions.push(`i.prod_posting_group_code IS NULL`)
-  } else if (filterStatus === 'missing_ipg') {
-    conditions.push(`i.inv_posting_group_code IS NULL`)
   } else if (filterStatus === 'below_reorder') {
     conditions.push(`COALESCE(ms.balance_qty, 0) < COALESCE(i.reorder_threshold, 0) AND COALESCE(i.reorder_threshold, 0) > 0`)
   }
@@ -221,9 +220,9 @@ governance.get('/items-master', permissionGuard('inventory', 'read'), async (c) 
      ), warehouse_stats AS (
        SELECT company_id, item_code, COUNT(*) AS warehouse_count
        FROM (
-         SELECT DISTINCT company_id, item_code, warehouse
+         SELECT DISTINCT company_id, item_code, warehouse_id
          FROM inventory_movements
-         WHERE item_code IS NOT NULL AND warehouse IS NOT NULL AND TRIM(warehouse) <> ''
+         WHERE item_code IS NOT NULL AND warehouse_id IS NOT NULL
        )
        GROUP BY company_id, item_code
      )
@@ -233,7 +232,6 @@ governance.get('/items-master', permissionGuard('inventory', 'read'), async (c) 
        i.unit,
        i.category_id,
        i.prod_posting_group_code,
-       i.inv_posting_group_code,
        i.standard_cost,
        i.reorder_threshold,
        ic.name AS category_name,
@@ -280,7 +278,6 @@ governance.patch('/items-master/:code', permissionGuard('inventory', 'create'), 
 
   const b = await c.req.json<{
     prod_posting_group_code?: string | null
-    inv_posting_group_code?:  string | null
     standard_cost?:           number | null
     reorder_threshold?:       number | null
     name?:                    string
@@ -292,7 +289,6 @@ governance.patch('/items-master/:code', permissionGuard('inventory', 'create'), 
   const binds: unknown[] = []
 
   if ('prod_posting_group_code' in b) { sets.push('prod_posting_group_code = ?'); binds.push(b.prod_posting_group_code ?? null) }
-  if ('inv_posting_group_code'  in b) { sets.push('inv_posting_group_code = ?');  binds.push(b.inv_posting_group_code  ?? null) }
   if ('standard_cost'           in b) { sets.push('standard_cost = ?');           binds.push(b.standard_cost ?? null) }
   if ('reorder_threshold'       in b) { sets.push('reorder_threshold = ?');       binds.push(b.reorder_threshold ?? null) }
   if ('name'                    in b) { sets.push('name = ?');                    binds.push(b.name) }
@@ -434,14 +430,14 @@ governance.get('/health-summary', permissionGuard('inventory', 'read'), async (c
 
     c.env.DB.prepare(
       `SELECT
-         im.warehouse,
+         w.name AS warehouse,
          w.inv_posting_group_code AS ipg,
          i.prod_posting_group_code AS ppg
        FROM inventory_movements im
-       LEFT JOIN warehouses w ON w.company_id = im.company_id AND w.name = im.warehouse AND w.is_active = 1
+       LEFT JOIN warehouses w ON w.id = im.warehouse_id AND w.company_id = im.company_id
        LEFT JOIN items i ON i.company_id = im.company_id AND i.code = im.item_code
        WHERE im.company_id = ?
-       GROUP BY im.warehouse, w.inv_posting_group_code, i.prod_posting_group_code`
+       GROUP BY im.warehouse_id, w.name, w.inv_posting_group_code, i.prod_posting_group_code`
     ).bind(company_id).all<{
       warehouse: string
       ipg: string | null
@@ -462,7 +458,7 @@ governance.get('/health-summary', permissionGuard('inventory', 'read'), async (c
          COUNT(*) AS active_items,
          SUM(CASE WHEN COALESCE(standard_cost, 0) <= 0 THEN 1 ELSE 0 END) AS items_without_standard_cost,
          SUM(CASE WHEN prod_posting_group_code IS NULL OR TRIM(prod_posting_group_code) = '' THEN 1 ELSE 0 END) AS items_without_ppg,
-         SUM(CASE WHEN inv_posting_group_code IS NULL OR TRIM(inv_posting_group_code) = '' THEN 1 ELSE 0 END) AS items_without_ipg,
+         0 AS items_without_ipg,
          SUM(CASE WHEN reorder_threshold IS NULL OR reorder_threshold <= 0 THEN 1 ELSE 0 END) AS items_without_reorder_threshold
        FROM items
        WHERE company_id = ? AND is_active = 1`
@@ -476,14 +472,14 @@ governance.get('/health-summary', permissionGuard('inventory', 'read'), async (c
 
     c.env.DB.prepare(
       `WITH latest_wh AS (
-         SELECT item_code, warehouse, balance_qty
+         SELECT item_code, warehouse_id, balance_qty
          FROM inventory_movements
          WHERE company_id = ?
            AND id IN (
              SELECT MAX(id)
              FROM inventory_movements
              WHERE company_id = ?
-             GROUP BY item_code, warehouse
+             GROUP BY item_code, warehouse_id
            )
        ), agg AS (
          SELECT item_code, SUM(balance_qty) AS total_qty
@@ -501,14 +497,14 @@ governance.get('/health-summary', permissionGuard('inventory', 'read'), async (c
 
     c.env.DB.prepare(
       `WITH latest_wh AS (
-         SELECT item_code, warehouse, balance_qty
+         SELECT item_code, warehouse_id, balance_qty
          FROM inventory_movements
          WHERE company_id = ?
            AND id IN (
              SELECT MAX(id)
              FROM inventory_movements
              WHERE company_id = ?
-             GROUP BY item_code, warehouse
+             GROUP BY item_code, warehouse_id
            )
        )
        SELECT
@@ -674,7 +670,7 @@ governance.get('/gl-trace', permissionGuard('inventory', 'read'), async (c) => {
     `SELECT
        m.id,
        m.movement_date,
-       m.warehouse,
+       w.name                AS warehouse,
        m.movement_type,
        m.item_code,
        i.name                AS item_name,
@@ -690,16 +686,15 @@ governance.get('/gl-trace', permissionGuard('inventory', 'read'), async (c) => {
        m.document_number,
        m.supplier_code,
        m.zero_value_reason,
-       -- outbox status if queued
        ob.status             AS outbox_status,
        ob.attempts           AS outbox_attempts,
        ob.last_error         AS outbox_last_error,
        ob.updated_at         AS outbox_updated_at,
-       -- GL entry details if linked
        je.entry_number       AS je_number,
        je.entry_date         AS je_date,
        je.description        AS je_description
      FROM inventory_movements m
+     LEFT JOIN warehouses w ON w.id = m.warehouse_id AND w.company_id = m.company_id
      LEFT JOIN items i  ON i.company_id = m.company_id AND i.code = m.item_code
      LEFT JOIN inventory_posting_outbox ob
        ON ob.movement_id = m.id AND ob.company_id = m.company_id
@@ -752,10 +747,12 @@ governance.post('/gl-trace/:id/resolve', permissionGuard('inventory', 'create'),
   if (!movId) return c.json({ success: false, error: 'movement id required' }, 400)
 
   const mov = await c.env.DB.prepare(
-    `SELECT id, gl_posting_status, value_in, value_out, journal_entry_id,
-            item_code, warehouse, movement_type, movement_date,
-            center_code, supplier_code, work_order_id, created_by_user_id
-     FROM inventory_movements WHERE company_id = ? AND id = ?`
+    `SELECT im.id, im.gl_posting_status, im.value_in, im.value_out, im.journal_entry_id,
+            im.item_code, w.name AS warehouse, im.movement_type, im.movement_date,
+            im.center_code, im.supplier_code, im.work_order_id, im.created_by_user_id
+     FROM inventory_movements im
+     LEFT JOIN warehouses w ON w.id = im.warehouse_id AND w.company_id = im.company_id
+     WHERE im.company_id = ? AND im.id = ?`
   ).bind(company_id, movId).first<{
     id: number; gl_posting_status: string
     value_in: number; value_out: number; journal_entry_id: number | null

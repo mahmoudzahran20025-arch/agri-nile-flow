@@ -13,21 +13,22 @@ items.get('/balances', permissionGuard('inventory', 'read'), async (c) => {
 
   // Reads from inventory_balances snapshot (replaces dead vw_stock_balances / stock_quants view)
   let query = `
-    SELECT ib.item_code, ib.warehouse, ib.balance_qty, ib.balance_value,
-           i.name AS item_name, i.unit, i.category
+    SELECT ib.item_code, w.name AS warehouse, ib.balance_qty, ib.balance_value,
+           i.name AS item_name, i.unit, i.category_id AS category
     FROM inventory_balances ib
     JOIN items i ON i.code = ib.item_code AND i.company_id = ib.company_id
+    LEFT JOIN warehouses w ON w.id = ib.warehouse_id AND w.company_id = ib.company_id
     WHERE ib.company_id = ?`
   const binds: unknown[] = [company_id]
 
   if (warehouseId) {
-    query += ` AND ib.warehouse = (SELECT name FROM warehouses WHERE id = ? AND company_id = ? LIMIT 1)`
-    binds.push(Number(warehouseId), company_id)
+    query += ` AND ib.warehouse_id = ?`
+    binds.push(Number(warehouseId))
   } else if (oldWarehouse) {
-    query += ` AND ib.warehouse = ?`
+    query += ` AND w.name = ?`
     binds.push(oldWarehouse)
   }
-  query += ` ORDER BY ib.warehouse, i.name`
+  query += ` ORDER BY w.name, i.name`
 
   const { results } = await c.env.DB.prepare(query).bind(...binds).all()
   return c.json({ success: true, data: results })
@@ -72,14 +73,15 @@ items.get('/item/:code/stock', permissionGuard('inventory', 'read'), async (c) =
   // Read from inventory_balances snapshot (authoritative, always correct) instead
   // of inventory_movements.balance_qty (stale running total, breaks after any
   // dedup or retroactive insert).
-  const whereClause = warehouse ? 'AND ib.warehouse = ?' : ''
+  const whereClause = warehouse ? 'AND w.name = ?' : ''
   const binds: unknown[] = warehouse
     ? [company_id, code, warehouse]
     : [company_id, code]
 
   const { results } = await c.env.DB.prepare(
-    `SELECT ib.warehouse, ib.balance_qty, ib.balance_value
+    `SELECT w.name AS warehouse, ib.balance_qty, ib.balance_value
      FROM inventory_balances ib
+     LEFT JOIN warehouses w ON w.id = ib.warehouse_id AND w.company_id = ib.company_id
      WHERE ib.company_id = ? AND ib.item_code = ? ${whereClause}`
   ).bind(...binds).all<{ warehouse: string; balance_qty: number; balance_value: number }>()
 
@@ -102,15 +104,17 @@ items.get('/item/:code/card', permissionGuard('inventory', 'read'), async (c) =>
   const code      = Number(c.req.param('code'))
   const warehouse = c.req.query('warehouse')
 
-  const where = warehouse ? 'AND warehouse = ?' : ''
+  const where = warehouse ? 'AND w.name = ?' : ''
   const binds = warehouse ? [company_id, code, warehouse] : [company_id, code]
 
   const { results } = await c.env.DB.prepare(
-    `SELECT movement_date, warehouse, movement_type, quantity, unit_price,
-            qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
-            document_number, notes
-     FROM inventory_movements WHERE company_id = ? AND item_code = ? ${where}
-     ORDER BY movement_date ASC, id ASC`
+    `SELECT im.movement_date, w.name AS warehouse, im.movement_type, im.quantity, im.unit_price,
+            im.qty_in, im.qty_out, im.balance_qty, im.value_in, im.value_out, im.balance_value,
+            im.document_number, im.notes
+     FROM inventory_movements im
+     LEFT JOIN warehouses w ON w.id = im.warehouse_id AND w.company_id = im.company_id
+     WHERE im.company_id = ? AND im.item_code = ? ${where}
+     ORDER BY im.movement_date ASC, im.id ASC`
   ).bind(...binds).all()
 
   return c.json({ success: true, data: results })

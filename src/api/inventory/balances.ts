@@ -32,7 +32,7 @@ balances.get('/stock-balances', permissionGuard('inventory', 'read'), async (c) 
   const conditions: string[] = ['ib.company_id = ?']
   const binds: (string | number)[] = [company_id]
 
-  if (warehouse)   { conditions.push('ib.warehouse = ?');                          binds.push(warehouse) }
+  if (warehouse)   { conditions.push('w.name = ?');                                binds.push(warehouse) }
   if (itemCode)    { conditions.push('ib.item_code = ?');                          binds.push(Number(itemCode)) }
   if (staleOnly)   { conditions.push('ib.is_stale = 1') }
   if (!includeZero){ conditions.push('ib.balance_qty != 0') }
@@ -58,10 +58,9 @@ balances.get('/stock-balances', permissionGuard('inventory', 'read'), async (c) 
          i.unit,
          i.category_id,
          i.prod_posting_group_code AS ppg,
-         i.inv_posting_group_code  AS ipg,
          i.standard_cost,
          i.reorder_threshold,
-         ib.warehouse,
+         w.name        AS warehouse,
          ib.balance_qty,
          ib.balance_value,
          CASE WHEN ib.balance_qty > 0 THEN ROUND(ib.balance_value / ib.balance_qty, 4) ELSE 0 END AS avg_cost,
@@ -69,19 +68,24 @@ balances.get('/stock-balances', permissionGuard('inventory', 'read'), async (c) 
          ib.last_updated           AS updated_at
        FROM inventory_balances ib
        LEFT JOIN items i ON i.code = ib.item_code AND i.company_id = ib.company_id
+       LEFT JOIN warehouses w ON w.id = ib.warehouse_id AND w.company_id = ib.company_id
        WHERE ${where}
        ORDER BY ib.balance_value DESC, i.name ASC
        LIMIT ? OFFSET ?`
     ).bind(...binds, size, offset).all<{
       item_code: number; item_name: string | null; unit: string | null
-      category_id: number | null; ppg: string | null; ipg: string | null
+      category_id: number | null; ppg: string | null
       standard_cost: number | null; reorder_threshold: number | null
       warehouse: string; balance_qty: number; balance_value: number
       avg_cost: number; is_stale: number; updated_at: string | null
     }>(),
 
     c.env.DB.prepare(
-      `SELECT DISTINCT warehouse FROM inventory_balances WHERE company_id = ? ORDER BY warehouse`
+      `SELECT DISTINCT w.name AS warehouse
+       FROM inventory_balances ib
+       LEFT JOIN warehouses w ON w.id = ib.warehouse_id AND w.company_id = ib.company_id
+       WHERE ib.company_id = ?
+       ORDER BY w.name`
     ).bind(company_id).all<{ warehouse: string }>(),
   ])
 
@@ -109,33 +113,35 @@ balances.get('/balances/:item_code', permissionGuard('inventory', 'read'), async
 
   const [item, rows, recentMov] = await Promise.all([
     c.env.DB.prepare(
-      `SELECT code, name, unit, category_id, prod_posting_group_code, inv_posting_group_code,
+      `SELECT code, name, unit, category_id, prod_posting_group_code,
               standard_cost, reorder_threshold
        FROM items WHERE company_id = ? AND code = ?`
     ).bind(company_id, itemCode).first<{
       code: number; name: string; unit: string | null
       category_id: number | null; prod_posting_group_code: string | null
-      inv_posting_group_code: string | null
       standard_cost: number | null; reorder_threshold: number | null
     }>(),
 
     c.env.DB.prepare(
-      `SELECT warehouse, balance_qty, balance_value,
-              CASE WHEN balance_qty > 0 THEN ROUND(balance_value / balance_qty, 4) ELSE 0 END AS avg_cost,
-              is_stale, last_updated AS updated_at
-       FROM inventory_balances
-       WHERE company_id = ? AND item_code = ?
-       ORDER BY balance_value DESC`
+      `SELECT w.name AS warehouse, ib.balance_qty, ib.balance_value,
+              CASE WHEN ib.balance_qty > 0 THEN ROUND(ib.balance_value / ib.balance_qty, 4) ELSE 0 END AS avg_cost,
+              ib.is_stale, ib.last_updated AS updated_at
+       FROM inventory_balances ib
+       LEFT JOIN warehouses w ON w.id = ib.warehouse_id AND w.company_id = ib.company_id
+       WHERE ib.company_id = ? AND ib.item_code = ?
+       ORDER BY ib.balance_value DESC`
     ).bind(company_id, itemCode).all<{
       warehouse: string; balance_qty: number; balance_value: number
       avg_cost: number; is_stale: number; updated_at: string | null
     }>(),
 
     c.env.DB.prepare(
-      `SELECT movement_date, movement_type, warehouse, quantity, unit_price, gl_posting_status
-       FROM inventory_movements
-       WHERE company_id = ? AND item_code = ?
-       ORDER BY id DESC LIMIT 10`
+      `SELECT im.movement_date, im.movement_type, w.name AS warehouse,
+              im.quantity, im.unit_price, im.gl_posting_status
+       FROM inventory_movements im
+       LEFT JOIN warehouses w ON w.id = im.warehouse_id AND w.company_id = im.company_id
+       WHERE im.company_id = ? AND im.item_code = ?
+       ORDER BY im.id DESC LIMIT 10`
     ).bind(company_id, itemCode).all<{
       movement_date: string; movement_type: string; warehouse: string
       quantity: number; unit_price: number; gl_posting_status: string
