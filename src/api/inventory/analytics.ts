@@ -23,6 +23,9 @@ analytics.get('/cost-by-field', permissionGuard('inventory', 'read'), async (c) 
   const cashBinds: unknown[] = [company_id]; if (sn) cashBinds.push(sn)
   const supBinds:  unknown[] = [company_id]; if (sn) supBinds.push(sn)
   const fsbBinds:  unknown[] = [company_id, company_id]; if (sn) fsbBinds.push(sn)
+  // WIP ledger: net balance per field via crop_cycles.field_id
+  const wipSeasonFilter = sn ? 'AND cc.season_id = ?' : ''
+  const wipBinds: unknown[] = [company_id]; if (sn) wipBinds.push(sn)
 
   const { results } = await c.env.DB.prepare(
     `SELECT
@@ -38,6 +41,8 @@ analytics.get('/cost-by-field', permissionGuard('inventory', 'read'), async (c) 
        COALESCE(eq.equipment_cost, 0) AS equipment_cost,
        COALESCE(cash.cash_cost,    0) AS cash_cost,
        COALESCE(sup.supplier_cost, 0) AS supplier_cost,
+       COALESCE(wip.wip_balance,   0) AS wip_cost,
+       COALESCE(wip.active_cycles, 0) AS active_cycle_count,
        -- Total and per-feddan (all 5 cost types)
        COALESCE(SUM(CASE WHEN im.movement_type IN ('ISSUE','TRANSFER_OUT','COGS_ADJUSTMENT','PRODUCTION_INPUT','ADJUSTMENT_LOSS') THEN im.value_out ELSE 0 END), 0)
          + COALESCE(lab.labor_cost, 0) + COALESCE(eq.equipment_cost, 0) + COALESCE(cash.cash_cost, 0) + COALESCE(sup.supplier_cost, 0) AS total_cost,
@@ -86,6 +91,15 @@ analytics.get('/cost-by-field', permissionGuard('inventory', 'read'), async (c) 
        WHERE st.company_id=? AND st.entry_type='د' AND st.status='posted' AND st.work_order_id IS NULL ${supSeasonFilter}
        GROUP BY f.id
      ) sup ON sup.field_id = f.id
+     LEFT JOIN (
+       SELECT cc.field_id,
+              SUM(wl.debit - wl.credit) AS wip_balance,
+              COUNT(DISTINCT cc.id)     AS active_cycles
+       FROM crop_cycles cc
+       JOIN wip_ledger wl ON wl.crop_cycle_id = cc.id AND wl.company_id = cc.company_id
+       WHERE cc.company_id = ? AND cc.status = 'active' ${wipSeasonFilter}
+       GROUP BY cc.field_id
+     ) wip ON wip.field_id = f.id
      LEFT JOIN field_season_budgets fsb
             ON fsb.field_id = f.id AND fsb.company_id = f.company_id
                AND fsb.season_id = f.season_id
@@ -95,7 +109,7 @@ analytics.get('/cost-by-field', permissionGuard('inventory', 'read'), async (c) 
        CASE WHEN fsb.budget_per_feddan IS NOT NULL THEN 0 ELSE 1 END,
        variance_pct DESC,
        total_cost DESC`
-  ).bind(company_id, ...labBinds, ...eqBinds, ...cashBinds, ...supBinds, ...fsbBinds).all()
+  ).bind(company_id, ...labBinds, ...eqBinds, ...cashBinds, ...supBinds, ...wipBinds, ...fsbBinds).all()
 
   return c.json({ success: true, data: results })
 })

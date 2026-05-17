@@ -3,9 +3,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Leaf, TrendingUp, Package, Wheat, AlertTriangle, CheckCircle,
-  Target, Edit3, X, ChevronDown, ChevronUp, Minus, ClipboardList, Loader2,
+  Target, Edit3, X, ChevronDown, ChevronUp, Minus, ClipboardList, Loader2, GitBranch,
 } from 'lucide-react'
 import { inventoryApi, configApi, budgetsApi, operationsApi } from '../../api/client'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 // ─── Formatters ───────────────────────────────────────────────
 
@@ -35,6 +36,8 @@ interface FieldCost {
   equipment_cost:     number
   cash_cost:          number
   supplier_cost:      number
+  wip_cost:           number   // net WIP balance from wip_ledger for active cycles on this field
+  active_cycle_count: number   // number of active crop cycles with WIP on this field
   total_cost:         number   // inv + labor + equipment + cash + supplier
   cost_per_feddan:    number | null
   budget_id:          number | null
@@ -256,6 +259,8 @@ export default function CostByFieldPage() {
   const totalCost        = rows.reduce((s, r) => s + (r.total_cost ?? r.total_consumed), 0)
   const totalArea        = rows.reduce((s, r) => s + r.area_feddan, 0)
   const avgCostPerFeddan = totalArea > 0 ? totalCost / totalArea : 0
+  const totalWipCost     = rows.reduce((s, r) => s + (r.wip_cost ?? 0), 0)
+  const activeCycleFields = rows.filter(r => (r.active_cycle_count ?? 0) > 0).length
 
   const withBudget   = rows.filter(r => r.budget_per_feddan != null)
   const overBudget   = rows.filter(r => getBudgetStatus(r) === 'over_budget')
@@ -263,59 +268,54 @@ export default function CostByFieldPage() {
   const onTrackCount = rows.filter(r => getBudgetStatus(r) === 'on_track').length
 
   return (
-    <div className="space-y-5">
-      {/* Page header */}
-      <div className="page-header">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-brand-100 rounded-xl">
-            <Wheat size={20} className="text-brand-700" />
-          </div>
-          <div>
-            <h1 className="page-title">تكلفة الإنتاج بالفدان</h1>
-            <p className="text-sm text-slate-400">تحليل التكلفة الفعلية مقابل الميزانية المستهدفة</p>
-          </div>
-        </div>
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="تكلفة الإنتاج بالفدان"
+        subtitle="التكلفة الفعلية × الميزانية × رصيد WIP النشط"
+        actions={[]}
+      />
 
-        {/* Season filter */}
-        <div className="flex items-center gap-2">
-          <Leaf size={14} className="text-brand-500" />
-          <select
-            className="input w-52 text-sm"
-            value={seasonId}
-            onChange={e => setSeasonFilter(e.target.value)}
-          >
-            <option value="">كل المواسم</option>
-            {seasonOptions.map(s => (
-              <option key={s.id} value={s.id}>
-                {s.name}{s.status === 'active' ? ' ✓' : ''}
-              </option>
-            ))}
-          </select>
+      <div className="flex-1 overflow-y-auto p-5 space-y-5 pb-10">
+
+      {/* Season filter bar */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <Leaf size={14} className="text-brand-500 shrink-0" />
+        <select
+          className="input w-52 text-sm"
+          value={seasonId}
+          onChange={e => setSeasonFilter(e.target.value)}
+        >
+          <option value="">كل المواسم</option>
+          {seasonOptions.map(s => (
+            <option key={s.id} value={s.id}>
+              {s.name}{s.status === 'active' ? ' ✓' : ''}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+            seasonId === ''
+              ? 'bg-slate-100 border-slate-300 text-slate-700'
+              : 'bg-white border-slate-200 text-slate-500 hover:text-slate-700'
+          }`}
+          onClick={() => setSeasonFilter('')}
+        >
+          الكل
+        </button>
+        {activeSeason && (
           <button
             type="button"
             className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
-              seasonId === ''
-                ? 'bg-slate-100 border-slate-300 text-slate-700'
-                : 'bg-white border-slate-200 text-slate-500 hover:text-slate-700'
+              seasonId === String(activeSeason.id)
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                : 'bg-white border-emerald-200 text-emerald-600 hover:bg-emerald-50'
             }`}
-            onClick={() => setSeasonFilter('')}
+            onClick={() => setSeasonFilter(String(activeSeason.id))}
           >
-            الكل
+            الموسم النشط
           </button>
-          {activeSeason && (
-            <button
-              type="button"
-              className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
-                seasonId === String(activeSeason.id)
-                  ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
-                  : 'bg-white border-emerald-200 text-emerald-600 hover:bg-emerald-50'
-              }`}
-              onClick={() => setSeasonFilter(String(activeSeason.id))}
-            >
-              الموسم النشط
-            </button>
-          )}
-        </div>
+        )}
       </div>
 
       {/* Alert strip */}
@@ -323,7 +323,7 @@ export default function CostByFieldPage() {
 
       {/* KPI strip */}
       {rows.length > 0 && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           {/* Total area */}
           <div className="card p-4">
             <p className="text-xs text-slate-500 font-medium mb-1">إجمالي المساحة</p>
@@ -333,7 +333,7 @@ export default function CostByFieldPage() {
 
           {/* Total cost (all types) */}
           <div className="card p-4">
-            <p className="text-xs text-slate-500 font-medium mb-1">إجمالي التكاليف الكلية</p>
+            <p className="text-xs text-slate-500 font-medium mb-1">إجمالي التكاليف</p>
             <p className="text-xl font-bold text-red-600">{egp(totalCost)}</p>
             <p className="text-xs text-slate-400 mt-0.5">مخزون + عمالة + معدات + نقدي</p>
           </div>
@@ -342,7 +342,21 @@ export default function CostByFieldPage() {
           <div className="card p-4 bg-brand-50 border border-brand-100">
             <p className="text-xs text-brand-600 font-medium mb-1">متوسط تكلفة الفدان</p>
             <p className="text-xl font-bold text-brand-700">{egp(avgCostPerFeddan)}</p>
-            <p className="text-xs text-brand-400 mt-0.5">ج.م / فدان — كل الحقول</p>
+            <p className="text-xs text-brand-400 mt-0.5">ج.م / فدان</p>
+          </div>
+
+          {/* WIP balance */}
+          <div className={`card p-4 ${totalWipCost > 0 ? 'bg-amber-50 border border-amber-100' : ''}`}>
+            <p className="text-xs text-amber-600 font-medium mb-1 flex items-center gap-1">
+              <GitBranch size={11} />
+              رصيد WIP النشط
+            </p>
+            <p className={`text-xl font-bold ${totalWipCost > 0 ? 'text-amber-700' : 'text-slate-400'}`}>
+              {totalWipCost > 0 ? egp(totalWipCost) : '—'}
+            </p>
+            <p className="text-xs text-amber-400 mt-0.5">
+              {activeCycleFields > 0 ? `${activeCycleFields} حقل بدورات نشطة` : 'لا دورات WIP نشطة'}
+            </p>
           </div>
 
           {/* Budget coverage */}
@@ -393,7 +407,7 @@ export default function CostByFieldPage() {
               <tr className="bg-slate-50 border-b border-slate-200">
                 {[
                   'الحقل', 'المساحة (فدان)', 'الموسم / المحصول',
-                  'التكاليف الكلية', 'تكلفة الفدان',
+                  'التكاليف الكلية', 'رصيد WIP', 'تكلفة الفدان',
                   'الميزانية / فدان', 'الانحراف', 'الحالة',
                 ].map(h => (
                   <th key={h}
@@ -457,6 +471,23 @@ export default function CostByFieldPage() {
                         {row.cash_cost      > 0 && <p className="text-xs text-sky-600">نقدي: {egp(row.cash_cost)}</p>}
                         {row.supplier_cost  > 0 && <p className="text-xs text-amber-600">موردين: {egp(row.supplier_cost)}</p>}
                       </div>
+                    </td>
+
+                    {/* WIP balance */}
+                    <td className="px-4 py-3">
+                      {row.wip_cost > 0 ? (
+                        <div className="flex items-center gap-1">
+                          <GitBranch size={11} className="text-amber-500 shrink-0" />
+                          <div>
+                            <span className="font-semibold text-amber-700 text-sm">{egp(row.wip_cost)}</span>
+                            {row.active_cycle_count > 0 && (
+                              <p className="text-[10px] text-amber-500 mt-0.5">{row.active_cycle_count} دورة</p>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-slate-300 text-xs">—</span>
+                      )}
                     </td>
 
                     {/* Cost per feddan */}
@@ -639,6 +670,8 @@ export default function CostByFieldPage() {
           </div>
         </div>
       )}
-    </div>
+
+      </div>{/* closes flex-1 scroll div */}
+    </div>  /* closes flex flex-col h-full */
   )
 }
