@@ -69,8 +69,27 @@ export default function CropCycleDetailPage() {
 
   const canWrite = role === 'super_admin' || role === 'company_admin' || role === 'field_supervisor' || role === 'accountant'
 
+  // Abandonment: calls the accounting-aware /abandon endpoint (GL write-off + WIP settlement).
+  const abandonMut = useMutation({
+    mutationFn: (notes?: string) =>
+      cropCyclesApi.abandon(cycleId, { notes: notes || undefined }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['crop-cycle', cycleId] })
+      qc.invalidateQueries({ queryKey: ['crop-cycle-wip', cycleId] })
+      qc.invalidateQueries({ queryKey: ['crop-cycles'] })
+      const wipMsg = res.wip_written_off > 0
+        ? ` — تم شطب رصيد WIP ${fmt(res.wip_written_off)} ج.م`
+        : ''
+      toast(`تم ترك الدورة${wipMsg}`, 'success')
+      setStatusModal(null)
+      setStatusNotes('')
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  })
+
+  // written_off only — plain status update, no WIP accounting needed.
   const statusMut = useMutation({
-    mutationFn: ({ status, notes }: { status: 'abandoned' | 'written_off'; notes?: string }) =>
+    mutationFn: ({ status, notes }: { status: 'written_off'; notes?: string }) =>
       cropCyclesApi.setStatus(cycleId, status, notes),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['crop-cycle', cycleId] })
@@ -408,10 +427,16 @@ export default function CropCycleDetailPage() {
             </h2>
             <p className="text-sm text-slate-500 mb-4">
               {statusModal === 'abandoned'
-                ? 'سيتم وضع علامة متروكة على هذه الدورة. إذا كان هناك رصيد WIP، ستحتاج إلى ترحيل قيد الشطب يدوياً.'
+                ? 'سيتم ترك هذه الدورة وترحيل قيد الخسارة المحاسبي تلقائياً. أي رصيد WIP سيتم تصفيته ضمن نفس العملية.'
                 : 'سيتم شطب هذه الدورة وإدراج الخسارة تحت حساب "خسارة محاصيل — هلاك وترك". إجراء لا يمكن التراجع عنه.'}
             </p>
-            {cycle.wip_balance > 0 && (
+            {cycle.wip_balance > 0 && statusModal === 'abandoned' && (
+              <div className="mb-4 p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-700 flex gap-2">
+                <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+                <span>رصيد WIP {fmt(cycle.wip_balance)} ج.م سيتم تصفيته تلقائياً وترحيله كخسارة محاصيل</span>
+              </div>
+            )}
+            {cycle.wip_balance > 0 && statusModal === 'written_off' && (
               <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-700 flex gap-2">
                 <AlertTriangle size={16} className="shrink-0 mt-0.5" />
                 <span>رصيد WIP غير مصفى: {fmt(cycle.wip_balance)} ج.م — يتطلب قيد شطب يدوي</span>
@@ -435,15 +460,23 @@ export default function CropCycleDetailPage() {
                 إلغاء
               </button>
               <button
-                onClick={() => statusMut.mutate({ status: statusModal, notes: statusNotes || undefined })}
-                disabled={statusMut.isPending}
+                onClick={() => {
+                  if (statusModal === 'abandoned') {
+                    abandonMut.mutate(statusNotes || undefined)
+                  } else if (statusModal === 'written_off') {
+                    statusMut.mutate({ status: 'written_off', notes: statusNotes || undefined })
+                  }
+                }}
+                disabled={abandonMut.isPending || statusMut.isPending}
                 className={`px-4 py-2 text-sm text-white rounded-lg font-medium transition-colors disabled:opacity-50 ${
                   statusModal === 'abandoned'
                     ? 'bg-amber-600 hover:bg-amber-700'
                     : 'bg-red-600 hover:bg-red-700'
                 }`}
               >
-                {statusMut.isPending ? 'جاري...' : statusModal === 'abandoned' ? 'تأكيد الترك' : 'تأكيد الشطب'}
+                {(abandonMut.isPending || statusMut.isPending)
+                  ? 'جاري...'
+                  : statusModal === 'abandoned' ? 'تأكيد الترك' : 'تأكيد الشطب'}
               </button>
             </div>
           </div>
