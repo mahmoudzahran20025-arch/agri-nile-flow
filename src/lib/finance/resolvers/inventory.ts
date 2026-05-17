@@ -9,6 +9,10 @@ import { normalizeIsoDate, yearMonthParts } from '../../utils/date'
 import { readInventoryBalance, upsertInventoryBalance, enqueueInventoryPostingOutbox } from '../../inventory_posting'
 import { resolveSupplierPayableAccount } from './supplier_payable_account'
 import { resolveUnitFactor } from '../../finance_core'
+import { postCostToWIP } from '../../wip_engine'
+
+// Movement types that represent materials consumed on a crop cycle (field issue).
+const ISSUE_MOVEMENT_TYPES = new Set(['ISSUE', 'issue', 'field_issue', 'consume', 'CONSUME'])
 
 export async function resolveInventoryMovement(
   db: D1Database,
@@ -32,6 +36,8 @@ export async function resolveInventoryMovement(
     work_order_id?: number
     batch_number?: string
     expiry_date?: string
+    // When set and movement_type is an ISSUE type, cost is also posted to wip_ledger.
+    crop_cycle_id?: number | null
   },
 ): Promise<number | null> {
   // Resolve base unit and posting groups
@@ -76,7 +82,7 @@ export async function resolveInventoryMovement(
   }
 
   const refId = opts.ref_id
-  return postFromBusinessEvent(db, {
+  const entryId = await postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'inventory_movement',
     source_module: 'inventory',
@@ -110,11 +116,36 @@ export async function resolveInventoryMovement(
       source_record_id: refId,
       ...dims,
     })),
-    onJournalEntryPosted: async (entryId) => {
+    onJournalEntryPosted: async (journalEntryId) => {
       await db.prepare('UPDATE inventory_movements SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
-        .bind(entryId, refId, opts.company_id).run()
+        .bind(journalEntryId, refId, opts.company_id).run()
     },
   })
+
+  // WIP side-effect: field issue tied to a crop cycle → accumulate material cost.
+  if (opts.crop_cycle_id && ISSUE_MOVEMENT_TYPES.has(opts.movement_type) && opts.season_id) {
+    try {
+      await postCostToWIP({
+        db,
+        company_id:         opts.company_id,
+        crop_cycle_id:      opts.crop_cycle_id,
+        season_id:          opts.season_id,
+        transaction_date:   opts.date,
+        cost_category:      'materials',
+        cost_category_code: 'MATERIALS',
+        debit:              totalValue,
+        description:        `مواد: ${opts.item_name}`,
+        source_module:      'inventory',
+        source_id:          refId,
+        journal_entry_id:   entryId,
+      })
+    } catch (wipErr) {
+      // WIP failure must not roll back the GL posting — log and continue.
+      console.error(`WIP_ACCUMULATION_FAILED: inventory movement ${refId}:`, (wipErr as Error).message)
+    }
+  }
+
+  return entryId
 }
 
 export async function resolveInventoryTransfer(

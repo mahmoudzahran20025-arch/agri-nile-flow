@@ -192,6 +192,81 @@ async function carryForwardWIP(
   return out
 }
 
+/**
+ * carryForwardCropCycleWIP — cycle-aware carry-forward for long-cycle crops.
+ *
+ * Reads wip_ledger.running_balance per active crop_cycle_id and posts a
+ * season-close/open pair in the GL for each cycle with a positive balance.
+ * Does NOT touch cycles in 'harvested', 'abandoned', or 'written_off' status.
+ *
+ * Replaces carryForwardWIP (field-aggregate, deprecated) for new crop cycles.
+ */
+async function carryForwardCropCycleWIP(
+  db: D1Database,
+  opts: { company_id: number; from_season_id: number; to_season_id: number; user_id: number },
+): Promise<Array<{ crop_cycle_id: number; crop_name: string; wip_balance: number; entry_id: number | null }>> {
+  const { company_id, from_season_id, to_season_id, user_id } = opts
+
+  const { results: cycles } = await db.prepare(`
+    SELECT cc.id AS crop_cycle_id, cc.crop_name, cc.center_code, cc.field_id,
+           COALESCE(
+             (SELECT running_balance FROM wip_ledger
+              WHERE company_id = cc.company_id AND crop_cycle_id = cc.id
+              ORDER BY id DESC LIMIT 1),
+             0
+           ) AS wip_balance
+    FROM crop_cycles cc
+    WHERE cc.company_id = ? AND cc.season_id = ? AND cc.status = 'active'
+  `).bind(company_id, from_season_id).all<{
+    crop_cycle_id: number; crop_name: string; center_code: number | null
+    field_id: number | null; wip_balance: number
+  }>()
+
+  const wipAcc = await requireControlAccount(db, company_id, ['wip_asset'], 'WIP asset account for carry-forward')
+  const today  = getTodayIsoDate()
+  const out: Array<{ crop_cycle_id: number; crop_name: string; wip_balance: number; entry_id: number | null }> = []
+
+  for (const cycle of cycles) {
+    const balance = Math.round(cycle.wip_balance * 100) / 100
+    if (balance <= 0) continue
+
+    const entryId = await postFromBusinessEvent(db, {
+      company_id,
+      event_type:    'wip_carry_forward_cycle',
+      source_module: 'operations',
+      source_id:     cycle.crop_cycle_id,
+      event_date:    today,
+      description:   `ترحيل WIP: ${cycle.crop_name} (موسم ${from_season_id} → ${to_season_id})`,
+      created_by:    user_id,
+      payload:       { crop_cycle_id: cycle.crop_cycle_id, from_season: from_season_id, to_season: to_season_id, balance },
+      lines: [
+        { account_code: wipAcc, debit: 0,       credit: balance, description: `إقفال WIP موسم ${from_season_id}: ${cycle.crop_name}`, rule_slot: 'wip_asset', source_ledger: 'manual' as const, source_record_id: cycle.crop_cycle_id, center_code: cycle.center_code ?? undefined, season_id: from_season_id, field_id: cycle.field_id ?? undefined },
+        { account_code: wipAcc, debit: balance, credit: 0,       description: `فتح WIP موسم ${to_season_id}: ${cycle.crop_name}`,   rule_slot: 'wip_asset', source_ledger: 'manual' as const, source_record_id: cycle.crop_cycle_id, center_code: cycle.center_code ?? undefined, season_id: to_season_id,   field_id: cycle.field_id ?? undefined },
+      ],
+    })
+
+    // Append carry-forward marker to wip_ledger (zero-net: debit + credit = balance)
+    await postCostToWIP({
+      db, company_id,
+      crop_cycle_id:    cycle.crop_cycle_id,
+      season_id:        to_season_id,
+      transaction_date: today,
+      cost_category:    'other',
+      cost_category_code: 'OTHER',
+      debit:            balance,
+      credit:           balance,
+      description:      `ترحيل إلى موسم ${to_season_id}`,
+      source_module:    'operations',
+      source_id:        cycle.crop_cycle_id,
+      journal_entry_id: entryId,
+    })
+
+    out.push({ crop_cycle_id: cycle.crop_cycle_id, crop_name: cycle.crop_name, wip_balance: balance, entry_id: entryId })
+  }
+
+  return out
+}
+
 async function postHarvestLedger(
   db: D1Database,
   opts: { 
@@ -254,6 +329,11 @@ async function postHarvestSettlement(
     season_id:         number
     settlement_date:   string
     disposition:       'stored' | 'sold'
+    // settlement_mode drives GL routing:
+    //   'inventory'   → DR Inventory / CR WIP  (cost moves to inventory asset)
+    //   'direct_sale' → DR COGS / CR WIP        (cost recognized without inventory step)
+    // Defaults to 'inventory' for backwards compatibility with pre-Phase-3 settlements.
+    settlement_mode?:  'inventory' | 'direct_sale'
     total_wip_cost:    number
     // stored only
     inventory_value?:  number
@@ -272,6 +352,8 @@ async function postHarvestSettlement(
   revenue_gl_entry_id:   number | null
 }> {
   const { company_id, user_id, settlement_id, crop_cycle_id, season_id, settlement_date } = opts
+  // Resolve settlement_mode: default to 'inventory' for backwards compatibility.
+  const settlementMode = opts.settlement_mode ?? 'inventory'
 
   const inventoryAcc   = await requireControlAccount(db, company_id, ['inventory'],         'Settlement inventory account')
   const cogsAcc        = await requireControlAccount(db, company_id, ['agricultural_cogs', 'harvest_cogs', 'cogs'], 'Settlement COGS account')
@@ -295,15 +377,15 @@ async function postHarvestSettlement(
     field_id: cropCycle?.field_id ?? undefined,
   }
 
-  if (opts.disposition === 'stored') {
-    // DR Inventory / CR Agricultural COGS — cost transferred to inventory
+  if (settlementMode === 'inventory') {
+    // DR Inventory / CR Agricultural COGS — WIP cost transfers to inventory asset.
     inventoryGlEntryId = await postFromBusinessEvent(db, {
       company_id, event_type: 'harvest_settlement_stored',
       source_module: 'harvest', source_id: settlement_id,
       event_date: settlement_date,
       description: `تسوية حصاد (مخزون): ${cycleDesc}`,
       created_by: user_id,
-      payload: { settlement_id, crop_cycle_id, disposition: 'stored', wip_cost: wipCost, inventory_value: invValue },
+      payload: { settlement_id, crop_cycle_id, settlement_mode: settlementMode, wip_cost: wipCost, inventory_value: invValue },
       lines: [
         { account_code: inventoryAcc, debit: invValue,  credit: 0,        description: `إضافة مخزون: ${cycleDesc}`, rule_slot: 'inventory',         source_ledger: 'harvest' as const, source_record_id: settlement_id, ...dims },
         { account_code: cogsAcc,      debit: 0,         credit: invValue,  description: `إقفال WIP ← مخزون: ${cycleDesc}`,  rule_slot: 'agricultural_cogs', source_ledger: 'harvest' as const, source_record_id: settlement_id, ...dims },
@@ -325,26 +407,26 @@ async function postHarvestSettlement(
       })
     }
   } else {
-    // disposition === 'sold'
-    // DR Agricultural COGS / CR Revenue — cost and revenue recognized simultaneously
+    // settlement_mode === 'direct_sale'
+    // DR Agricultural COGS / CR WIP — cost recognized directly without inventory step.
     cogsGlEntryId = await postFromBusinessEvent(db, {
-      company_id, event_type: 'harvest_settlement_sold_cogs',
+      company_id, event_type: 'harvest_settlement_direct_sale_cogs',
       source_module: 'harvest', source_id: settlement_id,
       event_date: settlement_date,
-      description: `تسوية حصاد (بيع — تكلفة): ${cycleDesc}`,
+      description: `تسوية حصاد (بيع مباشر — تكلفة): ${cycleDesc}`,
       created_by: user_id,
-      payload: { settlement_id, crop_cycle_id, disposition: 'sold', wip_cost: wipCost },
+      payload: { settlement_id, crop_cycle_id, settlement_mode: settlementMode, wip_cost: wipCost },
       lines: [
-        { account_code: cogsAcc, debit: wipCost, credit: 0, description: `تكلفة بضاعة مباعة: ${cycleDesc}`, rule_slot: 'agricultural_cogs', source_ledger: 'harvest' as const, source_record_id: settlement_id, ...dims },
-        { account_code: inventoryAcc, debit: 0, credit: wipCost, description: `إقفال WIP ← مبيعات: ${cycleDesc}`, rule_slot: 'inventory', source_ledger: 'harvest' as const, source_record_id: settlement_id, ...dims },
+        { account_code: cogsAcc,      debit: wipCost, credit: 0,        description: `تكلفة بضاعة مباعة: ${cycleDesc}`,     rule_slot: 'agricultural_cogs', source_ledger: 'harvest' as const, source_record_id: settlement_id, ...dims },
+        { account_code: inventoryAcc, debit: 0,       credit: wipCost,  description: `إقفال WIP ← بيع مباشر: ${cycleDesc}`, rule_slot: 'inventory',         source_ledger: 'harvest' as const, source_record_id: settlement_id, ...dims },
       ],
     })
     if (revenue > 0) {
       revenueGlEntryId = await postFromBusinessEvent(db, {
-        company_id, event_type: 'harvest_settlement_sold_revenue',
+        company_id, event_type: 'harvest_settlement_direct_sale_revenue',
         source_module: 'harvest', source_id: settlement_id,
         event_date: settlement_date,
-        description: `تسوية حصاد (بيع — إيراد): ${cycleDesc}${opts.buyer_name ? ' — ' + opts.buyer_name : ''}`,
+        description: `تسوية حصاد (بيع مباشر — إيراد): ${cycleDesc}${opts.buyer_name ? ' — ' + opts.buyer_name : ''}`,
         created_by: user_id,
         payload: { settlement_id, revenue, buyer: opts.buyer_name },
         lines: [
@@ -394,6 +476,93 @@ async function postHarvestSettlement(
   return { wip_gl_entry_id: wipGlEntryId, inventory_gl_entry_id: inventoryGlEntryId, cogs_gl_entry_id: cogsGlEntryId, revenue_gl_entry_id: revenueGlEntryId }
 }
 
+/**
+ * postCycleAbandonment — writes off the WIP balance of an abandoned crop cycle.
+ *
+ * Reads abandonment_policy from crop_cycles:
+ *   'operating_loss'     → DR 61060001 (مصروف هلاك محاصيل — operating)
+ *   'extraordinary_loss' → DR 61060002 (خسارة إهلاك محاصيل — extraordinary)
+ * Credit: WIP asset account (the accumulated cost is written off).
+ *
+ * After posting, marks crop_cycle status = 'abandoned' and appends a WIP credit row.
+ */
+async function postCycleAbandonment(
+  db: D1Database,
+  opts: {
+    company_id:    number
+    user_id:       number
+    crop_cycle_id: number
+    abandonment_date: string
+    notes?: string
+  },
+): Promise<{ gl_entry_id: number | null; wip_written_off: number }> {
+  const { company_id, user_id, crop_cycle_id, abandonment_date } = opts
+
+  const cycle = await db.prepare(`
+    SELECT cc.*, f.name AS field_name,
+           COALESCE(
+             (SELECT running_balance FROM wip_ledger
+              WHERE company_id = cc.company_id AND crop_cycle_id = cc.id
+              ORDER BY id DESC LIMIT 1),
+             0
+           ) AS wip_balance
+    FROM crop_cycles cc
+    LEFT JOIN fields f ON f.id = cc.field_id AND f.company_id = cc.company_id
+    WHERE cc.id = ? AND cc.company_id = ?
+  `).bind(crop_cycle_id, company_id).first<{
+    id: number; crop_name: string; field_name: string | null; center_code: number | null
+    season_id: number; abandonment_policy: 'operating_loss' | 'extraordinary_loss'
+    wip_balance: number; status: string
+  }>()
+
+  if (!cycle) throw new Error(`ABANDONMENT: crop_cycle_id=${crop_cycle_id} not found`)
+  if (cycle.status === 'abandoned' || cycle.status === 'harvested') {
+    throw new Error(`ABANDONMENT: cycle ${crop_cycle_id} already in terminal status '${cycle.status}'`)
+  }
+
+  const wipBalance = Math.round(cycle.wip_balance * 100) / 100
+  const lossAccount = cycle.abandonment_policy === 'extraordinary_loss' ? '61060002' : '61060001'
+  const wipAcc = await requireControlAccount(db, company_id, ['wip_asset'], 'WIP asset account for abandonment')
+  const cycleDesc = `${cycle.crop_name}${cycle.field_name ? ' — ' + cycle.field_name : ''}`
+
+  let glEntryId: number | null = null
+
+  if (wipBalance > 0) {
+    glEntryId = await postFromBusinessEvent(db, {
+      company_id,
+      event_type:    'crop_cycle_abandonment',
+      source_module: 'operations',
+      source_id:     crop_cycle_id,
+      event_date:    abandonment_date,
+      description:   `إهلاك دورة محصول مهجورة: ${cycleDesc}`,
+      created_by:    user_id,
+      payload:       { crop_cycle_id, wip_balance: wipBalance, policy: cycle.abandonment_policy, notes: opts.notes },
+      lines: [
+        { account_code: lossAccount, debit: wipBalance, credit: 0,          description: `خسارة إهلاك: ${cycleDesc}`, source_ledger: 'manual' as const, source_record_id: crop_cycle_id, center_code: cycle.center_code ?? undefined, season_id: cycle.season_id },
+        { account_code: wipAcc,      debit: 0,          credit: wipBalance,  description: `إقفال WIP: ${cycleDesc}`,   rule_slot: 'wip_asset',           source_ledger: 'manual' as const, source_record_id: crop_cycle_id, center_code: cycle.center_code ?? undefined, season_id: cycle.season_id },
+      ],
+    })
+
+    await creditCostFromWIP({
+      db, company_id,
+      crop_cycle_id, season_id: cycle.season_id,
+      transaction_date: abandonment_date,
+      cost_category: 'other',
+      cost_category_code: 'OTHER',
+      amount: wipBalance,
+      description: `إهلاك دورة مهجورة — ${cycleDesc}`,
+      source_module: 'operations', source_id: crop_cycle_id,
+      journal_entry_id: glEntryId,
+    })
+  }
+
+  await db.prepare(
+    `UPDATE crop_cycles SET status = 'abandoned', updated_at = datetime('now') WHERE id = ? AND company_id = ?`
+  ).bind(crop_cycle_id, company_id).run()
+
+  return { gl_entry_id: glEntryId, wip_written_off: wipBalance }
+}
+
 export const FinanceCore = {
   resolveUnitFactor,
   prepareCashMovement,
@@ -423,6 +592,8 @@ export const FinanceCore = {
   postCostToWIP,
   creditCostFromWIP,
   postHarvestSettlement,
+  postCycleAbandonment,
+  carryForwardCropCycleWIP,
 } as const
 
 export {
@@ -450,4 +621,5 @@ export {
   postManualEntry,
   postManualReversal,
   getOpenPeriod,
+  postCycleAbandonment,
 }
