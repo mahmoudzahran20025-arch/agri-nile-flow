@@ -38,7 +38,7 @@ transactions.get('/transactions/summary', permissionGuard('inventory', 'read'), 
        SUM(im.qty_in + im.qty_out) AS total_qty,
        SUM(im.value_in + im.value_out) AS total_value
      FROM inventory_movements im
-     \${where}
+     ${where}
      GROUP BY transaction_type
      ORDER BY total_value DESC`
   ).bind(...binds).all()
@@ -99,14 +99,14 @@ transactions.get('/transactions', permissionGuard('inventory', 'read'), async (c
          MIN(im.created_at) AS created_at,
          SUM(CASE WHEN im.gl_posting_status IN ('pending','failed','outbox_pending') THEN 1 ELSE 0 END) AS unposted_lines
        FROM inventory_movements im
-       \${where}
+       ${where}
        GROUP BY im.transaction_id, transaction_type, im.document_number, im.movement_date, im.warehouse
        ORDER BY im.movement_date DESC, im.transaction_id DESC
        LIMIT ? OFFSET ?`
     ).bind(...binds, size, offset).all(),
 
     c.env.DB.prepare(
-      `SELECT COUNT(DISTINCT im.transaction_id) AS n FROM inventory_movements im \${where}`
+      `SELECT COUNT(DISTINCT im.transaction_id) AS n FROM inventory_movements im ${where}`
     ).bind(...binds).first<{ n: number }>(),
   ])
 
