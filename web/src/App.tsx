@@ -80,7 +80,6 @@ const CostByFieldPage          = lazy(() => import('./pages/inventory/CostByFiel
 const ItemCategoriesPage       = lazy(() => import('./pages/inventory/ItemCategoriesPage'))
 const ItemMasterPage           = lazy(() => import('./pages/inventory/ItemMasterPage'))
 const InventoryPostingHealthPage = lazy(() => import('./pages/inventory/InventoryPostingHealthPage'))
-const InventoryBalancesPage      = lazy(() => import('./pages/inventory/InventoryBalancesPage'))
 const PhysicalCountPage          = lazy(() => import('./pages/inventory/PhysicalCountPage'))
 const FixedAssetsPage            = lazy(() => import('./pages/inventory/FixedAssetsPage'))
 const WipBalancesPage            = lazy(() => import('./pages/inventory/WipBalancesPage'))
@@ -191,7 +190,6 @@ export default function App() {
         <Route path="inventory/item/:code"       element={<ItemCardPage />} />
         <Route path="inventory/cost-by-field"    element={<CostByFieldPage />} />
         <Route path="inventory/posting-health"   element={<InventoryPostingHealthPage />} />
-        <Route path="inventory/balances-detail"  element={<InventoryBalancesPage />} />
         <Route path="inventory/physical-count"   element={<PhysicalCountPage />} />
         <Route path="inventory/fixed-assets"     element={<FixedAssetsPage />} />
         <Route path="inventory/wip-balances"     element={<WipBalancesPage />} />
