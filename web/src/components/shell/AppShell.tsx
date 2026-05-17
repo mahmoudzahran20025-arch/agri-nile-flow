@@ -64,6 +64,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { label: 'Batch Posting',   path: '/gl/batch-posting',   icon: <TrendingUp     size={18} /> },
       { label: 'Reconciliation',  path: '/gl/reconciliation',  icon: <ArrowLeftRight size={18} /> },
       { label: 'Fiscal Periods',  path: '/gl/periods',         icon: <CalendarDays   size={18} /> },
+      { label: 'إقفال الفترة',    path: '/gl/period-close',    icon: <Clock          size={18} /> },
       { label: 'Depreciation',    path: '/gl/depreciation',    icon: <TrendingDown   size={18} /> },
       { label: 'GL Governance',   path: '/gl/hardening',       icon: <ShieldCheck    size={18} /> },
     ],
@@ -86,9 +87,9 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { label: 'Suppliers Hub',     path: '/suppliers',              icon: <Users         size={18} /> },
       { label: 'Procurement',       path: '/suppliers/procurement',  icon: <ShoppingCart  size={18} /> },
       { label: 'AP Aging',          path: '/suppliers/aging',        icon: <Clock         size={18} /> },
-      { label: 'Purchase Orders', path: '/suppliers/procurement',  icon: <ClipboardList size={18} /> },
       { label: 'Cash & Banks',    path: '/treasury',      icon: <Wallet        size={18} /> },
       { label: 'Bank Reconcile',  path: '/treasury/bank', icon: <ArrowLeftRight size={18} /> },
+      { label: 'Equipment',       path: '/suppliers?tab=equipment', icon: <Tractor size={18} /> },
     ],
   },
   {
@@ -96,6 +97,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
     items: [
       { label: 'Movements',        path: '/inventory/movements',     icon: <Box       size={18} /> },
       { label: 'Transactions',      path: '/inventory/transactions',  icon: <FileText  size={18} /> },
+      { label: 'صحة الترحيل',       path: '/inventory/posting-health', icon: <ShieldCheck size={18} /> },
       { label: 'Warehouse Balances', path: '/inventory',               icon: <Warehouse size={18} /> },
         { label: 'Physical Count',     path: '/inventory/physical-count', icon: <ClipboardList size={18} /> },
       { label: 'Fixed Assets',      path: '/inventory/fixed-assets',   icon: <TrendingUp    size={18} /> },
@@ -113,7 +115,6 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { label: 'HR & Payroll',     path: '/hr',                        icon: <Users         size={18} /> },
       { label: 'Calendar',         path: '/calendar',                  icon: <CalendarDays  size={18} /> },
       { label: 'Documents',        path: '/documents',                 icon: <FileText      size={18} /> },
-      { label: 'Equipment',        path: '/suppliers?tab=equipment',   icon: <Tractor       size={18} /> },
     ],
   },
   {
