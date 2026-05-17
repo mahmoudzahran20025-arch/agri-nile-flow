@@ -415,6 +415,170 @@ fields.get('/harvest/cost-estimate', async (c) => {
   })
 })
 
+// GET /api/fields/seasons/:season_id/pnl
+// Season-level agricultural P&L: revenue vs costs across all fields in the season.
+fields.get('/seasons/:season_id/pnl', async (c) => {
+  const { company_id } = getUser(c)
+  const season_id = Number(c.req.param('season_id'))
+
+  if (!season_id) return c.json({ success: false, error: 'season_id مطلوب' }, 400)
+
+  const season = await c.env.DB.prepare(
+    'SELECT id, name, status FROM seasons WHERE id = ? AND company_id = ?'
+  ).bind(season_id, company_id).first<{ id: number; name: string; status: string }>()
+  if (!season) return c.json({ success: false, error: 'الموسم غير موجود' }, 404)
+
+  // All fields active in this season
+  const fieldsInSeason = await c.env.DB.prepare(
+    `SELECT f.id, f.name, f.code, f.area_feddan, COALESCE(f.rent_per_feddan, 0) AS rent_per_feddan
+     FROM fields f
+     WHERE f.company_id = ? AND f.season_id = ?
+     ORDER BY f.code`
+  ).bind(company_id, season_id).all<{
+    id: number; name: string; code: string; area_feddan: number; rent_per_feddan: number
+  }>()
+
+  const [materialsRow, laborRow, equipmentRow, cashRow, payrollRow, harvestRow] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT field_id, COALESCE(SUM(value_out), 0) AS total
+       FROM inventory_movements
+       WHERE company_id = ? AND season_id = ?
+         AND movement_type IN ('ISSUE','TRANSFER_OUT','COGS_ADJUSTMENT','PRODUCTION_INPUT','ADJUSTMENT_LOSS')
+       GROUP BY field_id`
+    ).bind(company_id, season_id).all<{ field_id: number; total: number }>(),
+
+    c.env.DB.prepare(
+      `SELECT wo.field_id, COALESCE(SUM(wt.quantity * wt.unit_cost), 0) AS total
+       FROM work_tasks wt
+       JOIN work_orders wo ON wo.id = wt.work_order_id AND wo.company_id = wt.company_id
+       WHERE wo.company_id = ? AND wo.season_id = ? AND wo.status != 'cancelled'
+       GROUP BY wo.field_id`
+    ).bind(company_id, season_id).all<{ field_id: number; total: number }>(),
+
+    c.env.DB.prepare(
+      `SELECT wo.field_id, COALESCE(SUM(woe.total_cost), 0) AS total
+       FROM work_order_equipment woe
+       JOIN work_orders wo ON wo.id = woe.work_order_id AND wo.company_id = woe.company_id
+       WHERE wo.company_id = ? AND wo.season_id = ? AND wo.status != 'cancelled'
+       GROUP BY wo.field_id`
+    ).bind(company_id, season_id).all<{ field_id: number; total: number }>(),
+
+    c.env.DB.prepare(
+      `SELECT field_id, COALESCE(SUM(amount), 0) AS total
+       FROM cash_transactions
+       WHERE company_id = ? AND season_id = ? AND direction = 'م' AND status = 'posted'
+       GROUP BY field_id`
+    ).bind(company_id, season_id).all<{ field_id: number; total: number }>(),
+
+    c.env.DB.prepare(
+      `SELECT COALESCE(SUM(total_net), 0) AS total
+       FROM payroll_runs
+       WHERE company_id = ? AND season_id = ? AND status IN ('approved','paid')`
+    ).bind(company_id, season_id).first<{ total: number }>(),
+
+    c.env.DB.prepare(
+      `SELECT field_id,
+              COALESCE(SUM(revenue), 0) AS revenue,
+              COALESCE(SUM(qty_tons), 0) AS total_tons,
+              GROUP_CONCAT(crop_name) AS crops
+       FROM harvest_records
+       WHERE company_id = ? AND season_id = ?
+       GROUP BY field_id`
+    ).bind(company_id, season_id).all<{ field_id: number; revenue: number; total_tons: number; crops: string }>(),
+  ])
+
+  const toMap = <T extends { field_id: number }>(rows: T[]) =>
+    new Map(rows.map(r => [r.field_id, r]))
+
+  const materialsMap  = toMap(materialsRow.results)
+  const laborMap      = toMap(laborRow.results)
+  const equipmentMap  = toMap(equipmentRow.results)
+  const cashMap       = toMap(cashRow.results)
+  const harvestMap    = toMap(harvestRow.results)
+  const payrollTotal  = payrollRow?.total ?? 0
+
+  // Distribute payroll proportionally by area_feddan (fallback: equal share)
+  const totalFeddan = fieldsInSeason.results.reduce((s, f) => s + (f.area_feddan ?? 0), 0)
+  const fieldCount  = fieldsInSeason.results.length || 1
+
+  const fieldBreakdown = fieldsInSeason.results.map(f => {
+    const materials_cost  = materialsMap.get(f.id)?.total  ?? 0
+    const labor_cost      = laborMap.get(f.id)?.total      ?? 0
+    const equipment_cost  = equipmentMap.get(f.id)?.total  ?? 0
+    const cash_cost       = cashMap.get(f.id)?.total       ?? 0
+    const land_rent       = f.rent_per_feddan * (f.area_feddan ?? 0)
+    const payroll_share   = totalFeddan > 0
+      ? payrollTotal * ((f.area_feddan ?? 0) / totalFeddan)
+      : payrollTotal / fieldCount
+    const total_cost      = materials_cost + labor_cost + equipment_cost + cash_cost + payroll_share + land_rent
+
+    const harvestData     = harvestMap.get(f.id)
+    const revenue         = harvestData?.revenue    ?? 0
+    const total_tons      = harvestData?.total_tons ?? 0
+    const crops           = harvestData?.crops      ?? null
+    const net_result      = revenue - total_cost
+    const cost_per_feddan = f.area_feddan > 0 ? total_cost / f.area_feddan : null
+
+    return {
+      field_id:      f.id,
+      field_name:    f.name,
+      field_code:    f.code,
+      area_feddan:   f.area_feddan,
+      crops,
+      revenue,
+      total_tons,
+      materials_cost,
+      labor_cost,
+      equipment_cost,
+      cash_cost,
+      payroll_share: Math.round(payroll_share * 100) / 100,
+      land_rent,
+      total_cost:    Math.round(total_cost * 100) / 100,
+      net_result:    Math.round(net_result * 100) / 100,
+      cost_per_feddan: cost_per_feddan != null ? Math.round(cost_per_feddan * 100) / 100 : null,
+    }
+  })
+
+  const totals = fieldBreakdown.reduce((acc, f) => ({
+    area_feddan:    acc.area_feddan    + f.area_feddan,
+    revenue:        acc.revenue        + f.revenue,
+    total_tons:     acc.total_tons     + f.total_tons,
+    materials_cost: acc.materials_cost + f.materials_cost,
+    labor_cost:     acc.labor_cost     + f.labor_cost,
+    equipment_cost: acc.equipment_cost + f.equipment_cost,
+    cash_cost:      acc.cash_cost      + f.cash_cost,
+    payroll_cost:   acc.payroll_cost   + f.payroll_share,
+    land_rent:      acc.land_rent      + f.land_rent,
+    total_cost:     acc.total_cost     + f.total_cost,
+    net_result:     acc.net_result     + f.net_result,
+  }), {
+    area_feddan: 0, revenue: 0, total_tons: 0,
+    materials_cost: 0, labor_cost: 0, equipment_cost: 0,
+    cash_cost: 0, payroll_cost: 0, land_rent: 0,
+    total_cost: 0, net_result: 0,
+  })
+
+  return c.json({
+    success: true,
+    data: {
+      season_id,
+      season_name:  season.name,
+      season_status: season.status,
+      field_count:  fieldBreakdown.length,
+      totals: {
+        ...totals,
+        gross_margin_pct: totals.revenue > 0
+          ? Math.round((totals.net_result / totals.revenue) * 10000) / 100
+          : null,
+        cost_per_feddan: totals.area_feddan > 0
+          ? Math.round((totals.total_cost / totals.area_feddan) * 100) / 100
+          : null,
+      },
+      fields: fieldBreakdown,
+    }
+  })
+})
+
 // ───────────────────────────────────────────────────────────
 
 // GET /api/fields/:id

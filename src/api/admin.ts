@@ -406,4 +406,83 @@ admin.get('/sanity-check', async (c) => {
   return c.json({ success: true, data: report })
 })
 
+// GET /api/admin/consolidated-pnl?start=YYYY-MM-DD&end=YYYY-MM-DD
+// Aggregated income statement across all active companies.
+admin.get('/consolidated-pnl', async (c) => {
+  const start = c.req.query('start')
+  const end   = c.req.query('end')
+  if (!start || !end) return c.json({ success: false, error: 'start and end required' }, 400)
+
+  // Per-company revenue/expense totals from posted journal entries
+  const { results: lines } = await c.env.DB.prepare(`
+    SELECT
+      e.company_id,
+      co.name                                          AS company_name,
+      co.code                                          AS company_code,
+      coa.account_type,
+      coa.normal_balance,
+      SUM(l.debit)                                     AS total_debit,
+      SUM(l.credit)                                    AS total_credit
+    FROM journal_entry_lines l
+    JOIN journal_entries e
+      ON e.id = l.entry_id AND e.company_id = l.company_id AND e.is_posted = 1
+    JOIN chart_of_accounts coa
+      ON coa.code = l.account_code AND coa.company_id = l.company_id
+    JOIN companies co ON co.id = e.company_id AND co.is_active = 1
+    WHERE e.entry_date >= ? AND e.entry_date <= ?
+      AND coa.account_type IN ('revenue', 'expense')
+    GROUP BY e.company_id, co.name, co.code, coa.account_type, coa.normal_balance
+    ORDER BY co.code, coa.account_type
+  `).bind(start, end).all<{
+    company_id: number; company_name: string; company_code: string
+    account_type: string; normal_balance: string
+    total_debit: number; total_credit: number
+  }>()
+
+  // Aggregate per company
+  const byCompany = new Map<number, {
+    company_id: number; company_name: string; company_code: string
+    revenue: number; expense: number
+  }>()
+
+  for (const row of lines) {
+    if (!byCompany.has(row.company_id)) {
+      byCompany.set(row.company_id, {
+        company_id: row.company_id,
+        company_name: row.company_name,
+        company_code: row.company_code,
+        revenue: 0, expense: 0,
+      })
+    }
+    const co = byCompany.get(row.company_id)!
+    const signed = row.normal_balance === 'credit'
+      ? row.total_credit - row.total_debit
+      : row.total_debit - row.total_credit
+
+    if (row.account_type === 'revenue') co.revenue += signed
+    else                                 co.expense += signed
+  }
+
+  const companies = Array.from(byCompany.values()).map(co => ({
+    ...co,
+    net_income: co.revenue - co.expense,
+  })).sort((a, b) => a.company_code.localeCompare(b.company_code))
+
+  const totals = companies.reduce((acc, co) => ({
+    revenue:    acc.revenue    + co.revenue,
+    expense:    acc.expense    + co.expense,
+    net_income: acc.net_income + co.net_income,
+  }), { revenue: 0, expense: 0, net_income: 0 })
+
+  return c.json({
+    success: true,
+    data: {
+      period: { start, end },
+      company_count: companies.length,
+      totals,
+      companies,
+    },
+  })
+})
+
 export default admin

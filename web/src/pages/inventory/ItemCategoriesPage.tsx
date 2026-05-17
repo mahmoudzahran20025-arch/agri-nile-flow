@@ -3,12 +3,15 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, FolderTree, Tag, Info } from 'lucide-react'
 import { inventoryApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
+import { useNewShortcut } from '../../hooks/useNewShortcut'
+import { EmptyList } from '../../components/ui/EmptyState'
 import Modal from '../../components/ui/Modal'
 
 export default function ItemCategoriesPage() {
   const qc = useQueryClient()
   const { toast } = useToast()
   const [open, setOpen] = useState(false)
+  useNewShortcut(() => setOpen(true))
   const [form, setForm] = useState({ name: '', expense_account_code: '', inventory_account_code: '' })
 
   const { data: categories, isLoading } = useQuery({
@@ -76,11 +79,8 @@ export default function ItemCategoriesPage() {
         ))}
 
         {!isLoading && categories?.length === 0 && (
-          <div className="col-span-full py-20 card text-center space-y-3">
-            <div className="w-16 h-16 bg-slate-50 text-slate-300 rounded-full flex items-center justify-center mx-auto">
-              <FolderTree size={32} />
-            </div>
-            <p className="text-slate-400">لا توجد تصنيفات معرفة بعد</p>
+          <div className="col-span-full">
+            <EmptyList noun="تصنيفات" onAdd={() => setOpen(true)} />
           </div>
         )}
       </div>

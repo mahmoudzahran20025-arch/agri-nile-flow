@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Building2, Plus, Users, ArrowLeftRight, ToggleLeft, ToggleRight,
   ChevronDown, ChevronUp, LayoutDashboard, Loader2,
-  TrendingUp, AlertTriangle, Briefcase, Activity, Wand2,
+  TrendingUp, AlertTriangle, Briefcase, Activity, Wand2, BarChart2,
 } from 'lucide-react'
 import { adminApi, type CompanyOverview } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
@@ -114,6 +114,12 @@ export default function SuperAdminPage() {
             title="إضافة سريعة"
           >
             <Plus size={14} />
+          </button>
+          <button
+            className="btn btn-secondary gap-2"
+            onClick={() => navigate('/admin/consolidated-pnl')}
+          >
+            <BarChart2 size={16} /> P&L مجمع
           </button>
           <button
             className="btn btn-primary gap-2"

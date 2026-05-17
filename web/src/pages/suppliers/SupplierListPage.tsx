@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Search, Plus, ExternalLink, FileText, X, Clock } from 'lucide-react'
 import { suppliersApi } from '../../api/client'
 import { usePermission } from '../../hooks/usePermission'
+import { useNewShortcut } from '../../hooks/useNewShortcut'
 import DataTableV2, { type ColumnV2 } from '../../components/ui/DataTableV2'
 import SidePanel from '../../components/ui/SidePanel'
 import AddSupplierModal from '../../components/forms/AddSupplierModal'
@@ -153,6 +154,7 @@ export default function SupplierListPage() {
   const [qInput,       setQInput]       = useState('')
   const [addOpen,      setAddOpen]      = useState(false)
   const [txnSupplier,  setTxnSupplier]  = useState<Supplier | null>(null)
+  useNewShortcut(() => setAddOpen(true))
   const [selected,     setSelected]     = useState<Supplier | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [balFilter,    setBalFilter]    = useState<BalanceFilter>('all')

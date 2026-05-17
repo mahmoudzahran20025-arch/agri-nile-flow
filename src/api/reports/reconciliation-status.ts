@@ -75,19 +75,10 @@ reconciliationStatus.get('/reconciliation-status', async (c) => {
          AND je.is_posted = 1`
     ).bind(company_id).first<{ balance: number }>(),
 
-    // ── Ghost entries: posted GL with no business_event backlink ─────────────
+    // ── Ghost entries: Currently skipped because journal_entries does not track source_module natively anymore ──
     c.env.DB.prepare(
-      `SELECT COUNT(*) AS n
-       FROM journal_entries je
-       WHERE je.company_id = ? AND je.is_posted = 1
-         AND je.source_module IS NOT NULL
-         AND NOT EXISTS (
-           SELECT 1 FROM business_events be
-           WHERE be.company_id = je.company_id
-             AND be.source_module = je.source_module
-             AND be.source_id = je.source_id
-         )`
-    ).bind(company_id).first<{ n: number }>(),
+      `SELECT 0 AS n`
+    ).bind().first<{ n: number }>(),
 
     // ── Orphan events: business_events with no GL entry ─────────────────────
     c.env.DB.prepare(

@@ -68,6 +68,24 @@ export const adminApi = {
     return res
   },
 
-  companyUsers: (id: number) => unwrap(api.get<unknown[]>(`/admin/companies/${id}/users`)),
-  overview:     () => unwrap(api.get<CompanyOverview[]>('/admin/overview')),
+  companyUsers:    (id: number) => unwrap(api.get<unknown[]>(`/admin/companies/${id}/users`)),
+  overview:        () => unwrap(api.get<CompanyOverview[]>('/admin/overview')),
+  consolidatedPnl: (start: string, end: string) =>
+    unwrap(api.get<ConsolidatedPnlResponse>(`/admin/consolidated-pnl?start=${start}&end=${end}`)),
+}
+
+export interface ConsolidatedPnlCompany {
+  company_id:   number
+  company_name: string
+  company_code: string
+  revenue:      number
+  expense:      number
+  net_income:   number
+}
+
+export interface ConsolidatedPnlResponse {
+  period:        { start: string; end: string }
+  company_count: number
+  totals:        { revenue: number; expense: number; net_income: number }
+  companies:     ConsolidatedPnlCompany[]
 }

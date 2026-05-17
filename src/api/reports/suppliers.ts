@@ -220,7 +220,7 @@ suppliers.get('/supplier-payments', async (c) => {
     ORDER BY st.transaction_date ASC, st.id ASC
   `
 
-  const { results: statements } = await c.env.DB.prepare(statementsSql).bind(...stBinds, company_id, company_id, company_id).all()
+  const { results: statements } = await c.env.DB.prepare(statementsSql).bind(...stBinds).all()
 
   let summary: any[] = []
   if (unified.ok) {

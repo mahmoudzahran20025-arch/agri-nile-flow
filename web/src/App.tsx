@@ -78,8 +78,6 @@ const TransactionHistoryPage   = lazy(() => import('./pages/inventory/Transactio
 const ItemCardPage             = lazy(() => import('./pages/inventory/ItemCardPage'))
 const CostByFieldPage          = lazy(() => import('./pages/inventory/CostByFieldPage'))
 const ItemCategoriesPage       = lazy(() => import('./pages/inventory/ItemCategoriesPage'))
-const InventoryAdjustmentsPage = lazy(() => import('./pages/inventory/InventoryAdjustmentsPage'))
-const AdjustmentDetailPage     = lazy(() => import('./pages/inventory/AdjustmentDetailPage'))
 const ItemMasterPage           = lazy(() => import('./pages/inventory/ItemMasterPage'))
 const InventoryPostingHealthPage = lazy(() => import('./pages/inventory/InventoryPostingHealthPage'))
 const InventoryBalancesPage      = lazy(() => import('./pages/inventory/InventoryBalancesPage'))
@@ -89,14 +87,19 @@ const WipBalancesPage            = lazy(() => import('./pages/inventory/WipBalan
 
 const UsersPage                = lazy(() => import('./pages/users/UsersPage'))
 const ConfigPage               = lazy(() => import('./pages/config/ConfigPage'))
+const BulkImportPage           = lazy(() => import('./pages/config/BulkImportPage'))
 const FieldsPage               = lazy(() => import('./pages/fields/FieldsPage'))
 const SeasonsPage              = lazy(() => import('./pages/fields/SeasonsPage'))
 const HarvestPage              = lazy(() => import('./pages/fields/HarvestPage'))
+const CropCyclesPage           = lazy(() => import('./pages/fields/CropCyclesPage'))
+const CropCycleDetailPage      = lazy(() => import('./pages/fields/CropCycleDetailPage'))
+const HarvestSettlementPage    = lazy(() => import('./pages/fields/HarvestSettlementPage'))
 const WorkOrdersPage           = lazy(() => import('./pages/operations/WorkOrdersPage'))
 const WorkOrderTemplatesPage   = lazy(() => import('./pages/operations/WorkOrderTemplatesPage'))
 const ContractsPage            = lazy(() => import('./pages/contracts/ContractsPage'))
 const SuperAdminPage           = lazy(() => import('./pages/admin/SuperAdminPage'))
 const OnboardingPage           = lazy(() => import('./pages/admin/OnboardingPage'))
+const ConsolidatedPnlPage      = lazy(() => import('./pages/admin/ConsolidatedPnlPage'))
 const AuditLogPage             = lazy(() => import('./pages/audit/AuditLogPage'))
 const ErrorLogPage             = lazy(() => import('./pages/audit/ErrorLogPage'))
 const IntegrityPage            = lazy(() => import('./pages/audit/IntegrityPage'))
@@ -181,8 +184,6 @@ export default function App() {
         <Route path="inventory"                  element={<WarehouseBalancesPage />} />
         <Route path="inventory/items"            element={<ItemMasterPage />} />
         <Route path="inventory/categories"       element={<ItemCategoriesPage />} />
-        <Route path="inventory/adjustments"      element={<InventoryAdjustmentsPage />} />
-        <Route path="inventory/adjustments/:id"  element={<AdjustmentDetailPage />} />
         <Route path="inventory/setup"            element={<WarehousesPage />} />
         <Route path="inventory/workspace/create"    element={<MovementWorkspacePage />} />
         <Route path="inventory/movements"        element={<InventoryMovementsPage />} />
@@ -212,9 +213,12 @@ export default function App() {
         <Route path="documents" element={<DocumentsPage />} />
 
         {/* Agricultural ERP */}
-        <Route path="fields"          element={<FieldsPage />} />
-        <Route path="seasons"         element={<SeasonsPage />} />
-        <Route path="fields/harvest"  element={<HarvestPage />} />
+        <Route path="fields"                    element={<FieldsPage />} />
+        <Route path="seasons"                   element={<SeasonsPage />} />
+        <Route path="fields/harvest"            element={<HarvestPage />} />
+        <Route path="fields/crop-cycles"        element={<CropCyclesPage />} />
+        <Route path="fields/crop-cycles/:id"    element={<CropCycleDetailPage />} />
+        <Route path="fields/harvest-settlement" element={<HarvestSettlementPage />} />
         <Route path="operations" element={<WorkOrdersPage />} />
         <Route path="operations/templates" element={<WorkOrderTemplatesPage />} />
         <Route path="contracts"  element={<ContractsPage />} />
@@ -280,8 +284,9 @@ export default function App() {
         <Route path="reports/budget-vs-actual"   element={<BudgetVsActualPage />} />
 
         {/* Super Admin */}
-        <Route path="admin"            element={<SuperAdminPage />} />
-        <Route path="admin/onboarding" element={<OnboardingPage />} />
+        <Route path="admin"                  element={<SuperAdminPage />} />
+        <Route path="admin/onboarding"       element={<OnboardingPage />} />
+        <Route path="admin/consolidated-pnl" element={<ConsolidatedPnlPage />} />
 
         {/* Audit Center — unified with tabs: log | errors | integrity */}
         <Route path="audit"           element={<AuditCenterPage />} />
@@ -294,8 +299,9 @@ export default function App() {
         <Route path="users" element={<UsersPage />} />
 
         {/* Config */}
-        <Route path="config"       element={<ConfigPage />} />
-        <Route path="config/:tab"  element={<ConfigPage />} />
+        <Route path="config"             element={<ConfigPage />} />
+        <Route path="config/:tab"        element={<ConfigPage />} />
+        <Route path="config/bulk-import" element={<BulkImportPage />} />
 
         {/* Catch-all */}
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

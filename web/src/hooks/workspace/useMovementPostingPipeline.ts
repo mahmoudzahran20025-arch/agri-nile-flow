@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import { inventoryApi } from '../../api/client'
 import type { MovementDraft, DraftStatus } from '../../components/workspace/types'
+import { validateDraftForSubmission } from '../../components/workspace/validateDraftForSubmission'
 import { workspaceEvents } from './workspaceEvents'
 
 export interface PostingResult {
@@ -29,19 +30,14 @@ export function useMovementPostingPipeline(): PostingPipelineHook {
     workspaceEvents.emit({ type: 'POSTING_START', draftId: draft.id } as any)
 
     try {
-      // 2. Pre-flight Check
-      // Filter out empty lines
-      const validLines = draft.lines.filter(l => l.item_code !== null && (l.quantity ?? 0) > 0)
-      
-      if (validLines.length === 0) {
-        throw new Error('لا يمكن ترحيل مسودة فارغة (يجب إضافة صنف واحد على الأقل بكمية أكبر من صفر)')
-      }
-
-      if (!draft.header.warehouse_id) {
-        throw new Error('يجب تحديد المخزن')
+      // 2. Pre-flight validation
+      const preflight = validateDraftForSubmission(draft)
+      if (!preflight.valid) {
+        throw new Error(preflight.errors[0]?.message ?? 'بيانات المسودة غير مكتملة')
       }
 
       // 3. Canonical Payload
+      const validLines = draft.lines.filter(l => l.item_code !== null && (l.quantity ?? 0) > 0)
       const payload: Parameters<typeof inventoryApi.createBatch>[0] = {
         movement_date:      draft.header.movement_date,
         warehouse:          String(draft.header.warehouse_id),

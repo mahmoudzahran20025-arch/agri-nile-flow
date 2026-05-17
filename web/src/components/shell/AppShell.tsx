@@ -28,6 +28,7 @@ import {
   ClipboardList,
   ShoppingCart,
   X as XIcon,
+  Upload,
 } from 'lucide-react';
 import { Topbar } from './Topbar';
 import GlobalSearch from '../GlobalSearch';
@@ -106,6 +107,8 @@ const navSections: { title: string; items: NavItem[] }[] = [
     title: 'Operations',
     items: [
       { label: 'Seasons & Fields', path: '/seasons',                   icon: <Sprout        size={18} /> },
+      { label: 'Crop Cycles',      path: '/fields/crop-cycles',        icon: <GitBranch     size={18} /> },
+      { label: 'Harvest Settlement', path: '/fields/harvest-settlement', icon: <Sprout        size={18} /> },
       { label: 'Work Orders',      path: '/operations',                icon: <ClipboardList size={18} /> },
       { label: 'HR & Payroll',     path: '/hr',                        icon: <Users         size={18} /> },
       { label: 'Calendar',         path: '/calendar',                  icon: <CalendarDays  size={18} /> },
@@ -126,9 +129,10 @@ const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: 'System',
     items: [
-      { label: 'Audit Center', path: '/audit',  icon: <GitBranch size={18} /> },
-      { label: 'Config',       path: '/config', icon: <Sliders   size={18} /> },
-      { label: 'Admin',        path: '/admin',  icon: <Settings  size={18} /> },
+      { label: 'Audit Center', path: '/audit',               icon: <GitBranch size={18} /> },
+      { label: 'Config',       path: '/config',              icon: <Sliders   size={18} /> },
+      { label: 'Bulk Import',  path: '/config/bulk-import',  icon: <Upload    size={18} /> },
+      { label: 'Admin',        path: '/admin',               icon: <Settings  size={18} /> },
       { label: 'Users',        path: '/users',  icon: <UserCog   size={18} /> },
     ],
   },

@@ -5,7 +5,7 @@ import {
   XCircle, Leaf, Package, Users, TrendingUp, ChevronRight, ArrowLeft,
   Tractor, Droplets, Sprout, CloudRain, Wheat, Truck, ClipboardList, Zap, AlignJustify
 } from 'lucide-react'
-import { operationsApi, fieldsApi, configApi, employeesApi, suppliersApi } from '../../api/client'
+import { operationsApi, fieldsApi, configApi, employeesApi, suppliersApi, cropCyclesApi } from '../../api/client'
 import { assetsApi } from '../../api/assets'
 import type { FixedAsset } from '../../api/assets'
 import Modal from '../../components/ui/Modal'
@@ -372,7 +372,7 @@ export default function WorkOrdersPage() {
   const [err, setErr] = useState('')
 
   const [form, setForm] = useState({
-    name: '', operation_type: '', planned_date: '', field_id: '', season_id: '', center_code: '', area_feddan: '', notes: '',
+    name: '', operation_type: '', planned_date: '', field_id: '', season_id: '', center_code: '', area_feddan: '', notes: '', crop_cycle_id: '',
   })
   const [taskForm, setTF] = useState({
     task_date: '', description: '', employee_id: '', quantity: '', unit: '', unit_cost: '', notes: '',
@@ -403,6 +403,15 @@ export default function WorkOrdersPage() {
   const { data: fixedAssets = [] } = useQuery({ queryKey: ['fixed-assets'], queryFn: assetsApi.list })
   const { data: suppliersData } = useQuery({ queryKey: ['suppliers-options'], queryFn: () => suppliersApi.list({ page: 1, size: 300 }) })
   const { data: opTypesData = [] } = useQuery({ queryKey: ['operation-types'], queryFn: configApi.operationTypes })
+  const { data: cropCycles = [] } = useQuery({
+    queryKey: ['crop-cycles', form.season_id, form.field_id],
+    queryFn: () => cropCyclesApi.list({
+      season_id: form.season_id ? Number(form.season_id) : undefined,
+      field_id: form.field_id ? Number(form.field_id) : undefined,
+      status: 'active',
+    }),
+    enabled: !!form.season_id || !!form.field_id,
+  })
   const opTypes = (opTypesData as { id: number; name: string; is_active: number }[]).filter(t => t.is_active === 1)
 
   const activeCostCenters = (costCenters as CostCenterOption[])
@@ -418,17 +427,18 @@ export default function WorkOrdersPage() {
       name:           form.name.trim(),
       operation_type: form.operation_type,
       planned_date:   form.planned_date,
-      field_id:       form.field_id    ? Number(form.field_id)    : undefined,
-      season_id:      form.season_id   ? Number(form.season_id)   : undefined,
-      center_code:    form.center_code ? Number(form.center_code) : undefined,
-      area_feddan:    form.area_feddan ? Number(form.area_feddan) : undefined,
+      field_id:       form.field_id      ? Number(form.field_id)      : undefined,
+      season_id:      form.season_id     ? Number(form.season_id)     : undefined,
+      center_code:    form.center_code   ? Number(form.center_code)   : undefined,
+      area_feddan:    form.area_feddan   ? Number(form.area_feddan)   : undefined,
+      crop_cycle_id:  form.crop_cycle_id ? Number(form.crop_cycle_id) : undefined,
       notes:          form.notes || undefined,
     }),
     onSuccess: (res: { success: boolean; error?: string }) => {
       if (!res.success) { setErr((res as { error?: string }).error ?? 'خطأ'); return }
       qc.invalidateQueries({ queryKey: ['work-orders'] })
       setOpenNew(false)
-      setForm({ name: '', operation_type: '', planned_date: '', field_id: '', season_id: '', center_code: '', area_feddan: '', notes: '' })
+      setForm({ name: '', operation_type: '', planned_date: '', field_id: '', season_id: '', center_code: '', area_feddan: '', notes: '', crop_cycle_id: '' })
       setErr('')
     },
   })
@@ -888,6 +898,7 @@ export default function WorkOrdersPage() {
                   ...p,
                   field_id: nextFieldId,
                   center_code: selectedField?.center_code ? String(selectedField.center_code) : p.center_code,
+                  crop_cycle_id: '',
                 }))
               }}>
               <option value="">— اختر —</option>
@@ -899,12 +910,26 @@ export default function WorkOrdersPage() {
           <div>
             <label className="label">الموسم</label>
             <select className="input" value={form.season_id}
-              onChange={e => setForm(p => ({ ...p, season_id: e.target.value }))}>
+              onChange={e => setForm(p => ({ ...p, season_id: e.target.value, crop_cycle_id: '' }))}>
               <option value="">— اختر —</option>
               {(seasons as { id: number; name: string }[]).map(s => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
+          </div>
+          <div>
+            <label className="label">دورة المحصول (اختياري)</label>
+            <select className="input" value={form.crop_cycle_id}
+              onChange={e => setForm(p => ({ ...p, crop_cycle_id: e.target.value }))}
+              disabled={!form.season_id && !form.field_id}>
+              <option value="">— بدون ربط WIP —</option>
+              {(cropCycles as Array<{ id: number; crop_name: string; field_name: string }>).map(cc => (
+                <option key={cc.id} value={cc.id}>{cc.crop_name} — {cc.field_name}</option>
+              ))}
+            </select>
+            {form.crop_cycle_id && (
+              <p className="text-xs text-emerald-600 mt-1">تكاليف العمالة والمعدات ستُرحَّل تلقائياً إلى دفتر WIP عند الترحيل المحاسبي</p>
+            )}
           </div>
           <div>
             <label className="label">مركز التكلفة</label>

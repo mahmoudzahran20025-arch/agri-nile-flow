@@ -127,6 +127,7 @@ export function useMovementDraft(opts: UseMovementDraftOptions = {}) {
     draftId: id,
     status: orchestrator.status,
     dirty: orchestrator.isDirty,
+    isSaving: orchestrator.isSaving,
     savedDrafts: orchestrator.savedDrafts,
 
     // The single orchestrator dispatch method for all commands

@@ -4,7 +4,10 @@ import { MapPin, Plus, CheckCircle, XCircle, Navigation, Pencil, TrendingUp } fr
 import { useNavigate } from 'react-router-dom'
 import { fieldsApi, configApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
+import { TableSkeleton } from '../../components/ui/Skeleton'
+import { EmptyList } from '../../components/ui/EmptyState'
 import { usePermission } from '../../hooks/usePermission'
+import { useNewShortcut } from '../../hooks/useNewShortcut'
 import GeoJSONFieldDrawer from '../../components/forms/GeoJSONFieldDrawer'
 import type { GeoFieldResult } from '../../lib/geoUtils'
 import { formatFeddan } from '../../lib/geoUtils'
@@ -49,6 +52,7 @@ export default function FieldsPage() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [open, setOpen]               = useState(false)
+  useNewShortcut(() => setOpen(true))
   const [editField, setEditField]     = useState<Field | null>(null)
   const [search, setSearch]           = useState('')
   const [form, setForm]               = useState<FieldForm>(EMPTY)
@@ -199,12 +203,9 @@ export default function FieldsPage() {
 
       {/* Table */}
       {isLoading ? (
-        <p className="text-center text-gray-500 py-10">جاري التحميل...</p>
+        <TableSkeleton rows={8} cols={6} />
       ) : filtered.length === 0 ? (
-        <div className="card text-center py-16 text-gray-400">
-          <MapPin size={40} className="mx-auto mb-3 opacity-30" />
-          <p>لا توجد قطع أراضي مسجلة</p>
-        </div>
+        <EmptyList noun="قطع أراضي" onAdd={() => setOpen(true)} />
       ) : (
         <div className="card overflow-hidden p-0">
           <table className="w-full text-sm">

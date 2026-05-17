@@ -52,6 +52,10 @@ export { financeApi }                                             from './financ
 export { calendarApi }                                            from './calendar'
 export { fieldsApi }                                              from './fields'
 export { documentsApi }                                           from './documents'
+export { cropCyclesApi }                                          from './crop-cycles'
+export type { CropCycle, WIPLedgerEntry, WIPSummary, CropType, CycleStatus, WIPCategory, CreateCropCycleInput } from './crop-cycles'
+export { harvestSettlementsApi }                                  from './harvest-settlements'
+export type { HarvestSettlement, CreateHarvestSettlementInput, UpdateHarvestSettlementInput } from './harvest-settlements'
 
 // Domain types from previously-extracted files
 export type {

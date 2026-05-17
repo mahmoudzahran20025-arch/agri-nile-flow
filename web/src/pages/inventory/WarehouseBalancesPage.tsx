@@ -134,11 +134,11 @@ export default function WarehouseBalancesPage() {
             <>
               <button
                 className="btn-secondary gap-2"
-                onClick={() => navigate('/inventory/workspace/new?type=TRANSFER_OUT')}
+                onClick={() => navigate('/inventory/workspace/create?type=TRANSFER_OUT')}
               >
                 <ArrowRightLeft size={16} /> تحويل بين المخازن
               </button>
-              <button className="btn-primary gap-2" onClick={() => navigate('/inventory/workspace/new')}>
+              <button className="btn-primary gap-2" onClick={() => navigate('/inventory/workspace/create')}>
                 <Plus size={16} />
                 حركة جديدة
               </button>
@@ -408,7 +408,7 @@ export default function WarehouseBalancesPage() {
                                   title="تحويل مخزني"
                                   onClick={(e) => { 
                                     e.stopPropagation(); 
-                                    navigate(`/inventory/workspace/new?type=TRANSFER_OUT&warehouse=${warehouse}`);
+                                    navigate(`/inventory/workspace/create?type=TRANSFER_OUT&warehouse=${warehouse}`);
                                   }}
                                 >
                                   <ArrowRightLeft size={14} />

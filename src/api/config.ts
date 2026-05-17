@@ -262,7 +262,7 @@ config.get('/seasons/:id/close-check', async (c) => {
   ).bind(id, company_id).first<{ name: string; status: string; start_date: string; end_date: string }>()
   if (!season) return c.json({ success: false, error: 'الموسم غير موجود' }, 404)
 
-  const [openWO, openPO, unmatchedBank, unpaidInv] = await Promise.all([
+  const [openWO, openPO, unmatchedBank, unpaidInv, annualWIPCycles, carryForwardCycles] = await Promise.all([
     // Open work orders (still active)
     c.env.DB.prepare(
       `SELECT COUNT(*) AS n FROM work_orders
@@ -282,13 +282,41 @@ config.get('/seasons/:id/close-check', async (c) => {
          AND statement_date BETWEEN ? AND ?`
     ).bind(company_id, season.start_date, season.end_date).first<{ n: number }>(),
 
-    // Open AP balance: unmatched supplier invoices (entry_type='د', is_matched=0)
+    // Open AP balance: unmatched supplier invoices
     c.env.DB.prepare(
       `SELECT COUNT(*) AS n, COALESCE(SUM(sal.net_ap_balance), 0) AS total
        FROM supplier_ap_ledger sal
        WHERE sal.company_id = ? AND sal.net_ap_balance > 0`
     ).bind(company_id).first<{ n: number; total: number }>(),
+
+    // Active ANNUAL crop cycles in this season with non-zero WIP balance (HARD BLOCKER)
+    c.env.DB.prepare(
+      `SELECT cc.id, cc.crop_name, f.name AS field_name,
+              COALESCE(SUM(wl.debit) - SUM(wl.credit), 0) AS wip_balance
+       FROM crop_cycles cc
+       JOIN fields f ON f.id = cc.field_id AND f.company_id = cc.company_id
+       LEFT JOIN wip_ledger wl ON wl.crop_cycle_id = cc.id AND wl.company_id = cc.company_id
+       WHERE cc.company_id = ? AND cc.season_id = ?
+         AND cc.status = 'active' AND cc.crop_type = 'annual'
+       GROUP BY cc.id
+       HAVING wip_balance > 0`
+    ).bind(company_id, id).all<{ id: number; crop_name: string; field_name: string; wip_balance: number }>(),
+
+    // Long-cycle/perennial active cycles (informational — they carry forward automatically)
+    c.env.DB.prepare(
+      `SELECT cc.id, cc.crop_name, f.name AS field_name, cc.crop_type,
+              COALESCE(SUM(wl.debit) - SUM(wl.credit), 0) AS wip_balance
+       FROM crop_cycles cc
+       JOIN fields f ON f.id = cc.field_id AND f.company_id = cc.company_id
+       LEFT JOIN wip_ledger wl ON wl.crop_cycle_id = cc.id AND wl.company_id = cc.company_id
+       WHERE cc.company_id = ? AND cc.season_id = ?
+         AND cc.status = 'active' AND cc.crop_type IN ('long_cycle','perennial')
+       GROUP BY cc.id`
+    ).bind(company_id, id).all<{ id: number; crop_name: string; field_name: string; crop_type: string; wip_balance: number }>(),
   ])
+
+  const annualBlockers = annualWIPCycles.results ?? []
+  const carryForward   = carryForwardCycles.results ?? []
 
   const checks = [
     {
@@ -323,14 +351,38 @@ config.get('/seasons/:id/close-check', async (c) => {
       blocker: false,
       ok:     (unpaidInv?.n ?? 0) === 0,
     },
+    {
+      key:     'annual_wip_cycles',
+      label:   'دورات محاصيل حولية نشطة برصيد WIP (يجب التسوية أو الشطب)',
+      count:   annualBlockers.length,
+      amount:  annualBlockers.reduce((s, r) => s + r.wip_balance, 0),
+      blocker: true,
+      ok:      annualBlockers.length === 0,
+      detail:  annualBlockers,
+    },
+    {
+      key:     'carry_forward_cycles',
+      label:   'دورات طويلة/معمرة ستُرحَّل للموسم التالي (معلوماتي)',
+      count:   carryForward.length,
+      amount:  carryForward.reduce((s, r) => s + r.wip_balance, 0),
+      blocker: false,
+      ok:      true,
+      detail:  carryForward,
+    },
   ]
+
+  const hardBlocked = annualBlockers.length > 0
 
   return c.json({
     success: true,
     data: {
       season: { id, name: season.name, status: season.status },
       checks,
-      can_close: season.status !== 'closed',
+      can_close: season.status !== 'closed' && !hardBlocked,
+      hard_blocked: hardBlocked,
+      hard_blocked_reason: hardBlocked
+        ? `${annualBlockers.length} دورة محصول حولي نشطة برصيد WIP غير مصفى — يجب تسوية أو شطب كل دورة قبل إغلاق الموسم`
+        : null,
     },
   })
 })
@@ -339,7 +391,7 @@ config.get('/seasons/:id/close-check', async (c) => {
 config.post('/seasons/:id/close', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
-  const { close_notes } = await c.req.json<{ close_notes?: string }>()
+  const { close_notes, force } = await c.req.json<{ close_notes?: string; force?: boolean }>()
 
   const season = await c.env.DB.prepare(
     'SELECT status FROM seasons WHERE id = ? AND company_id = ?'
@@ -347,9 +399,41 @@ config.post('/seasons/:id/close', async (c) => {
   if (!season) return c.json({ success: false, error: 'الموسم غير موجود' }, 404)
   if (season.status === 'closed') return c.json({ success: false, error: 'الموسم مغلق مسبقاً' }, 422)
 
+  // ── WIP guard: block close if active annual cycles have non-zero WIP balance ──
+  if (!force) {
+    const { results: annualBlockers } = await c.env.DB.prepare(
+      `SELECT cc.id, cc.crop_name,
+              COALESCE(SUM(wl.debit) - SUM(wl.credit), 0) AS wip_balance
+       FROM crop_cycles cc
+       LEFT JOIN wip_ledger wl ON wl.crop_cycle_id = cc.id AND wl.company_id = cc.company_id
+       WHERE cc.company_id = ? AND cc.season_id = ?
+         AND cc.status = 'active' AND cc.crop_type = 'annual'
+       GROUP BY cc.id
+       HAVING wip_balance > 0`
+    ).bind(company_id, id).all<{ id: number; crop_name: string; wip_balance: number }>()
+
+    if (annualBlockers.length > 0) {
+      return c.json({
+        success: false,
+        error: `لا يمكن إغلاق الموسم: ${annualBlockers.length} دورة محصول حولي نشطة برصيد WIP غير مصفى`,
+        code: 'ANNUAL_WIP_UNRESOLVED',
+        detail: annualBlockers,
+      }, 422)
+    }
+  }
+
+  // ── Mark long_cycle/perennial active cycles as carrying forward ──
+  // Their status stays 'active'; the wip_ledger entries remain as-is (append-only).
+  // We just log which cycles are implicitly crossing the season boundary.
+  const { results: carryForwardCycles } = await c.env.DB.prepare(
+    `SELECT id, crop_name FROM crop_cycles
+     WHERE company_id = ? AND season_id = ? AND status = 'active'
+       AND crop_type IN ('long_cycle','perennial')`
+  ).bind(company_id, id).all<{ id: number; crop_name: string }>()
+
+  // Legacy GL carry-forward (field-level, no crop_cycle_id context — keep for backward compat)
   let wipEntries: Array<{ field_id: number; crop_name: string; cost_balance: number }> = []
   try {
-    // Carry forward any unfinished crops to next season
     wipEntries = await FinanceCore.carryForwardWIP(c.env.DB, {
       company_id,
       season_id: id,
@@ -357,7 +441,6 @@ config.post('/seasons/:id/close', async (c) => {
     })
   } catch (err: any) {
     console.warn('WIP carry-forward warning (non-fatal):', err.message)
-    // Don't fail season close if WIP carry-forward fails
   }
 
   await c.env.DB.prepare(
@@ -370,10 +453,26 @@ config.post('/seasons/:id/close', async (c) => {
     user_id: userId, company_id,
     action: 'UPDATE', table_name: 'seasons', record_id: id,
     old_value: { status: season.status },
-    new_value: { status: 'closed', wip_carried: wipEntries.length, close_notes: close_notes ?? null },
+    new_value: {
+      status: 'closed',
+      wip_carried: wipEntries.length,
+      carry_forward_cycles: carryForwardCycles.length,
+      force_override: force ?? false,
+      close_notes: close_notes ?? null,
+    },
   })
 
-  return c.json({ success: true, data: { id, status: 'closed', wip_carried: wipEntries.length, wip_details: wipEntries } })
+  return c.json({
+    success: true,
+    data: {
+      id,
+      status: 'closed',
+      wip_carried: wipEntries.length,
+      wip_details: wipEntries,
+      carry_forward_cycles: carryForwardCycles,
+      force_override: force ?? false,
+    },
+  })
 })
 
 // ── GET /config/wip — list WIP balances (pending carry-forwards) ─────────────
@@ -638,6 +737,149 @@ config.patch('/equipment_types/:id', async (c) => {
   ).bind(...binds).run()
 
   return c.json({ success: true, data: null })
+})
+
+// ── POST /config/items/bulk-import ───────────────────────────────────────────
+// Accepts a JSON array of item rows parsed client-side from CSV/Excel.
+// Uses INSERT OR REPLACE so re-importing the same code updates the record.
+// Returns per-row results so the UI can show a summary.
+config.post('/items/bulk-import', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const body = await c.req.json<{
+    rows: Array<{
+      code:              number
+      name:             string
+      unit?:            string
+      reorder_threshold?: number
+      category_id?:     number
+      standard_cost?:   number
+      package_type?:    string
+      package_capacity?: number
+    }>
+  }>()
+
+  if (!Array.isArray(body.rows) || body.rows.length === 0) {
+    return c.json({ success: false, error: 'rows مطلوب' }, 400)
+  }
+  if (body.rows.length > 500) {
+    return c.json({ success: false, error: 'الحد الأقصى 500 صف في الطلب الواحد' }, 400)
+  }
+
+  const results: Array<{ code: number; name: string; status: 'ok' | 'error'; error?: string }> = []
+  let inserted = 0, updated = 0, failed = 0
+
+  for (const row of body.rows) {
+    const code = Number(row.code)
+    if (!code || code <= 0 || !row.name?.trim()) {
+      results.push({ code, name: row.name ?? '', status: 'error', error: 'الكود والاسم مطلوبان' })
+      failed++
+      continue
+    }
+    try {
+      const existing = await c.env.DB.prepare(
+        'SELECT code FROM items WHERE code = ? AND company_id = ?'
+      ).bind(code, company_id).first()
+
+      await c.env.DB.prepare(
+        `INSERT OR REPLACE INTO items
+         (code, company_id, name, unit, reorder_threshold, category_id, standard_cost, package_type, package_capacity, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?, datetime('now'))`
+      ).bind(
+        code, company_id, row.name.trim(),
+        row.unit?.trim() || null,
+        row.reorder_threshold ?? 0,
+        row.category_id ?? null,
+        row.standard_cost ?? null,
+        row.package_type?.trim() || null,
+        row.package_capacity ?? null,
+      ).run()
+
+      if (existing) updated++; else inserted++
+      results.push({ code, name: row.name.trim(), status: 'ok' })
+    } catch (e: any) {
+      results.push({ code, name: row.name ?? '', status: 'error', error: e.message })
+      failed++
+    }
+  }
+
+  void logAudit(c.env.DB, {
+    user_id: Number(userId), company_id, action: 'BULK_IMPORT',
+    table_name: 'items', record_id: 0,
+    new_value: { inserted, updated, failed, total: body.rows.length },
+  })
+
+  return c.json({ success: true, data: { inserted, updated, failed, total: body.rows.length, results } })
+})
+
+// ── POST /config/suppliers/bulk-import ───────────────────────────────────────
+config.post('/suppliers/bulk-import', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const body = await c.req.json<{
+    rows: Array<{
+      code:           number
+      name:           string
+      activity?:      string
+      phone?:         string
+      email?:         string
+      address?:       string
+      tax_number?:    string
+      credit_limit?:  number
+      payment_terms?: number
+    }>
+  }>()
+
+  if (!Array.isArray(body.rows) || body.rows.length === 0) {
+    return c.json({ success: false, error: 'rows مطلوب' }, 400)
+  }
+  if (body.rows.length > 500) {
+    return c.json({ success: false, error: 'الحد الأقصى 500 صف في الطلب الواحد' }, 400)
+  }
+
+  const results: Array<{ code: number; name: string; status: 'ok' | 'error'; error?: string }> = []
+  let inserted = 0, updated = 0, failed = 0
+
+  for (const row of body.rows) {
+    const code = Number(row.code)
+    if (!code || code <= 0 || !row.name?.trim()) {
+      results.push({ code, name: row.name ?? '', status: 'error', error: 'الكود والاسم مطلوبان' })
+      failed++
+      continue
+    }
+    try {
+      const existing = await c.env.DB.prepare(
+        'SELECT code FROM suppliers WHERE code = ? AND company_id = ?'
+      ).bind(code, company_id).first()
+
+      await c.env.DB.prepare(
+        `INSERT OR REPLACE INTO suppliers
+         (code, company_id, name, activity, phone, email, address, tax_number, credit_limit, payment_terms, is_active)
+         VALUES (?,?,?,?,?,?,?,?,?,?,1)`
+      ).bind(
+        code, company_id, row.name.trim(),
+        row.activity?.trim() || null,
+        row.phone?.trim() || null,
+        row.email?.trim() || null,
+        row.address?.trim() || null,
+        row.tax_number?.trim() || null,
+        row.credit_limit ?? null,
+        row.payment_terms ?? 30,
+      ).run()
+
+      if (existing) updated++; else inserted++
+      results.push({ code, name: row.name.trim(), status: 'ok' })
+    } catch (e: any) {
+      results.push({ code, name: row.name ?? '', status: 'error', error: e.message })
+      failed++
+    }
+  }
+
+  void logAudit(c.env.DB, {
+    user_id: Number(userId), company_id, action: 'BULK_IMPORT',
+    table_name: 'suppliers', record_id: 0,
+    new_value: { inserted, updated, failed, total: body.rows.length },
+  })
+
+  return c.json({ success: true, data: { inserted, updated, failed, total: body.rows.length, results } })
 })
 
 export default config

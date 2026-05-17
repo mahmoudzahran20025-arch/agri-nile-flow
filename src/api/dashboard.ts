@@ -113,7 +113,7 @@ dashboard.get('/inventory-alerts', async (c) => {
   const { company_id } = getUser(c)
 
   const { results } = await c.env.DB.prepare(
-    `SELECT i.code, i.name, i.unit, i.warehouse, i.reorder_threshold,
+    `SELECT i.code, i.name, i.unit, i.reorder_threshold,
             COALESCE(SUM(im.qty_in) - SUM(im.qty_out), 0) AS balance_qty
      FROM items i
      LEFT JOIN inventory_movements im ON im.item_code = i.code AND im.company_id = i.company_id

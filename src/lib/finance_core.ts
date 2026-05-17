@@ -70,6 +70,10 @@ async function requireControlAccount(
   throw new Error(`COA_CONTROL_UNRESOLVED: ${context}. Missing active mapping for keys [${keys.join(', ')}].`)
 }
 
+// Import WIP engine
+import { postCostToWIP, creditCostFromWIP } from './wip_engine'
+export type { WIPCostCategory, PostCostToWIPOpts, WIPPostResult } from './wip_engine'
+
 // Import all modules from the finance directory
 import {
   postFromBusinessEvent,
@@ -227,6 +231,169 @@ async function postHarvestLedger(
   })
 }
 
+/**
+ * postHarvestSettlement — converts WIP into inventory or COGS at harvest time.
+ *
+ * Disposition rules (binding architectural decision):
+ *  - 'stored'  → DR Inventory / CR Agricultural COGS   (cost moves to inventory asset)
+ *  - 'sold'    → DR Agricultural COGS / CR Revenue      (cost recognized, revenue booked)
+ *
+ * WIP zeroing: after the GL entry posts, a credit row is appended to wip_ledger
+ * to bring the running_balance to zero. This is the source-of-truth settlement.
+ *
+ * The harvest_settlements record must already exist in 'draft' status.
+ * This function posts it and flips it to 'posted'.
+ */
+async function postHarvestSettlement(
+  db: D1Database,
+  opts: {
+    company_id:        number
+    user_id:           number
+    settlement_id:     number
+    crop_cycle_id:     number
+    season_id:         number
+    settlement_date:   string
+    disposition:       'stored' | 'sold'
+    total_wip_cost:    number
+    // stored only
+    inventory_value?:  number
+    warehouse_id?:     number
+    item_code?:        number
+    // sold only
+    revenue?:          number
+    buyer_name?:       string
+    qty_tons?:         number
+    notes?:            string
+  },
+): Promise<{
+  wip_gl_entry_id:       number | null
+  inventory_gl_entry_id: number | null
+  cogs_gl_entry_id:      number | null
+  revenue_gl_entry_id:   number | null
+}> {
+  const { company_id, user_id, settlement_id, crop_cycle_id, season_id, settlement_date } = opts
+
+  const inventoryAcc   = await requireControlAccount(db, company_id, ['inventory'],         'Settlement inventory account')
+  const cogsAcc        = await requireControlAccount(db, company_id, ['agricultural_cogs', 'harvest_cogs', 'cogs'], 'Settlement COGS account')
+  const revenueAcc     = await requireControlAccount(db, company_id, ['harvest_revenue', 'revenue_default'], 'Settlement revenue account')
+
+  const wipCost    = Math.round(opts.total_wip_cost * 100) / 100
+  const invValue   = Math.round((opts.inventory_value ?? wipCost) * 100) / 100
+  const revenue    = Math.round((opts.revenue ?? 0) * 100) / 100
+  const cropCycle  = await db.prepare('SELECT crop_name, field_id, center_code FROM crop_cycles WHERE id = ? AND company_id = ?')
+    .bind(crop_cycle_id, company_id).first<{ crop_name: string; field_id: number | null; center_code: number | null }>()
+  const cycleDesc  = cropCycle?.crop_name ?? `دورة #${crop_cycle_id}`
+
+  let wipGlEntryId:       number | null = null
+  let inventoryGlEntryId: number | null = null
+  let cogsGlEntryId:      number | null = null
+  let revenueGlEntryId:   number | null = null
+
+  const dims = {
+    center_code: cropCycle?.center_code ?? undefined,
+    season_id,
+    field_id: cropCycle?.field_id ?? undefined,
+  }
+
+  if (opts.disposition === 'stored') {
+    // DR Inventory / CR Agricultural COGS — cost transferred to inventory
+    inventoryGlEntryId = await postFromBusinessEvent(db, {
+      company_id, event_type: 'harvest_settlement_stored',
+      source_module: 'harvest', source_id: settlement_id,
+      event_date: settlement_date,
+      description: `تسوية حصاد (مخزون): ${cycleDesc}`,
+      created_by: user_id,
+      payload: { settlement_id, crop_cycle_id, disposition: 'stored', wip_cost: wipCost, inventory_value: invValue },
+      lines: [
+        { account_code: inventoryAcc, debit: invValue,  credit: 0,        description: `إضافة مخزون: ${cycleDesc}`, rule_slot: 'inventory',         source_ledger: 'harvest' as const, source_record_id: settlement_id, ...dims },
+        { account_code: cogsAcc,      debit: 0,         credit: invValue,  description: `إقفال WIP ← مخزون: ${cycleDesc}`,  rule_slot: 'agricultural_cogs', source_ledger: 'harvest' as const, source_record_id: settlement_id, ...dims },
+      ],
+    })
+    // Variance entry if inventory_value ≠ wip_cost
+    const variance = Math.round((wipCost - invValue) * 100) / 100
+    if (Math.abs(variance) > 0.01) {
+      cogsGlEntryId = await postFromBusinessEvent(db, {
+        company_id, event_type: 'harvest_settlement_variance',
+        source_module: 'harvest', source_id: settlement_id,
+        event_date: settlement_date,
+        description: `فارق تقييم حصاد: ${cycleDesc}`,
+        created_by: user_id,
+        payload: { settlement_id, variance },
+        lines: [
+          { account_code: cogsAcc, debit: variance > 0 ? variance : 0, credit: variance < 0 ? Math.abs(variance) : 0, description: `فارق WIP ← مخزون`, rule_slot: 'agricultural_cogs', source_ledger: 'harvest' as const, source_record_id: settlement_id, ...dims },
+        ],
+      })
+    }
+  } else {
+    // disposition === 'sold'
+    // DR Agricultural COGS / CR Revenue — cost and revenue recognized simultaneously
+    cogsGlEntryId = await postFromBusinessEvent(db, {
+      company_id, event_type: 'harvest_settlement_sold_cogs',
+      source_module: 'harvest', source_id: settlement_id,
+      event_date: settlement_date,
+      description: `تسوية حصاد (بيع — تكلفة): ${cycleDesc}`,
+      created_by: user_id,
+      payload: { settlement_id, crop_cycle_id, disposition: 'sold', wip_cost: wipCost },
+      lines: [
+        { account_code: cogsAcc, debit: wipCost, credit: 0, description: `تكلفة بضاعة مباعة: ${cycleDesc}`, rule_slot: 'agricultural_cogs', source_ledger: 'harvest' as const, source_record_id: settlement_id, ...dims },
+        { account_code: inventoryAcc, debit: 0, credit: wipCost, description: `إقفال WIP ← مبيعات: ${cycleDesc}`, rule_slot: 'inventory', source_ledger: 'harvest' as const, source_record_id: settlement_id, ...dims },
+      ],
+    })
+    if (revenue > 0) {
+      revenueGlEntryId = await postFromBusinessEvent(db, {
+        company_id, event_type: 'harvest_settlement_sold_revenue',
+        source_module: 'harvest', source_id: settlement_id,
+        event_date: settlement_date,
+        description: `تسوية حصاد (بيع — إيراد): ${cycleDesc}${opts.buyer_name ? ' — ' + opts.buyer_name : ''}`,
+        created_by: user_id,
+        payload: { settlement_id, revenue, buyer: opts.buyer_name },
+        lines: [
+          { account_code: '14010101', debit: revenue, credit: 0,       description: `حصيلة بيع: ${cycleDesc}`, rule_slot: 'cash',            source_ledger: 'harvest' as const, source_record_id: settlement_id, ...dims },
+          { account_code: revenueAcc, debit: 0,       credit: revenue,  description: `إيراد مبيعات محاصيل`,     rule_slot: 'harvest_revenue', source_ledger: 'harvest' as const, source_record_id: settlement_id, ...dims },
+        ],
+      })
+    }
+  }
+
+  // Zero out WIP ledger with a credit row
+  const { wip_ledger_id: wipLedgerId } = await creditCostFromWIP({
+    db, company_id,
+    crop_cycle_id, season_id,
+    transaction_date: settlement_date,
+    cost_category: 'other',
+    amount: wipCost,
+    description: `تسوية نهائية — ${opts.disposition === 'stored' ? 'نقل إلى مخزون' : 'بيع مباشر'}`,
+    source_module: 'harvest', source_id: settlement_id,
+    journal_entry_id: inventoryGlEntryId ?? cogsGlEntryId,
+  })
+  wipGlEntryId = inventoryGlEntryId ?? cogsGlEntryId
+
+  // Update crop cycle status to 'harvested' and patch settlement to 'posted'
+  await db.batch([
+    db.prepare(
+      `UPDATE harvest_settlements
+       SET status = 'posted',
+           wip_gl_entry_id = ?, inventory_gl_entry_id = ?,
+           cogs_gl_entry_id = ?, revenue_gl_entry_id = ?,
+           cost_per_ton = CASE WHEN qty_tons > 0 THEN ? / qty_tons ELSE NULL END,
+           updated_at = datetime('now')
+       WHERE id = ? AND company_id = ?`
+    ).bind(
+      wipGlEntryId, inventoryGlEntryId ?? null,
+      cogsGlEntryId ?? null, revenueGlEntryId ?? null,
+      wipCost, settlement_id, company_id,
+    ),
+    db.prepare(
+      `UPDATE crop_cycles SET status = 'harvested', actual_harvest_date = ?, updated_at = datetime('now')
+       WHERE id = ? AND company_id = ?`
+    ).bind(settlement_date, crop_cycle_id, company_id),
+  ])
+
+  void wipLedgerId // used for side effect; referenced for bookkeeping
+
+  return { wip_gl_entry_id: wipGlEntryId, inventory_gl_entry_id: inventoryGlEntryId, cogs_gl_entry_id: cogsGlEntryId, revenue_gl_entry_id: revenueGlEntryId }
+}
+
 export const FinanceCore = {
   resolveUnitFactor,
   prepareCashMovement,
@@ -253,9 +420,14 @@ export const FinanceCore = {
   postManualEntry,
   postManualReversal,
   getOpenPeriod,
+  postCostToWIP,
+  creditCostFromWIP,
+  postHarvestSettlement,
 } as const
 
 export {
+  postCostToWIP,
+  creditCostFromWIP,
   resolveUnitFactor,
   postFromBusinessEvent,
   syncSourceDocumentBridge,

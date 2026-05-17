@@ -3,7 +3,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Users, Plus, Phone, Calendar, DollarSign, ToggleLeft, ToggleRight } from 'lucide-react'
 import { employeesApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
+import { TableSkeleton } from '../../components/ui/Skeleton'
+import { EmptyList } from '../../components/ui/EmptyState'
 import { usePermission } from '../../hooks/usePermission'
+import { useNewShortcut } from '../../hooks/useNewShortcut'
 
 interface Employee {
   id: number; name: string; national_id?: string; role_title?: string
@@ -23,6 +26,7 @@ export default function EmployeesPage() {
   const { canWrite } = usePermission()
   const qc = useQueryClient()
   const [open, setOpen]     = useState(false)
+  useNewShortcut(() => setOpen(true))
   const [search, setSearch] = useState('')
   const [form, setForm]     = useState<EmpForm>(EMPTY)
   const [err, setErr]       = useState('')
@@ -81,12 +85,9 @@ export default function EmployeesPage() {
       />
 
       {isLoading ? (
-        <p className="text-center text-gray-500 py-10">جاري التحميل...</p>
+        <TableSkeleton rows={8} cols={5} />
       ) : list.length === 0 ? (
-        <div className="card text-center py-16 text-gray-400">
-          <Users size={40} className="mx-auto mb-3 opacity-30" />
-          <p>لا يوجد موظفون مسجلون</p>
-        </div>
+        <EmptyList noun="موظفين" onAdd={canWrite('employees') ? () => setOpen(true) : undefined} />
       ) : (
         <div className="card overflow-hidden p-0">
           <table className="w-full text-sm">

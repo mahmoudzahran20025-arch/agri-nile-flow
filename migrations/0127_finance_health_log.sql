@@ -17,3 +17,7 @@ CREATE TABLE IF NOT EXISTS finance_health_log (
 
 CREATE INDEX IF NOT EXISTS idx_fhl_company_checked
   ON finance_health_log (company_id, checked_at DESC);
+
+-- Register migration
+INSERT INTO schema_migrations (filename, name, source)
+VALUES ('0127_finance_health_log.sql', '0127_finance_health_log', 'manual');

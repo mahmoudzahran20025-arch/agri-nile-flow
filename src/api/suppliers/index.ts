@@ -18,8 +18,8 @@ import payments from './payments'
 
 const suppliers = new Hono<{ Bindings: Env }>()
 
-suppliers.route('/', master)
-suppliers.route('/', invoices)
 suppliers.route('/', payments)
+suppliers.route('/', invoices)
+suppliers.route('/', master)
 
 export default suppliers

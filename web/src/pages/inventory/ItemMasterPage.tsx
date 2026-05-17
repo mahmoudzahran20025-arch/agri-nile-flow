@@ -17,6 +17,7 @@ import {
 import { inventoryApi } from '../../api/inventory'
 import { glApi } from '../../api/gl'
 import Modal from '../../components/ui/Modal'
+import { TableSkeleton } from '../../components/ui/Skeleton'
 import { usePermission } from '../../hooks/usePermission'
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
@@ -428,7 +429,7 @@ export default function ItemMasterPage() {
       {/* Table */}
       <div className="card overflow-hidden">
         {isLoading ? (
-          <div className="p-16 text-center text-slate-400 animate-pulse">جاري التحميل...</div>
+          <TableSkeleton rows={10} cols={8} />
         ) : items.length === 0 ? (
           <div className="p-16 text-center text-slate-400">
             <Package size={40} className="mx-auto mb-3 opacity-20" />

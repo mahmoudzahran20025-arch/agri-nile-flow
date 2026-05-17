@@ -28,6 +28,7 @@ export function useWorkspaceOrchestrator(config: OrchestratorConfig) {
   const dirtyRowIds   = useRef<Set<string>>(new Set())
   const dirtyDomains  = useRef<Set<'header' | 'dimensions' | 'lines'>>(new Set())
   const [status, setStatus] = useState<import('../../components/workspace/types').DraftStatus>('draft')
+  const [pendingFlushCount, setPendingFlushCount] = useState(0)
   
   // Helper to safely transition status
   const transitionTo = useCallback((next: import('../../components/workspace/types').DraftStatus) => {
@@ -100,12 +101,16 @@ export function useWorkspaceOrchestrator(config: OrchestratorConfig) {
       console.error('Orchestrator persist failed:', err)
     } finally {
       isPersistingRef.current = false
+      setPendingFlushCount(n => Math.max(0, n - 1))
     }
   }, [config, status, transitionTo])
 
   const enqueueSave = useCallback((delayMs = 1500) => {
     if (config.mode === 'readonly') return
-    if (pendingSaveRef.current) {
+    if (!pendingSaveRef.current) {
+      // Only increment when scheduling a new flush (not re-debouncing an existing one)
+      setPendingFlushCount(n => n + 1)
+    } else {
       clearTimeout(pendingSaveRef.current)
     }
     pendingSaveRef.current = setTimeout(() => {
@@ -184,6 +189,8 @@ export function useWorkspaceOrchestrator(config: OrchestratorConfig) {
     status,
     setDraftStatus: transitionTo,
     isDirty: status === 'dirty' || status === 'saving',
+    isSaving: pendingFlushCount > 0 || status === 'saving',
+    pendingFlushCount,
     savedDrafts,
     // Methods for UI orchestration
     discardDraft: async () => {

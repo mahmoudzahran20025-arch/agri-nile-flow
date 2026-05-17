@@ -10,11 +10,14 @@ interface Season { id: number; name: string; status: string; start_date: string;
 interface Check {
   key: string; label: string
   count: number; amount: number | null; blocker: boolean; ok: boolean
+  detail?: Array<{ id: number; crop_name: string; field_name?: string; wip_balance?: number; crop_type?: string }>
 }
 interface CloseCheckResult {
   season: { id: number; name: string; status: string }
   checks: Check[]
   can_close: boolean
+  hard_blocked?: boolean
+  hard_blocked_reason?: string | null
 }
 
 function egp(n: number) {
@@ -26,6 +29,7 @@ export default function SeasonClosePage() {
   const [selectedId, setSelectedId] = useState<number | ''>('')
   const [notes, setNotes] = useState('')
   const [confirmed, setConfirmed] = useState(false)
+  const [forceOverride, setForceOverride] = useState(false)
   const [done, setDone] = useState(false)
 
   const { data: seasons = [] } = useQuery({
@@ -43,7 +47,7 @@ export default function SeasonClosePage() {
   })
 
   const closeMut = useMutation({
-    mutationFn: () => configApi.closeSeason(selectedId as number, notes || undefined),
+    mutationFn: () => configApi.closeSeason(selectedId as number, notes || undefined, forceOverride || undefined),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['seasons'] })
       qc.invalidateQueries({ queryKey: ['season-close-check'] })
@@ -52,7 +56,9 @@ export default function SeasonClosePage() {
   })
 
   const issues   = checkData?.checks.filter(c => !c.ok) ?? []
-  const blockers = checkData?.checks.filter(c => !c.ok && c.blocker) ?? []
+  const hardBlockers = checkData?.checks.filter(c => !c.ok && c.blocker) ?? []
+  // With force override, hard blockers are bypassed (super_admin only escape hatch)
+  const blockers = forceOverride ? [] : hardBlockers
   const canClose = !!checkData?.can_close && blockers.length === 0 && confirmed
 
   if (done) {
@@ -176,6 +182,19 @@ export default function SeasonClosePage() {
                         {check.blocker && ' — يجب المعالجة قبل الإغلاق'}
                       </p>
                     )}
+                    {check.detail && check.detail.length > 0 && (
+                      <ul className="mt-1.5 space-y-0.5">
+                        {check.detail.map(d => (
+                          <li key={d.id} className="text-xs text-red-700 flex items-center gap-1">
+                            <span className="w-1 h-1 rounded-full bg-red-400 shrink-0" />
+                            {d.crop_name}{d.field_name ? ` — ${d.field_name}` : ''}
+                            {d.wip_balance != null && d.wip_balance > 0 && (
+                              <span className="text-red-500 font-mono ml-1">{egp(d.wip_balance)} ج.م</span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                   <span className={`text-xs rounded-full px-2 py-0.5 font-medium ${
                     check.ok ? 'bg-emerald-100 text-emerald-700' : check.blocker ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
@@ -204,8 +223,33 @@ export default function SeasonClosePage() {
         </div>
       )}
 
+      {/* Step 3: Force-override escape hatch for hard blockers */}
+      {checkData && hardBlockers.length > 0 && (
+        <div className="bg-white rounded-2xl border border-red-200 shadow-sm p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <XCircle size={18} className="text-red-600 shrink-0" />
+            <h2 className="font-semibold text-red-800">موانع تحتاج إلى معالجة</h2>
+          </div>
+          <p className="text-sm text-red-700 mb-3">{checkData.hard_blocked_reason}</p>
+          <p className="text-xs text-slate-500 mb-3">
+            للحل: انتقل إلى <strong>دورات المحاصيل</strong> وقم بتسوية أو شطب كل دورة حولية نشطة، ثم أعد الفحص.
+          </p>
+          <label className="flex items-start gap-3 cursor-pointer p-3 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 transition-colors">
+            <input
+              type="checkbox"
+              checked={forceOverride}
+              onChange={e => { setForceOverride(e.target.checked); setConfirmed(false) }}
+              className="mt-0.5 w-4 h-4 rounded accent-red-600"
+            />
+            <span className="text-xs text-red-800 font-medium">
+              تجاوز إجباري (للمسؤول فقط) — أعلم أن هناك دورات WIP غير مُسوَّاة وأوافق على الإغلاق المبكر
+            </span>
+          </label>
+        </div>
+      )}
+
       {/* Step 3: Confirm & close */}
-      {checkData && blockers.length === 0 && (
+      {checkData && (blockers.length === 0) && (
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
           <div className="flex items-center gap-2 mb-4">
             <span className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-bold">3</span>
@@ -213,6 +257,11 @@ export default function SeasonClosePage() {
           </div>
 
           <div className="space-y-4">
+            {forceOverride && (
+              <div className="p-3 rounded-xl border border-red-200 bg-red-50 text-xs text-red-700">
+                ⚠️ وضع التجاوز الإجباري مُفعَّل — سيتم الإغلاق رغم وجود دورات WIP غير مُسوَّاة
+              </div>
+            )}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">ملاحظات الإغلاق</label>
               <textarea

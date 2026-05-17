@@ -18,9 +18,10 @@ const SHORTCUTS: ShortcutDef[] = [
   { group: 'تنقل',        keys: 'Alt + G', label: 'قيود الأستاذ العام'  },
   { group: 'تنقل',        keys: 'Alt + F', label: 'قطع الأراضي'        },
   { group: 'تنقل',        keys: 'Alt + C', label: 'الإعدادات'           },
-  { group: 'النظام',      keys: 'Ctrl + K', label: 'بحث سريع'          },
-  { group: 'النظام',      keys: '?',        label: 'اختصارات لوحة المفاتيح' },
-  { group: 'النظام',      keys: 'Escape',   label: 'إغلاق / إلغاء'     },
+  { group: 'النظام',      keys: 'Ctrl + K', label: 'بحث سريع'              },
+  { group: 'النظام',      keys: 'Ctrl + N', label: 'إضافة جديد (الصفحة الحالية)' },
+  { group: 'النظام',      keys: '?',        label: 'اختصارات لوحة المفاتيح'     },
+  { group: 'النظام',      keys: 'Escape',   label: 'إغلاق / إلغاء'              },
 ]
 
 const NAV_MAP: Record<string, string> = {

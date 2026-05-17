@@ -106,6 +106,22 @@ if ($strictViolations.Count -gt 0) {
     $strictViolations | ForEach-Object { Write-Host "       $($_.File)" -ForegroundColor Yellow }
 }
 
+# --- Rule 5: Ensure new migrations register themselves in schema_migrations ---
+$unregistered = @()
+foreach ($g in $numbered | Where-Object { [int]$_.Number -gt $GRANDFATHER_THRESHOLD }) {
+    $content = Get-Content (Join-Path $MigrationsDir $g.File) -Raw
+    if ($content -notmatch "INSERT INTO schema_migrations") {
+        $unregistered += $g.File
+    }
+}
+if ($unregistered.Count -gt 0) {
+    Write-Host "`n[FAIL] New migrations must register themselves in the schema_migrations table:" -ForegroundColor Red
+    $unregistered | ForEach-Object { Write-Host "  - $_ (missing INSERT INTO schema_migrations)" -ForegroundColor Red }
+    $exitCode = 1
+} else {
+    Write-Host "`n[PASS] All new migrations register themselves in the schema_migrations table." -ForegroundColor Green
+}
+
 Write-Host ""
 if ($exitCode -eq 0) {
     Write-Host "[OK] Migration check passed." -ForegroundColor Green

@@ -5,7 +5,6 @@ import { resolveCashLedger } from './resolvers/cash'
 import { logFinancialWorkflowFailure } from './workflow_policy'
 import {
   resolveCashTransaction as peResolveCash,
-  resolveExpensePosting as peResolveExpense,
   resolveControlAccount,
 } from '../posting_engine'
 
@@ -73,7 +72,7 @@ async function getCashTransactionColumns(db: D1Database): Promise<Set<string>> {
 async function preValidateCashGlBlueprint(
   db: D1Database,
   opts: CashMovementInput,
-  postingDate: string,
+  _postingDate: string,
 ): Promise<void> {
   if (opts.skipGlPosting) return
 

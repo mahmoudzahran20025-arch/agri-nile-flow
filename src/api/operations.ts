@@ -4,6 +4,7 @@ import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
 import { getTodayIsoDate } from '../lib/utils/date'
 import { FinanceCore } from '../lib/finance_core'
 import { logAudit } from '../lib/audit'
+import { postCostToWIP } from '../lib/wip_engine'
 
 const operations = new Hono<{ Bindings: Env }>()
 operations.use('*', authMiddleware)
@@ -292,8 +293,8 @@ operations.patch('/orders/:id/status', async (c) => {
   if (status === 'costed') {
     try {
       const order = await c.env.DB.prepare(
-        'SELECT center_code, actual_date, season_id, field_id FROM work_orders WHERE id = ? AND company_id = ?'
-      ).bind(id, company_id).first<{ center_code: number; actual_date: string; season_id: number | null; field_id: number | null }>()
+        'SELECT center_code, actual_date, season_id, field_id, crop_cycle_id FROM work_orders WHERE id = ? AND company_id = ?'
+      ).bind(id, company_id).first<{ center_code: number; actual_date: string; season_id: number | null; field_id: number | null; crop_cycle_id: number | null }>()
 
       let centerCode = order?.center_code ?? null
       if (centerCode == null && order?.field_id != null) {
@@ -317,12 +318,14 @@ operations.patch('/orders/:id/status', async (c) => {
       const equipmentUnposted = eqRow?.total_cost ?? 0
       const totalCost         = laborCost + equipmentUnposted
 
+      const costingDate = actual_date ?? order?.actual_date ?? getTodayIsoDate()
+
       if (totalCost > 0) {
         const entryId = await FinanceCore.resolveWorkOrderLabor(c.env.DB, {
           company_id,
           ref_id: id,
           amount: totalCost,
-          date: actual_date ?? order?.actual_date ?? getTodayIsoDate(),
+          date: costingDate,
           description: equipmentUnposted > 0
             ? `تكلفة عمليات ميدانية (عمالة + معدات غير مُرحّلة): أمر عمل #${id}`
             : `تكلفة عمليات ميدانية (عمالة): أمر عمل #${id}`,
@@ -338,6 +341,36 @@ operations.patch('/orders/:id/status', async (c) => {
              SET journal_entry_id = ?
              WHERE work_order_id = ? AND company_id = ? AND journal_entry_id IS NULL`
           ).bind(entryId, id, company_id).run()
+        }
+
+        // ── WIP dual-write: if WO is linked to a crop cycle, post labor+equipment cost ──
+        if (order?.crop_cycle_id && order.season_id) {
+          if (laborCost > 0) {
+            await postCostToWIP({
+              db: c.env.DB, company_id,
+              crop_cycle_id: order.crop_cycle_id,
+              season_id: order.season_id,
+              transaction_date: costingDate,
+              cost_category: 'labor',
+              debit: laborCost,
+              description: `عمالة — أمر عمل #${id}`,
+              source_module: 'operations', source_id: id,
+              journal_entry_id: typeof entryId === 'number' ? entryId : null,
+            })
+          }
+          if (equipmentUnposted > 0) {
+            await postCostToWIP({
+              db: c.env.DB, company_id,
+              crop_cycle_id: order.crop_cycle_id,
+              season_id: order.season_id,
+              transaction_date: costingDate,
+              cost_category: 'equipment',
+              debit: equipmentUnposted,
+              description: `معدات — أمر عمل #${id}`,
+              source_module: 'operations', source_id: id,
+              journal_entry_id: typeof entryId === 'number' ? entryId : null,
+            })
+          }
         }
       }
     } catch (e: any) {

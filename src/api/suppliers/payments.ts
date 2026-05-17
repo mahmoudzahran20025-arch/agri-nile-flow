@@ -10,10 +10,11 @@
 
 import { Hono } from 'hono'
 import type { Env } from '../../types'
-import { getUser, permissionGuard } from '../../middleware/auth'
+import { authMiddleware, getUser, permissionGuard } from '../../middleware/auth'
 import { getTodayIsoDate } from '../../lib/utils/date'
 
 const payments = new Hono<{ Bindings: Env }>()
+payments.use('*', authMiddleware)
 
 // ── POST /:code/match-payment ─────────────────────────────────────────────────
 // Links a payment row to an open invoice row, updating is_matched on both.
@@ -196,7 +197,6 @@ payments.get('/aging-summary', permissionGuard('suppliers', 'read'), async (c) =
           AND p.entry_type = 'م'
           AND p.status = 'posted'
       ), 0)                                                 AS outstanding,
-      st.po_number,
       COALESCE(CAST(
         julianday(?) - julianday(COALESCE(st.due_date, st.transaction_date))
       AS INTEGER), 0)                                       AS days_overdue,
@@ -212,6 +212,127 @@ payments.get('/aging-summary', permissionGuard('suppliers', 'read'), async (c) =
   `).bind(today, company_id).all()
 
   return c.json({ success: true, data: results })
+})
+
+// ── GET /ap-aging ─────────────────────────────────────────────────────────────
+// Bucketed AP aging: current / 1-30 / 31-60 / 61-90 / 90+ days overdue.
+// Returns per-supplier rows + company-level totals.
+// Query param: supplier_code (optional, filter to one supplier)
+payments.get('/ap-aging', permissionGuard('suppliers', 'read'), async (c) => {
+  const { company_id } = getUser(c)
+  const today = getTodayIsoDate()
+  const supplierCodeFilter = c.req.query('supplier_code')
+    ? Number(c.req.query('supplier_code'))
+    : null
+
+  let whereExtra = ''
+  const binds: unknown[] = [today, today, today, today, today, company_id]
+  if (supplierCodeFilter) {
+    whereExtra = ' AND st.supplier_code = ?'
+    binds.push(supplierCodeFilter)
+  }
+
+  // Each open invoice bucketed by days overdue.
+  // outstanding = invoice credit minus all matched payments against it.
+  const { results } = await c.env.DB.prepare(`
+    SELECT
+      st.supplier_code,
+      s.name                                                        AS supplier_name,
+      COUNT(*)                                                      AS invoice_count,
+      COALESCE(SUM(
+        st.credit - COALESCE((
+          SELECT SUM(p.debit)
+          FROM supplier_transactions p
+          WHERE p.matched_payment_id = st.id
+            AND p.company_id = st.company_id
+            AND p.entry_type = 'م'
+            AND p.status = 'posted'
+        ), 0)
+      ), 0)                                                         AS total_outstanding,
+      COALESCE(SUM(CASE
+        WHEN julianday(?) - julianday(COALESCE(st.due_date, st.transaction_date)) <= 0
+        THEN st.credit - COALESCE((
+          SELECT SUM(p.debit) FROM supplier_transactions p
+          WHERE p.matched_payment_id = st.id AND p.company_id = st.company_id
+            AND p.entry_type = 'م' AND p.status = 'posted'
+        ), 0) ELSE 0 END
+      ), 0)                                                         AS bucket_current,
+      COALESCE(SUM(CASE
+        WHEN julianday(?) - julianday(COALESCE(st.due_date, st.transaction_date)) BETWEEN 1 AND 30
+        THEN st.credit - COALESCE((
+          SELECT SUM(p.debit) FROM supplier_transactions p
+          WHERE p.matched_payment_id = st.id AND p.company_id = st.company_id
+            AND p.entry_type = 'م' AND p.status = 'posted'
+        ), 0) ELSE 0 END
+      ), 0)                                                         AS bucket_1_30,
+      COALESCE(SUM(CASE
+        WHEN julianday(?) - julianday(COALESCE(st.due_date, st.transaction_date)) BETWEEN 31 AND 60
+        THEN st.credit - COALESCE((
+          SELECT SUM(p.debit) FROM supplier_transactions p
+          WHERE p.matched_payment_id = st.id AND p.company_id = st.company_id
+            AND p.entry_type = 'م' AND p.status = 'posted'
+        ), 0) ELSE 0 END
+      ), 0)                                                         AS bucket_31_60,
+      COALESCE(SUM(CASE
+        WHEN julianday(?) - julianday(COALESCE(st.due_date, st.transaction_date)) BETWEEN 61 AND 90
+        THEN st.credit - COALESCE((
+          SELECT SUM(p.debit) FROM supplier_transactions p
+          WHERE p.matched_payment_id = st.id AND p.company_id = st.company_id
+            AND p.entry_type = 'م' AND p.status = 'posted'
+        ), 0) ELSE 0 END
+      ), 0)                                                         AS bucket_61_90,
+      COALESCE(SUM(CASE
+        WHEN julianday(?) - julianday(COALESCE(st.due_date, st.transaction_date)) > 90
+        THEN st.credit - COALESCE((
+          SELECT SUM(p.debit) FROM supplier_transactions p
+          WHERE p.matched_payment_id = st.id AND p.company_id = st.company_id
+            AND p.entry_type = 'م' AND p.status = 'posted'
+        ), 0) ELSE 0 END
+      ), 0)                                                         AS bucket_90_plus
+    FROM supplier_transactions st
+    LEFT JOIN suppliers s
+      ON s.code = st.supplier_code AND s.company_id = st.company_id
+    WHERE st.company_id = ?
+      AND st.entry_type = 'د'
+      AND (st.is_matched IS NULL OR st.is_matched = 0)
+      AND st.status = 'posted'
+      ${whereExtra}
+    GROUP BY st.supplier_code, s.name
+    ORDER BY total_outstanding DESC
+  `).bind(...binds).all<{
+    supplier_code: number
+    supplier_name: string | null
+    invoice_count: number
+    total_outstanding: number
+    bucket_current: number
+    bucket_1_30: number
+    bucket_31_60: number
+    bucket_61_90: number
+    bucket_90_plus: number
+  }>()
+
+  const totals = results.reduce((acc, r) => ({
+    invoice_count:     acc.invoice_count     + r.invoice_count,
+    total_outstanding: acc.total_outstanding + r.total_outstanding,
+    bucket_current:    acc.bucket_current    + r.bucket_current,
+    bucket_1_30:       acc.bucket_1_30       + r.bucket_1_30,
+    bucket_31_60:      acc.bucket_31_60      + r.bucket_31_60,
+    bucket_61_90:      acc.bucket_61_90      + r.bucket_61_90,
+    bucket_90_plus:    acc.bucket_90_plus    + r.bucket_90_plus,
+  }), {
+    invoice_count: 0, total_outstanding: 0,
+    bucket_current: 0, bucket_1_30: 0, bucket_31_60: 0, bucket_61_90: 0, bucket_90_plus: 0,
+  })
+
+  return c.json({
+    success: true,
+    data: {
+      as_of_date: today,
+      supplier_count: results.length,
+      totals,
+      suppliers: results,
+    },
+  })
 })
 
 export default payments
