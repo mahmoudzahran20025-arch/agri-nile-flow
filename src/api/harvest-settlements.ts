@@ -198,6 +198,7 @@ hs.post('/:id/post', async (c) => {
     WHERE hs.id = ? AND hs.company_id = ?
   `).bind(id, company_id).first<{
     id: number; crop_cycle_id: number; season_id: number; disposition: 'stored' | 'sold'
+    settlement_mode: 'inventory' | 'direct_sale'
     total_wip_cost: number; inventory_value: number | null; warehouse_id: number | null
     item_code: number | null; revenue: number | null; buyer_name: string | null
     qty_tons: number | null; notes: string | null; settlement_date: string
@@ -231,6 +232,7 @@ hs.post('/:id/post', async (c) => {
       season_id:       settlement.season_id,
       settlement_date: settlement.settlement_date,
       disposition:     settlement.disposition,
+      settlement_mode: settlement.settlement_mode,
       total_wip_cost:  settlement.total_wip_cost,
       inventory_value: settlement.inventory_value ?? undefined,
       warehouse_id:    settlement.warehouse_id ?? undefined,

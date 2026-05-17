@@ -38,8 +38,9 @@ export interface WIPLedgerEntry {
   season_id:        number
   season_name:      string
   transaction_date: string
-  cost_category:    WIPCategory
-  subcategory_code: string | null
+  cost_category:      WIPCategory
+  cost_category_code: string | null
+  subcategory_code:   string | null
   debit:            number
   credit:           number
   running_balance:  number
@@ -95,9 +96,15 @@ export const cropCyclesApi = {
       api.patch(`/crop-cycles/${id}`, body)
     ),
 
-  setStatus: (id: number, status: 'abandoned' | 'written_off', notes?: string) =>
+  // written_off only — abandonment uses abandon() below for full GL accounting
+  setStatus: (id: number, status: 'written_off', notes?: string) =>
     unwrap<{ wip_balance_warning: string | null }>(
       api.post(`/crop-cycles/${id}/status`, { status, notes })
+    ),
+
+  abandon: (id: number, opts?: { abandonment_date?: string; notes?: string }) =>
+    unwrap<{ gl_entry_id: number | null; wip_written_off: number }>(
+      api.post(`/crop-cycles/${id}/abandon`, opts ?? {})
     ),
 
   wipSummary: (id: number) =>

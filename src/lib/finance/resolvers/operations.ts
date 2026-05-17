@@ -5,6 +5,7 @@ import {
 } from '../../posting_engine'
 import { postFromBusinessEvent } from '../business_events'
 import { resolveControlAccount } from '../../posting_engine'
+import { postCostToWIP } from '../../wip_engine'
 
 export async function resolveWorkOrderLabor(
   db: D1Database,
@@ -18,6 +19,8 @@ export async function resolveWorkOrderLabor(
     center_code?: number
     season_id?: number
     field_id?: number
+    // When set, labor cost is also posted to wip_ledger for the crop cycle.
+    crop_cycle_id?: number | null
   },
 ): Promise<number | null> {
   const [cogsAcc, wagesPayableAcc] = await Promise.all([
@@ -39,7 +42,7 @@ export async function resolveWorkOrderLabor(
   }
 
   const refId = opts.ref_id
-  return postFromBusinessEvent(db, {
+  const laborEntryId = await postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'work_order_labor',
     source_module: 'operations',
@@ -67,6 +70,30 @@ export async function resolveWorkOrderLabor(
         .bind(entryId, refId, opts.company_id).run()
     },
   })
+
+  // WIP side-effect: work order tied to a crop cycle → accumulate labor cost.
+  if (opts.crop_cycle_id && opts.season_id) {
+    try {
+      await postCostToWIP({
+        db,
+        company_id:         opts.company_id,
+        crop_cycle_id:      opts.crop_cycle_id,
+        season_id:          opts.season_id,
+        transaction_date:   opts.date,
+        cost_category:      'labor',
+        cost_category_code: 'LABOR',
+        debit:              opts.amount,
+        description:        `عمالة: ${opts.description}`,
+        source_module:      'operations',
+        source_id:          refId,
+        journal_entry_id:   laborEntryId,
+      })
+    } catch (wipErr) {
+      console.error(`WIP_ACCUMULATION_FAILED: work order ${refId}:`, (wipErr as Error).message)
+    }
+  }
+
+  return laborEntryId
 }
 
 export async function resolveContractAdvance(

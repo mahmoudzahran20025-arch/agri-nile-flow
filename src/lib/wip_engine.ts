@@ -23,6 +23,8 @@ export interface PostCostToWIPOpts {
   season_id:        number
   transaction_date: string
   cost_category:    WIPCostCategory
+  // FK to cost_categories.code (Phase 3+). Written alongside legacy cost_category for dual-write.
+  cost_category_code?: string | null
   subcategory_code?: string | null
   debit:            number
   credit?:          number
@@ -76,17 +78,18 @@ export async function postCostToWIP(opts: PostCostToWIPOpts): Promise<WIPPostRes
   const { meta } = await db.prepare(`
     INSERT INTO wip_ledger
       (company_id, crop_cycle_id, season_id, transaction_date,
-       cost_category, subcategory_code,
+       cost_category, cost_category_code, subcategory_code,
        debit, credit, running_balance,
        description, source_module, source_id, journal_entry_id,
        allocation_method, allocation_share)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     company_id,
     crop_cycle_id,
     opts.season_id,
     opts.transaction_date,
     opts.cost_category,
+    opts.cost_category_code ?? null,
     opts.subcategory_code ?? null,
     debit,
     credit,

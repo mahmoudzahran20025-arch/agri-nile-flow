@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser, roleGuard } from '../middleware/auth'
 import { logAudit } from '../lib/audit'
+import { FinanceCore } from '../lib/finance_core'
 
 const cropCycles = new Hono<{ Bindings: Env }>()
 cropCycles.use('*', authMiddleware)
@@ -312,6 +313,39 @@ cropCycles.get('/:id/wip-summary', async (c) => {
       by_season:     bySeason,
     },
   })
+})
+
+// ── POST /api/crop-cycles/:id/abandon — GL-posted abandonment write-off ──────
+// Posts a loss entry to GL and zeros out WIP ledger. Uses abandonment_policy
+// from crop_cycles to select the correct loss account (operating vs extraordinary).
+cropCycles.post('/:id/abandon', async (c) => {
+  const { company_id, sub: user_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const body = await c.req.json<{ abandonment_date?: string; notes?: string }>()
+
+  const abandonment_date = body.abandonment_date ?? new Date().toISOString().slice(0, 10)
+
+  try {
+    const result = await FinanceCore.postCycleAbandonment(c.env.DB, {
+      company_id,
+      user_id,
+      crop_cycle_id:   id,
+      abandonment_date,
+      notes:           body.notes,
+    })
+
+    await logAudit(c.env.DB, {
+      user_id, company_id,
+      action: 'UPDATE', table_name: 'crop_cycles', record_id: id,
+      new_value: { status: 'abandoned', abandonment_date, wip_written_off: result.wip_written_off },
+    })
+
+    return c.json({ success: true, data: result })
+  } catch (err) {
+    const msg = (err as Error).message
+    const status = msg.startsWith('ABANDONMENT:') ? 422 : 500
+    return c.json({ success: false, error: msg }, status)
+  }
 })
 
 export default cropCycles
