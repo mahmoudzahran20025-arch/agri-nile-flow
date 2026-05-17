@@ -205,61 +205,20 @@ cropCycles.patch('/:id', async (c) => {
 })
 
 // ── POST /api/crop-cycles/:id/status ─────────────────────────────────────────
-// Explicit state-machine transition. Validates allowed transitions.
-// abandoned / written_off also require a GL write-off entry (Phase 4).
+// All terminal transitions now have dedicated accounting-aware endpoints.
+// This endpoint is kept only to return clear redirect errors for legacy callers.
 cropCycles.post('/:id/status', async (c) => {
-  const { company_id, sub: user_id } = getUser(c)
-  const id = Number(c.req.param('id'))
-  const { status, notes } = await c.req.json<{
-    status: 'abandoned' | 'written_off'
-    notes?: string
-  }>()
-
-  const ALLOWED_MANUAL_TRANSITIONS = ['abandoned', 'written_off'] as const
-  if (!ALLOWED_MANUAL_TRANSITIONS.includes(status as typeof ALLOWED_MANUAL_TRANSITIONS[number])) {
+  const body = await c.req.json<{ status?: string }>().catch(() => ({ status: undefined }))
+  if (body.status === 'abandoned') {
     return c.json({
       success: false,
-      error: 'التحولات المسموح بها يدوياً: abandoned أو written_off فقط. يتم تعيين harvested تلقائياً عند التسوية.',
+      error: 'استخدم POST /crop-cycles/:id/abandon لترك دورة المحصول — يُجري محاسبة GL كاملة وتصفية WIP.',
     }, 400)
   }
-
-  const cycle = await c.env.DB.prepare(
-    'SELECT id, status, crop_name FROM crop_cycles WHERE id = ? AND company_id = ?'
-  ).bind(id, company_id).first<{ id: number; status: string; crop_name: string }>()
-  if (!cycle) return c.json({ success: false, error: 'دورة المحصول غير موجودة' }, 404)
-
-  if (cycle.status !== 'active') {
-    return c.json({
-      success: false,
-      error: `لا يمكن تغيير الحالة من "${cycle.status}" — يُسمح فقط بتحويل الدورات النشطة`,
-    }, 422)
-  }
-
-  // Check WIP balance — warn if non-zero (GL write-off not yet implemented; Phase 4)
-  const wipRow = await c.env.DB.prepare(
-    'SELECT COALESCE(SUM(debit) - SUM(credit), 0) AS balance FROM wip_ledger WHERE company_id = ? AND crop_cycle_id = ?'
-  ).bind(company_id, id).first<{ balance: number }>()
-  const wipBalance = wipRow?.balance ?? 0
-
-  await c.env.DB.prepare(
-    `UPDATE crop_cycles SET status = ?, notes = CASE WHEN ? IS NOT NULL THEN ? ELSE notes END, updated_at = datetime('now') WHERE id = ? AND company_id = ?`
-  ).bind(status, notes ?? null, notes?.trim() ?? null, id, company_id).run()
-
-  await logAudit(c.env.DB, {
-    user_id, company_id,
-    action:     'UPDATE',
-    table_name: 'crop_cycles',
-    record_id:  id,
-    old_value:  { status: cycle.status },
-    new_value:  { status, notes },
-  })
-
   return c.json({
-    success: true,
-    wip_balance_warning: wipBalance > 0
-      ? `تحذير: رصيد WIP غير مصفى = ${wipBalance.toFixed(2)} ج.م — يجب ترحيل قيد الشطب يدوياً (المرحلة 4)`
-      : null,
-  })
+    success: false,
+    error: 'استخدم POST /crop-cycles/:id/write-off للشطب — يُجري محاسبة GL كاملة وتصفية WIP.',
+  }, 400)
 })
 
 // ── GET /api/crop-cycles/:id/wip-summary ─────────────────────────────────────
@@ -313,6 +272,39 @@ cropCycles.get('/:id/wip-summary', async (c) => {
       by_season:     bySeason,
     },
   })
+})
+
+// ── POST /api/crop-cycles/:id/write-off — GL-posted write-off ────────────────
+// Posts a loss entry to GL (agricultural_loss_writeoff account) and zeros WIP.
+// Use this instead of /status for written_off transitions.
+cropCycles.post('/:id/write-off', async (c) => {
+  const { company_id, sub: user_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const body = await c.req.json<{ writeoff_date?: string; notes?: string }>()
+
+  const writeoff_date = body.writeoff_date ?? new Date().toISOString().slice(0, 10)
+
+  try {
+    const result = await FinanceCore.postCycleWriteOff(c.env.DB, {
+      company_id,
+      user_id,
+      crop_cycle_id:  id,
+      writeoff_date,
+      notes:          body.notes,
+    })
+
+    await logAudit(c.env.DB, {
+      user_id, company_id,
+      action: 'UPDATE', table_name: 'crop_cycles', record_id: id,
+      new_value: { status: 'written_off', writeoff_date, wip_written_off: result.wip_written_off },
+    })
+
+    return c.json({ success: true, data: result })
+  } catch (err) {
+    const msg = (err as Error).message
+    const status = msg.startsWith('WRITEOFF:') ? 422 : 500
+    return c.json({ success: false, error: msg }, status)
+  }
 })
 
 // ── POST /api/crop-cycles/:id/abandon — GL-posted abandonment write-off ──────

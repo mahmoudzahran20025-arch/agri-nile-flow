@@ -668,6 +668,91 @@ async function postHarvestSettlement(
 }
 
 /**
+ * postCycleWriteOff — writes off the WIP balance of a written-off crop cycle.
+ *
+ * Written-off differs from abandonment: this is a formal accounting write-off
+ * (e.g. crop destroyed, unrecoverable loss) that posts to account 61060003
+ * (خسارة محاصيل — شطب) via the 'agricultural_loss_writeoff' control key.
+ *
+ * After posting, marks crop_cycle status = 'written_off' and appends a WIP credit row.
+ */
+async function postCycleWriteOff(
+  db: D1Database,
+  opts: {
+    company_id:    number
+    user_id:       number
+    crop_cycle_id: number
+    writeoff_date: string
+    notes?: string
+  },
+): Promise<{ gl_entry_id: number | null; wip_written_off: number }> {
+  const { company_id, user_id, crop_cycle_id, writeoff_date } = opts
+
+  const cycle = await db.prepare(`
+    SELECT cc.*, f.name AS field_name,
+           COALESCE(
+             (SELECT running_balance FROM wip_ledger
+              WHERE company_id = cc.company_id AND crop_cycle_id = cc.id
+              ORDER BY id DESC LIMIT 1),
+             0
+           ) AS wip_balance
+    FROM crop_cycles cc
+    LEFT JOIN fields f ON f.id = cc.field_id AND f.company_id = cc.company_id
+    WHERE cc.id = ? AND cc.company_id = ?
+  `).bind(crop_cycle_id, company_id).first<{
+    id: number; crop_name: string; field_name: string | null; center_code: number | null
+    season_id: number; wip_balance: number; status: string
+  }>()
+
+  if (!cycle) throw new Error(`WRITEOFF: crop_cycle_id=${crop_cycle_id} not found`)
+  if (cycle.status === 'written_off' || cycle.status === 'harvested' || cycle.status === 'abandoned') {
+    throw new Error(`WRITEOFF: cycle ${crop_cycle_id} already in terminal status '${cycle.status}'`)
+  }
+
+  const wipBalance  = Math.round(cycle.wip_balance * 100) / 100
+  const lossAccount = await requireControlAccount(db, company_id, ['agricultural_loss_writeoff', 'agricultural_loss'], 'Write-off loss account')
+  const wipAcc      = await requireControlAccount(db, company_id, ['wip_asset'], 'WIP asset account for write-off')
+  const cycleDesc   = `${cycle.crop_name}${cycle.field_name ? ' — ' + cycle.field_name : ''}`
+
+  let glEntryId: number | null = null
+
+  if (wipBalance > 0) {
+    glEntryId = await postFromBusinessEvent(db, {
+      company_id,
+      event_type:    'crop_cycle_writeoff',
+      source_module: 'operations',
+      source_id:     crop_cycle_id,
+      event_date:    writeoff_date,
+      description:   `شطب دورة محصول: ${cycleDesc}`,
+      created_by:    user_id,
+      payload:       { crop_cycle_id, wip_balance: wipBalance, notes: opts.notes },
+      lines: [
+        { account_code: lossAccount, debit: wipBalance, credit: 0,         description: `خسارة شطب: ${cycleDesc}`,  source_ledger: 'manual' as const, source_record_id: crop_cycle_id, center_code: cycle.center_code ?? undefined, season_id: cycle.season_id },
+        { account_code: wipAcc,      debit: 0,          credit: wipBalance, description: `إقفال WIP: ${cycleDesc}`, rule_slot: 'wip_asset',           source_ledger: 'manual' as const, source_record_id: crop_cycle_id, center_code: cycle.center_code ?? undefined, season_id: cycle.season_id },
+      ],
+    })
+
+    await creditCostFromWIP({
+      db, company_id,
+      crop_cycle_id, season_id: cycle.season_id,
+      transaction_date: writeoff_date,
+      cost_category: 'other',
+      cost_category_code: 'OTHER',
+      amount: wipBalance,
+      description: `شطب دورة محصول — ${cycleDesc}`,
+      source_module: 'operations', source_id: crop_cycle_id,
+      journal_entry_id: glEntryId,
+    })
+  }
+
+  await db.prepare(
+    `UPDATE crop_cycles SET status = 'written_off', updated_at = datetime('now') WHERE id = ? AND company_id = ?`
+  ).bind(crop_cycle_id, company_id).run()
+
+  return { gl_entry_id: glEntryId, wip_written_off: wipBalance }
+}
+
+/**
  * postCycleAbandonment — writes off the WIP balance of an abandoned crop cycle.
  *
  * Reads abandonment_policy from crop_cycles:
@@ -784,6 +869,7 @@ export const FinanceCore = {
   creditCostFromWIP,
   postHarvestSettlement,
   postCycleAbandonment,
+  postCycleWriteOff,
   carryForwardCropCycleWIP,
 } as const
 
@@ -813,4 +899,5 @@ export {
   postManualReversal,
   getOpenPeriod,
   postCycleAbandonment,
+  postCycleWriteOff,
 }

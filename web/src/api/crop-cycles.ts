@@ -96,15 +96,14 @@ export const cropCyclesApi = {
       api.patch(`/crop-cycles/${id}`, body)
     ),
 
-  // written_off only — abandonment uses abandon() below for full GL accounting
-  setStatus: (id: number, status: 'written_off', notes?: string) =>
-    unwrap<{ wip_balance_warning: string | null }>(
-      api.post(`/crop-cycles/${id}/status`, { status, notes })
-    ),
-
   abandon: (id: number, opts?: { abandonment_date?: string; notes?: string }) =>
     unwrap<{ gl_entry_id: number | null; wip_written_off: number }>(
       api.post(`/crop-cycles/${id}/abandon`, opts ?? {})
+    ),
+
+  writeOff: (id: number, opts?: { writeoff_date?: string; notes?: string }) =>
+    unwrap<{ gl_entry_id: number | null; wip_written_off: number }>(
+      api.post(`/crop-cycles/${id}/write-off`, opts ?? {})
     ),
 
   wipSummary: (id: number) =>
