@@ -12,11 +12,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Package, ShieldCheck, AlertTriangle, CheckCircle,
   Search, Edit2, ExternalLink, X, Save, ChevronDown, ChevronUp,
-  Settings,
+  Settings, Plus,
 } from 'lucide-react'
 import { inventoryApi } from '../../api/inventory'
 import { glApi } from '../../api/gl'
 import Modal from '../../components/ui/Modal'
+import { CommandBar } from '../../components/ui/CommandBar'
 import { TableSkeleton } from '../../components/ui/Skeleton'
 import { usePermission } from '../../hooks/usePermission'
 
@@ -307,18 +308,20 @@ export default function ItemMasterPage() {
   }
 
   return (
-    <div className="space-y-5 pb-10">
-
-      {/* Header */}
-      <div className="page-header">
-        <div>
-          <h1 className="page-title flex items-center gap-2">
-            <Package size={22} className="text-slate-400" />
-            سجل الأصناف الموحد
-          </h1>
-          <p className="text-sm text-slate-400 mt-1">إدارة الأصناف مع الإعداد المحاسبي المركزي</p>
-        </div>
-      </div>
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="سجل الأصناف الموحد"
+        subtitle="إدارة الأصناف مع الإعداد المحاسبي المركزي"
+        actions={canWrite('inventory') ? [
+          {
+            label: 'صنف جديد',
+            icon: <Plus size={15} />,
+            variant: 'primary' as const,
+            onClick: () => navigate('/inventory/items/new'),
+          },
+        ] : []}
+      />
+      <div className="flex-1 overflow-y-auto p-5 space-y-5 pb-10">
 
       {/* Health summary bar */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -547,6 +550,7 @@ export default function ItemMasterPage() {
       {editItem && (
         <AccountingEditModal item={editItem} onClose={() => setEditItem(null)} />
       )}
+      </div>
     </div>
   )
 }

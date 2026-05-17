@@ -5,8 +5,9 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, Link } from 'react-router-dom'
-import { ShieldCheck, AlertTriangle, CheckCircle, Package, ExternalLink, Link2Off, Tag, Activity, RefreshCw, Ban } from 'lucide-react'
+import { AlertTriangle, CheckCircle, Package, ExternalLink, Link2Off, Tag, Activity, RefreshCw, Ban } from 'lucide-react'
 import { inventoryApi } from '../../api/inventory'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 const EGP = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
@@ -66,24 +67,20 @@ export default function InventoryPostingHealthPage() {
   const missing  = health.filter(h => !h.is_covered)
 
   return (
-    <div className="space-y-5 pb-10">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title flex items-center gap-2">
-            <ShieldCheck size={22} className="text-slate-400" />
-            فحص صحة الترحيل المخزني
-          </h1>
-          <p className="text-sm text-slate-400 mt-1">
-            مصفوفة التغطية: كل تركيبة (مخزن × مجموعة ترحيل) لها حركات مخزنية
-          </p>
-        </div>
-        <button
-          className="btn-secondary gap-2"
-          onClick={() => navigate('/gl/posting-setup')}
-        >
-          <ExternalLink size={15} /> إعداد الترحيل
-        </button>
-      </div>
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="فحص صحة الترحيل المخزني"
+        subtitle="مصفوفة التغطية: كل تركيبة (مخزن × مجموعة ترحيل) لها حركات مخزنية"
+        actions={[
+          {
+            label: 'إعداد الترحيل',
+            icon: <ExternalLink size={15} />,
+            variant: 'secondary' as const,
+            onClick: () => navigate('/gl/posting-setup'),
+          },
+        ]}
+      />
+      <div className="flex-1 overflow-y-auto p-5 space-y-5 pb-10">
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -465,6 +462,7 @@ export default function InventoryPostingHealthPage() {
             </table>
           </div>
         )}
+      </div>
       </div>
     </div>
   )

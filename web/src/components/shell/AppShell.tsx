@@ -103,6 +103,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { label: 'Fixed Assets',      path: '/inventory/fixed-assets',   icon: <TrendingUp    size={18} /> },
       { label: 'WIP Balances',      path: '/inventory/wip-balances',   icon: <GitBranch     size={18} /> },
       { label: 'Items',             path: '/inventory/items',          icon: <FileCheck     size={18} /> },
+      { label: 'تكلفة الحقول',      path: '/inventory/cost-by-field',  icon: <Sprout        size={18} /> },
     ],
   },
   {

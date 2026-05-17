@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { Package, ChevronDown, ChevronUp, Plus, Download, ExternalLink, AlertTriangle, X, Wrench, ArrowRightLeft, Activity, ShieldCheck, Link2Off, Boxes, CircleDollarSign } from 'lucide-react'
 import { inventoryApi, downloadCsv } from '../../api/client'
-
+import { CommandBar } from '../../components/ui/CommandBar'
 import { TableSkeleton } from '../../components/ui/Skeleton'
 import type { } from '../../types'
 import { usePermission } from '../../hooks/usePermission'
@@ -117,35 +117,34 @@ export default function WarehouseBalancesPage() {
   }
 
   return (
-    <div className="space-y-5">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">أرصدة المخازن</h1>
-          <p className="text-xs text-slate-500 mt-1">لوحة الأرصدة الحالية حسب المخزن مع مؤشرات التكامل المحاسبي</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            className="btn-secondary gap-2"
-            onClick={() => downloadCsv('/inventory/stock-balances', 'أرصدة_المخازن')}
-          >
-            <Download size={16} />تصدير CSV
-          </button>
-          {canWrite('inventory') && (
-            <>
-              <button
-                className="btn-secondary gap-2"
-                onClick={() => navigate('/inventory/workspace/create?type=TRANSFER_OUT')}
-              >
-                <ArrowRightLeft size={16} /> تحويل بين المخازن
-              </button>
-              <button className="btn-primary gap-2" onClick={() => navigate('/inventory/workspace/create')}>
-                <Plus size={16} />
-                حركة جديدة
-              </button>
-            </>
-          )}
-        </div>
-      </div>
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="أرصدة المخازن"
+        subtitle="لوحة الأرصدة الحالية حسب المخزن مع مؤشرات التكامل المحاسبي"
+        actions={[
+          {
+            label: 'تصدير CSV',
+            icon: <Download size={15} />,
+            variant: 'secondary',
+            onClick: () => downloadCsv('/inventory/stock-balances', 'أرصدة_المخازن'),
+          },
+          ...(canWrite('inventory') ? [
+            {
+              label: 'تحويل بين المخازن',
+              icon: <ArrowRightLeft size={15} />,
+              variant: 'secondary' as const,
+              onClick: () => navigate('/inventory/workspace/create?type=TRANSFER_OUT'),
+            },
+            {
+              label: 'حركة جديدة',
+              icon: <Plus size={15} />,
+              variant: 'primary' as const,
+              onClick: () => navigate('/inventory/workspace/create'),
+            },
+          ] : []),
+        ]}
+      />
+      <div className="flex-1 overflow-y-auto p-5 space-y-5">
 
       {/* Inventory cockpit KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
@@ -437,6 +436,7 @@ export default function WarehouseBalancesPage() {
       )}
 
 
+      </div>
     </div>
   )
 }
