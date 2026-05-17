@@ -2,8 +2,9 @@ import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
 import { logAudit } from '../lib/audit'
-import { getOpenPeriod } from '../lib/gl'
 import { FinanceCore } from '../lib/finance_core'
+
+const { getOpenPeriod } = FinanceCore
 
 const staging = new Hono<{ Bindings: Env }>()
 staging.use('*', authMiddleware)
@@ -333,14 +334,17 @@ staging.post('/movements/promote/:batchId', async (c) => {
       .prepare('SELECT name FROM items WHERE code = ? AND company_id = ?')
       .bind(row.item_code, company_id).first<{ name: string }>()
 
-    const glValue = row.movement_type === 'اضافة' ? valueIn : valueOut
+    const wh = await c.env.DB.prepare("SELECT id FROM warehouses WHERE name = ? AND company_id = ? AND is_active = 1").bind(row.warehouse, company_id).first<{ id: number }>()
+    if (!wh) throw new Error(`Warehouse ${row.warehouse} not found or inactive`)
+
     await FinanceCore.resolveInventoryMovement(c.env.DB, {
       company_id,
-      ref_id: newMovId,
-      item_code: row.item_code!,
-      warehouse: row.warehouse,
-      movement_type: row.movement_type,
-      value: glValue,
+      ref_id: Number(newMovId),
+      item_code: Number(row.item_code!),
+      warehouse_id: wh.id,
+      movement_type: row.movement_type === 'اضافة' ? 'GRN' : 'ISSUE', // map to canonical
+      quantity: Number(row.quantity),
+      unit_price: Number(unitPrice),
       date: row.movement_date,
       item_name: itemRow?.name ?? String(row.item_code),
       created_by: userId,

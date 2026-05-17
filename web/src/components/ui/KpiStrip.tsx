@@ -6,7 +6,8 @@ export interface KpiItem {
   value: string | number;
   delta?: string;
   progress?: number; // 0-100
-  variant?: 'default' | 'success' | 'warning';
+  variant?: 'default' | 'success' | 'warning' | 'error';
+  onClick?: () => void;
 }
 
 interface KpiStripProps {
@@ -22,11 +23,13 @@ export const KpiStrip: React.FC<KpiStripProps> = ({ items }) => {
         let barColor = "bg-[#0F2D5C]";
         if (item.variant === 'success') barColor = "bg-[#1D9E75]";
         if (item.variant === 'warning') barColor = "bg-amber-500";
+        if (item.variant === 'error')   barColor = "bg-red-500";
 
         return (
-          <div 
-            key={item.id} 
-            className={`p-5 relative ${!isLast ? 'border-r border-slate-100' : ''}`}
+          <div
+            key={item.id}
+            onClick={item.onClick}
+            className={`p-5 relative ${!isLast ? 'border-r border-slate-100' : ''} ${item.onClick ? 'cursor-pointer hover:bg-slate-50 transition-colors' : ''}`}
           >
             {/* Background progress bar indication if progress exists */}
             {item.progress !== undefined && (

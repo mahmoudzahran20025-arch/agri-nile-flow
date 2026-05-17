@@ -26,7 +26,13 @@ import reportsRoutes    from './api/reports'
 import budgetsRoutes    from './api/budgets'
 import classifierRoutes from './api/classifier'
 import validationRoutes from './api/validation'
-import assetsRoutes     from './api/assets'
+import assetsRoutes      from './api/assets'
+import schemaRoutes      from './api/schema'
+import cropCyclesRoutes          from './api/crop-cycles'
+import harvestSettlementsRoutes  from './api/harvest-settlements'
+import { processAllPendingOutbox } from './lib/process_outbox'
+import { runHealthForAllCompanies } from './lib/daily_finance_health'
+import { getTodayIsoDate } from './lib/utils/date'
 
 const app = new Hono<{ Bindings: Env; Variables: { jwtPayload: JwtPayload } }>()
 
@@ -78,7 +84,10 @@ app.route('/api/reports',    reportsRoutes)
 app.route('/api/budgets',    budgetsRoutes)
 app.route('/api/classifier', classifierRoutes)
 app.route('/api/validation', validationRoutes)
-app.route('/api/assets',     assetsRoutes)
+app.route('/api/assets',       assetsRoutes)
+app.route('/api/schema',       schemaRoutes)
+app.route('/api/crop-cycles',          cropCyclesRoutes)
+app.route('/api/harvest-settlements',  harvestSettlementsRoutes)
 
 // ─── Health Check ─────────────────────────────────────────────
 app.get('/api/health', (c) => c.json({ status: 'ok', ts: new Date().toISOString() }))
@@ -143,23 +152,40 @@ export default {
   fetch: app.fetch,
 
   // ─── Scheduled Cron Handler ─────────────────────────────────
-  // يشتغل كل يوم الساعة 10 مساءً UTC (تقريباً منتصف الليل بتوقيت القاهرة)
-  // يحوّل جميع مهام الزيارات المعلقة من أيام سابقة إلى "missed"
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+  // Two triggers (see wrangler.toml):
+  //   "0 22 * * *"   — daily at 22:00 UTC: marks overdue location tasks as missed
+  //   "*/15 * * * *" — every 15 min: sweeps inventory GL posting outbox
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil((async () => {
+      const isDailyRun = event.cron === '0 22 * * *'
+
+      // ── Daily: mark overdue location tasks + finance health check ──
+      if (isDailyRun) {
+        try {
+          const today = getTodayIsoDate()
+
+          const result = await env.DB.prepare(
+            `UPDATE location_tasks SET status = 'missed' WHERE status = 'pending' AND task_date < ?`
+          ).bind(today).run()
+          console.log(`[Cron:daily] Marked ${result.meta.changes ?? 0} overdue location tasks as missed (${today})`)
+        } catch (err) {
+          console.error('[Cron:daily] Failed to mark missed tasks:', err)
+        }
+
+        try {
+          await runHealthForAllCompanies(env.DB)
+          console.log('[Cron:daily] Finance health check complete')
+        } catch (err) {
+          console.error('[Cron:daily] Finance health check failed:', err)
+        }
+      }
+
+      // ── Every 15 min: sweep inventory GL posting outbox ────
       try {
-        const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
-
-        // تحويل كل location_tasks بتاريخ أقدم من اليوم وحالتها pending → missed
-        const result = await env.DB.prepare(
-          `UPDATE location_tasks
-           SET status = 'missed'
-           WHERE status = 'pending' AND task_date < ?`
-        ).bind(today).run()
-
-        console.log(`[Cron] Marked ${result.meta.changes ?? 0} overdue location tasks as missed (${today})`)
+        await processAllPendingOutbox(env.DB)
+        console.log(`[Cron:outbox] Inventory posting outbox sweep complete (${event.cron})`)
       } catch (err) {
-        console.error('[Cron] Failed to mark missed tasks:', err)
+        console.error('[Cron:outbox] Outbox sweep failed:', err)
       }
     })())
   },

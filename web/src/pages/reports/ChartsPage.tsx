@@ -116,10 +116,11 @@ export default function ChartsPage() {
     queryFn: () => dashboardApi.costByCrop(seasonId) as Promise<{ crop: string | null; total_cost: number }[]>,
   })
 
-  const { data: balancesRaw = null, isLoading: loadingBalances } = useQuery({
-    queryKey: ['inventory', 'balances', null],
-    queryFn: () => inventoryApi.balances() as Promise<{ warehouse: string; item_name: string; balance_qty: number; balance_value: number }[]>,
+  const { data: balancesResp = null, isLoading: loadingBalances } = useQuery({
+    queryKey: ['inventory', 'stock-balances'],
+    queryFn: () => inventoryApi.balancesList({ size: 2000 }),
   })
+  const balancesRaw = balancesResp?.data ?? null
 
   const { data: suppliersRaw = null, isLoading: loadingSuppliers } = useQuery({
     queryKey: ['suppliers', 1, ''],

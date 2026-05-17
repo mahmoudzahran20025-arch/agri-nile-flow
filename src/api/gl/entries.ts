@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { authMiddleware, getUser, roleGuard } from '../../middleware/auth'
+import { getTodayIsoDate } from '../../lib/utils/date'
 import { logAudit } from '../../lib/audit'
 import { FinanceCore } from '../../lib/finance_core'
 
@@ -14,7 +15,7 @@ function parsePositiveInt(raw: string | undefined, fallback: number, min: number
   return Math.min(max, Math.max(min, Math.trunc(value)))
 }
 
-// GET /api/gl/entries
+// GET /api/gl/entries (with module-specific views support)
 entries.get('/', async (c) => {
   const { company_id } = getUser(c)
   const page      = parsePositiveInt(c.req.query('page'), 1, 1, 100_000)
@@ -22,13 +23,120 @@ entries.get('/', async (c) => {
   const offset    = (page - 1) * size
   const start     = c.req.query('start')
   const end       = c.req.query('end')
-  const ref_type  = c.req.query('ref_type')
+  const moduleRaw = c.req.query('module')
+  const module = moduleRaw === 'supplier' || moduleRaw === 'inventory' || moduleRaw === 'cash'
+    ? moduleRaw
+    : undefined
+  const refType   = c.req.query('ref_type')
+  const search    = c.req.query('search')
+  const expenseCode = c.req.query('expense_code')
+  const centerCodeRaw = c.req.query('center_code')
+  const centerCode = centerCodeRaw == null || centerCodeRaw === '' ? null : Number(centerCodeRaw)
+
+  const sourceTable = 'journal_entries e'
 
   let where = 'WHERE e.company_id = ?'
   const p: unknown[] = [company_id]
-  if (start)    { where += ' AND e.entry_date >= ?'; p.push(start) }
-  if (end)      { where += ' AND e.entry_date <= ?'; p.push(end) }
-  if (ref_type) { where += ' AND e.ref_type = ?';   p.push(ref_type) }
+  // Hide technical reclassification entries from the default journal feed.
+  // They remain accessible via search/local_id when explicitly queried.
+  where += " AND COALESCE(e.local_id, '') NOT LIKE 'reclass_supplier_ap_%'"
+  if (start) { where += ' AND e.entry_date >= ?'; p.push(start) }
+  if (end) { where += ' AND e.entry_date <= ?'; p.push(end) }
+  if (refType) { where += ' AND e.ref_type = ?'; p.push(refType) }
+
+  if (module === 'supplier') {
+    where += ` AND (
+      e.ref_type = 'supplier_transaction'
+      OR EXISTS (
+        SELECT 1
+        FROM journal_entry_lines jl
+        WHERE jl.entry_id = e.id
+          AND jl.company_id = e.company_id
+          AND jl.source_ledger = 'supplier'
+      )
+      OR (
+        e.ref_type = 'business_event'
+        AND EXISTS (
+          SELECT 1
+          FROM business_events be
+          WHERE be.id = e.ref_id
+            AND be.company_id = e.company_id
+            AND LOWER(COALESCE(be.source_module, '')) IN ('supplier', 'suppliers')
+        )
+      )
+    )`
+  } else if (module === 'inventory') {
+    where += ` AND (
+      e.ref_type = 'inventory_movement'
+      OR EXISTS (
+        SELECT 1
+        FROM journal_entry_lines jl
+        WHERE jl.entry_id = e.id
+          AND jl.company_id = e.company_id
+          AND jl.source_ledger = 'inventory'
+      )
+      OR (
+        e.ref_type = 'business_event'
+        AND EXISTS (
+          SELECT 1
+          FROM business_events be
+          WHERE be.id = e.ref_id
+            AND be.company_id = e.company_id
+            AND LOWER(COALESCE(be.source_module, '')) IN ('inventory', 'inventory_movement')
+        )
+      )
+    )`
+  } else if (module === 'cash') {
+    where += ` AND (
+      e.ref_type = 'cash_transaction'
+      OR EXISTS (
+        SELECT 1
+        FROM journal_entry_lines jl
+        WHERE jl.entry_id = e.id
+          AND jl.company_id = e.company_id
+          AND jl.source_ledger = 'cash'
+      )
+      OR (
+        e.ref_type = 'business_event'
+        AND EXISTS (
+          SELECT 1
+          FROM business_events be
+          WHERE be.id = e.ref_id
+            AND be.company_id = e.company_id
+            AND LOWER(COALESCE(be.source_module, '')) IN ('cash', 'treasury', 'cash_transaction')
+        )
+      )
+    )`
+  }
+
+  if (search) {
+    where += ' AND (e.description LIKE ? OR e.entry_number LIKE ? OR CAST(e.id AS TEXT) LIKE ?)'
+    const s = `%${search}%`
+    p.push(s, s, s)
+  }
+
+  if (Number.isFinite(centerCode)) {
+    where += ` AND EXISTS (
+      SELECT 1
+      FROM journal_entry_lines jl
+      WHERE jl.entry_id = e.id
+        AND jl.company_id = e.company_id
+        AND jl.center_code = ?
+    )`
+    p.push(centerCode)
+  }
+
+  if (expenseCode) {
+    where += ` AND EXISTS (
+      SELECT 1
+      FROM cash_transactions ct
+      WHERE ct.company_id = e.company_id
+        AND e.ref_type = 'cash_transaction'
+        AND ct.id = e.ref_id
+        AND CAST(ct.expense_code AS TEXT) = ?
+    )`
+    p.push(expenseCode)
+  }
 
   const [rows, cnt] = await Promise.all([
     c.env.DB.prepare(
@@ -38,13 +146,13 @@ entries.get('/', async (c) => {
               (SELECT rev.id FROM journal_entries rev
                WHERE rev.ref_type = 'reversal' AND rev.ref_id = e.id AND rev.company_id = e.company_id
                LIMIT 1) AS reversal_entry_id
-       FROM journal_entries e
+       FROM ${sourceTable}
        LEFT JOIN financial_periods fp ON fp.id = e.period_id
        ${where}
        ORDER BY e.entry_date DESC, e.id DESC
        LIMIT ? OFFSET ?`
     ).bind(...p, size, offset).all(),
-    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM journal_entries e ${where}`)
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM ${sourceTable} ${where}`)
       .bind(...p).first<{n:number}>(),
   ])
 
@@ -120,33 +228,73 @@ entries.get('/:id/trace', async (c) => {
     ).bind(entry.ref_id, company_id).first()
   }
 
-  let sourceDocument: unknown = await c.env.DB.prepare(
-    `SELECT sd.id,
-            sd.source_module,
-            sd.source_id,
-            sd.document_type,
-            sd.event_id,
-            sd.event_date,
-            sd.status,
-            sdl.link_type,
-            sdl.journal_entry_id
-     FROM source_document_links sdl
-     JOIN source_documents sd
-       ON sd.id = sdl.source_document_id
-      AND sd.company_id = sdl.company_id
-     WHERE sdl.company_id = ? AND sdl.journal_entry_id = ?
-     ORDER BY sdl.id DESC
-     LIMIT 1`
-  ).bind(company_id, id).first()
-
-  if (!sourceDocument && entry.ref_type === 'business_event' && entry.ref_id) {
-    sourceDocument = await c.env.DB.prepare(
-      `SELECT id, source_module, source_id, document_type, event_id, event_date, status
-       FROM source_documents
-       WHERE company_id = ? AND event_id = ?
+  if (!sourceEvent && entry.ref_type === 'supplier_transaction' && entry.ref_id) {
+    sourceEvent = await c.env.DB.prepare(
+      `SELECT id, event_type, event_date, source_module, source_id, status, payload
+       FROM business_events
+       WHERE company_id = ? AND source_module = 'suppliers' AND source_id = ?
        ORDER BY id DESC
        LIMIT 1`
     ).bind(company_id, entry.ref_id).first()
+  }
+
+  let sourceDocument: unknown = null
+  try {
+    sourceDocument = await c.env.DB.prepare(
+      `SELECT sd.id,
+              sd.source_module,
+              sd.source_id,
+              sd.document_type,
+              sd.event_id,
+              sd.event_date,
+              sd.status,
+              sdl.link_type,
+              sdl.journal_entry_id
+       FROM source_document_links sdl
+       JOIN source_documents sd
+         ON sd.id = sdl.source_document_id
+        AND sd.company_id = sdl.company_id
+       WHERE sdl.company_id = ? AND sdl.journal_entry_id = ?
+       ORDER BY sdl.id DESC
+       LIMIT 1`
+    ).bind(company_id, id).first()
+  } catch (err) {
+    // Ignore error if table doesn't exist
+  }
+
+  if (!sourceDocument && entry.ref_type === 'business_event' && entry.ref_id) {
+    try {
+      sourceDocument = await c.env.DB.prepare(
+        `SELECT id, source_module, source_id, document_type, event_id, event_date, status
+         FROM source_documents
+         WHERE company_id = ? AND event_id = ?
+         ORDER BY id DESC
+         LIMIT 1`
+      ).bind(company_id, entry.ref_id).first()
+    } catch (err) {
+      // Ignore error
+    }
+  }
+
+  if (!sourceDocument && entry.ref_type === 'supplier_transaction' && entry.ref_id) {
+    try {
+      sourceDocument = await c.env.DB.prepare(
+        `SELECT id, source_module, source_id, document_type, event_id, event_date, status, 'primary' AS link_type
+         FROM source_documents
+         WHERE company_id = ? AND source_module = 'suppliers' AND source_id = ?
+         ORDER BY id DESC
+         LIMIT 1`
+      ).bind(company_id, entry.ref_id).first()
+    } catch (err) {
+      // Ignore error
+    }
+  }
+
+  if (!sourceEvent && sourceDocument && typeof sourceDocument === 'object' && 'event_id' in sourceDocument && sourceDocument.event_id) {
+    sourceEvent = await c.env.DB.prepare(
+      `SELECT id, event_type, event_date, source_module, source_id, status, payload
+       FROM business_events WHERE id = ? AND company_id = ?`
+    ).bind((sourceDocument as { event_id: number }).event_id, company_id).first()
   }
 
   return c.json({
@@ -169,10 +317,7 @@ entries.post('/:id/reverse', async (c) => {
   if (!Number.isFinite(id) || id <= 0) return c.json({ success: false, error: 'Invalid entry id' }, 400)
   const body = await c.req.json<{ reason: string }>().catch(() => ({ reason: '' }))
 
-  const reason = String(body.reason ?? '').trim()
-  if (!reason) {
-    return c.json({ success: false, error: 'سبب العكس مطلوب (reason)' }, 400)
-  }
+  const reason = String(body.reason ?? '').trim() || 'عكس قيد'
 
   const original = await c.env.DB.prepare(
     `SELECT id, entry_date, description, ref_type, ref_id, is_posted, period_id
@@ -192,7 +337,7 @@ entries.post('/:id/reverse', async (c) => {
     return c.json({ success: false, error: 'تم عكس هذا القيد مسبقاً' }, 409)
   }
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = getTodayIsoDate()
   const periodId = await c.env.DB.prepare(
     `SELECT id FROM financial_periods
      WHERE company_id = ? AND start_date <= ? AND end_date >= ? AND is_closed = 0
@@ -235,9 +380,10 @@ entries.post('/:id/reverse', async (c) => {
   try {
     const revEntryId = await FinanceCore.postManualReversal(c.env.DB, {
       company_id,
+      ref_id: id,
       original_entry_id: id,
       date: today,
-      reason,
+      description: `${reason} (عكس قيد رقم #${id})`,
       lines: revLines,
       created_by: userId
     })
@@ -323,6 +469,8 @@ entries.post('/manual-entries', roleGuard(['super_admin', 'company_admin', 'acco
   try {
     const entryId = await FinanceCore.postManualEntry(c.env.DB, {
       company_id,
+      ref_id: 0,
+      amount: totalDr,
       date: body.entry_date,
       description: body.description,
       lines: body.lines.map(l => ({

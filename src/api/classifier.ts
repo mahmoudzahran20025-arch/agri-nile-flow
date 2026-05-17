@@ -40,7 +40,7 @@ classifier.get('/rules', async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT r.*, e.name as expense_name, s.name as supplier_name, p.name as partner_name
      FROM transaction_mapping_rules r
-     LEFT JOIN expense_types e ON r.category_type = 'expense' AND r.target_id = e.code AND e.company_id = r.company_id
+     LEFT JOIN expense_types e ON r.category_type = 'expense' AND r.target_id = e.code AND e.company_id = r.company_id AND e.is_deprecated = 0
      LEFT JOIN suppliers s ON r.category_type = 'supplier' AND r.target_id = s.code AND s.company_id = r.company_id
      LEFT JOIN partners p ON r.category_type = 'partner' AND r.target_id = p.id AND p.company_id = r.company_id
      WHERE r.company_id = ?
@@ -130,8 +130,18 @@ classifier.post('/reconcile-legacy', async (c) => {
       if (rule.direct_gl_account) {
         glAccountCode = rule.direct_gl_account
       } else if (rule.category_type === 'expense') {
-        const et = await c.env.DB.prepare('SELECT gl_account_code FROM expense_types WHERE code = ? AND company_id = ?').bind(rule.target_id, company_id).first<{gl_account_code: string}>()
-        if (et?.gl_account_code) glAccountCode = et.gl_account_code
+        // Prefer service_types (new taxonomy); fall back to expense_types for legacy records
+        const st = await c.env.DB.prepare(
+          'SELECT default_expense_account_code AS gl_account_code FROM service_types WHERE CAST(code AS TEXT) = CAST(? AS TEXT) AND company_id = ? AND is_active = 1 LIMIT 1'
+        ).bind(rule.target_id, company_id).first<{ gl_account_code: string | null }>()
+        if (st?.gl_account_code) {
+          glAccountCode = st.gl_account_code
+        } else {
+          const et = await c.env.DB.prepare(
+            'SELECT gl_account_code FROM expense_types WHERE code = ? AND company_id = ? LIMIT 1'
+          ).bind(rule.target_id, company_id).first<{ gl_account_code: string | null }>()
+          if (et?.gl_account_code) glAccountCode = et.gl_account_code
+        }
       }
     }
 

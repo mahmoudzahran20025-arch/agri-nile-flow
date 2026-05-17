@@ -31,13 +31,15 @@ export { reportsApi }      from './reports'
 export { glApi }           from './gl'
 export type { SourceDocRow, ReconciliationSummary, ReconciliationResult } from './gl'
 export { auditApi }        from './audit'
+export { schemaApi }       from './schema'
+export type { FormSchema, FormFieldDef, FormSchemaDimensions, UnitType } from './schema'
 export { adminApi }        from './admin'
 export { classifierApi }   from './classifier'
 export { exportUrl, downloadCsv } from './export'
 
 // ─── Domain types re-exported for consumers ──────────────────────────────────
 export type { RbacMatrix }                           from './auth'
-export type { WOTemplate, WOTemplateTask }           from './operations'
+export type { WOTemplate, WOTemplateTask, WOTemplateEquipment } from './operations'
 export type { IntegrityCheck, IntegrityCheckResult } from './gl'
 export type { AuditLogRow, ErrorLogEntry, AuditStats } from './audit'
 export type {
@@ -50,6 +52,10 @@ export { financeApi }                                             from './financ
 export { calendarApi }                                            from './calendar'
 export { fieldsApi }                                              from './fields'
 export { documentsApi }                                           from './documents'
+export { cropCyclesApi }                                          from './crop-cycles'
+export type { CropCycle, WIPLedgerEntry, WIPSummary, CropType, CycleStatus, WIPCategory, CreateCropCycleInput } from './crop-cycles'
+export { harvestSettlementsApi }                                  from './harvest-settlements'
+export type { HarvestSettlement, CreateHarvestSettlementInput, UpdateHarvestSettlementInput } from './harvest-settlements'
 
 // Domain types from previously-extracted files
 export type {

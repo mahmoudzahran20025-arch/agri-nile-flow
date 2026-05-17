@@ -71,6 +71,6 @@ export const useSeasonId   = ()  => useAppStore(s => s.activeSeason?.id)
 export const useAbility = (module: string, action: string) => {
   const permissions = usePermissions()
   const role = useRole()
-  if (role === 'super_admin') return true
+  if (role === 'super_admin' || role === 'company_admin') return true
   return permissions.includes(`${module}.${action}`)
 }

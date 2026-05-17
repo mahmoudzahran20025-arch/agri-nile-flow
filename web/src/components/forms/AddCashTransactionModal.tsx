@@ -1,11 +1,35 @@
 import { useState, useEffect } from 'react'
 import { useQueryClient, useQuery } from '@tanstack/react-query'
-import { Users, Briefcase, Receipt } from 'lucide-react'
+import { Users, Briefcase, Receipt, Info, TrendingDown, TrendingUp } from 'lucide-react'
 import Modal from '../ui/Modal'
 import { treasuryApi, suppliersApi, configApi, employeesApi, fieldsApi, glApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 
-interface Props { open: boolean; onClose: () => void }
+function egp(n: number | null | undefined) {
+  if (n == null) return '—'
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
+}
+
+export interface CashTransactionPrefill {
+  supplier_code?: number
+  supplier_name?: string
+  amount?: number
+  narration?: string
+  document_type?: string
+  document_number?: string
+  direction?: 'م' | 'د'
+  /** AP invoice id — stored in notes for traceability */
+  invoice_id?: number
+  invoice_number?: string
+}
+
+interface Props {
+  open: boolean
+  onClose: () => void
+  prefill?: CashTransactionPrefill
+  /** If provided, shown as a locked context banner (e.g. "سداد فاتورة AP #5") */
+  contextLabel?: string
+}
 
 type BeneficiaryType = 'supplier' | 'employee' | 'partner' | 'general'
 
@@ -20,7 +44,20 @@ const BENEFICIARY_TYPES: { value: BeneficiaryType; label: string; icon: React.Re
 
 const DOCUMENT_TYPES = ['فاتورة', 'شيك', 'تحويل بنكي', 'نقداً', 'إيصال', 'أخرى']
 
-export default function AddCashTransactionModal({ open, onClose }: Props) {
+function cashNeedsOperationalDimensions(input: {
+  direction: 'د' | 'م'
+  center_code?: string
+  supplier_code?: string
+  partner_id?: string
+  expense_code?: string
+}) {
+  if (input.direction !== 'م') return false
+  if (input.center_code?.trim()) return true
+  if (input.expense_code?.trim()) return true
+  return !input.supplier_code?.trim() && !input.partner_id?.trim()
+}
+
+export default function AddCashTransactionModal({ open, onClose, prefill, contextLabel }: Props) {
   const qc = useQueryClient()
   const { toast } = useToast()
   const [saving, setSaving]   = useState(false)
@@ -39,26 +76,37 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
     center_code:      '',
     field_id:         '',
     expense_code:     '',
-    unit:             '',
-    quantity:         '',
-    unit_price:       '',
     status:           'draft' as 'draft' | 'posted',
     financial_account_id: '',
     partner_id:       '',
   })
   const [beneficiaryType, setBeneficiaryType] = useState<BeneficiaryType>('supplier')
 
-  // Reset form when modal opens
+  // Reset form when modal opens, applying any prefill
   useEffect(() => {
     if (open) {
+      const invoiceNote = prefill?.invoice_id
+        ? `سداد فاتورة #${prefill.invoice_number ?? prefill.invoice_id}`
+        : ''
       setForm({
-        transaction_date: today(), direction: 'م', narration: '', amount: '',
-        document_number: '', document_type: '', recipient_name: '', notes: '',
-        supplier_code: '', season_id: '', center_code: '', field_id: '', expense_code: '',
-        unit: '', quantity: '', unit_price: '', status: 'draft',
-        financial_account_id: '', partner_id: '',
+        transaction_date: today(),
+        direction:        prefill?.direction   ?? 'م',
+        narration:        prefill?.narration   ?? '',
+        amount:           prefill?.amount != null ? String(prefill.amount) : '',
+        document_number:  prefill?.document_number ?? '',
+        document_type:    prefill?.document_type   ?? '',
+        recipient_name:   prefill?.supplier_name   ?? '',
+        notes:            invoiceNote,
+        supplier_code:    prefill?.supplier_code != null ? String(prefill.supplier_code) : '',
+        season_id:        '',
+        center_code:      '',
+        field_id:         '',
+        expense_code:     '',
+        status:           'draft',
+        financial_account_id: '',
+        partner_id:       '',
       })
-      setBeneficiaryType('supplier')
+      setBeneficiaryType(prefill?.supplier_code != null ? 'supplier' : 'supplier')
       setError('')
     }
   }, [open])
@@ -129,11 +177,26 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
     staleTime: 120_000,
   })
 
+  // Load supplier summary for balance display
+  const { data: supplierSummary } = useQuery({
+    queryKey: ['supplier-summary-mini', form.supplier_code],
+    queryFn:  () => suppliersApi.summary(Number(form.supplier_code)),
+    enabled:  open && beneficiaryType === 'supplier' && !!form.supplier_code,
+    staleTime: 30_000,
+  })
+
   // Auto-fill recipient name when supplier changes
   useEffect(() => {
     if (beneficiaryType === 'supplier' && form.supplier_code) {
       const sup = (suppliers as SupplierOption[]).find(s => String(s.code) === form.supplier_code)
-      if (sup) set('recipient_name', sup.name)
+      if (sup) {
+        set('recipient_name', sup.name)
+        // Auto-suggest narration if empty
+        if (!form.narration) {
+          const action = form.direction === 'م' ? 'سداد مستحقات' : 'تحصيل من'
+          set('narration', `${action} ${sup.name}`)
+        }
+      }
     }
   }, [form.supplier_code, suppliers, beneficiaryType])
 
@@ -145,42 +208,48 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
     }
   }, [form.supplier_code, employees, beneficiaryType])
 
-  // Auto-compute amount from qty × price
-  useEffect(() => {
-    const qty = Number(form.quantity)
-    const price = Number(form.unit_price)
-    if (qty > 0 && price > 0) {
-      set('amount', String(qty * price))
-    }
-  }, [form.quantity, form.unit_price])
+
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    const requiresOperationalDimensions = form.status === 'posted' && cashNeedsOperationalDimensions({
+      direction: form.direction as 'د' | 'م',
+      center_code: form.center_code,
+      supplier_code: form.supplier_code,
+      partner_id: form.partner_id,
+      expense_code: form.expense_code,
+    })
     if (!form.narration.trim() || !form.amount) { setError('البيان والمبلغ مطلوبان'); return }
+    if (!form.financial_account_id) { setError('يجب اختيار الحساب (الخزينة أو البنك)'); return }
+    if (requiresOperationalDimensions && !form.season_id) { setError('الموسم مطلوب عند الترحيل التشغيلي'); return }
+    if (requiresOperationalDimensions && !form.center_code) { setError('مركز التكلفة مطلوب عند الترحيل التشغيلي'); return }
     if (form.narration.trim().length < 3) { setError('البيان يجب أن يكون 3 أحرف على الأقل'); return }
     if (Number(form.amount) <= 0) { setError('المبلغ يجب أن يكون أكبر من صفر'); return }
+    if (form.status === 'posted' && form.direction === 'م' && !form.supplier_code && !form.partner_id && !form.expense_code) {
+      setError('بند المصروف مطلوب للصرف بدون مورد أو شريك'); return
+    }
 
     setSaving(true)
     try {
       const res = await treasuryApi.create({
         transaction_date: form.transaction_date,
         direction:        form.direction,
+        statement_text:   form.narration.trim(),
         narration:        form.narration.trim(),
         amount:           Number(form.amount),
         document_number:  form.document_number ? Number(form.document_number) : undefined,
         document_type:    form.document_type || undefined,
         recipient_name:   form.recipient_name.trim() || undefined,
+        notes_internal:   form.notes.trim() || undefined,
         notes:            form.notes.trim() || undefined,
+        service_type_code: form.expense_code ? String(form.expense_code) : undefined,
         supplier_code:    beneficiaryType === 'supplier' && form.supplier_code
                             ? Number(form.supplier_code) : undefined,
         season_id:        form.season_id ? Number(form.season_id) : undefined,
         center_code:      form.center_code ? Number(form.center_code) : undefined,
         field_id:         form.field_id ? Number(form.field_id) : undefined,
         expense_code:     form.expense_code ? Number(form.expense_code) : null,
-        unit:             form.unit || null,
-        quantity:         form.quantity ? Number(form.quantity) : null,
-        unit_price:       form.unit_price ? Number(form.unit_price) : null,
         financial_account_id: form.financial_account_id ? Number(form.financial_account_id) : null,
         partner_id:       form.partner_id ? Number(form.partner_id) : null,
         status:           form.status,
@@ -199,21 +268,35 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
         'success'
       )
       await qc.invalidateQueries({ queryKey: ['treasury'] })
+      if (beneficiaryType === 'supplier' && form.supplier_code) {
+        // queryKey uses the raw string code (from useParams), not a number
+        await qc.invalidateQueries({ queryKey: ['supplier-statement', form.supplier_code] })
+        await qc.invalidateQueries({ queryKey: ['supplier-summary-mini', form.supplier_code] })
+      }
       onClose()
-    } catch {
-      setError('حدث خطأ في الاتصال')
+    } catch (err: unknown) {
+      const msg = (err as Error)?.message ?? String(err)
+      // Surface actionable backend errors (e.g. CASH_EXPENSE_ACCOUNT_MISSING) verbatim
+      setError(msg || 'حدث خطأ في الاتصال')
     } finally {
       setSaving(false)
     }
   }
 
-  const computedAmount = Number(form.quantity) > 0 && Number(form.unit_price) > 0
-    ? (Number(form.quantity) * Number(form.unit_price)).toLocaleString('en-US', { style: 'currency', currency: 'EGP' })
-    : null
+
 
   return (
-    <Modal open={open} title="إضافة حركة خزينة" onClose={onClose} size="lg">
+    <Modal open={open} title={contextLabel ? contextLabel : 'إضافة حركة خزينة'} onClose={onClose} size="lg">
       <form onSubmit={handleSubmit} className="space-y-4">
+
+        {/* ── Context banner (prefill mode) ────────────────── */}
+        {contextLabel && (
+          <div className="flex items-center gap-2 rounded-xl bg-indigo-50 border border-indigo-200 px-3 py-2.5 text-xs text-indigo-800">
+            <Info size={13} className="shrink-0 text-indigo-500" />
+            <span className="font-semibold">{contextLabel}</span>
+            <span className="text-indigo-500 mr-auto">— البيانات مُعبَّأة تلقائياً، راجع وأكمل</span>
+          </div>
+        )}
 
         {/* ── Row 1: Date + Direction + Status ────────────── */}
         <div className="grid grid-cols-3 gap-3">
@@ -276,25 +359,59 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
 
         {/* ── Beneficiary Details ─────────────────────────── */}
         {beneficiaryType === 'supplier' && (
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">المورد / العميل</label>
-              <select className="input" value={form.supplier_code}
-                onChange={e => set('supplier_code', e.target.value)}>
-                <option value="">— اختر المورد —</option>
-                {(suppliers as SupplierOption[]).map(s => (
-                  <option key={s.code} value={s.code}>
-                    {s.name}{s.activity ? ` (${s.activity})` : ''}
-                  </option>
-                ))}
-              </select>
+          <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">المورد / العميل</label>
+                <select className="input" value={form.supplier_code}
+                  onChange={e => set('supplier_code', e.target.value)}>
+                  <option value="">— اختر المورد —</option>
+                  {(suppliers as SupplierOption[]).map(s => (
+                    <option key={s.code} value={s.code}>
+                      {s.name}{s.activity ? ` (${s.activity})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">اسم المستلم / المسلم</label>
+                <input className="input" placeholder="يتم تعبئته تلقائياً..."
+                  value={form.recipient_name}
+                  onChange={e => set('recipient_name', e.target.value)} />
+              </div>
             </div>
-            <div>
-              <label className="label">اسم المستلم / المسلم</label>
-              <input className="input" placeholder="يتم تعبئته تلقائياً..."
-                value={form.recipient_name}
-                onChange={e => set('recipient_name', e.target.value)} />
-            </div>
+
+            {/* Supplier balance indicator */}
+            {form.supplier_code && supplierSummary && (
+              <div className={`flex items-center justify-between rounded-xl px-3 py-2 text-xs border ${
+                (supplierSummary.open_balance ?? 0) > 0
+                  ? 'bg-amber-50 border-amber-200 text-amber-800'
+                  : 'bg-slate-50 border-slate-200 text-slate-600'
+              }`}>
+                <span className="flex items-center gap-1.5">
+                  {(supplierSummary.open_balance ?? 0) > 0
+                    ? <TrendingDown size={12} className="text-amber-600" />
+                    : <TrendingUp   size={12} className="text-slate-400" />}
+                  رصيد المورد الحالي (المستحق):
+                </span>
+                <span className="font-black tabular-nums">
+                  {egp(supplierSummary.open_balance)}
+                </span>
+              </div>
+            )}
+
+            {/* Integration note */}
+            {form.supplier_code && (
+              <div className="flex items-start gap-2 rounded-xl bg-blue-50 border border-blue-200 px-3 py-2 text-[11px] text-blue-700">
+                <Info size={12} className="mt-0.5 shrink-0 text-blue-500" />
+                <span>
+                  {form.direction === 'م'
+                    ? 'هذه الحركة ستُسجَّل تلقائياً في كشف حساب المورد كدفعة (تخفيض المستحق)'
+                    : 'هذه الحركة ستُسجَّل تلقائياً في كشف حساب المورد كتحصيل (زيادة المستحق)'}
+                  {' — '}لا تُدخل نفس الحركة يدوياً في ملف المورد تجنباً للتكرار.
+                </span>
+              </div>
+            )}
           </div>
         )}
 
@@ -322,19 +439,27 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
         )}
 
         {beneficiaryType === 'partner' && (
-          <div>
-            <label className="label">الشريك</label>
-            <select className="input" value={form.partner_id}
-              onChange={e => {
-                set('partner_id', e.target.value)
-                const p = (partners as { id: number; name: string }[]).find(x => x.id === Number(e.target.value))
-                if (p) set('recipient_name', p.name)
-              }}>
-              <option value="">— اختر الشريك —</option>
-              {(partners as { id: number; name: string }[]).map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
+          <div className="space-y-2">
+            <div>
+              <label className="label">الشريك</label>
+              <select className="input" value={form.partner_id}
+                onChange={e => {
+                  set('partner_id', e.target.value)
+                  const p = (partners as { id: number; name: string }[]).find(x => x.id === Number(e.target.value))
+                  if (p) set('recipient_name', p.name)
+                }}>
+                <option value="">— اختر الشريك —</option>
+                {(partners as { id: number; name: string }[]).map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+            {form.direction === 'د' && (
+              <div className="flex items-start gap-2 rounded-xl bg-blue-50 border border-blue-200 px-3 py-2 text-[11px] text-blue-700">
+                <Info size={12} className="mt-0.5 shrink-0 text-blue-500" />
+                <span>الوارد من الشريك يُصنَّف كحقوق ملكية (ضخ رأس مال) ويُرحَّل لحساب رأس المال أو الجاري.</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -357,7 +482,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
         {/* ── Season + Field + Cost Center + Expense Type ── */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="label">الموسم الزراعي</label>
+            <label className="label">الموسم الزراعي {form.status === 'posted' && <span className="text-red-500">*</span>}</label>
             <select className="input" value={form.season_id}
               onChange={e => { set('season_id', e.target.value); set('field_id', '') }}>
               <option value="">— بدون موسم —</option>
@@ -383,7 +508,7 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="label">مركز التكلفة</label>
+            <label className="label">مركز التكلفة {form.status === 'posted' && <span className="text-red-500">*</span>}</label>
             <select className="input" value={form.center_code}
               onChange={e => set('center_code', e.target.value)}>
               <option value="">— بدون مركز —</option>
@@ -393,7 +518,12 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
             </select>
           </div>
           <div>
-            <label className="label">بند المصروف</label>
+            <label className="label">
+              بند المصروف{' '}
+              {form.status === 'posted' && form.direction === 'م' && !form.supplier_code && !form.partner_id
+                ? <span className="text-red-500">*</span>
+                : <span className="text-slate-400 font-normal text-[10px]">(موصى به)</span>}
+            </label>
             <select className="input" value={form.expense_code}
               onChange={e => set('expense_code', e.target.value)}>
               <option value="">— بدون تصنيف —</option>
@@ -428,46 +558,11 @@ export default function AddCashTransactionModal({ open, onClose }: Props) {
           </div>
         </div>
 
-        {/* ── Qty × Price (collapsible detail) ────────────── */}
-        <details className="group rounded-xl border border-slate-200 bg-slate-50">
-          <summary className="flex items-center gap-2 px-3 py-2 cursor-pointer text-sm text-slate-500 hover:text-slate-700 select-none">
-            <span className="text-xs font-semibold uppercase tracking-wide">تفاصيل الكمية والسعر</span>
-            {computedAmount && (
-              <span className="mr-auto text-xs font-medium text-brand-600">
-                = {computedAmount}
-              </span>
-            )}
-          </summary>
-          <div className="grid grid-cols-3 gap-3 p-3 pt-2 border-t border-slate-200">
-            <div>
-              <label className="label text-xs">الوحدة</label>
-              <select className="input text-sm" value={form.unit} onChange={e => set('unit', e.target.value)}>
-                <option value="">—</option>
-                <option value="طن">طن</option>
-                <option value="كجم">كجم</option>
-                <option value="فدان">فدان</option>
-                <option value="لتر">لتر</option>
-                <option value="عبوة">عبوة</option>
-                <option value="قطعة">قطعة</option>
-                <option value="كرتونة">كرتونة</option>
-              </select>
-            </div>
-            <div>
-              <label className="label text-xs">الكمية</label>
-              <input type="number" className="input text-sm" placeholder="0" min="0" step="0.001"
-                value={form.quantity} onChange={e => set('quantity', e.target.value)} />
-            </div>
-            <div>
-              <label className="label text-xs">سعر الوحدة</label>
-              <input type="number" className="input text-sm" placeholder="0.00" min="0" step="0.01"
-                value={form.unit_price} onChange={e => set('unit_price', e.target.value)} />
-            </div>
-          </div>
-        </details>
+
 
         {/* ── Notes ───────────────────────────────────────── */}
         <div>
-          <label className="label">ملاحظات</label>
+          <label className="label">ملاحظات داخلية</label>
           <textarea className="input" rows={2} placeholder="ملاحظات إضافية..." value={form.notes}
             onChange={e => set('notes', e.target.value)} />
         </div>

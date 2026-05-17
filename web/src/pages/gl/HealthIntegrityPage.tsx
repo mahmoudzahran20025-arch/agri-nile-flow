@@ -1,11 +1,22 @@
-import { Download, Filter, ShieldAlert } from 'lucide-react'
+import { Download, Filter, ShieldAlert, Unlink } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { useGlAuditLog, useGlIntegrityIssues, useGlSystemIntegrityScore } from '../../hooks/useGlFinance'
+import { glApi } from '../../api/gl'
 import SectionCard from '../../components/ui/SectionCard'
 import StatusBadge from '../../components/ui/StatusBadge'
 
 type Severity = 'all' | 'critical' | 'high' | 'medium'
+
+function isPermissionError(error: unknown): boolean {
+  const msg = (error instanceof Error ? error.message : String(error ?? '')).toLowerCase()
+  return msg.includes('forbidden') ||
+         msg.includes('unauthorized') ||
+         msg.includes('permission') ||
+         msg.includes('غير مصرح') ||
+         msg.includes('صلاحية')
+}
 
 function csvEscape(val: unknown): string {
   const str = String(val ?? '')
@@ -19,9 +30,31 @@ export default function HealthIntegrityPage() {
   const [severity, setSeverity] = useState<Severity>('all')
   const [showDetailed, setShowDetailed] = useState(false)
 
-  const { data: scoreData } = useGlSystemIntegrityScore()
-  const { data: issuesData, isLoading: issuesLoading } = useGlIntegrityIssues(showDetailed)
-  const { data: auditData } = useGlAuditLog({ page: 1, size: 15 })
+  const { data: scoreData, error: scoreError } = useGlSystemIntegrityScore()
+  const { data: issuesData, isLoading: issuesLoading, error: issuesError } = useGlIntegrityIssues(showDetailed)
+  const { data: auditData, error: auditError } = useGlAuditLog({ page: 1, size: 15 })
+  const { data: orphansData, isLoading: orphansLoading } = useQuery({
+    queryKey: ['gl-orphans'],
+    queryFn:  async () => {
+      try {
+        return await glApi.orphans()
+      } catch (error) {
+        if (isPermissionError(error)) {
+          return { total: 0, rows: [], _permissionDenied: true as const }
+        }
+        throw error
+      }
+    },
+    retry: (failureCount, error) => !isPermissionError(error) && failureCount < 1,
+    refetchInterval: (query) => (isPermissionError(query.state.error) ? false : 60_000),
+    staleTime: 60_000,
+  })
+
+  const scorePermissionDenied = isPermissionError(scoreError)
+  const issuesPermissionDenied = isPermissionError(issuesError)
+  const auditPermissionDenied = isPermissionError(auditError)
+  const orphansPermissionDenied = (orphansData as { _permissionDenied?: boolean } | undefined)?._permissionDenied === true
+  const hasPermissionLimitation = scorePermissionDenied || issuesPermissionDenied || auditPermissionDenied || orphansPermissionDenied
 
   const filtered = useMemo(() => {
     const rows = issuesData?.checks ?? []
@@ -63,6 +96,11 @@ export default function HealthIntegrityPage() {
       </div>
 
       <div className="px-6 py-3 bg-white border-b border-slate-200 flex flex-wrap items-center gap-3">
+        {hasPermissionLimitation && (
+          <div className="w-full text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+            بعض بطاقات الصحة غير متاحة حسب صلاحياتك الحالية. يمكنك المتابعة بالمكونات المتاحة دون أخطاء مزعجة.
+          </div>
+        )}
         <div className="text-[12px] text-slate-500">Overall score</div>
         <div className="text-[22px] font-semibold text-[#0F2D5C] leading-none">{scoreData?.overall_score ?? scoreData?.score ?? '--'}</div>
         <StatusBadge type="status" variant={(scoreData?.overall_score ?? scoreData?.score ?? 0) >= 80 ? 'posted' : 'draft'} label={scoreData?.status || 'unknown'} />
@@ -121,6 +159,53 @@ export default function HealthIntegrityPage() {
               <div className="text-[12px] text-[#1D9E75] font-semibold">No issues for current filter.</div>
             )}
           </div>
+        </SectionCard>
+
+        <SectionCard
+          title="Orphan Journal Entries"
+          subtitle={`Entries with unbalanced debit/credit · ${orphansData?.total ?? 0} found`}
+          icon={<Unlink size={16} />}
+          className="xl:col-span-3"
+        >
+          {orphansPermissionDenied && (
+            <div className="text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 mb-2">
+              لا تملك صلاحية عرض تفاصيل Orphans حالياً.
+            </div>
+          )}
+          {orphansLoading && <div className="text-[12px] text-slate-500">Loading orphans...</div>}
+          {!orphansLoading && (orphansData?.rows ?? []).length === 0 && (
+            <div className="text-[12px] text-[#1D9E75] font-semibold">No orphan entries found.</div>
+          )}
+          {!orphansLoading && (orphansData?.rows ?? []).length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[12px]">
+                <thead>
+                  <tr className="text-slate-500 font-medium border-b border-slate-100">
+                    <th className="text-left pb-2 pr-4">ID</th>
+                    <th className="text-left pb-2 pr-4">Date</th>
+                    <th className="text-left pb-2 pr-4">Description</th>
+                    <th className="text-left pb-2 pr-4">Ref</th>
+                    <th className="text-right pb-2 pr-4">Debit</th>
+                    <th className="text-right pb-2 pr-4">Credit</th>
+                    <th className="text-right pb-2">Diff</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {(orphansData?.rows ?? []).map(row => (
+                    <tr key={row.id} className="hover:bg-slate-50">
+                      <td className="py-1.5 pr-4 font-mono text-slate-700">#{row.id}</td>
+                      <td className="py-1.5 pr-4 text-slate-600">{row.entry_date}</td>
+                      <td className="py-1.5 pr-4 text-slate-700 max-w-[200px] truncate">{row.description ?? '—'}</td>
+                      <td className="py-1.5 pr-4 text-slate-500">{row.ref_type ?? '—'}{row.ref_id ? ` #${row.ref_id}` : ''}</td>
+                      <td className="py-1.5 pr-4 text-right font-mono">{row.debit_total.toLocaleString()}</td>
+                      <td className="py-1.5 pr-4 text-right font-mono">{row.credit_total.toLocaleString()}</td>
+                      <td className="py-1.5 text-right font-mono text-red-600 font-semibold">{row.diff.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </SectionCard>
 
         <SectionCard

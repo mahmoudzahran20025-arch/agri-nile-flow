@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   ChevronDown, ChevronUp, BarChart3, Download, MapPin,
@@ -50,6 +50,9 @@ export default function CostCenterReportPage() {
   const summary   = data?.summary
   const grandExp  = summary?.grand_expense ?? 0
   const detail    = detailResp?.data
+  const detailLines = Array.isArray(detail?.lines) ? detail.lines : []
+  const detailTimeline = Array.isArray(detail?.timeline) ? detail.timeline : []
+  const detailPagination = detail?.pagination ?? { has_more: false, total: detailLines.length }
 
   const maxExpense = rows.reduce((m, r) => Math.max(m, r.expense_total), 0)
 
@@ -131,8 +134,8 @@ export default function CostCenterReportPage() {
               <tr className="bg-slate-50 border-b border-slate-200">
                 <th className="px-4 py-3 text-right font-semibold text-slate-700 w-10"></th>
                 <th className="px-4 py-3 text-right font-semibold text-slate-700">مركز التكلفة</th>
-                <th className="px-4 py-3 text-left font-semibold text-slate-700 text-red-700">مصروفات</th>
-                <th className="px-4 py-3 text-left font-semibold text-slate-700 text-emerald-700 hidden md:table-cell">إيرادات</th>
+                <th className="px-4 py-3 text-left font-semibold text-red-700">مصروفات</th>
+                <th className="px-4 py-3 text-left font-semibold text-emerald-700 hidden md:table-cell">إيرادات</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-700">صافي التكلفة</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-700 hidden md:table-cell">قيود</th>
                 <th className="px-4 py-3 text-right font-semibold text-slate-700">% من الكل</th>
@@ -147,9 +150,8 @@ export default function CostCenterReportPage() {
                 <tr><td colSpan={8} className="py-12 text-center text-slate-400">لا توجد بيانات للموسم المحدد</td></tr>
               )}
               {rows.map(row => (
-                <>
+                <Fragment key={row.center_code}>
                   <tr
-                    key={row.center_code}
                     className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer transition-colors"
                     onClick={() => toggleRow(row.center_code)}
                   >
@@ -260,9 +262,9 @@ export default function CostCenterReportPage() {
                               {/* Timeline tab */}
                               {detailTab === 'timeline' && (
                                 <div className="flex gap-3 flex-wrap">
-                                  {detail.timeline.length === 0
+                                  {detailTimeline.length === 0
                                     ? <p className="text-slate-400 text-sm">لا توجد بيانات شهرية</p>
-                                    : detail.timeline.map(t => (
+                                    : detailTimeline.map(t => (
                                       <div key={`${t.year}-${t.month}`} className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-center min-w-[90px]">
                                         <p className="text-xs text-slate-500">{MONTH_NAMES[Number(t.month)]} {t.year}</p>
                                         {t.expense_total > 0 && <p className="text-xs font-semibold text-red-700 mt-0.5">{egp(t.expense_total)}</p>}
@@ -290,9 +292,9 @@ export default function CostCenterReportPage() {
                                       </tr>
                                     </thead>
                                     <tbody>
-                                      {detail.lines.length === 0
+                                      {detailLines.length === 0
                                         ? <tr><td colSpan={7} className="py-6 text-center text-slate-400">لا توجد سطور</td></tr>
-                                        : detail.lines.map(l => (
+                                        : detailLines.map(l => (
                                           <tr key={l.id} className="border-b border-slate-100 hover:bg-white">
                                             <td className="px-2 py-1.5 text-slate-500">{l.entry_date}</td>
                                             <td className="px-2 py-1.5">
@@ -321,9 +323,9 @@ export default function CostCenterReportPage() {
                                       }
                                     </tbody>
                                   </table>
-                                  {detail.pagination.has_more && (
+                                  {detailPagination.has_more && (
                                     <p className="text-xs text-slate-400 text-center py-2">
-                                      عرض {detail.lines.length} من {detail.pagination.total} سطر
+                                      عرض {detailLines.length} من {detailPagination.total} سطر
                                     </p>
                                   )}
                                 </div>
@@ -334,7 +336,7 @@ export default function CostCenterReportPage() {
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               ))}
 
               {/* Grand total */}

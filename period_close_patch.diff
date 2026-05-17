@@ -1,0 +1,1502 @@
+﻿diff --git a/src/api/gl/periods.ts b/src/api/gl/periods.ts
+index 2d402f5..92ba624 100644
+--- a/src/api/gl/periods.ts
++++ b/src/api/gl/periods.ts
+@@ -1,4 +1,4 @@
+-import { Hono } from 'hono'
++∩╗┐import { Hono } from 'hono'
+ import type { Env } from '../../types'
+ import { authMiddleware, getUser, roleGuard } from '../../middleware/auth'
+ import { logAudit } from '../../lib/audit'
+@@ -7,150 +7,435 @@ const periods = new Hono<{ Bindings: Env }>()
+ periods.use('*', authMiddleware)
+ periods.use('*', roleGuard(['super_admin', 'company_admin', 'accountant']))
+ 
+-// GET /api/gl/periods
++// ΓöÇΓöÇΓöÇ Close Workflow Step Definitions ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++
++const CLOSE_STEPS = [
++  { key: 'inventory_gl',     order: 1, label: 'GL Posting ΓÇö Inventory Movements',   critical: true  },
++  { key: 'unposted_entries', order: 2, label: 'Unposted Journal Entries',            critical: true  },
++  { key: 'balance_check',    order: 3, label: 'Double-Entry Balance Verification',   critical: true  },
++  { key: 'orphan_entries',   order: 4, label: 'Entries Missing Period Assignment',   critical: false },
++  { key: 'period_summary',   order: 5, label: 'Period Activity Summary',             critical: false },
++] as const
++
++type StepKey = typeof CLOSE_STEPS[number]['key']
++type CheckStatus = 'pending' | 'running' | 'passed' | 'failed' | 'warning'
++
++interface CheckRow {
++  step_key: string; step_order: number; step_label: string; is_critical: boolean
++  status: CheckStatus; count_blocked: number; details: string; action_url?: string
++}
++
++// ΓöÇΓöÇΓöÇ Helper: execute one check step + upsert into checklist table ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++
++async function runStep(
++  db: Env['DB'],
++  companyId: number,
++  periodId: number,
++  startDate: string,
++  endDate: string,
++  stepKey: StepKey,
++): Promise<CheckRow> {
++  const meta = CLOSE_STEPS.find(s => s.key === stepKey)!
++  let status: CheckStatus = 'passed'
++  let countBlocked = 0
++  let details = ''
++  let actionUrl: string | undefined
++
++  if (stepKey === 'inventory_gl') {
++    const r = await db.prepare(
++      `SELECT COUNT(*) as n FROM inventory_movements
++       WHERE company_id=? AND movement_date >= ? AND movement_date <= ?
++       AND gl_posting_status IN ('pending','failed','outbox_pending')`
++    ).bind(companyId, startDate, endDate).first<{ n: number }>()
++    countBlocked = r?.n ?? 0
++    status  = countBlocked > 0 ? 'failed' : 'passed'
++    details = countBlocked > 0
++      ? `${countBlocked} ╪¡╪▒┘â╪⌐ ┘à╪«╪▓┘å┘è╪⌐ ┘ü┘è ┘å╪╖╪º┘é ╪º┘ä┘ü╪¬╪▒╪⌐ ┘ä┘à ╪¬╪▒╪¡┘ä ╪Ñ┘ä┘ë ╪»┘ü╪¬╪▒ ╪º┘ä╪ú╪│╪¬╪º╪░ ╪¿╪╣╪»`
++      : '╪¼┘à┘è╪╣ ╪º┘ä╪¡╪▒┘â╪º╪¬ ╪º┘ä┘à╪«╪▓┘å┘è╪⌐ ┘ü┘è ┘å╪╖╪º┘é ╪º┘ä┘ü╪¬╪▒╪⌐ ┘à╪▒╪¡┘ä╪⌐ ╪¿┘å╪¼╪º╪¡'
++    if (status === 'failed') actionUrl = '/gl/batch-posting'
++
++  } else if (stepKey === 'unposted_entries') {
++    const r = await db.prepare(
++      `SELECT COUNT(*) as n FROM journal_entries WHERE company_id=? AND period_id=? AND is_posted=0`
++    ).bind(companyId, periodId).first<{ n: number }>()
++    countBlocked = r?.n ?? 0
++    status  = countBlocked > 0 ? 'failed' : 'passed'
++    details = countBlocked > 0
++      ? `${countBlocked} ┘é┘è╪» ┘à╪¡╪º╪│╪¿┘è ╪║┘è╪▒ ┘à╪▒╪¡┘ä ΓÇö ┘è╪¼╪¿ ╪¬╪▒╪¡┘è┘ä┘ç ╪ú┘ê ╪¡╪░┘ü┘ç ┘é╪¿┘ä ╪º┘ä╪Ñ╪║┘ä╪º┘é`
++      : '╪¼┘à┘è╪╣ ╪º┘ä┘é┘è┘ê╪» ╪º┘ä┘à╪¡╪º╪│╪¿┘è╪⌐ ┘ü┘è ┘ç╪░┘ç ╪º┘ä┘ü╪¬╪▒╪⌐ ┘à╪▒╪¡┘ä╪⌐'
++    if (status === 'failed') actionUrl = '/gl/entries'
++
++  } else if (stepKey === 'balance_check') {
++    const r = await db.prepare(`
++      SELECT COUNT(*) AS n FROM (
++        SELECT je.id FROM journal_entries je
++        JOIN journal_entry_lines jel ON jel.entry_id = je.id
++        WHERE je.company_id=? AND je.period_id=?
++        GROUP BY je.id
++        HAVING ABS(ROUND(SUM(jel.debit), 2) - ROUND(SUM(jel.credit), 2)) > 0.01
++      )`
++    ).bind(companyId, periodId).first<{ n: number }>()
++    countBlocked = r?.n ?? 0
++    status  = countBlocked > 0 ? 'failed' : 'passed'
++    details = countBlocked > 0
++      ? `${countBlocked} ┘é┘è╪» ╪║┘è╪▒ ┘à╪¬┘ê╪º╪▓┘å ΓÇö ┘à╪¼┘à┘ê╪╣ ╪º┘ä┘à╪»┘è┘å ┘ä╪º ┘è╪│╪º┘ê┘è ┘à╪¼┘à┘ê╪╣ ╪º┘ä╪»╪º╪ª┘å`
++      : '╪¼┘à┘è╪╣ ╪º┘ä┘é┘è┘ê╪» ┘à╪¬┘ê╪º╪▓┘å╪⌐ ΓÇö ┘à╪¼┘à┘ê╪╣ ╪º┘ä┘à╪»┘è┘å = ┘à╪¼┘à┘ê╪╣ ╪º┘ä╪»╪º╪ª┘å'
++    if (status === 'failed') actionUrl = '/gl/health-integrity'
++
++  } else if (stepKey === 'orphan_entries') {
++    const r = await db.prepare(
++      `SELECT COUNT(*) as n FROM journal_entries
++       WHERE company_id=? AND period_id IS NULL
++       AND entry_date >= ? AND entry_date <= ?`
++    ).bind(companyId, startDate, endDate).first<{ n: number }>()
++    countBlocked = r?.n ?? 0
++    status  = countBlocked > 0 ? 'warning' : 'passed'
++    details = countBlocked > 0
++      ? `${countBlocked} ┘é┘è╪» ┘à╪ñ╪▒╪« ╪╢┘à┘å ┘å╪╖╪º┘é ╪º┘ä┘ü╪¬╪▒╪⌐ ┘ä┘â┘å ╪║┘è╪▒ ┘à╪▒╪¬╪¿╪╖ ╪¿┘ç╪º ΓÇö ╪│┘è╪│╪¬╪½┘å┘ë ┘à┘å ┘ä┘é╪╖╪⌐ ╪º┘ä╪Ñ╪║┘ä╪º┘é`
++      : '╪¼┘à┘è╪╣ ╪º┘ä┘é┘è┘ê╪» ┘ü┘è ┘å╪╖╪º┘é ╪º┘ä╪¬╪º╪▒┘è╪« ┘à╪▒╪¬╪¿╪╖╪⌐ ╪¿╪º┘ä┘ü╪¬╪▒╪⌐ ╪º┘ä╪╡╪¡┘è╪¡╪⌐'
++    if (status === 'warning') actionUrl = '/gl/health-integrity'
++
++  } else if (stepKey === 'period_summary') {
++    const r = await db.prepare(`
++      SELECT COUNT(DISTINCT je.id) as entry_count,
++             COALESCE(SUM(jel.debit),  0) as total_debit,
++             COALESCE(SUM(jel.credit), 0) as total_credit
++      FROM journal_entries je
++      LEFT JOIN journal_entry_lines jel ON jel.entry_id = je.id
++      WHERE je.company_id=? AND je.period_id=? AND je.is_posted=1`
++    ).bind(companyId, periodId).first<{
++      entry_count: number; total_debit: number; total_credit: number
++    }>()
++    status = 'passed'
++    const count = r?.entry_count ?? 0
++    const dr    = (r?.total_debit  ?? 0).toLocaleString('en-US')
++    const cr    = (r?.total_credit ?? 0).toLocaleString('en-US')
++    details = `${count} ┘é┘è╪» ┘à╪▒╪¡┘ä ┘ü┘è ╪º┘ä┘ü╪¬╪▒╪⌐ | ╪Ñ╪¼┘à╪º┘ä┘è ╪º┘ä┘à╪»┘è┘å: ${dr} | ╪Ñ╪¼┘à╪º┘ä┘è ╪º┘ä╪»╪º╪ª┘å: ${cr}`
++  }
++
++  // Upsert the checklist row so the latest result is always visible in the UI
++  await db.prepare(`
++    INSERT INTO period_close_checklist
++      (company_id, period_id, step_key, step_order, step_label, is_critical,
++       status, count_blocked, details_json, completed_at)
++    VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))
++    ON CONFLICT(company_id, period_id, step_key) DO UPDATE SET
++      status=excluded.status,
++      count_blocked=excluded.count_blocked,
++      details_json=excluded.details_json,
++      completed_at=excluded.completed_at
++  `).bind(
++    companyId, periodId, stepKey, meta.order, meta.label, meta.critical ? 1 : 0,
++    status, countBlocked, details,
++  ).run()
++
++  return {
++    step_key: stepKey, step_order: meta.order, step_label: meta.label,
++    is_critical: meta.critical, status, count_blocked: countBlocked,
++    details, action_url: actionUrl,
++  }
++}
++
++// ΓöÇΓöÇΓöÇ GET /api/gl/periods ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++
+ periods.get('/', async (c) => {
+   const { company_id } = getUser(c)
+   const { results } = await c.env.DB
+-    .prepare('SELECT * FROM financial_periods WHERE company_id = ? ORDER BY start_date DESC')
++    .prepare('SELECT * FROM financial_periods WHERE company_id=? ORDER BY start_date DESC')
+     .bind(company_id).all()
+   return c.json({ success: true, data: results })
+ })
+ 
+-// POST /api/gl/periods
++// ΓöÇΓöÇΓöÇ POST /api/gl/periods ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++
+ periods.post('/', async (c) => {
+-  const { company_id } = getUser(c)
++  const { company_id, sub: userId } = getUser(c)
+   const b = await c.req.json<{
+     name: string; period_type?: string; start_date: string; end_date: string
+   }>()
+   if (!b.name || !b.start_date || !b.end_date) {
+     return c.json({ success: false, error: '╪º┘ä╪º╪│┘à ┘ê╪º┘ä╪¬┘ê╪º╪▒┘è╪« ┘à╪╖┘ä┘ê╪¿╪⌐' }, 400)
+   }
++  // Single-open-period guard
++  const openCount = await c.env.DB.prepare(
++    'SELECT COUNT(*) as n FROM financial_periods WHERE company_id=? AND is_closed=0'
++  ).bind(company_id).first<{ n: number }>()
++  if ((openCount?.n ?? 0) >= 1) {
++    return c.json({
++      success: false,
++      error: '┘è┘ê╪¼╪» ┘ü╪¬╪▒╪⌐ ┘à╪º┘ä┘è╪⌐ ┘à┘ü╪¬┘ê╪¡╪⌐ ╪¿╪º┘ä┘ü╪╣┘ä.',
++      detail: '┘è╪¼╪¿ ╪Ñ╪║┘ä╪º┘é ╪º┘ä┘ü╪¬╪▒╪⌐ ╪º┘ä╪¡╪º┘ä┘è╪⌐ ╪¿╪º┘ä┘â╪º┘à┘ä ┘é╪¿┘ä ╪Ñ┘å╪┤╪º╪í ┘ü╪¬╪▒╪⌐ ╪¼╪»┘è╪»╪⌐. ╪º┘ä┘ü╪¬╪▒╪º╪¬ ╪º┘ä┘à╪¬╪╣╪»╪»╪⌐ ╪º┘ä┘à┘ü╪¬┘ê╪¡╪⌐ ╪║┘è╪▒ ┘à╪│┘à┘ê╪¡ ╪¿┘ç╪º ╪¡╪¬┘ë ╪º┘â╪¬┘à╪º┘ä ╪│┘è┘å╪º╪▒┘è┘ê┘ç╪º╪¬ ╪º╪«╪¬╪¿╪º╪▒ ╪º┘ä╪Ñ╪║┘ä╪º┘é.',
++      open_count: openCount?.n,
++    }, 409)
++  }
+   const r = await c.env.DB.prepare(
+-    `INSERT INTO financial_periods (company_id, name, period_type, start_date, end_date) VALUES (?,?,?,?,?)`
++    `INSERT INTO financial_periods (company_id, name, period_type, start_date, end_date, status) VALUES (?,?,?,?,?,'open')`
+   ).bind(company_id, b.name, b.period_type ?? 'monthly', b.start_date, b.end_date).run()
++  void logAudit(c.env.DB, {
++    user_id: userId, company_id, action: 'CREATE', table_name: 'financial_periods',
++    record_id: r.meta.last_row_id as number,
++    new_value: { name: b.name, start_date: b.start_date, end_date: b.end_date },
++  })
+   return c.json({ success: true, data: { id: r.meta.last_row_id } }, 201)
+ })
+ 
+-// PATCH /api/gl/periods/:id/close
+-periods.patch('/:id/close', async (c) => {
+-  const { company_id, sub: userId } = getUser(c)
++// ΓöÇΓöÇΓöÇ GET /api/gl/periods/:id ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++
++periods.get('/:id', async (c) => {
++  const { company_id } = getUser(c)
++  const id = Number(c.req.param('id'))
++  const period = await c.env.DB.prepare(
++    'SELECT * FROM financial_periods WHERE id=? AND company_id=?'
++  ).bind(id, company_id).first()
++  if (!period) return c.json({ success: false, error: '╪º┘ä┘ü╪¬╪▒╪⌐ ╪║┘è╪▒ ┘à┘ê╪¼┘ê╪»╪⌐' }, 404)
++  return c.json({ success: true, data: period })
++})
++
++// ΓöÇΓöÇΓöÇ GET /api/gl/periods/:id/checklist ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++// Returns current checklist state. Returns 'pending' defaults for steps not yet run.
++
++periods.get('/:id/checklist', async (c) => {
++  const { company_id } = getUser(c)
++  const id = Number(c.req.param('id'))
++
++  const period = await c.env.DB.prepare(
++    'SELECT id, name, start_date, end_date, is_closed FROM financial_periods WHERE id=? AND company_id=?'
++  ).bind(id, company_id).first<{
++    id: number; name: string; start_date: string; end_date: string; is_closed: number
++  }>()
++  if (!period) return c.json({ success: false, error: '╪º┘ä┘ü╪¬╪▒╪⌐ ╪║┘è╪▒ ┘à┘ê╪¼┘ê╪»╪⌐' }, 404)
++
++  const { results: stored } = await c.env.DB.prepare(
++    `SELECT step_key, step_order, step_label, is_critical, status, count_blocked, details_json, completed_at
++     FROM period_close_checklist WHERE company_id=? AND period_id=? ORDER BY step_order`
++  ).bind(company_id, id).all<{
++    step_key: string; step_order: number; step_label: string; is_critical: number
++    status: CheckStatus; count_blocked: number; details_json: string; completed_at: string | null
++  }>()
++
++  // Fill in any steps not yet run as 'pending'
++  const checks = CLOSE_STEPS.map(s => {
++    const row = stored.find(r => r.step_key === s.key)
++    return row
++      ? { step_key: row.step_key, step_order: row.step_order, step_label: row.step_label,
++          is_critical: row.is_critical === 1, status: row.status,
++          count_blocked: row.count_blocked, details: row.details_json, completed_at: row.completed_at }
++      : { step_key: s.key, step_order: s.order, step_label: s.label, is_critical: s.critical,
++          status: 'pending' as CheckStatus, count_blocked: 0, details: '', completed_at: null }
++  })
++
++  const all_critical_passed = checks
++    .filter(c => c.is_critical)
++    .every(c => c.status === 'passed')
++
++  return c.json({ success: true, data: { period, checks, all_critical_passed } })
++})
++
++// ΓöÇΓöÇΓöÇ POST /api/gl/periods/:id/checklist/run ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++// Run ALL 5 check steps and persist results.
++
++periods.post('/:id/checklist/run', async (c) => {
++  const { company_id } = getUser(c)
+   const id = Number(c.req.param('id'))
++
++  const period = await c.env.DB.prepare(
++    'SELECT id, name, start_date, end_date, is_closed FROM financial_periods WHERE id=? AND company_id=?'
++  ).bind(id, company_id).first<{
++    id: number; name: string; start_date: string; end_date: string; is_closed: number
++  }>()
++  if (!period) return c.json({ success: false, error: '╪º┘ä┘ü╪¬╪▒╪⌐ ╪║┘è╪▒ ┘à┘ê╪¼┘ê╪»╪⌐' }, 404)
++  if (period.is_closed) return c.json({ success: false, error: '╪º┘ä┘ü╪¬╪▒╪⌐ ┘à╪║┘ä┘é╪⌐ ╪¿╪º┘ä┘ü╪╣┘ä ΓÇö ┘ä╪º ┘è┘à┘â┘å ╪¬╪┤╪║┘è┘ä ╪º┘ä┘ü╪¡┘ê╪╡╪º╪¬' }, 409)
++
++  const results: CheckRow[] = []
++  for (const step of CLOSE_STEPS) {
++    const row = await runStep(c.env.DB, company_id, id, period.start_date, period.end_date, step.key)
++    results.push(row)
++  }
++
++  const all_critical_passed = results.filter(r => r.is_critical).every(r => r.status === 'passed')
++  const blockers = results.filter(r => r.is_critical && r.status === 'failed').map(r => r.details)
++
++  return c.json({ success: true, data: { checks: results, all_critical_passed, blockers } })
++})
++
++// ΓöÇΓöÇΓöÇ POST /api/gl/periods/:id/checklist/run/:step ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++// Re-run a single check step.
++
++periods.post('/:id/checklist/run/:step', async (c) => {
++  const { company_id } = getUser(c)
++  const id   = Number(c.req.param('id'))
++  const step = c.req.param('step') as StepKey
++
++  if (!CLOSE_STEPS.find(s => s.key === step)) {
++    return c.json({ success: false, error: `╪«╪╖┘ê╪⌐ ╪║┘è╪▒ ┘à╪╣╪▒┘ê┘ü╪⌐: ${step}` }, 400)
++  }
++
++  const period = await c.env.DB.prepare(
++    'SELECT id, start_date, end_date, is_closed FROM financial_periods WHERE id=? AND company_id=?'
++  ).bind(id, company_id).first<{ id: number; start_date: string; end_date: string; is_closed: number }>()
++  if (!period) return c.json({ success: false, error: '╪º┘ä┘ü╪¬╪▒╪⌐ ╪║┘è╪▒ ┘à┘ê╪¼┘ê╪»╪⌐' }, 404)
++  if (period.is_closed) return c.json({ success: false, error: '╪º┘ä┘ü╪¬╪▒╪⌐ ┘à╪║┘ä┘é╪⌐ ╪¿╪º┘ä┘ü╪╣┘ä' }, 409)
++
++  const result = await runStep(c.env.DB, company_id, id, period.start_date, period.end_date, step)
++  return c.json({ success: true, data: result })
++})
++
++// ΓöÇΓöÇΓöÇ PATCH /api/gl/periods/:id/close ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++// Execute the actual period close.
++// Requires all critical checklist steps to be 'passed', unless force=1 (admins only).
++
++periods.patch('/:id/close', async (c) => {
++  const { company_id, sub: userId, role } = getUser(c)
++  const id    = Number(c.req.param('id'))
+   const force = c.req.query('force') === '1'
+ 
+   const period = await c.env.DB.prepare(
+-    'SELECT id, name, start_date, end_date, is_closed FROM financial_periods WHERE id = ? AND company_id = ?'
+-  ).bind(id, company_id).first<{ id: number; name: string; start_date: string; end_date: string; is_closed: number }>()
++    'SELECT id, name, start_date, end_date, is_closed FROM financial_periods WHERE id=? AND company_id=?'
++  ).bind(id, company_id).first<{
++    id: number; name: string; start_date: string; end_date: string; is_closed: number
++  }>()
+   if (!period) return c.json({ success: false, error: '╪º┘ä┘ü╪¬╪▒╪⌐ ╪║┘è╪▒ ┘à┘ê╪¼┘ê╪»╪⌐' }, 404)
+-  if (period.is_closed) return c.json({ success: false, error: '╪º┘ä┘ü╪¬╪▒╪⌐ ┘à╪║┘ä┘é╪⌐ ┘à╪│╪¿┘é╪º┘ï' }, 409)
+-
+-  // Guard: no unbalanced entries in this period
+-  const unbalanced = await c.env.DB.prepare(`
+-    SELECT COUNT(*) AS n FROM (
+-      SELECT je.id FROM journal_entries je
+-      JOIN journal_entry_lines jel ON jel.entry_id = je.id
+-      WHERE je.company_id = ? AND je.period_id = ?
+-      GROUP BY je.id
+-      HAVING ABS(ROUND(SUM(jel.debit), 2) - ROUND(SUM(jel.credit), 2)) > 0.01
+-    )`).bind(company_id, id).first<{ n: number }>()
+-
+-  // Guard: no business events in 'error' or 'pending' state for this period
+-  const pendingEvents = await c.env.DB.prepare(`
+-    SELECT COUNT(*) AS n FROM business_events be
+-    JOIN journal_entries je ON je.id = be.journal_entry_id
+-    WHERE be.company_id = ? AND je.period_id = ? AND be.status IN ('pending','error')
+-  `).bind(company_id, id).first<{ n: number }>()
+-
+-  const blockers: string[] = []
+-  if ((unbalanced?.n ?? 0) > 0) blockers.push(`┘è┘ê╪¼╪» ${unbalanced!.n} ┘é┘è╪» ╪║┘è╪▒ ┘à╪¬┘ê╪º╪▓┘å ┘ü┘è ┘ç╪░┘ç ╪º┘ä┘ü╪¬╪▒╪⌐`)
+-  if ((pendingEvents?.n ?? 0) > 0) blockers.push(`┘è┘ê╪¼╪» ${pendingEvents!.n} ╪¡╪»╪½ ╪ú╪╣┘à╪º┘ä ┘à╪╣┘ä┘é ╪ú┘ê ╪«╪º╪╖╪ª`)
+-
+-  if (blockers.length > 0 && !force) {
++  if (period.is_closed) return c.json({ success: false, error: '╪º┘ä┘ü╪¬╪▒╪⌐ ┘à╪║┘ä┘é╪⌐ ┘à╪│╪¿┘é╪º' }, 409)
++
++  // force=1 requires elevated role
++  if (force && !['super_admin', 'company_admin'].includes(role ?? '')) {
+     return c.json({
+       success: false,
+-      error: '┘ä╪º ┘è┘à┘â┘å ╪Ñ╪║┘ä╪º┘é ╪º┘ä┘ü╪¬╪▒╪⌐ ╪¿╪│╪¿╪¿ ┘à╪┤╪º┘â┘ä ┘ü┘è ╪º┘ä╪¿┘è╪º┘å╪º╪¬',
+-      blockers,
+-      hint: '╪ú╪╢┘ü force=1 ┘ä┘ä╪¬╪¼╪º┘ç┘ä (┘ä┘ä┘à╪¡╪º╪│╪¿┘è┘å ╪º┘ä┘â╪¿╪º╪▒ ┘ü┘é╪╖)',
+-    }, 409)
++      error: '╪¬╪¼╪º┘ê╪▓ ┘é╪º╪ª┘à╪⌐ ╪º┘ä╪¬╪¡┘é┘é ┘è╪¬╪╖┘ä╪¿ ╪╡┘ä╪º╪¡┘è╪º╪¬ ┘à╪│╪ñ┘ê┘ä ╪º┘ä╪┤╪▒┘â╪⌐ ╪ú┘ê ╪º┘ä┘à╪│╪ñ┘ê┘ä ╪º┘ä╪╣╪º┘à',
++    }, 403)
+   }
+ 
+-  // Build immutable period snapshot for historical reporting.
+-  await c.env.DB.prepare('DELETE FROM period_account_balances WHERE company_id = ? AND period_id = ?')
+-    .bind(company_id, id).run()
++  // Read checklist results
++  const { results: checklistRows } = await c.env.DB.prepare(
++    `SELECT step_key, is_critical, status, details_json
++     FROM period_close_checklist WHERE company_id=? AND period_id=?`
++  ).bind(company_id, id).all<{
++    step_key: string; is_critical: number; status: CheckStatus; details_json: string
++  }>()
++
++  if (!force) {
++    if (checklistRows.length === 0) {
++      return c.json({
++        success: false,
++        error: '┘è╪¼╪¿ ╪¬╪┤╪║┘è┘ä ┘é╪º╪ª┘à╪⌐ ╪º┘ä╪¬╪¡┘é┘é ╪ú┘ê┘ä╪º ┘é╪¿┘ä ╪Ñ╪║┘ä╪º┘é ╪º┘ä┘ü╪¬╪▒╪⌐',
++        hint: '╪º╪╢╪║╪╖ "╪¬╪┤╪║┘è┘ä ╪¼┘à┘è╪╣ ╪º┘ä┘ü╪¡┘ê╪╡╪º╪¬" ┘ü┘è ┘ä┘ê╪¡╪⌐ ╪º┘ä╪Ñ╪║┘ä╪º┘é ╪½┘à ╪¬╪ú┘â╪» ┘à┘å ┘å╪¼╪º╪¡ ╪¼┘à┘è╪╣ ╪º┘ä╪¿┘å┘ê╪» ╪º┘ä╪¡╪▒╪¼╪⌐.',
++      }, 409)
++    }
++    const criticalFailed = checklistRows.filter(r => r.is_critical === 1 && r.status !== 'passed')
++    if (criticalFailed.length > 0) {
++      return c.json({
++        success: false,
++        error: `┘ä╪º ┘è┘à┘â┘å ╪Ñ╪║┘ä╪º┘é ╪º┘ä┘ü╪¬╪▒╪⌐ ΓÇö ┘è┘ê╪¼╪» ${criticalFailed.length} ╪¿┘å╪» ╪¡╪▒╪¼ ┘ä┘à ┘è╪¡┘ä`,
++        blockers: criticalFailed.map(r => r.details_json),
++      }, 409)
++    }
++  }
+ 
++  // ΓöÇΓöÇ Account-balance snapshot (independent of chart_of_accounts table) ΓöÇΓöÇΓöÇΓöÇ
+   await c.env.DB.prepare(
+-    `INSERT INTO period_account_balances
+-     (company_id, period_id, account_code,
+-      opening_debit, opening_credit,
+-      period_debit, period_credit,
+-      closing_debit, closing_credit,
+-      snapshotted_at)
+-     SELECT
+-       ?, ?, a.code,
+-       COALESCE(ob.opening_debit, 0),
+-       COALESCE(ob.opening_credit, 0),
+-       COALESCE(pb.period_debit, 0),
+-       COALESCE(pb.period_credit, 0),
+-       COALESCE(ob.opening_debit, 0) + COALESCE(pb.period_debit, 0),
+-       COALESCE(ob.opening_credit, 0) + COALESCE(pb.period_credit, 0),
+-       datetime('now')
+-     FROM chart_of_accounts a
+-     LEFT JOIN (
+-       SELECT l.account_code,
+-              SUM(l.debit)  AS opening_debit,
+-              SUM(l.credit) AS opening_credit
+-       FROM journal_entry_lines l
+-       JOIN journal_entries e ON e.id = l.entry_id
+-       WHERE e.company_id = ?
+-         AND e.is_posted = 1
+-         AND e.entry_date < ?
+-       GROUP BY l.account_code
+-     ) ob ON ob.account_code = a.code
+-     LEFT JOIN (
+-       SELECT l.account_code,
+-              SUM(l.debit)  AS period_debit,
+-              SUM(l.credit) AS period_credit
+-       FROM journal_entry_lines l
+-       JOIN journal_entries e ON e.id = l.entry_id
+-       WHERE e.company_id = ?
+-         AND e.is_posted = 1
+-         AND e.entry_date >= ?
+-         AND e.entry_date <= ?
+-       GROUP BY l.account_code
+-     ) pb ON pb.account_code = a.code
+-     WHERE a.company_id = ?`
+-  ).bind(
+-    company_id,
+-    id,
+-    company_id,
+-    period.start_date,
+-    company_id,
+-    period.start_date,
+-    period.end_date,
++    'DELETE FROM period_account_balances WHERE company_id=? AND period_id=?'
++  ).bind(company_id, id).run()
++
++  await c.env.DB.prepare(`
++    INSERT OR REPLACE INTO period_account_balances
++      (company_id, period_id, account_code,
++       opening_debit,  opening_credit,
++       period_debit,   period_credit,
++       closing_debit,  closing_credit,
++       snapshotted_at)
++    SELECT
++      ?,
++      ?,
++      jel.account_code,
++      COALESCE(SUM(CASE WHEN e.entry_date <  ?  AND e.is_posted=1 THEN jel.debit  ELSE 0 END), 0),
++      COALESCE(SUM(CASE WHEN e.entry_date <  ?  AND e.is_posted=1 THEN jel.credit ELSE 0 END), 0),
++      COALESCE(SUM(CASE WHEN e.entry_date >= ?  AND e.entry_date <= ? AND e.is_posted=1 THEN jel.debit  ELSE 0 END), 0),
++      COALESCE(SUM(CASE WHEN e.entry_date >= ?  AND e.entry_date <= ? AND e.is_posted=1 THEN jel.credit ELSE 0 END), 0),
++      COALESCE(SUM(CASE WHEN e.entry_date <= ?  AND e.is_posted=1 THEN jel.debit  ELSE 0 END), 0),
++      COALESCE(SUM(CASE WHEN e.entry_date <= ?  AND e.is_posted=1 THEN jel.credit ELSE 0 END), 0),
++      datetime('now')
++    FROM journal_entry_lines jel
++    JOIN journal_entries e ON e.id = jel.entry_id
++    WHERE e.company_id = ?
++    GROUP BY jel.account_code
++  `).bind(
++    company_id, id,
++    period.start_date, period.start_date,
++    period.start_date, period.end_date, period.start_date, period.end_date,
++    period.end_date, period.end_date,
+     company_id,
+   ).run()
+ 
++  // ΓöÇΓöÇ Lock the period ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+   await c.env.DB.prepare(
+-    `UPDATE financial_periods SET is_closed = 1, closed_at = datetime('now'), closed_by = ? WHERE id = ? AND company_id = ?`
++    `UPDATE financial_periods
++     SET is_closed=1, status='locked', closed_at=datetime('now'), closed_by=?
++     WHERE id=? AND company_id=?`
+   ).bind(userId, id, company_id).run()
+ 
+   void logAudit(c.env.DB, {
+     user_id: userId, company_id, action: 'CLOSE', table_name: 'financial_periods', record_id: id,
+-    new_value: { forced: force, blockers_ignored: blockers },
++    new_value: { forced: force, period_name: period.name },
++  })
++
++  return c.json({
++    success: true,
++    data: { period_id: id, period_name: period.name, snapshot_created: true, forced: force },
+   })
+-  return c.json({ success: true, data: { period_id: id, closed_with_warnings: blockers.length > 0 } })
+ })
+ 
+-// PATCH /api/gl/periods/:id/reopen
++// ΓöÇΓöÇΓöÇ PATCH /api/gl/periods/:id/reopen ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++// Restricted to super_admin and company_admin ONLY.
++// Also enforces single-open-period policy.
++
+ periods.patch('/:id/reopen', async (c) => {
+-  const { company_id, sub: userId } = getUser(c)
++  const { company_id, sub: userId, role } = getUser(c)
+   const id = Number(c.req.param('id'))
++
++  if (!['super_admin', 'company_admin'].includes(role ?? '')) {
++    return c.json({
++      success: false,
++      error: '┘ä╪º ┘è┘à┘â┘å┘â ╪Ñ╪╣╪º╪»╪⌐ ┘ü╪¬╪¡ ╪º┘ä┘ü╪¬╪▒╪⌐ ╪º┘ä┘à╪º┘ä┘è╪⌐',
++      detail: '╪Ñ╪╣╪º╪»╪⌐ ┘ü╪¬╪¡ ╪º┘ä┘ü╪¬╪▒╪⌐ ╪º┘ä┘à╪º┘ä┘è╪⌐ ╪¬╪¬╪╖┘ä╪¿ ╪╡┘ä╪º╪¡┘è╪º╪¬ company_admin ╪ú┘ê super_admin. ╪¬┘ê╪º╪╡┘ä ┘à╪╣ ╪º┘ä┘à╪│╪ñ┘ê┘ä.',
++    }, 403)
++  }
++
++  const period = await c.env.DB.prepare(
++    'SELECT id, name, is_closed FROM financial_periods WHERE id=? AND company_id=?'
++  ).bind(id, company_id).first<{ id: number; name: string; is_closed: number }>()
++  if (!period) return c.json({ success: false, error: '╪º┘ä┘ü╪¬╪▒╪⌐ ╪║┘è╪▒ ┘à┘ê╪¼┘ê╪»╪⌐' }, 404)
++  if (!period.is_closed) return c.json({ success: false, error: '╪º┘ä┘ü╪¬╪▒╪⌐ ┘à┘ü╪¬┘ê╪¡╪⌐ ╪¿╪º┘ä┘ü╪╣┘ä' }, 409)
++
++  // Enforce single-open-period policy
++  const openCount = await c.env.DB.prepare(
++    'SELECT COUNT(*) as n FROM financial_periods WHERE company_id=? AND is_closed=0'
++  ).bind(company_id).first<{ n: number }>()
++  if ((openCount?.n ?? 0) >= 1) {
++    return c.json({
++      success: false,
++      error: '┘è┘ê╪¼╪» ┘ü╪¬╪▒╪⌐ ┘à╪º┘ä┘è╪⌐ ┘à┘ü╪¬┘ê╪¡╪⌐ ╪¿╪º┘ä┘ü╪╣┘ä',
++      detail: '┘ä╪º ┘è┘à┘â┘å ╪Ñ╪╣╪º╪»╪⌐ ┘ü╪¬╪¡ ┘ç╪░┘ç ╪º┘ä┘ü╪¬╪▒╪⌐ ┘ä╪ú┘å ┘ç┘å╪º┘â ┘ü╪¬╪▒╪⌐ ╪ú╪«╪▒┘ë ┘à┘ü╪¬┘ê╪¡╪⌐. ╪ú╪║┘ä┘é ╪º┘ä┘ü╪¬╪▒╪⌐ ╪º┘ä┘à┘ü╪¬┘ê╪¡╪⌐ ╪ú┘ê┘ä╪º.',
++    }, 409)
++  }
++
+   await c.env.DB.prepare(
+-    `UPDATE financial_periods SET is_closed = 0, closed_at = NULL, closed_by = NULL WHERE id = ? AND company_id = ?`
++    `UPDATE financial_periods
++     SET is_closed=0, status='open', closed_at=NULL, closed_by=NULL
++     WHERE id=? AND company_id=?`
+   ).bind(id, company_id).run()
++
++  // Reset checklist so the next close starts fresh
++  await c.env.DB.prepare(
++    `UPDATE period_close_checklist
++     SET status='pending', count_blocked=0, details_json='', completed_at=NULL
++     WHERE company_id=? AND period_id=?`
++  ).bind(company_id, id).run()
++
+   void logAudit(c.env.DB, {
+     user_id: userId, company_id, action: 'REOPEN', table_name: 'financial_periods', record_id: id,
++    new_value: { period_name: period.name, reopened_by_role: role },
+   })
+-  return c.json({ success: true, data: null })
++  return c.json({ success: true, data: { period_id: id, period_name: period.name } })
+ })
+ 
+ export default periods
+diff --git a/web/src/api/gl.ts b/web/src/api/gl.ts
+index f2103b8..2e8f1e9 100644
+--- a/web/src/api/gl.ts
++++ b/web/src/api/gl.ts
+@@ -52,6 +52,52 @@ export interface SystemIntegrityScoreResult {
+   }
+ }
+ 
++export interface FinancialPeriod {
++  id: number
++  company_id: number
++  name: string
++  period_type: string
++  start_date: string
++  end_date: string
++  is_closed: number
++  status?: 'open' | 'closed' | 'locked'
++  closed_at?: string | null
++  closed_by?: number | null
++  created_at?: string
++}
++
++export interface PeriodCloseChecklistStep {
++  step_key: string
++  step_order: number
++  step_label: string
++  is_critical: boolean
++  status: 'pending' | 'running' | 'passed' | 'failed' | 'warning'
++  count_blocked: number
++  details: string
++  completed_at?: string | null
++}
++
++export interface PeriodCloseChecklistResult {
++  period: FinancialPeriod
++  checks: PeriodCloseChecklistStep[]
++  all_critical_passed: boolean
++}
++
++export interface PeriodCloseRunResult {
++  checks: Array<{
++    step_key: string
++    step_order: number
++    step_label: string
++    is_critical: boolean
++    status: 'pending' | 'running' | 'passed' | 'failed' | 'warning'
++    count_blocked: number
++    details: string
++    action_url?: string
++  }>
++  all_critical_passed: boolean
++  blockers: string[]
++}
++
+ export interface GlAuditLogRow {
+   id: number
+   user_id: number | null
+@@ -346,10 +392,15 @@ export const glApi = {
+   createAccount: (body: unknown) => api.post('/gl/accounts', body),
+   updateAccount: (code: string, body: unknown) => api.patch(`/gl/accounts/${code}`, body),
+ 
+-  periods:      () => unwrap(api.get<unknown[]>('/gl/periods')),
++  periods:      () => unwrap(api.get<FinancialPeriod[]>('/gl/periods')),
+   createPeriod: (body: unknown) => api.post('/gl/periods', body),
+   closePeriod:  (id: number) => api.patch(`/gl/periods/${id}/close`, {}),
++  closePeriodForce: (id: number) => api.patch(`/gl/periods/${id}/close?force=1`, {}),
+   reopenPeriod: (id: number) => api.patch(`/gl/periods/${id}/reopen`, {}),
++  periodChecklist: (id: number) => unwrap(api.get<PeriodCloseChecklistResult>(`/gl/periods/${id}/checklist`)),
++  runPeriodChecklist: (id: number) => unwrap(api.post<PeriodCloseRunResult>(`/gl/periods/${id}/checklist/run`, {})),
++  runPeriodChecklistStep: (id: number, stepKey: string) =>
++    unwrap(api.post<PeriodCloseChecklistStep>(`/gl/periods/${id}/checklist/run/${stepKey}`, {})),
+ 
+   entries:     (p?: { page?: number; size?: number; start?: string; end?: string; ref_type?: string }) =>
+     unwrapPaginated<unknown>(api.get(paginatedUrl('/gl/entries', p ?? {}))),
+diff --git a/web/src/pages/gl/PeriodCloseCockpit.tsx b/web/src/pages/gl/PeriodCloseCockpit.tsx
+index 4b5b873..a534bc4 100644
+--- a/web/src/pages/gl/PeriodCloseCockpit.tsx
++++ b/web/src/pages/gl/PeriodCloseCockpit.tsx
+@@ -1,349 +1,382 @@
+-/**
+- * PeriodCloseCockpit ΓÇö FIN-EPIC-06
+- * Pre-close readiness checklist + period close/reopen controls.
+- * Runs integrity check, reconciliation summary, and unposted entries
+- * before allowing a period to be closed.
+- */
+-import { useState } from 'react'
+-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
++import { useMemo, useState } from 'react'
++import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+ import { Link } from 'react-router-dom'
+ import {
+-  Lock, Unlock, CheckCircle2, XCircle, AlertTriangle, RefreshCw,
+-  ChevronRight, Loader2, Shield, CalendarDays,
++  AlertTriangle,
++  CalendarDays,
++  CheckCircle2,
++  ChevronRight,
++  Loader2,
++  Lock,
++  PlayCircle,
++  RefreshCw,
++  RotateCcw,
++  Shield,
++  Unlock,
++  User,
++  XCircle,
+ } from 'lucide-react'
+ import { glApi } from '../../api/client'
++import type { FinancialPeriod, PeriodCloseChecklistStep } from '../../api/gl'
+ import { KpiStrip, type KpiItem } from '../../components/ui/KpiStrip'
+-import SectionCard from '../../components/ui/SectionCard'
+ import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
+-import Modal from '../../components/ui/Modal'
++import SectionCard from '../../components/ui/SectionCard'
+ import StatusBadge from '../../components/ui/StatusBadge'
+-import { useGlSystemIntegrityScore, useGlIntegrityIssues } from '../../hooks/useGlFinance'
+-
+-// ΓöÇΓöÇ Types ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++import Modal from '../../components/ui/Modal'
+ 
+-interface FinancialPeriod {
+-  id: number; company_id: number
+-  name: string; period_type: string
+-  start_date: string; end_date: string
+-  is_closed: number; closed_at?: string; closed_by?: number
+-  created_at: string
++const STEP_OWNER: Record<string, string> = {
++  inventory_gl: 'Inventory + GL Team',
++  unposted_entries: 'General Ledger Team',
++  balance_check: 'Chief Accountant',
++  orphan_entries: 'GL Data Governance',
++  period_summary: 'Finance Controller',
+ }
+ 
+-interface ReadinessCheck {
+-  id: string
+-  label: string
+-  description: string
+-  isCritical: boolean
+-  isPassed: boolean | null   // null = loading
+-  detail?: string
+-  actionTo?: string
+-  actionLabel?: string
++function mapStepAction(stepKey: string): { to?: string; label?: string } {
++  if (stepKey === 'inventory_gl') return { to: '/gl/batch-posting', label: 'Resolve in Batch Posting' }
++  if (stepKey === 'unposted_entries') return { to: '/gl/entries', label: 'Open Journal Entries' }
++  if (stepKey === 'balance_check') return { to: '/gl/health-integrity', label: 'Open Integrity Issues' }
++  if (stepKey === 'orphan_entries') return { to: '/gl/health-integrity', label: 'Open Integrity Issues' }
++  return {}
+ }
+ 
+-// ΓöÇΓöÇ Helper ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+-
+-function statusIcon(pass: boolean | null, critical: boolean) {
+-  if (pass === null)  return <div className="w-4 h-4 rounded-full border-2 border-slate-300 animate-pulse" />
+-  if (pass)           return <CheckCircle2 size={16} className="text-[#1D9E75]" />
+-  if (critical)       return <XCircle      size={16} className="text-red-500" />
+-  return                     <AlertTriangle size={16} className="text-amber-500" />
++function stepStatusIcon(status: PeriodCloseChecklistStep['status'], critical: boolean) {
++  if (status === 'passed') return <CheckCircle2 size={16} className="text-emerald-600" />
++  if (status === 'failed') return <XCircle size={16} className="text-red-500" />
++  if (status === 'warning') return <AlertTriangle size={16} className="text-amber-500" />
++  if (status === 'running') return <Loader2 size={16} className="text-slate-500 animate-spin" />
++  return (
++    <div
++      className={`w-4 h-4 rounded-full border-2 ${critical ? 'border-red-300' : 'border-slate-300'}`}
++      title="Pending"
++    />
++  )
+ }
+ 
+-// ΓöÇΓöÇ Period Row ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++function statusTone(status: PeriodCloseChecklistStep['status'], critical: boolean) {
++  if (status === 'passed') return 'bg-emerald-50/70 border-emerald-200'
++  if (status === 'failed') return 'bg-red-50/80 border-red-200'
++  if (status === 'warning') return 'bg-amber-50/80 border-amber-200'
++  if (status === 'running') return 'bg-slate-50 border-slate-200'
++  return critical ? 'bg-red-50/40 border-red-150' : 'bg-slate-50 border-slate-200'
++}
+ 
+ function PeriodCard({
+   period,
++  selected,
++  onSelect,
+   onClose,
+   onReopen,
+-  isSelected,
+-  onSelect,
+   closing,
+   reopening,
+ }: {
+   period: FinancialPeriod
++  selected: boolean
++  onSelect: () => void
+   onClose: () => void
+   onReopen: () => void
+-  isSelected: boolean
+-  onSelect: () => void
+   closing: boolean
+   reopening: boolean
+ }) {
+   return (
+     <div
+-      className={`rounded-lg border p-4 cursor-pointer transition-all ${
+-        isSelected
++      className={`rounded-lg border p-4 transition-all cursor-pointer ${
++        selected
+           ? 'border-[#0F2D5C] bg-blue-50/50 shadow-sm'
+           : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm'
+       }`}
+       onClick={onSelect}
+     >
+-      <div className="flex items-start justify-between gap-3">
++      <div className="flex items-start justify-between gap-2">
+         <div className="flex items-start gap-3">
+-          <div className="mt-0.5">
+-            {period.is_closed
+-              ? <Lock size={16} className="text-red-400" />
+-              : <Unlock size={16} className="text-[#1D9E75]" />
+-            }
+-          </div>
++          {period.is_closed ? (
++            <Lock size={16} className="text-red-400 mt-0.5" />
++          ) : (
++            <Unlock size={16} className="text-emerald-600 mt-0.5" />
++          )}
+           <div>
+             <p className="text-[14px] font-bold text-[#0F2D5C]">{period.name}</p>
+             <p className="text-[11px] text-slate-500 font-mono mt-0.5">
+-              {period.start_date} ΓåÆ {period.end_date}
++              {period.start_date} - {period.end_date}
+             </p>
+-            {period.is_closed && period.closed_at && (
++            {period.closed_at ? (
+               <p className="text-[10px] text-slate-400 mt-1">Closed {period.closed_at.slice(0, 10)}</p>
+-            )}
++            ) : null}
+           </div>
+         </div>
+         <div className="flex items-center gap-2 shrink-0">
+           <StatusBadge variant={period.is_closed ? 'voided' : 'active'} label={period.is_closed ? 'Closed' : 'Open'} />
+-          {period.is_closed
+-            ? (
+-              <button
+-                className="btn-secondary text-[11px] py-1 px-3 flex items-center gap-1"
+-                onClick={e => { e.stopPropagation(); onReopen() }}
+-                disabled={reopening}
+-              >
+-                {reopening ? <Loader2 size={11} className="animate-spin" /> : <Unlock size={11} />}
+-                Reopen
+-              </button>
+-            )
+-            : (
+-              <button
+-                className="btn-primary text-[11px] py-1 px-3 flex items-center gap-1 bg-red-600 hover:bg-red-700"
+-                onClick={e => { e.stopPropagation(); onClose() }}
+-                disabled={closing}
+-              >
+-                {closing ? <Loader2 size={11} className="animate-spin" /> : <Lock size={11} />}
+-                Close Period
+-              </button>
+-            )
+-          }
+-          <ChevronRight size={14} className={`text-slate-400 transition-transform ${isSelected ? 'rotate-90' : ''}`} />
++          {period.is_closed ? (
++            <button
++              className="btn-secondary text-[11px] py-1 px-3 flex items-center gap-1"
++              onClick={(e) => {
++                e.stopPropagation()
++                onReopen()
++              }}
++              disabled={reopening}
++            >
++              {reopening ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
++              Reopen
++            </button>
++          ) : (
++            <button
++              className="btn-primary text-[11px] py-1 px-3 flex items-center gap-1 bg-red-600 hover:bg-red-700"
++              onClick={(e) => {
++                e.stopPropagation()
++                onClose()
++              }}
++              disabled={closing}
++            >
++              {closing ? <Loader2 size={11} className="animate-spin" /> : <Lock size={11} />}
++              Close
++            </button>
++          )}
++          <ChevronRight size={14} className={`text-slate-400 transition-transform ${selected ? 'rotate-90' : ''}`} />
+         </div>
+       </div>
+     </div>
+   )
+ }
+ 
+-// ΓöÇΓöÇ Readiness Panel ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+-
+-function ReadinessChecklist({ period, checks }: { period: FinancialPeriod; checks: ReadinessCheck[] }) {
+-  const passing  = checks.filter(c => c.isPassed === true).length
+-  const total    = checks.length
+-  const blockers = checks.filter(c => !c.isPassed && c.isCritical)
+-  const allClear = blockers.length === 0
++function ReadinessPanel({
++  period,
++  checks,
++  onRunAll,
++  onRunOne,
++  runningAll,
++  runningStep,
++}: {
++  period: FinancialPeriod
++  checks: PeriodCloseChecklistStep[]
++  onRunAll: () => void
++  onRunOne: (stepKey: string) => void
++  runningAll: boolean
++  runningStep: string | null
++}) {
++  const total = checks.length
++  const passed = checks.filter((c) => c.status === 'passed').length
++  const criticalFailures = checks.filter((c) => c.is_critical && c.status === 'failed').length
++  const progress = total === 0 ? 0 : Math.round((passed / total) * 100)
+ 
+   return (
+     <SectionCard
+-      title={`Close Readiness ΓÇö ${period.name}`}
+-      subtitle={`${passing}/${total} checks passing ┬╖ ${blockers.length} blocker(s)`}
++      title={`Period Close Command Center - ${period.name}`}
++      subtitle={`${passed}/${total} passed - ${criticalFailures} critical blocker(s)`}
+       icon={<Shield size={14} />}
+     >
+-      {/* Summary bar */}
+-      <div className="h-2 rounded-full bg-slate-200 overflow-hidden mb-4">
+-        <div
+-          className={`h-full rounded-full transition-all ${allClear ? 'bg-[#1D9E75]' : 'bg-amber-400'}`}
+-          style={{ width: total > 0 ? `${(passing / total) * 100}%` : '0%' }}
+-        />
++      <div className="rounded-lg border border-slate-200 p-4 bg-slate-50 mb-4">
++        <div className="flex items-center justify-between gap-2 mb-2">
++          <p className="text-[12px] font-semibold text-slate-700">Close Progress</p>
++          <p className="text-[12px] text-slate-500">{progress}%</p>
++        </div>
++        <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
++          <div className={`h-full rounded-full transition-all ${criticalFailures > 0 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${progress}%` }} />
++        </div>
+       </div>
+ 
+-      <div className="space-y-2.5">
+-        {checks.map(chk => (
+-          <div
+-            key={chk.id}
+-            className={`rounded-lg border p-3 flex items-start gap-3 ${
+-              chk.isPassed === true  ? 'bg-emerald-50/50 border-emerald-100' :
+-              chk.isCritical         ? 'bg-red-50/50 border-red-200' :
+-                                       'bg-amber-50/50 border-amber-200'
+-            }`}
+-          >
+-            <div className="mt-0.5 shrink-0">{statusIcon(chk.isPassed, chk.isCritical)}</div>
+-            <div className="flex-1 min-w-0">
+-              <div className="flex items-center gap-2">
+-                <p className="text-[13px] font-semibold text-slate-700">{chk.label}</p>
+-                {chk.isCritical && !chk.isPassed && (
+-                  <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded uppercase tracking-wide">Blocker</span>
+-                )}
++      <div className="flex items-center gap-2 mb-4">
++        <button className="btn-primary text-[12px] flex items-center gap-1" onClick={onRunAll} disabled={runningAll}>
++          {runningAll ? <Loader2 size={12} className="animate-spin" /> : <PlayCircle size={12} />}
++          Run All Checks
++        </button>
++        <p className="text-[11px] text-slate-500">Sequence: Inventory {'->'} Journal {'->'} Balance {'->'} Mapping {'->'} Summary</p>
++      </div>
++
++      <div className="space-y-2">
++        {checks.map((step) => {
++          const action = mapStepAction(step.step_key)
++          const isRunOneBusy = runningStep === step.step_key
++          return (
++            <div key={step.step_key} className={`rounded-lg border p-3 ${statusTone(step.status, step.is_critical)}`}>
++              <div className="flex items-start gap-3">
++                <div className="mt-0.5">{stepStatusIcon(step.status, step.is_critical)}</div>
++                <div className="flex-1 min-w-0">
++                  <div className="flex items-center gap-2">
++                    <p className="text-[13px] font-semibold text-slate-700">{step.step_order}. {step.step_label}</p>
++                    {step.is_critical && step.status !== 'passed' ? (
++                      <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded uppercase tracking-wide">Blocker</span>
++                    ) : null}
++                  </div>
++                  <div className="flex items-center gap-3 mt-1">
++                    <p className="text-[11px] text-slate-500 flex items-center gap-1">
++                      <User size={11} /> Owner: {STEP_OWNER[step.step_key] ?? 'Finance Team'}
++                    </p>
++                    <p className="text-[11px] text-slate-500">Status: {step.status}</p>
++                    <p className="text-[11px] text-slate-500">Count: {step.count_blocked}</p>
++                  </div>
++                  {step.details ? (
++                    <p className="text-[11px] mt-1 text-slate-700">{step.details}</p>
++                  ) : null}
++                </div>
++                <div className="shrink-0 flex items-center gap-2">
++                  <button
++                    className="btn-secondary text-[11px] py-1 px-2"
++                    onClick={() => onRunOne(step.step_key)}
++                    disabled={isRunOneBusy || runningAll}
++                    title="Re-run this step"
++                  >
++                    {isRunOneBusy ? <Loader2 size={11} className="animate-spin" /> : 'Run'}
++                  </button>
++                  {action.to && (step.status === 'failed' || step.status === 'warning') ? (
++                    <Link to={action.to} className="text-[11px] text-[#0F2D5C] underline hover:opacity-80 whitespace-nowrap">
++                      {action.label ?? 'Investigate'}
++                    </Link>
++                  ) : null}
++                </div>
+               </div>
+-              <p className="text-[11px] text-slate-500 mt-0.5">{chk.description}</p>
+-              {chk.detail && (
+-                <p className={`text-[11px] mt-1 font-medium ${chk.isPassed ? 'text-emerald-700' : chk.isCritical ? 'text-red-700' : 'text-amber-700'}`}>
+-                  {chk.detail}
+-                </p>
+-              )}
+             </div>
+-            {chk.actionTo && !chk.isPassed && (
+-              <Link
+-                to={chk.actionTo}
+-                className="shrink-0 text-[11px] text-[#0F2D5C] underline hover:opacity-80 whitespace-nowrap"
+-              >
+-                {chk.actionLabel ?? 'Investigate'}
+-              </Link>
+-            )}
+-          </div>
+-        ))}
++          )
++        })}
+       </div>
+-
+-      {allClear && (
+-        <div className="mt-4 flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded p-3">
+-          <CheckCircle2 size={16} className="text-[#1D9E75] shrink-0" />
+-          <p className="text-[13px] font-semibold text-emerald-800">Period is ready to close ΓÇö all blockers resolved</p>
+-        </div>
+-      )}
+     </SectionCard>
+   )
+ }
+ 
+-// ΓöÇΓöÇ Main Page ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+-
+ export default function PeriodCloseCockpit() {
+   const qc = useQueryClient()
+   const [selectedId, setSelectedId] = useState<number | null>(null)
+   const [confirmClose, setConfirmClose] = useState<FinancialPeriod | null>(null)
++  const [confirmForceClose, setConfirmForceClose] = useState<FinancialPeriod | null>(null)
+   const [showAdd, setShowAdd] = useState(false)
++  const [runningStep, setRunningStep] = useState<string | null>(null)
+   const [form, setForm] = useState({ name: '', period_type: 'monthly', start_date: '', end_date: '' })
+-  const PERIOD_TYPES = ['monthly', 'quarterly', 'annual']
+ 
+   const { data: periods = [], isLoading: periodsLoading, refetch: refetchPeriods } = useQuery({
+     queryKey: ['gl-periods'],
+-    queryFn: () => glApi.periods() as Promise<FinancialPeriod[]>,
++    queryFn: () => glApi.periods(),
++  })
++
++  const selectedPeriod = useMemo(() => {
++    return periods.find((p) => p.id === selectedId) ?? periods.find((p) => !p.is_closed) ?? null
++  }, [periods, selectedId])
++
++  const { data: checklistData, refetch: refetchChecklist, isFetching: checklistLoading } = useQuery({
++    queryKey: ['gl-period-checklist', selectedPeriod?.id],
++    queryFn: () => glApi.periodChecklist(selectedPeriod!.id),
++    enabled: !!selectedPeriod,
+   })
+ 
+-  const { data: scoreData,  refetch: refetchScore  } = useGlSystemIntegrityScore()
+-  const { data: issuesData, refetch: refetchIssues } = useGlIntegrityIssues(false)
++  const checks = checklistData?.checks ?? []
++  const allCriticalPassed = checklistData?.all_critical_passed ?? false
+ 
+-  // Unposted entries count
+-  const { data: entriesData } = useQuery({
+-    queryKey: ['gl-entries-unposted'],
+-    queryFn: () => glApi.entries({ page: 1, size: 200 }),
++  const createMut = useMutation({
++    mutationFn: () => glApi.createPeriod(form),
++    onSuccess: () => {
++      qc.invalidateQueries({ queryKey: ['gl-periods'] })
++      setShowAdd(false)
++      setForm({ name: '', period_type: 'monthly', start_date: '', end_date: '' })
++    },
+   })
+ 
+-  // Recon summary (all docs)
+-  const { data: reconData } = useQuery({
+-    queryKey: ['recon-summary-cockpit'],
+-    queryFn: () => (glApi as any).reconciliationSourceDocs({ page: 1, size: 1, mismatch_only: '1' }) as Promise<{ summary: { total: number } }>,
++  const runAllMut = useMutation({
++    mutationFn: (id: number) => glApi.runPeriodChecklist(id),
++    onSuccess: () => {
++      refetchChecklist()
++      qc.invalidateQueries({ queryKey: ['gl-periods'] })
++    },
+   })
+ 
+-  const selectedPeriod = periods.find(p => p.id === selectedId) ?? periods.find(p => !p.is_closed) ?? null
++  const runStepMut = useMutation({
++    mutationFn: ({ id, stepKey }: { id: number; stepKey: string }) => glApi.runPeriodChecklistStep(id, stepKey),
++    onSuccess: () => {
++      setRunningStep(null)
++      refetchChecklist()
++    },
++    onError: () => setRunningStep(null),
++  })
+ 
+   const closeMut = useMutation({
+     mutationFn: (id: number) => glApi.closePeriod(id),
+     onSuccess: () => {
+       qc.invalidateQueries({ queryKey: ['gl-periods'] })
++      refetchChecklist()
+       setConfirmClose(null)
+     },
+   })
+ 
+-  const reopenMut = useMutation({
+-    mutationFn: (id: number) => glApi.reopenPeriod(id),
+-    onSuccess: () => qc.invalidateQueries({ queryKey: ['gl-periods'] }),
++  const forceCloseMut = useMutation({
++    mutationFn: (id: number) => glApi.closePeriodForce(id),
++    onSuccess: () => {
++      qc.invalidateQueries({ queryKey: ['gl-periods'] })
++      refetchChecklist()
++      setConfirmForceClose(null)
++    },
+   })
+ 
+-  const createMut = useMutation({
+-    mutationFn: () => glApi.createPeriod(form),
++  const reopenMut = useMutation({
++    mutationFn: (id: number) => glApi.reopenPeriod(id),
+     onSuccess: () => {
+       qc.invalidateQueries({ queryKey: ['gl-periods'] })
+-      setShowAdd(false)
+-      setForm({ name: '', period_type: 'monthly', start_date: '', end_date: '' })
++      refetchChecklist()
+     },
+   })
+ 
++  function refreshAll() {
++    refetchPeriods()
++    refetchChecklist()
++  }
++
+   function prefillCurrentMonth() {
+     const now = new Date()
+     const y = now.getFullYear()
+     const m = String(now.getMonth() + 1).padStart(2, '0')
+     const lastDay = new Date(y, now.getMonth() + 1, 0).getDate()
+-    const names = ['','January','February','March','April','May','June','July','August','September','October','November','December']
+-    setForm({ name: `${names[now.getMonth() + 1]} ${y}`, period_type: 'monthly', start_date: `${y}-${m}-01`, end_date: `${y}-${m}-${lastDay}` })
+-  }
+-
+-  function refreshAll() {
+-    refetchPeriods(); refetchScore(); refetchIssues()
++    const names = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
++    setForm({
++      name: `${names[now.getMonth() + 1]} ${y}`,
++      period_type: 'monthly',
++      start_date: `${y}-${m}-01`,
++      end_date: `${y}-${m}-${String(lastDay).padStart(2, '0')}`,
++    })
+   }
+ 
+-  const open    = periods.filter(p => !p.is_closed)
+-  const closed  = periods.filter(p =>  p.is_closed)
+-  const integrityScore  = scoreData?.overall_score ?? scoreData?.score ?? 0
+-  const criticalIssues  = (issuesData?.checks ?? []).filter(i => i.severity === 'critical').length
+-  const unpostedEntries = ((entriesData as any)?.data ?? []).filter((e: { is_posted: number }) => e.is_posted === 0).length
+-  const reconMismatches = (reconData as any)?.summary?.total ?? 0
++  const open = periods.filter((p) => !p.is_closed)
++  const closed = periods.filter((p) => p.is_closed)
+ 
+-  // Build readiness checks for selected period
+-  const readinessChecks: ReadinessCheck[] = selectedPeriod && !selectedPeriod.is_closed ? [
+-    {
+-      id: 'integrity',
+-      label: 'System Integrity Score',
+-      description: 'GL integrity score must be ΓëÑ 70 to safely close a period',
+-      isCritical: false,
+-      isPassed: integrityScore >= 70,
+-      detail: integrityScore > 0 ? `Current score: ${integrityScore}/100` : undefined,
+-      actionTo: '/gl/health-integrity',
+-      actionLabel: 'View Issues',
+-    },
+-    {
+-      id: 'critical_issues',
+-      label: 'No Critical GL Issues',
+-      description: 'All critical integrity issues must be resolved before closing',
+-      isCritical: true,
+-      isPassed: criticalIssues === 0,
+-      detail: criticalIssues > 0 ? `${criticalIssues} critical issue(s) found` : 'No critical issues',
+-      actionTo: '/gl/health-integrity',
+-      actionLabel: 'Resolve Issues',
+-    },
+-    {
+-      id: 'unposted',
+-      label: 'No Unposted Entries',
+-      description: 'All journal entries within the period should be posted',
+-      isCritical: true,
+-      isPassed: unpostedEntries === 0,
+-      detail: unpostedEntries > 0 ? `${unpostedEntries} entry/entries pending posting` : 'All entries posted',
+-      actionTo: '/gl/entries',
+-      actionLabel: 'Post Entries',
+-    },
+-    {
+-      id: 'reconciliation',
+-      label: 'Source Document Reconciliation',
+-      description: 'All operational events should have a corresponding GL entry',
+-      isCritical: false,
+-      isPassed: reconMismatches === 0,
+-      detail: reconMismatches > 0 ? `${reconMismatches} document mismatch(es) found` : 'All documents reconciled',
+-      actionTo: '/gl/reconciliation',
+-      actionLabel: 'Workbench',
+-    },
+-    {
+-      id: 'open_period_exists',
+-      label: 'Next Period Exists or Will Be Created',
+-      description: 'Closing this period will block all future entries unless another open period exists',
+-      isCritical: false,
+-      isPassed: open.length > 1,
+-      detail: open.length > 1 ? `${open.length - 1} other open period(s) available` : 'This is the only open period ΓÇö create a new one after closing',
+-    },
+-  ] : []
++  const passed = checks.filter((c) => c.status === 'passed').length
++  const completionPct = checks.length === 0 ? 0 : Math.round((passed / checks.length) * 100)
+ 
+   const kpis: KpiItem[] = [
+-    { id: 'open',    label: 'OPEN PERIODS',    value: open.length,   variant: open.length > 0 ? 'success' : 'warning' },
+-    { id: 'closed',  label: 'CLOSED PERIODS',  value: closed.length },
+-    { id: 'score',   label: 'INTEGRITY SCORE', value: integrityScore > 0 ? `${integrityScore}/100` : 'ΓÇö', variant: integrityScore >= 80 ? 'success' : 'warning' },
+-    { id: 'recon',   label: 'RECON MISMATCHES', value: reconMismatches, variant: reconMismatches === 0 ? 'success' : 'warning' },
++    { id: 'open', label: 'OPEN PERIODS', value: open.length, variant: open.length === 1 ? 'success' : 'warning' },
++    { id: 'closed', label: 'CLOSED PERIODS', value: closed.length },
++    { id: 'steps', label: 'CHECKS PASSED', value: `${passed}/${checks.length || 5}`, variant: allCriticalPassed ? 'success' : 'warning' },
++    { id: 'progress', label: 'COMPLETION', value: `${completionPct}%`, variant: completionPct === 100 ? 'success' : 'warning' },
+   ]
+ 
+   const actions: CommandAction[] = [
+     {
+-      id: 'refresh', label: 'Refresh', icon: <RefreshCw size={14} />, onClick: refreshAll, variant: 'secondary',
++      id: 'refresh',
++      label: 'Refresh',
++      icon: <RefreshCw size={14} />,
++      onClick: refreshAll,
++      variant: 'secondary',
+     },
+     {
+-      id: 'new', label: 'New Period', icon: <CalendarDays size={14} />, variant: 'primary',
+-      onClick: () => { setShowAdd(true); prefillCurrentMonth() },
++      id: 'run-checks',
++      label: 'Run Close Checks',
++      icon: <PlayCircle size={14} />,
++      onClick: () => selectedPeriod && runAllMut.mutate(selectedPeriod.id),
++      disabled: !selectedPeriod || !!selectedPeriod.is_closed || runAllMut.isPending,
++      variant: 'primary',
++    },
++    {
++      id: 'new',
++      label: 'New Period',
++      icon: <CalendarDays size={14} />,
++      onClick: () => {
++        setShowAdd(true)
++        prefillCurrentMonth()
++      },
++      variant: 'secondary',
+     },
+   ]
+ 
+   return (
+     <div className="flex flex-col h-full bg-[#f8fafc]">
+       <div className="px-6 py-5 bg-white border-b border-slate-200">
+-        <h1 className="text-[18px] font-bold text-[#0F2D5C]">Period Close Cockpit</h1>
++        <h1 className="text-[18px] font-bold text-[#0F2D5C]">Financial Period Close Command Center</h1>
+         <p className="text-[12px] text-slate-500 mt-0.5">
+-          Run the close-readiness checklist and safely close or reopen financial periods.
++          One-open-period policy with guided checklist, strict close controls, and exception-based reopen.
+         </p>
+       </div>
+ 
+@@ -351,28 +384,33 @@ export default function PeriodCloseCockpit() {
+       <KpiStrip items={kpis} />
+ 
+       <div className="flex-1 overflow-y-auto p-6">
+-        <div className="max-w-6xl mx-auto grid grid-cols-1 xl:grid-cols-[380px_1fr] gap-6">
+-
+-          {/* ΓöÇΓöÇ Left: Period List ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */}
++        <div className="max-w-6xl mx-auto grid grid-cols-1 xl:grid-cols-[390px_1fr] gap-6">
+           <div className="space-y-4">
+-            {open.length === 0 && !periodsLoading && (
++            <div className="rounded-lg border border-slate-200 bg-white p-3 text-[12px] text-slate-600">
++              <p className="font-semibold text-slate-700 mb-1">Policy</p>
++              <p>
++                System currently enforces exactly one open financial period while close workflows are being hardened.
++              </p>
++            </div>
++
++            {open.length === 0 && !periodsLoading ? (
+               <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded p-3">
+                 <AlertTriangle size={16} className="text-amber-500 shrink-0" />
+-                <p className="text-[12px] font-medium text-amber-800">No open periods ΓÇö posting is blocked system-wide</p>
++                <p className="text-[12px] font-medium text-amber-800">No open period detected. Posting may be blocked.</p>
+               </div>
+-            )}
++            ) : null}
+ 
+-            {/* Open Periods */}
+-            {open.length > 0 && (
++            {open.length > 0 ? (
+               <div>
+                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+-                  <Unlock size={10} className="text-[#1D9E75]" /> Open Periods ({open.length})
++                  <Unlock size={10} className="text-emerald-600" /> Open ({open.length})
+                 </p>
+                 <div className="space-y-2">
+-                  {open.map(p => (
++                  {open.map((p) => (
+                     <PeriodCard
+-                      key={p.id} period={p}
+-                      isSelected={selectedPeriod?.id === p.id}
++                      key={p.id}
++                      period={p}
++                      selected={selectedPeriod?.id === p.id}
+                       onSelect={() => setSelectedId(p.id)}
+                       onClose={() => setConfirmClose(p)}
+                       onReopen={() => {}}
+@@ -382,19 +420,19 @@ export default function PeriodCloseCockpit() {
+                   ))}
+                 </div>
+               </div>
+-            )}
++            ) : null}
+ 
+-            {/* Closed Periods */}
+-            {closed.length > 0 && (
++            {closed.length > 0 ? (
+               <div>
+                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                   <Lock size={10} className="text-red-400" /> Closed ({closed.length})
+                 </p>
+                 <div className="space-y-2">
+-                  {closed.slice(0, 5).map(p => (
++                  {closed.slice(0, 6).map((p) => (
+                     <PeriodCard
+-                      key={p.id} period={p}
+-                      isSelected={selectedPeriod?.id === p.id}
++                      key={p.id}
++                      period={p}
++                      selected={selectedPeriod?.id === p.id}
+                       onSelect={() => setSelectedId(p.id)}
+                       onClose={() => {}}
+                       onReopen={() => reopenMut.mutate(p.id)}
+@@ -402,87 +440,138 @@ export default function PeriodCloseCockpit() {
+                       reopening={reopenMut.isPending}
+                     />
+                   ))}
+-                  {closed.length > 5 && (
+-                    <p className="text-[11px] text-slate-400 text-center pt-1">+ {closed.length - 5} more closed periods</p>
+-                  )}
++                  {closed.length > 6 ? (
++                    <p className="text-[11px] text-slate-400 text-center pt-1">+ {closed.length - 6} more closed periods</p>
++                  ) : null}
+                 </div>
+               </div>
+-            )}
++            ) : null}
+           </div>
+ 
+-          {/* ΓöÇΓöÇ Right: Readiness Panel ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */}
+           <div>
+             {selectedPeriod && !selectedPeriod.is_closed ? (
+-              <ReadinessChecklist period={selectedPeriod} checks={readinessChecks} />
++              <ReadinessPanel
++                period={selectedPeriod}
++                checks={checks}
++                onRunAll={() => runAllMut.mutate(selectedPeriod.id)}
++                onRunOne={(stepKey) => {
++                  setRunningStep(stepKey)
++                  runStepMut.mutate({ id: selectedPeriod.id, stepKey })
++                }}
++                runningAll={runAllMut.isPending || checklistLoading}
++                runningStep={runningStep}
++              />
+             ) : selectedPeriod && selectedPeriod.is_closed ? (
+-              <SectionCard title={`${selectedPeriod.name} ΓÇö Closed`} subtitle="This period is locked" icon={<Lock size={14} className="text-red-400" />}>
++              <SectionCard title={`${selectedPeriod.name} - Closed`} subtitle="Period is currently locked" icon={<Lock size={14} className="text-red-400" />}>
+                 <div className="space-y-3 text-[13px] text-slate-600">
+-                  <p>Period was closed on <strong>{selectedPeriod.closed_at?.slice(0, 10) ?? 'unknown date'}</strong>.</p>
+-                  <p>No journal entries can be posted within its date range (<span className="font-mono">{selectedPeriod.start_date}</span> ΓåÆ <span className="font-mono">{selectedPeriod.end_date}</span>).</p>
+-                  <p className="text-[12px] text-slate-400">To re-open this period, click <strong>Reopen</strong> on the period card. This requires elevated permissions.</p>
++                  <p>
++                    Closed on <strong>{selectedPeriod.closed_at?.slice(0, 10) ?? 'unknown date'}</strong>.
++                  </p>
++                  <p>
++                    Reopening is allowed only as an exception and with elevated permissions.
++                  </p>
+                 </div>
+               </SectionCard>
+             ) : (
+               <div className="flex flex-col items-center justify-center h-64 rounded-xl border-2 border-dashed border-slate-200 bg-white text-center px-6">
+                 <Shield size={40} className="text-slate-300 mb-3" />
+-                <p className="text-[14px] font-semibold text-slate-500">Select an open period to run the close-readiness checklist</p>
++                <p className="text-[14px] font-semibold text-slate-500">Select an open period to run close workflow checks.</p>
+               </div>
+             )}
+           </div>
+         </div>
+       </div>
+ 
+-      {/* Confirm Close Modal */}
+-      {confirmClose && (
++      {confirmClose ? (
+         <Modal open={!!confirmClose} onClose={() => setConfirmClose(null)} title="Confirm Period Close" size="md">
+           <div className="space-y-4 text-[13px]">
+             <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded p-4">
+               <AlertTriangle size={18} className="text-red-500 shrink-0 mt-0.5" />
+               <div>
+-                <p className="font-semibold text-red-800">This action cannot be easily undone</p>
++                <p className="font-semibold text-red-800">Closing will lock transactions in this date range.</p>
+                 <p className="text-[12px] text-red-700 mt-1">
+-                  Closing <strong>{confirmClose.name}</strong> will block all journal entries within{' '}
+-                  <span className="font-mono">{confirmClose.start_date}</span> ΓåÆ <span className="font-mono">{confirmClose.end_date}</span>.
++                  {confirmClose.start_date} - {confirmClose.end_date}
+                 </p>
+               </div>
+             </div>
+-            <p className="text-slate-600">Make sure the close-readiness checklist shows no critical blockers before proceeding.</p>
++            {!allCriticalPassed ? (
++              <div className="rounded border border-amber-200 bg-amber-50 p-3 text-amber-800">
++                Critical checklist items are not fully passed. Use force close only for emergency with admin approval.
++              </div>
++            ) : null}
+           </div>
+-          <div className="flex justify-end gap-3 mt-6">
++          <div className="flex justify-between items-center mt-6 gap-3">
+             <button className="btn-secondary" onClick={() => setConfirmClose(null)}>Cancel</button>
++            <div className="flex items-center gap-2">
++              <button
++                className="btn-secondary"
++                onClick={() => {
++                  setConfirmClose(null)
++                  setConfirmForceClose(confirmClose)
++                }}
++              >
++                Force Close
++              </button>
++              <button
++                className="btn-primary bg-red-600 hover:bg-red-700 flex items-center gap-2"
++                onClick={() => closeMut.mutate(confirmClose.id)}
++                disabled={closeMut.isPending || !allCriticalPassed}
++              >
++                {closeMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <Lock size={14} />}
++                Close Period
++              </button>
++            </div>
++          </div>
++        </Modal>
++      ) : null}
++
++      {confirmForceClose ? (
++        <Modal open={!!confirmForceClose} onClose={() => setConfirmForceClose(null)} title="Force Close (Admin Override)" size="md">
++          <div className="space-y-3 text-[13px]">
++            <div className="rounded border border-red-200 bg-red-50 p-3 text-red-800">
++              This bypasses critical checklist blockers and should be used only under strict exception handling.
++            </div>
++            <p>
++              Period: <strong>{confirmForceClose.name}</strong>
++            </p>
++            <p className="text-[12px] text-slate-600">Action will call close with force=1 and remain fully auditable.</p>
++          </div>
++          <div className="flex justify-end gap-3 mt-6">
++            <button className="btn-secondary" onClick={() => setConfirmForceClose(null)}>Cancel</button>
+             <button
+-              className="btn-primary bg-red-600 hover:bg-red-700 flex items-center gap-2"
+-              onClick={() => closeMut.mutate(confirmClose.id)}
+-              disabled={closeMut.isPending}
++              className="btn-primary bg-red-700 hover:bg-red-800 flex items-center gap-2"
++              onClick={() => forceCloseMut.mutate(confirmForceClose.id)}
++              disabled={forceCloseMut.isPending}
+             >
+-              {closeMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <Lock size={14} />}
+-              Close Period
++              {forceCloseMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <Lock size={14} />}
++              Force Close
+             </button>
+           </div>
+         </Modal>
+-      )}
++      ) : null}
+ 
+-      {/* Create Period Modal */}
+       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add New Financial Period" size="md">
+         <div className="space-y-4 text-[13px]">
+           <div>
+             <label className="block text-slate-600 font-semibold mb-1">Period Name *</label>
+-            <input className="input" placeholder="e.g. May 2026" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
++            <input className="input" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+           </div>
+           <div>
+             <label className="block text-slate-600 font-semibold mb-1">Period Type</label>
+-            <select className="input" value={form.period_type} onChange={e => setForm(f => ({ ...f, period_type: e.target.value }))}>
+-              {PERIOD_TYPES.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
++            <select className="input" value={form.period_type} onChange={(e) => setForm((f) => ({ ...f, period_type: e.target.value }))}>
++              <option value="monthly">Monthly</option>
++              <option value="quarterly">Quarterly</option>
++              <option value="annual">Annual</option>
+             </select>
+           </div>
+           <div className="grid grid-cols-2 gap-4">
+             <div>
+               <label className="block text-slate-600 font-semibold mb-1">Start Date</label>
+-              <input type="date" className="input" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} />
++              <input type="date" className="input" value={form.start_date} onChange={(e) => setForm((f) => ({ ...f, start_date: e.target.value }))} />
+             </div>
+             <div>
+               <label className="block text-slate-600 font-semibold mb-1">End Date</label>
+-              <input type="date" className="input" value={form.end_date} onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} />
++              <input type="date" className="input" value={form.end_date} onChange={(e) => setForm((f) => ({ ...f, end_date: e.target.value }))} />
+             </div>
+           </div>
+         </div>
+diff --git a/web/src/pages/contracts/ContractsPage.tsx b/web/src/pages/contracts/ContractsPage.tsx
+index 314bb8c..5087f05 100644
+--- a/web/src/pages/contracts/ContractsPage.tsx
++++ b/web/src/pages/contracts/ContractsPage.tsx
+@@ -26,11 +26,6 @@ interface ContractAdvance {
+ const STATUS_LABELS: Record<string, string> = {
+   draft: '┘à╪│┘ê╪»╪⌐', active: '┘å╪┤╪╖', partial: '╪¼╪▓╪ª┘è', completed: '┘à┘â╪¬┘à┘ä', cancelled: '┘à┘ä╪║┘ë',
+ }
+-// @ts-ignore
+-const STATUS_BADGE: Record<string, string> = {
+-  draft: 'badge-yellow', active: 'badge-blue', partial: 'badge-yellow',
+-  completed: 'badge-green', cancelled: 'badge-red',
+-}
+ const CONTRACT_STATUSES = ['draft','active','partial','completed','cancelled']
+ 
+ function fmt(n: number) { return Number(n).toLocaleString('en-US') }
+diff --git a/wrangler.toml b/wrangler.toml
+index 0c1dd91..79d4340 100644
+--- a/wrangler.toml
++++ b/wrangler.toml
+@@ -10,9 +10,8 @@ database_id   = "2dd5cfe6-b694-46bd-9cb8-adf1bc7c27af"
+ 
+ [vars]
+ APP_ENV    = "production"
+-# Feature flag: set to "true" to activate posting_engine.ts dual-path logic.
+-# Runtime toggle: UPDATE gl_integration_settings SET is_enabled=1 WHERE module_key='posting_engine';
+-# NEVER set to "true" in production until posting-group setup tables are populated.
++# Dead env var ΓÇö not consumed by any source code. Retained for reference only.
++# Runtime toggle for GL posting engine: UPDATE gl_integration_settings SET is_enabled=1 WHERE module_key='posting_engine';
+ ENABLE_POSTING_ENGINE = "true"
+ 
+ # ΓöÇΓöÇ Cron Triggers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ

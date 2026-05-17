@@ -1,11 +1,21 @@
 import { useQuery } from '@tanstack/react-query'
 import { glApi } from '../api/client'
 
+function isPermissionError(error: unknown): boolean {
+  const msg = (error instanceof Error ? error.message : String(error ?? '')).toLowerCase()
+  return msg.includes('forbidden') ||
+         msg.includes('unauthorized') ||
+         msg.includes('permission') ||
+         msg.includes('غير مصرح') ||
+         msg.includes('صلاحية')
+}
+
 export function useGlSystemIntegrityScore() {
   return useQuery({
     queryKey: ['gl-system-integrity-score'],
     queryFn: () => glApi.systemIntegrityScore(),
-    refetchInterval: 60_000,
+    retry: (failureCount, error) => !isPermissionError(error) && failureCount < 1,
+    refetchInterval: (query) => (isPermissionError(query.state.error) ? false : 60_000),
   })
 }
 
@@ -13,7 +23,8 @@ export function useGlIntegrityIssues(detailed = false) {
   return useQuery({
     queryKey: ['gl-integrity-issues', detailed],
     queryFn: () => glApi.integrityCheckV2(detailed),
-    refetchInterval: 60_000,
+    retry: (failureCount, error) => !isPermissionError(error) && failureCount < 1,
+    refetchInterval: (query) => (isPermissionError(query.state.error) ? false : 60_000),
   })
 }
 
@@ -48,5 +59,6 @@ export function useGlAuditLog(params?: {
       params?.to ?? '',
     ],
     queryFn: () => glApi.auditLog(params),
+    retry: (failureCount, error) => !isPermissionError(error) && failureCount < 1,
   })
 }

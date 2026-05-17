@@ -1,12 +1,11 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Package, ChevronDown, ChevronUp, Plus, Download, ExternalLink, AlertTriangle, X, Wrench, ArrowRightLeft } from 'lucide-react'
+import { Package, ChevronDown, ChevronUp, Plus, Download, ExternalLink, AlertTriangle, X, Wrench, ArrowRightLeft, Activity, ShieldCheck, Link2Off, Boxes, CircleDollarSign } from 'lucide-react'
 import { inventoryApi, downloadCsv } from '../../api/client'
-import AddInventoryBatchModal from '../../components/forms/AddInventoryBatchModal'
-import InternalTransferModal from '../../components/forms/InternalTransferModal'
+import { CommandBar } from '../../components/ui/CommandBar'
 import { TableSkeleton } from '../../components/ui/Skeleton'
-import type { InventoryBalance } from '../../types'
+import type { } from '../../types'
 import { usePermission } from '../../hooks/usePermission'
 
 function egp(n: number) {
@@ -21,15 +20,7 @@ export default function WarehouseBalancesPage() {
   const navigate     = useNavigate()
   const [activeWarehouse,    setActiveWarehouse]    = useState<string | null>(null)
   const [expanded,           setExpanded]           = useState<Set<string>>(new Set())
-  const [addOpen,            setAddOpen]            = useState(false)
   const [reorderDismissed,   setReorderDismissed]   = useState(false)
-  const [transferData, setTransferData] = useState<{
-    open: boolean;
-    itemCode: number;
-    itemName: string;
-    sourceWarehouse: string;
-    maxQuantity: number;
-  }>({ open: false, itemCode: 0, itemName: '', sourceWarehouse: '', maxQuantity: 0 })
 
   const { data: warehouses } = useQuery({
     queryKey: ['warehouses'],
@@ -43,13 +34,21 @@ export default function WarehouseBalancesPage() {
     refetchInterval: 300_000,
   })
 
-  const { data: balances, isLoading } = useQuery({
-    queryKey: ['inventory', 'balances', activeWarehouse],
-    queryFn:  () => inventoryApi.balances(activeWarehouse ?? undefined) as Promise<InventoryBalance[]>,
+  const { data: healthSummary } = useQuery({
+    queryKey: ['inventory', 'health-summary'],
+    queryFn: inventoryApi.healthSummary,
+    staleTime: 120_000,
   })
 
+  const { data: balancesResp, isLoading } = useQuery({
+    queryKey: ['inventory', 'stock-balances', activeWarehouse],
+    queryFn:  () => inventoryApi.balancesList({ warehouse: activeWarehouse ?? undefined, size: 2000 }),
+  })
+  const balances = balancesResp?.data
+
   // Group by warehouse
-  const grouped = (balances ?? []).reduce<Record<string, InventoryBalance[]>>((acc, row) => {
+  type BalRow = NonNullable<typeof balances>[number]
+  const grouped = (balances ?? []).reduce<Record<string, BalRow[]>>((acc, row) => {
     const wh = row.warehouse ?? 'غير محدد'
     if (!acc[wh]) acc[wh] = []
     acc[wh].push(row)
@@ -64,31 +63,203 @@ export default function WarehouseBalancesPage() {
     })
   }
 
+  const metrics = useMemo(() => {
+    const rows = balances ?? []
+    const whSet = new Set<string>()
+    const itemSet = new Set<number>()
+    let totalQty = 0
+    let totalValue = 0
+    let negativeRows = 0
+
+    for (const r of rows) {
+      whSet.add(r.warehouse ?? 'غير محدد')
+      itemSet.add(r.item_code)
+      totalQty += r.balance_qty ?? 0
+      totalValue += r.balance_value ?? 0
+      if ((r.balance_qty ?? 0) < 0) negativeRows += 1
+    }
+
+    return {
+      warehouses: whSet.size,
+      items: itemSet.size,
+      totalQty,
+      totalValue,
+      negativeRows,
+    }
+  }, [balances])
+
+  const postingSummary = healthSummary?.posting ?? {
+    health_pct: 100,
+    total_combos: 0,
+    covered: 0,
+    missing_setup: 0,
+  }
+
+  const movementSummary = healthSummary?.movement ?? {
+    total: 0,
+    unlinked_total: 0,
+    unlinked_non_zero: 0,
+    unlinked_zero: 0,
+  }
+
+  const itemRiskSummary = healthSummary?.item_risk ?? {
+    active_items: 0,
+    items_without_standard_cost: 0,
+    items_without_ppg: 0,
+    items_without_ipg: 0,
+    items_without_reorder_threshold: 0,
+    below_reorder_count: 0,
+  }
+
+  const stockRiskSummary = healthSummary?.stock_risk ?? {
+    negative_balance_rows: metrics.negativeRows,
+    negative_balance_items: 0,
+  }
+
   return (
-    <div className="space-y-5">
-      <div className="page-header">
-        <h1 className="page-title">أرصدة المخازن</h1>
-        <div className="flex items-center gap-2">
-          <button
-            className="btn-secondary gap-2"
-            onClick={() => downloadCsv('/inventory', 'أرصدة_المخازن')}
-          >
-            <Download size={16} />تصدير CSV
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="أرصدة المخازن"
+        subtitle="لوحة الأرصدة الحالية حسب المخزن مع مؤشرات التكامل المحاسبي"
+        actions={[
+          {
+            label: 'تصدير CSV',
+            icon: <Download size={15} />,
+            variant: 'secondary',
+            onClick: () => downloadCsv('/inventory/stock-balances', 'أرصدة_المخازن'),
+          },
+          ...(canWrite('inventory') ? [
+            {
+              label: 'تحويل بين المخازن',
+              icon: <ArrowRightLeft size={15} />,
+              variant: 'secondary' as const,
+              onClick: () => navigate('/inventory/workspace/create?type=TRANSFER_OUT'),
+            },
+            {
+              label: 'حركة جديدة',
+              icon: <Plus size={15} />,
+              variant: 'primary' as const,
+              onClick: () => navigate('/inventory/workspace/create'),
+            },
+          ] : []),
+        ]}
+      />
+      <div className="flex-1 overflow-y-auto p-5 space-y-5">
+
+      {/* Inventory cockpit KPIs */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <button className="card p-4 text-right hover:border-brand-300 hover:bg-brand-50 transition-colors" onClick={() => navigate('/inventory/setup')}>
+          <p className="text-xs text-slate-500 mb-1">المخازن النشطة</p>
+          <p className="text-2xl font-bold text-slate-800">{metrics.warehouses}</p>
+        </button>
+        <button className="card p-4 text-right hover:border-emerald-300 hover:bg-emerald-50 transition-colors" onClick={() => navigate('/inventory/items')}>
+          <p className="text-xs text-slate-500 mb-1">الأصناف الحالية</p>
+          <p className="text-2xl font-bold text-slate-800">{metrics.items}</p>
+        </button>
+        <button className="card p-4 text-right hover:border-slate-300 hover:bg-slate-50 transition-colors" onClick={() => navigate('/inventory/movements')}>
+          <p className="text-xs text-slate-500 mb-1">إجمالي الكمية</p>
+          <p className="text-xl font-bold text-slate-800">{num(metrics.totalQty)}</p>
+        </button>
+        <button className="card p-4 text-right hover:border-brand-300 hover:bg-brand-50 transition-colors" onClick={() => navigate('/inventory/movements')}>
+          <p className="text-xs text-slate-500 mb-1">قيمة المخزون</p>
+          <p className="text-xl font-bold text-brand-700">{egp(metrics.totalValue)}</p>
+        </button>
+        <button className={`card p-4 text-right hover:border-red-300 hover:bg-red-50 transition-colors ${metrics.negativeRows > 0 ? 'border-red-200 bg-red-50' : ''}`} onClick={() => navigate('/inventory/movements?negative=1')}>
+          <p className="text-xs text-slate-500 mb-1">أرصدة سالبة</p>
+          <p className={`text-2xl font-bold ${metrics.negativeRows > 0 ? 'text-red-700' : 'text-emerald-700'}`}>
+            {metrics.negativeRows > 0 ? metrics.negativeRows : '✓ 0'}
+          </p>
+        </button>
+      </div>
+
+      {/* Master-data risk cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <button className={`card p-4 text-right hover:border-amber-300 hover:bg-amber-50 transition-colors ${itemRiskSummary.items_without_standard_cost > 0 ? 'border-amber-200 bg-amber-50' : ''}`} onClick={() => navigate('/inventory/items?risk=no_standard_cost')}>
+          <p className="text-xs text-slate-500 mb-1">بدون تكلفة معيارية</p>
+          <p className={`text-xl font-bold ${itemRiskSummary.items_without_standard_cost > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+            {itemRiskSummary.items_without_standard_cost}
+          </p>
+        </button>
+        <button className={`card p-4 text-right hover:border-red-300 hover:bg-red-50 transition-colors ${itemRiskSummary.items_without_ppg > 0 ? 'border-red-200 bg-red-50' : ''}`} onClick={() => navigate('/inventory/items?risk=no_ppg')}>
+          <p className="text-xs text-slate-500 mb-1">أصناف بدون PPG</p>
+          <p className={`text-xl font-bold ${itemRiskSummary.items_without_ppg > 0 ? 'text-red-700' : 'text-emerald-700'}`}>
+            {itemRiskSummary.items_without_ppg}
+          </p>
+        </button>
+        <button className={`card p-4 text-right hover:border-red-300 hover:bg-red-50 transition-colors ${itemRiskSummary.items_without_ipg > 0 ? 'border-red-200 bg-red-50' : ''}`} onClick={() => navigate('/inventory/items?risk=no_ipg')}>
+          <p className="text-xs text-slate-500 mb-1">أصناف بدون IPG</p>
+          <p className={`text-xl font-bold ${itemRiskSummary.items_without_ipg > 0 ? 'text-red-700' : 'text-emerald-700'}`}>
+            {itemRiskSummary.items_without_ipg}
+          </p>
+        </button>
+        <button className={`card p-4 text-right hover:border-amber-300 hover:bg-amber-50 transition-colors ${itemRiskSummary.below_reorder_count > 0 ? 'border-amber-200 bg-amber-50' : ''}`} onClick={() => navigate('/inventory/items?risk=below_reorder')}>
+          <p className="text-xs text-slate-500 mb-1">أقل من حد إعادة الطلب</p>
+          <p className={`text-xl font-bold ${itemRiskSummary.below_reorder_count > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+            {itemRiskSummary.below_reorder_count}
+          </p>
+        </button>
+      </div>
+
+      {/* Main module actions */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <button
+          onClick={() => navigate('/inventory/movements')}
+          className="card p-4 text-right hover:border-brand-300 hover:bg-brand-50 transition-colors"
+        >
+          <div className="flex items-center gap-2 mb-2 text-brand-700 font-semibold">
+            <Activity size={15} /> حركات المخزون
+          </div>
+          <p className="text-xs text-slate-500">إدارة الإضافة/الصرف والتحويلات مع الفلاتر</p>
+        </button>
+        <button
+          onClick={() => navigate('/inventory/posting-health')}
+          className="card p-4 text-right hover:border-indigo-300 hover:bg-indigo-50 transition-colors"
+        >
+          <div className="flex items-center gap-2 mb-2 text-indigo-700 font-semibold">
+            <ShieldCheck size={15} /> صحة الترحيل
+          </div>
+          <p className="text-xs text-slate-500">متابعة تغطية warehouse×PPG والفجوات المحاسبية</p>
+        </button>
+        <button
+          onClick={() => navigate('/inventory/items')}
+          className="card p-4 text-right hover:border-emerald-300 hover:bg-emerald-50 transition-colors"
+        >
+          <div className="flex items-center gap-2 mb-2 text-emerald-700 font-semibold">
+            <Boxes size={15} /> دليل الأصناف
+          </div>
+          <p className="text-xs text-slate-500">ضبط المجموعات المحاسبية والتكلفة المعيارية</p>
+        </button>
+      </div>
+
+      {/* Financial linkage health strip */}
+      <div className={`rounded-xl border p-4 ${postingSummary.missing_setup > 0 || movementSummary.unlinked_non_zero > 0 ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-emerald-50'}`}>
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <p className="text-sm font-bold text-slate-800">تكامل المخزون مع المالية (Posting)</p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              تغطية الإعدادات: {postingSummary.covered}/{postingSummary.total_combos} ({postingSummary.health_pct}%)
+            </p>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              إجمالي الحركات: {movementSummary.total}
+            </p>
+          </div>
+          <button className="btn-secondary text-xs" onClick={() => navigate('/inventory/posting-health')}>
+            فتح لوحة الصحة
           </button>
-          {canWrite('inventory') && (
-            <>
-              <button 
-                className="btn-secondary gap-2 border-indigo-200 text-indigo-700 hover:bg-indigo-50" 
-                onClick={() => setTransferData({ open: true, itemCode: 0, itemName: '', sourceWarehouse: '', maxQuantity: 0 })}
-              >
-                <ArrowRightLeft size={16} /> تحويل مخزني
-              </button>
-              <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
-                <Plus size={16} />
-                حركة جديدة
-              </button>
-            </>
-          )}
+        </div>
+        <div className="mt-3 flex items-center gap-2 flex-wrap text-xs">
+          <button onClick={() => navigate('/inventory/posting-health')} className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border ${postingSummary.missing_setup > 0 ? 'bg-red-50 text-red-700 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+            <ShieldCheck size={12} /> بدون إعداد: {postingSummary.missing_setup}
+          </button>
+          <button onClick={() => navigate('/inventory/movements?unlinked=1')} className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border ${movementSummary.unlinked_non_zero > 0 ? 'bg-red-50 text-red-700 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+            <Link2Off size={12} /> حركات بقيمة بدون قيد: {movementSummary.unlinked_non_zero}
+          </button>
+          <button onClick={() => navigate('/inventory/movements?unlinked=1')} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border bg-amber-50 text-amber-700 border-amber-200">
+            <AlertTriangle size={12} /> حركات صفرية بدون قيد: {movementSummary.unlinked_zero}
+          </button>
+          <button onClick={() => navigate('/inventory/movements?negative=1')} className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border ${stockRiskSummary.negative_balance_rows > 0 ? 'bg-red-50 text-red-700 border-red-200' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
+            <CircleDollarSign size={12} /> أرصدة سالبة حالية: {stockRiskSummary.negative_balance_rows}
+          </button>
         </div>
       </div>
 
@@ -236,13 +407,7 @@ export default function WarehouseBalancesPage() {
                                   title="تحويل مخزني"
                                   onClick={(e) => { 
                                     e.stopPropagation(); 
-                                    setTransferData({
-                                      open: true,
-                                      itemCode: item.item_code,
-                                      itemName: item.item_name ?? `#${item.item_code}`,
-                                      sourceWarehouse: warehouse,
-                                      maxQuantity: item.balance_qty
-                                    });
+                                    navigate(`/inventory/workspace/create?type=TRANSFER_OUT&warehouse=${warehouse}`);
                                   }}
                                 >
                                   <ArrowRightLeft size={14} />
@@ -270,21 +435,8 @@ export default function WarehouseBalancesPage() {
         </div>
       )}
 
-      <AddInventoryBatchModal
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        defaultWarehouse={activeWarehouse ?? undefined}
-      />
 
-      {transferData.open && (
-        <InternalTransferModal
-          open={transferData.open}
-          onClose={() => setTransferData({ ...transferData, open: false })}
-          initialItemCode={transferData.itemCode}
-          initialItemName={transferData.itemName}
-          initialSourceWarehouse={transferData.sourceWarehouse}
-        />
-      )}
+      </div>
     </div>
   )
 }

@@ -1,15 +1,17 @@
 import { useSearchParams } from 'react-router-dom'
-import { Shield, Activity, ShieldCheck } from 'lucide-react'
-import AuditLogPage   from './AuditLogPage'
-import ErrorLogPage   from './ErrorLogPage'
-import IntegrityPage  from './IntegrityPage'
+import { Shield, Activity, ShieldCheck, Tractor } from 'lucide-react'
+import AuditLogPage            from './AuditLogPage'
+import ErrorLogPage            from './ErrorLogPage'
+import IntegrityPage           from './IntegrityPage'
+import OperationalEventsPage   from './OperationalEventsPage'
 
-type Tab = 'log' | 'errors' | 'integrity'
+type Tab = 'log' | 'errors' | 'integrity' | 'operational'
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: 'log',       icon: <Shield      size={15} />, label: 'سجل التغييرات'  },
-  { id: 'errors',    icon: <Activity    size={15} />, label: 'سجل الأخطاء'    },
-  { id: 'integrity', icon: <ShieldCheck size={15} />, label: 'سلامة البيانات' },
+  { id: 'log',         icon: <Shield      size={15} />, label: 'سجل التغييرات'   },
+  { id: 'operational', icon: <Tractor     size={15} />, label: 'أحداث التشغيل'   },
+  { id: 'errors',      icon: <Activity    size={15} />, label: 'سجل الأخطاء'     },
+  { id: 'integrity',   icon: <ShieldCheck size={15} />, label: 'سلامة البيانات'  },
 ]
 
 export default function AuditCenterPage() {
@@ -52,9 +54,10 @@ export default function AuditCenterPage() {
 
       {/* Content — suppress inner page headers */}
       <div className="[&_.page-header]:hidden [&_.page-title]:hidden">
-        {tab === 'log'       && <AuditLogPage />}
-        {tab === 'errors'    && <ErrorLogPage />}
-        {tab === 'integrity' && <IntegrityPage />}
+        {tab === 'log'         && <AuditLogPage />}
+        {tab === 'operational' && <OperationalEventsPage />}
+        {tab === 'errors'      && <ErrorLogPage />}
+        {tab === 'integrity'   && <IntegrityPage />}
       </div>
     </div>
   )

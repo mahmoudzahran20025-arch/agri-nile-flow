@@ -59,12 +59,12 @@ export default function DebugPage() {
       }
 
       // 5. Test inventory
-      log('Testing /api/inventory/balances...')
+      log('Testing /api/inventory/stock-balances...')
       try {
-        const inventoryResp = await inventoryApi.balances()
+        const inventoryResp = await inventoryApi.balancesList({ size: 10 })
         log(`✅ Inventory response received:`)
         setApiResults(prev => ({ ...prev, inventory: inventoryResp }))
-        log(`Data count: ${Array.isArray(inventoryResp) ? inventoryResp.length : 0}`)
+        log(`Data count: ${inventoryResp?.data?.length ?? 0} (total: ${inventoryResp?.pagination?.total ?? 0})`)
       } catch (e) {
         log(`❌ Inventory error: ${String(e)}`)
       }

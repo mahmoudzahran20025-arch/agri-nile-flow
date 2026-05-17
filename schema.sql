@@ -160,9 +160,7 @@ CREATE TABLE supplier_transactions (
   document_number       INTEGER,
   expense_category      TEXT,
   equipment             TEXT,
-  unit                  TEXT,
-  quantity              REAL,
-  unit_price            REAL,
+
   amount                REAL    NOT NULL DEFAULT 0,
   credit                REAL    NOT NULL DEFAULT 0,
   debit                 REAL    NOT NULL DEFAULT 0,
@@ -198,9 +196,7 @@ CREATE TABLE cash_transactions (
   recipient_name   TEXT,
   narration        TEXT,
   season_service   TEXT,
-  unit             TEXT,
-  quantity         REAL,
-  unit_price       REAL,
+
   amount           REAL    NOT NULL DEFAULT 0,
   debit            REAL    NOT NULL DEFAULT 0,
   credit           REAL    NOT NULL DEFAULT 0,

@@ -27,6 +27,7 @@ export default function PeriodsPage() {
   const [form, setForm] = useState({
     name: '', period_type: 'monthly', start_date: '', end_date: '',
   });
+  const [createError, setCreateError] = useState('');
 
   const { data: periods = [], isLoading } = useQuery({
     queryKey: ['gl-periods'],
@@ -35,11 +36,17 @@ export default function PeriodsPage() {
 
   const createMut = useMutation({
     mutationFn: () => glApi.createPeriod(form),
-    onSuccess: () => {
+    onSuccess: (res: any) => {
+      if (!res?.success) {
+        setCreateError(res?.error ?? 'فشل إنشاء الفترة');
+        return;
+      }
       qc.invalidateQueries({ queryKey: ['gl-periods'] });
       setShowAdd(false);
+      setCreateError('');
       setForm({ name: '', period_type: 'monthly', start_date: '', end_date: '' });
     },
+    onError: () => setCreateError('حدث خطأ في الاتصال بالخادم'),
   });
 
   const closeMut = useMutation({
@@ -144,7 +151,7 @@ export default function PeriodsPage() {
       </div>
 
       {/* Create Period Modal */}
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add New Financial Period" size="md">
+      <Modal open={showAdd} onClose={() => { setShowAdd(false); setCreateError(''); }} title="Add New Financial Period" size="md">
         <div className="space-y-4 text-[13px]">
           <div>
             <label className="block text-slate-600 font-semibold mb-1">Period Name *</label>
@@ -162,6 +169,11 @@ export default function PeriodsPage() {
             </select>
           </div>
           <div className="grid grid-cols-2 gap-4">
+          {createError && (
+            <div className="col-span-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-red-700 text-[12px]">
+              {createError}
+            </div>
+          )}
             <div>
               <label className="block text-slate-600 font-semibold mb-1">Start Date</label>
               <input type="date" className="input" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} />

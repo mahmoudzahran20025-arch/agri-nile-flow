@@ -110,6 +110,7 @@ export const fieldsApi = {
   costEstimate: (field_id: number, season_id: number): Promise<{
     field_id: number; season_id: number; field_name: string; field_code: string
     area_feddan: number; materials_cost: number; labor_cost: number
+    equipment_cost: number; cash_cost: number
     land_rent: number; total_cost: number; note: string
   }> =>
     unwrap(api.get(`/fields/harvest/cost-estimate?field_id=${field_id}&season_id=${season_id}`)),
@@ -119,4 +120,7 @@ export const fieldsApi = {
 
   deleteHarvest: (id: number): Promise<void> =>
     api.delete<void>(`/fields/harvest/${id}`).then(() => undefined),
+
+  repostHarvestGL: (id: number): Promise<{ harvest_id: number; journal_entry_id: number | null; message: string }> =>
+    unwrap(api.post(`/fields/harvest/${id}/repost`, {})),
 }

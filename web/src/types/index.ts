@@ -40,6 +40,17 @@ export interface Supplier {
   activity:        string | null
   notes:           string | null
   is_active:       number
+  // ERP-enriched fields
+  phone?:                  string | null
+  email?:                  string | null
+  address?:                string | null
+  tax_number?:             string | null
+  credit_limit?:           number | null
+  payment_terms?:          number
+  supplier_type?:          string
+  bus_posting_group_code?: string | null
+  gl_account_code?:        number | null
+  // Aggregated
   total_credit?:   number
   total_debit?:    number
   current_balance?: number
@@ -52,6 +63,7 @@ export interface SupplierTransaction {
   document_type:       string | null
   document_number:     number | null
   expense_category:    string | null
+  service_type_code?:  string | null
   equipment:           string | null
   unit:                string | null
   quantity:            number | null
@@ -64,10 +76,16 @@ export interface SupplierTransaction {
   balance_with_checks: number | null
   due_date:            string | null
   center_code:         number | null
+  financial_account_id?: number | null
+  equipment_type_id?:   number | null
+  equipment_usage_mode?: 'owned' | 'rental' | null
   notes:               string | null
+  statement_text?:     string | null
+  notes_internal?:     string | null
   year:                number | null
   month:               number | null
   status?:             'draft' | 'posted'
+  journal_entry_id?:   number | null
 }
 
 export interface CashTransaction {
@@ -77,21 +95,28 @@ export interface CashTransaction {
   document_number: number | null
   recipient_name:  string | null
   narration:       string | null
+  statement_text?: string | null
+  service_type_code?: string | null
   amount:          number
   debit:           number
   credit:          number
   running_balance: number | null
   year:            number | null
   month:           number | null
-  status?:         'draft' | 'posted'
-  notes:           string | null
-  field_id?:       number | null
-  center_code?:    number | null
-  season_id?:      number | null
-  document_type?:  string | null
-  unit?:           string | null
-  quantity?:       number | null
-  unit_price?:     number | null
+  status?:           'draft' | 'posted'
+  notes:             string | null
+  notes_internal?:    string | null
+  field_id?:         number | null
+  center_code?:      number | null
+  season_id?:        number | null
+  document_type?:    string | null
+  financial_account_id?: number | null
+  partner_id?:       number | null
+  journal_entry_id?: number | null
+  supplier_code?:    number | null
+  expense_code?:     string | null
+  supplier_name?:    string | null  // joined from suppliers table
+  expense_name?:     string | null  // joined from expense_types table
 }
 
 export interface InventoryBalance {
@@ -124,6 +149,8 @@ export interface InventoryMovement {
   supplier_name: string | null
   document_number: number | null
   notes:         string | null
+  statement_text?: string | null
+  service_type_code?: string | null
   season_id:     number | null
   field_id:      number | null
   work_order_id: number | null

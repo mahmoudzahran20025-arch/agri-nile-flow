@@ -4,9 +4,9 @@
  */
 import type { ApiResult } from '../types'
 
-export const BASE_URL = window.location.hostname.endsWith('pages.dev')
-  ? 'https://agri-nile-flow.mahm-zahran22.workers.dev/api'
-  : '/api'
+export const BASE_URL =
+  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_API_URL as string | undefined) ||
+  `${window.location.origin}/api`
 
 function getToken(): string | null {
   return localStorage.getItem('agro_token')

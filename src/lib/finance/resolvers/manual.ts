@@ -5,40 +5,28 @@ export async function postManualEntry(
   db: D1Database,
   opts: {
     company_id: number
+    ref_id?: number // Optional for direct manual calls
+    amount?: number // Derivable from lines if missing
     date: string
     description: string
-    lines: Array<{
-      account_code: string
-      debit: number
-      credit: number
-      description?: string
-      center_code?: number
-      season_id?: number
-      field_id?: number
-      rule_slot?: string
-    }>
     created_by?: number
+    lines: Array<{ account_code: string; debit: number; credit: number; description?: string; center_code?: number; season_id?: number; field_id?: number }>
   },
 ): Promise<number | null> {
+  const refId = opts.ref_id ?? 0
+  const amount = opts.amount ?? opts.lines.reduce((s, l) => s + (l.debit || 0), 0)
+
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
-    event_type:    'manual_journal',
-    source_module: 'gl',
-    source_id:     0,
+    event_type:    'manual_entry',
+    source_module: 'manual',
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
     description:   opts.description,
     created_by:    opts.created_by,
-    payload:       { manual_entry: true, line_count: opts.lines.length },
-    lines:         opts.lines.map((l) => ({
-      account_code: l.account_code,
-      debit:        l.debit,
-      credit:       l.credit,
-      description:  l.description ?? opts.description,
-      center_code:  l.center_code,
-      season_id:    l.season_id,
-      field_id:     l.field_id,
-      rule_slot:    l.rule_slot ?? 'manual_line',
-    })),
+    payload:       { amount },
+    lines:         opts.lines.map(l => ({ ...l, source_ledger: 'manual', source_record_id: refId })),
   })
 }
 
@@ -46,40 +34,26 @@ export async function postManualReversal(
   db: D1Database,
   opts: {
     company_id: number
+    ref_id?: number
     original_entry_id: number
     date: string
-    reason: string
-    lines: Array<{
-      account_code: string
-      debit: number
-      credit: number
-      description?: string
-      center_code?: number
-      season_id?: number
-      field_id?: number
-      rule_slot?: string
-    }>
+    description: string
     created_by?: number
+    lines: Array<{ account_code: string; debit: number; credit: number; description?: string; center_code?: number; season_id?: number; field_id?: number }>
   },
 ): Promise<number | null> {
+  const refId = opts.ref_id ?? opts.original_entry_id
+
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
-    event_type:    'reversal',
-    source_module: 'gl',
-    source_id:     opts.original_entry_id,
+    event_type:    'manual_reversal',
+    source_module: 'manual',
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
-    description:   `عكس قيد #${opts.original_entry_id}: ${opts.reason}`,
+    description:   opts.description,
     created_by:    opts.created_by,
-    payload:       { original_entry_id: opts.original_entry_id, reason: opts.reason, reversal: true },
-    lines:         opts.lines.map((l) => ({
-      account_code: l.account_code,
-      debit:        l.debit,
-      credit:       l.credit,
-      description:  l.description ?? `عكس قيد #${opts.original_entry_id}`,
-      center_code:  l.center_code,
-      season_id:    l.season_id,
-      field_id:     l.field_id,
-      rule_slot:    l.rule_slot ?? 'reversal_line',
-    })),
+    payload:       { original_entry_id: opts.original_entry_id },
+    lines:         opts.lines.map(l => ({ ...l, source_ledger: 'manual', source_record_id: refId })),
   })
 }

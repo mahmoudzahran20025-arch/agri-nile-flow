@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { getUser, permissionGuard } from '../../middleware/auth'
 import { logAudit } from '../../lib/audit'
+import { getTodayIsoDate } from '../../lib/utils/date'
 
 const jobDetails = new Hono<{ Bindings: Env }>()
 
@@ -72,7 +73,7 @@ jobDetails.put('/job-details/:employee_id', permissionGuard('hr', 'admin'), asyn
     b.position_level ?? 'junior', b.contract_type ?? 'full_time', b.shift_type ?? 'morning',
     b.base_salary ?? 0, b.housing_allow ?? 0, b.transport_allow ?? 0, b.other_allows ?? 0,
     b.social_insur ?? 0, b.income_tax_pct ?? 0, b.bank_name ?? null, b.bank_iban ?? null,
-    b.start_date ?? new Date().toISOString().slice(0,10), b.end_date ?? null, b.notes ?? null
+    b.start_date ?? getTodayIsoDate(), b.end_date ?? null, b.notes ?? null
   ).run()
 
   void logAudit(c.env.DB, { user_id: userId, company_id, action: 'UPSERT', table_name: 'employee_job_details', record_id: empId })

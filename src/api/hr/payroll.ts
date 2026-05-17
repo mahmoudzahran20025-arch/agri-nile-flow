@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { getUser, permissionGuard } from '../../middleware/auth'
+import { getTodayIsoDate } from '../../lib/utils/date'
 import { logAudit } from '../../lib/audit'
 import { FinanceCore } from '../../lib/finance_core'
 
@@ -185,7 +186,6 @@ payroll.patch('/payroll/:id/approve', permissionGuard('hr', 'admin'), async (c) 
       date:        runDate,
       description: `مسيرة رواتب ${run.period_year}/${run.period_month}`,
       created_by:  userId,
-      season_id:   run.season_id,
     })
   } catch (e: any) {
     return c.json({ success: false, error: `فشل إنشاء القيد المحاسبي للمسيرة: ${e.message}` }, 400)
@@ -203,20 +203,21 @@ payroll.patch('/payroll/:id/approve', permissionGuard('hr', 'admin'), async (c) 
 payroll.patch('/payroll/:id/pay', permissionGuard('hr', 'admin'), async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
-  const { payment_date } = await c.req.json<{ payment_date?: string }>()
+  const { payment_date, financial_account_id } = await c.req.json<{ payment_date?: string; financial_account_id?: number }>()
 
   const run = await c.env.DB.prepare('SELECT * FROM payroll_runs WHERE id = ? AND company_id = ?')
     .bind(id, company_id).first<{ status: string; total_net: number; period_year: number; period_month: number }>()
   if (!run) return c.json({ success: false, error: 'المسيرة غير موجودة' }, 404)
   if (run.status !== 'approved') return c.json({ success: false, error: 'يجب اعتماد المسيرة أولاً قبل الصرف' }, 400)
 
-  const payDate = payment_date ?? new Date().toISOString().slice(0, 10)
+  const payDate = payment_date ?? getTodayIsoDate()
 
   let glId: number | null = null
   try {
     glId = await FinanceCore.resolvePayrollPayment(c.env.DB, {
       company_id, ref_id: id, amount: run.total_net, date: payDate,
       description: `صرف رواتب ${run.period_year}/${run.period_month}`,
+      financial_account_id: financial_account_id ?? 2,
       created_by: userId,
     })
   } catch (e: any) {

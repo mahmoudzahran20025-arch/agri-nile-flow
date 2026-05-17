@@ -1,15 +1,16 @@
-import { useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight, FileText, Plus, Filter, BarChart3, ShieldCheck,
   CreditCard, TrendingDown, Wallet, BookOpen, AlertTriangle,
-  CheckCircle2, Clock, Edit3, Download,
+  CheckCircle2, Clock, Edit3, Download, Trash2, Link2,
 } from 'lucide-react'
 import { suppliersApi, reportsApi, configApi, downloadCsv } from '../../api/client'
 import { usePermission } from '../../hooks/usePermission'
-import DataTable, { type Column } from '../../components/ui/DataTable'
+import DataTableV2, { type ColumnV2 } from '../../components/ui/DataTableV2'
 import AddSupplierTransactionModal from '../../components/forms/AddSupplierTransactionModal'
+import EditSupplierModal from '../../components/forms/EditSupplierModal'
 import type { Supplier, SupplierTransaction } from '../../types'
 import { useToast } from '../../contexts/ToastContext'
 
@@ -74,16 +75,30 @@ function SupplierStatusBadge({ isActive }: { isActive: number | undefined }) {
 }
 
 export default function SupplierDetailPage() {
-  const { canWrite, role } = usePermission()
+  const { canWrite } = usePermission()
   const { code }         = useParams<{ code: string }>()
   const navigate         = useNavigate()
+  const [searchParams]   = useSearchParams()
   const { toast }        = useToast()
   const queryClient      = useQueryClient()
   const [page,        setPage]       = useState(1)
   const [addOpen,     setAddOpen]    = useState(false)
+  const [editOpen,    setEditOpen]   = useState(false)
   const [tab,         setTab]        = useState<TabId>('statement')
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [seasonId,    setSeasonId]   = useState<number | undefined>(undefined)
   const [filterMonth, setFilterMonth]= useState<number | undefined>(undefined)
+  const highlightId = searchParams.get('highlight') ? Number(searchParams.get('highlight')) : null
+  const tableRef    = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!highlightId) return
+    const timer = setTimeout(() => {
+      const el = tableRef.current?.querySelector(`[data-row-key="${highlightId}"]`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [highlightId])
 
   const { data: seasons } = useQuery({
     queryKey: ['seasons'],
@@ -127,9 +142,70 @@ export default function SupplierDetailPage() {
     onError: (err: { message?: string }) => toast(err.message || 'فشل ترحيل الحركة', 'error')
   })
 
-  const TXNS_COLS: Column<SupplierTransaction>[] = [
-    { key: 'transaction_date', header: 'التاريخ', width: '100px',
-      render: r => new Date(r.transaction_date).toLocaleDateString('en-US') },
+  const bulkPostMut = useMutation({
+    mutationFn: async (ids: number[]) => {
+      const results = await Promise.allSettled(
+        ids.map(id => suppliersApi.postTransaction(Number(code), id))
+      )
+      const failed = results.filter(r => r.status === 'rejected')
+      if (failed.length > 0) {
+        const firstErr = (failed[0] as PromiseRejectedResult).reason
+        throw Object.assign(
+          new Error(firstErr?.message || 'فشل ترحيل بعض الحركات'),
+          { failedCount: failed.length, total: ids.length }
+        )
+      }
+    },
+    onSuccess: (_data, ids) => {
+      toast(`تم ترحيل ${ids.length} قيد بنجاح`, 'success')
+      setSelectedIds(new Set())
+      queryClient.invalidateQueries({ queryKey: ['supplier-statement', code] })
+      queryClient.invalidateQueries({ queryKey: ['supplier-summary', code] })
+      queryClient.invalidateQueries({ queryKey: ['supplier', code] })
+    },
+    onError: (err: { message?: string; failedCount?: number; total?: number }) => {
+      const msg = err.failedCount != null
+        ? `فشل ترحيل ${err.failedCount} من ${err.total} قيد: ${err.message}`
+        : err.message || 'فشل الترحيل الجماعي'
+      toast(msg, 'error')
+      setSelectedIds(new Set())
+      queryClient.invalidateQueries({ queryKey: ['supplier-statement', code] })
+      queryClient.invalidateQueries({ queryKey: ['supplier-summary', code] })
+    },
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => suppliersApi.deleteTransaction(Number(code), id),
+    onSuccess: () => {
+      toast('تم حذف المسودة بنجاح', 'success')
+      queryClient.invalidateQueries({ queryKey: ['supplier-statement', code] })
+      queryClient.invalidateQueries({ queryKey: ['supplier-summary', code] })
+    },
+    onError: (err: { message?: string }) => toast(err.message || 'فشل حذف الحركة', 'error')
+  })
+
+  const TXNS_COLS: ColumnV2<SupplierTransaction>[] = [
+    {
+      key: 'id', header: '', width: '36px',
+      render: r => r.status === 'draft' && canWrite('suppliers') ? (
+        <input
+          type="checkbox"
+          className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-600 cursor-pointer"
+          checked={selectedIds.has(r.id)}
+          onChange={e => {
+            setSelectedIds(prev => {
+              const next = new Set(prev)
+              e.target.checked ? next.add(r.id) : next.delete(r.id)
+              return next
+            })
+          }}
+          onClick={ev => ev.stopPropagation()}
+        />
+      ) : <span className="block w-3.5 h-3.5" />,
+    },
+    { key: 'transaction_date', header: 'التاريخ', width: '100px', sortable: true,
+      render: r => new Date(r.transaction_date).toLocaleDateString('en-US'),
+      csvValue: r => r.transaction_date },
     {
       key: 'status', header: 'الحالة', width: '85px',
       render: r => (
@@ -163,15 +239,35 @@ export default function SupplierDetailPage() {
         )
       }
     },
-    { key: 'document_number',  header: 'رقم',      width: '65px',  render: r => r.document_number ?? '—' },
-    { key: 'expense_category', header: 'الخدمة',                   render: r => r.expense_category ?? '—' },
-    { key: 'amount', header: 'القيمة', width: '110px',
-      render: r => <span className="font-semibold tabular-nums">{egp(r.amount)}</span> },
-    { key: 'credit', header: 'دائن ↑', width: '110px',
-      render: r => r.credit ? <span className="text-amber-700 font-semibold tabular-nums">{egp(r.credit)}</span> : <span className="text-slate-200">—</span> },
-    { key: 'debit',  header: 'مدين ↓', width: '110px',
-      render: r => r.debit ? <span className="text-blue-700 font-semibold tabular-nums">{egp(r.debit)}</span> : <span className="text-slate-200">—</span> },
-    { key: 'balance_with_checks', header: 'الرصيد', width: '120px',
+    { key: 'document_number',  header: 'رقم',      width: '65px',  render: r => r.document_number ?? '—', csvValue: r => String(r.document_number ?? '') },
+    { key: 'expense_category', header: 'الخدمة',                   render: r => r.expense_category ?? '—', csvValue: r => r.expense_category ?? '' },
+    { key: 'amount', header: 'القيمة', width: '110px', sortable: true,
+      render: r => <span className="font-semibold tabular-nums">{egp(r.amount)}</span>,
+      csvValue: r => String(r.amount ?? '') },
+    {
+      key: 'journal_entry_id', header: 'القيد اليومية', width: '115px', align: 'center',
+      render: r => (
+        r.journal_entry_id ? (
+          <a
+            href={`/gl/entries?id=${r.journal_entry_id}&trace=1`}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-semibold hover:bg-emerald-100 transition-colors"
+          >
+            <span className="font-mono">{r.journal_entry_id}</span>
+            <Link2 size={9} className="opacity-60" />
+          </a>
+        ) : (
+          <span className="text-slate-300 text-[11px]">—</span>
+        )
+      )
+    },
+    { key: 'credit', header: 'دائن ↑', width: '110px', sortable: true,
+      render: r => r.credit ? <span className="text-amber-700 font-semibold tabular-nums">{egp(r.credit)}</span> : <span className="text-slate-200">—</span>,
+      csvValue: r => String(r.credit ?? '') },
+    { key: 'debit',  header: 'مدين ↓', width: '110px', sortable: true,
+      render: r => r.debit ? <span className="text-blue-700 font-semibold tabular-nums">{egp(r.debit)}</span> : <span className="text-slate-200">—</span>,
+      csvValue: r => String(r.debit ?? '') },
+    { key: 'balance_with_checks', header: 'الرصيد', width: '120px', sortable: true,
+      csvValue: r => r.status === 'draft' ? 'مسودة' : String(r.balance_with_checks ?? ''),
       render: r => {
         if (r.status === 'draft') return <span className="text-slate-300 italic text-[10px]">بانتظار الترحيل</span>
         const b = r.balance_with_checks ?? 0
@@ -179,17 +275,31 @@ export default function SupplierDetailPage() {
       }
     },
     {
-      key: 'actions', header: '', width: '50px',
+      key: 'actions', header: '', width: '80px',
       render: r => (
-        r.status === 'draft' && (role === 'super_admin' || role === 'company_admin') ? (
-          <button
-            onClick={() => postMutation.mutate(r.id)}
-            disabled={postMutation.isPending}
-            className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-            title="اعتماد وترحيل"
-          >
-            <ShieldCheck size={16} />
-          </button>
+        r.status === 'draft' && canWrite('suppliers') ? (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => postMutation.mutate(r.id)}
+              disabled={postMutation.isPending}
+              className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+              title="اعتماد وترحيل"
+            >
+              <ShieldCheck size={16} />
+            </button>
+            <button
+              onClick={() => {
+                if (window.confirm('هل تريد حذف هذه المسودة؟ لا يمكن التراجع عن هذا الإجراء.')) {
+                  deleteMutation.mutate(r.id)
+                }
+              }}
+              disabled={deleteMutation.isPending}
+              className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
+              title="حذف المسودة"
+            >
+              <Trash2 size={15} />
+            </button>
+          </div>
         ) : null
       )
     }
@@ -218,6 +328,9 @@ export default function SupplierDetailPage() {
 
   const openBalance = summary?.open_balance ?? (supplier?.current_balance ?? 0)
   const hasDrafts   = (summary?.draft_count ?? 0) > 0
+  const glApBalance = (summary?.gl_credit ?? 0) - (summary?.gl_debit ?? 0)
+  const apGap = Math.round((openBalance - glApBalance) * 100) / 100
+  const isApInSync = Math.abs(apGap) < 0.01
 
   return (
     <div className="space-y-0 animate-fade-in">
@@ -257,11 +370,21 @@ export default function SupplierDetailPage() {
           </div>
 
           {/* Action Buttons */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+            {selectedIds.size > 0 && canWrite('suppliers') && (
+              <button
+                className="btn-primary gap-2 text-xs bg-emerald-600 hover:bg-emerald-700"
+                onClick={() => bulkPostMut.mutate([...selectedIds])}
+                disabled={bulkPostMut.isPending}
+              >
+                <ShieldCheck size={13} />
+                {bulkPostMut.isPending ? 'جاري الترحيل...' : `ترحيل ${selectedIds.size} قيد`}
+              </button>
+            )}
             {canWrite('suppliers') && (
               <button
                 className="btn-secondary gap-2 text-xs"
-                onClick={() => setAddOpen(true)}
+                onClick={() => setEditOpen(true)}
               >
                 <Edit3 size={13} /> تعديل المورد
               </button>
@@ -305,6 +428,7 @@ export default function SupplierDetailPage() {
             label="دفعة نقدية"
             value={summary?.payments_count ?? 0}
             color="green"
+            onClick={() => navigate(`/treasury?supplier=${code}`)}
           />
           <SmartButton
             icon={<TrendingDown size={18} />}
@@ -331,6 +455,41 @@ export default function SupplierDetailPage() {
 
       {/* ── Tabs + Content ──────────────────────────────────── */}
       <div className="px-6 py-4 space-y-4">
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h3 className="text-sm font-black text-slate-800">مطابقة ذمم المورد مع GL</h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">مقارنة مباشرة بين رصيد المورد الفرعي ورصيد حساب الدائنين من القيود</p>
+            </div>
+            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold border ${
+              isApInSync
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-red-50 text-red-700 border-red-200'
+            }`}>
+              {isApInSync ? 'مطابق' : 'يوجد فرق'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] text-slate-500">Subledger (Supplier)</p>
+              <p className="font-black text-slate-800 tabular-nums">{egp(openBalance)}</p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] text-slate-500">GL AP Balance</p>
+              <p className="font-black text-slate-800 tabular-nums">{egp(glApBalance)}</p>
+            </div>
+            <div className={`rounded-lg border px-3 py-2 ${
+              isApInSync
+                ? 'border-emerald-200 bg-emerald-50'
+                : 'border-red-200 bg-red-50'
+            }`}>
+              <p className={`text-[11px] ${isApInSync ? 'text-emerald-700' : 'text-red-700'}`}>Gap</p>
+              <p className={`font-black tabular-nums ${isApInSync ? 'text-emerald-700' : 'text-red-700'}`}>{egp(apGap)}</p>
+            </div>
+          </div>
+        </div>
+
         {/* Tab bar */}
         <div className="flex items-center gap-0 border-b border-slate-200">
           {([
@@ -386,17 +545,24 @@ export default function SupplierDetailPage() {
                 يوجد {summary?.draft_count} قيد/فاتورة في حالة المسودة — يلزم الترحيل لتحديث الرصيد
               </div>
             )}
-            <DataTable<SupplierTransaction>
-              columns={TXNS_COLS}
-              data={allTxns}
-              loading={isLoading}
-              total={txns?.total ?? 0}
-              page={page}
-              pageSize={100}
-              onPage={setPage}
-              rowKey={r => r.id}
-              emptyText="لا توجد معاملات لهذا المورد"
-            />
+            <div ref={tableRef}>
+              <DataTableV2<SupplierTransaction>
+                columns={TXNS_COLS}
+                data={allTxns}
+                loading={isLoading}
+                total={txns?.total ?? 0}
+                page={page}
+                pageSize={100}
+                onPage={setPage}
+                rowKey={r => r.id}
+                rowClassName={r => highlightId === r.id
+                  ? 'bg-amber-50 ring-1 ring-inset ring-amber-300'
+                  : ''}
+                emptyText="لا توجد معاملات لهذا المورد"
+                exportFilename={`كشف_حساب_${code}`}
+                searchPlaceholder="بحث في الحركات..."
+              />
+            </div>
           </div>
         )}
 
@@ -452,6 +618,12 @@ export default function SupplierDetailPage() {
         onClose={() => setAddOpen(false)}
         supplierCode={Number(code)}
         supplierName={supplier?.name ?? ''}
+      />
+
+      <EditSupplierModal
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        supplier={supplier}
       />
     </div>
   )

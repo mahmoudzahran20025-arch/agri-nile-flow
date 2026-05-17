@@ -12,6 +12,8 @@
  */
 
 import type { D1Database } from '@cloudflare/workers-types'
+import { getFlag } from './hardening'
+import { getNowIsoTimestamp } from './utils/date'
 
 // ── Public Types ──────────────────────────────────────────────────────────────
 
@@ -64,6 +66,8 @@ interface InventoryPostingRuleRow {
   inv_posting_group_code:  string | null
   prod_posting_group_code: string | null
   inventory_account:       string | null
+  wip_account:             string | null
+  finished_goods_account:  string | null
 }
 
 type DimOpts = { center_code?: number; season_id?: number; field_id?: number }
@@ -143,7 +147,16 @@ async function resolveGeneralSetup(
     [null,     ppg_code, 3],   // BPG wildcard
     [null,     null,     4],   // global default
   ]
+
+  const strictMode = await getFlag(db, company_id, 'strict_posting_mode')
+  const catchAllAllowed = await getFlag(db, company_id, 'catch_all_allowed', 1)
+
   for (const [b, p, step] of candidates) {
+    const isCatchAllCandidate = b == null && p == null
+    if (isCatchAllCandidate && strictMode && !catchAllAllowed) {
+      continue
+    }
+
     const row = await db
       .prepare(`SELECT id, bus_posting_group_code, prod_posting_group_code,
                   sales_account, purchases_account, cogs_account,
@@ -186,36 +199,55 @@ async function resolveInventorySetup(
   company_id: number,
   ipg_code: string | null,
   ppg_code: string | null,
+  movementType?: string | null,
 ): Promise<{ row: InventoryPostingRuleRow; step: number } | null> {
-  const cacheKey = getCacheKey(company_id, ipg_code, ppg_code)
+  // Cache key includes movement_type so specific and wildcard rules don't collide.
+  const cacheKey = `${getCacheKey(company_id, ipg_code, ppg_code)}:${movementType ?? 'NULL'}`
   const cached = readCache(inventorySetupCache, cacheKey)
   if (cached !== undefined) {
     const step = deriveInventoryStep(ipg_code, ppg_code, cached)
     return cached ? { row: cached, step } : null
   }
 
-  const candidates: [string | null, string | null, number][] = [
+  // 8-step cascade: for each of the 4 dimension combinations, try movement_type-specific
+  // rule first (step n), then movement_type IS NULL wildcard (step n+4).
+  // NULL movementType → skip the specific pass and only try wildcard.
+  const dimCandidates: [string | null, string | null, number][] = [
     [ipg_code, ppg_code, 1],
     [ipg_code, null,     2],
     [null,     ppg_code, 3],
     [null,     null,     4],
   ]
-  for (const [i, p, step] of candidates) {
-    const row = await db
-      .prepare(`SELECT id, inv_posting_group_code, prod_posting_group_code, inventory_account
-                FROM posting_rules
-                WHERE company_id = ?
-                  AND rule_type = 'inventory'
-                  AND (inv_posting_group_code IS ? OR (inv_posting_group_code IS NULL AND ? IS NULL))
-                  AND (prod_posting_group_code IS ? OR (prod_posting_group_code IS NULL AND ? IS NULL))
-                  AND is_active = 1
-                ORDER BY priority ASC, id ASC
-                LIMIT 1`)
-      .bind(company_id, i, i, p, p)
-      .first<InventoryPostingRuleRow>()
-    if (row) {
-      writeCache(inventorySetupCache, cacheKey, row)
-      return { row, step }
+  const passes: Array<'specific' | 'wildcard'> = movementType ? ['specific', 'wildcard'] : ['wildcard']
+  const strictMode = await getFlag(db, company_id, 'strict_posting_mode')
+  const catchAllAllowed = await getFlag(db, company_id, 'catch_all_allowed', 1)
+
+  for (const pass of passes) {
+    const mt = pass === 'specific' ? movementType! : null
+    for (const [i, p, baseStep] of dimCandidates) {
+      const step = pass === 'specific' ? baseStep : baseStep + 4
+      const isCatchAllCandidate = i == null && p == null
+      if (isCatchAllCandidate && strictMode && !catchAllAllowed) {
+        continue
+      }
+
+      const row = await db
+        .prepare(`SELECT id, inv_posting_group_code, prod_posting_group_code, inventory_account, wip_account, finished_goods_account
+                  FROM posting_rules
+                  WHERE company_id = ?
+                    AND rule_type = 'inventory'
+                    AND (inv_posting_group_code IS ? OR (inv_posting_group_code IS NULL AND ? IS NULL))
+                    AND (prod_posting_group_code IS ? OR (prod_posting_group_code IS NULL AND ? IS NULL))
+                    AND (movement_type IS ? OR (movement_type IS NULL AND ? IS NULL))
+                    AND is_active = 1
+                  ORDER BY priority ASC, id ASC
+                  LIMIT 1`)
+        .bind(company_id, i, i, p, p, mt, mt)
+        .first<InventoryPostingRuleRow>()
+      if (row) {
+        writeCache(inventorySetupCache, cacheKey, row)
+        return { row, step }
+      }
     }
   }
   writeCache(inventorySetupCache, cacheKey, null)
@@ -294,7 +326,7 @@ function blocked(
       resolution_step:   partialTrace.resolution_step   ?? 0,
       matched_rule_id:   partialTrace.matched_rule_id   ?? null,
       resolved_accounts: partialTrace.resolved_accounts ?? {},
-      resolved_at:       new Date().toISOString(),
+      resolved_at:       getNowIsoTimestamp(),
     } : null,
   }
 }
@@ -316,7 +348,7 @@ function buildTrace(
     resolution_step:  step,
     matched_rule_id,
     resolved_accounts,
-    resolved_at:      new Date().toISOString(),
+    resolved_at:      getNowIsoTimestamp(),
   }
 }
 
@@ -340,21 +372,38 @@ export async function resolveControlAccount(
   return writeCache(controlAccountCache, key, row?.account_code ?? null)
 }
 
+// ── Movement Direction Helper ─────────────────────────────────────────────────
+
+export function resolveMovementDirection(movementType: string): 'IN' | 'OUT' {
+  const IN_CODES = new Set(['GRN', 'TRANSFER_IN', 'RETURN_CUSTOMER', 'ADJUSTMENT_PROFIT', 'PRODUCTION_OUTPUT'])
+  return IN_CODES.has(movementType) ? 'IN' : 'OUT'
+}
+
 // ── Public: resolveInventoryMovement ─────────────────────────────────────────
 
 export async function resolveInventoryMovement(
   db: D1Database, company_id: number,
   ipg_code: string | null, ppg_code: string | null,
-  amount: number, isIncrease: boolean,
+  amount: number, movementType: string,
   description?: string, dimensions?: DimOpts,
 ): Promise<JournalBlueprint> {
+  const isIncrease = resolveMovementDirection(movementType) === 'IN'
+
   const warnings: string[] = []
   if (!ipg_code) warnings.push('Warehouse has no Inventory Posting Group assigned. Using default setup.')
   if (!ppg_code) warnings.push('Item has no Product Posting Group assigned. Using default setup.')
   if (ipg_code) { const w = await checkPostingGroupExists(db, 'inventory_posting_groups', ipg_code, company_id); if (w) warnings.push(w) }
   if (ppg_code) { const w = await checkPostingGroupExists(db, 'product_posting_groups', ppg_code, company_id); if (w) warnings.push(w) }
 
-  const invResult = await resolveInventorySetup(db, company_id, ipg_code, ppg_code)
+  // Normalise to a known code or null so the movement_type cascade is skipped for
+  // legacy Arabic strings that don't exist in posting_rules.movement_type.
+  const mtCode = resolveMovementDirection(movementType) === 'IN' || resolveMovementDirection(movementType) === 'OUT'
+    ? (['GRN','ISSUE','TRANSFER_IN','TRANSFER_OUT','RETURN_CUSTOMER','RETURN_SUPPLIER',
+        'ADJUSTMENT_PROFIT','ADJUSTMENT_LOSS','PRODUCTION_INPUT','PRODUCTION_OUTPUT'].includes(movementType)
+        ? movementType : null)
+    : null
+
+  const invResult = await resolveInventorySetup(db, company_id, ipg_code, ppg_code, mtCode)
   if (!invResult) return blocked(
     [noInvSetupError(ipg_code, ppg_code)], warnings,
     { rule_type: 'inventory', input_ipg: ipg_code, input_ppg: ppg_code },
@@ -379,8 +428,9 @@ export async function resolveInventoryMovement(
     warnings,
   )
 
+  const traceRuleType = `inventory_${movementType.toLowerCase().replace(/[^a-z_]/g, '')}`
   const trace = buildTrace(
-    isIncrease ? 'inventory_receipt' : 'inventory_issue',
+    traceRuleType,
     null, ppg_code, ipg_code,
     Math.max(invResult.step, genResult.step),
     invResult.row.id,
@@ -399,6 +449,63 @@ export async function resolveInventoryMovement(
 
   const errors = await validateAccounts(db, company_id, [inventoryAcc, offsetAcc])
   return { lines, validationErrors: errors, warnings, isBlocked: errors.length > 0, trace }
+}
+
+// ── Public: resolveHarvestMovement ───────────────────────────────────────────
+
+export async function resolveHarvestMovement(
+  db: D1Database,
+  company_id: number,
+  ipg_code: string | null,
+  ppg_code: string | null,
+  amount: number,
+  description?: string,
+  dimensions?: DimOpts,
+): Promise<JournalBlueprint> {
+  const warnings: string[] = []
+  if (!ipg_code) warnings.push('Warehouse has no Inventory Posting Group assigned. Using default setup.')
+  if (!ppg_code) warnings.push('Item has no Product Posting Group assigned. Using default setup.')
+  if (ipg_code) { const w = await checkPostingGroupExists(db, 'inventory_posting_groups', ipg_code, company_id); if (w) warnings.push(w) }
+  if (ppg_code) { const w = await checkPostingGroupExists(db, 'product_posting_groups', ppg_code, company_id); if (w) warnings.push(w) }
+
+  const invResult = await resolveInventorySetup(db, company_id, ipg_code, ppg_code)
+  if (!invResult) return blocked(
+    [noInvSetupError(ipg_code, ppg_code)], warnings,
+    { rule_type: 'harvest', input_ipg: ipg_code, input_ppg: ppg_code },
+  )
+
+  const finishedGoodsAcc = invResult.row.finished_goods_account ?? await resolveControlAccount(db, company_id, 'FINISHED_GOODS')
+  const wipAcc = invResult.row.wip_account ?? await resolveControlAccount(db, company_id, 'wip_asset')
+
+  const errors: string[] = []
+  if (!finishedGoodsAcc) {
+    errors.push(`PG-HRV-001: finished_goods_account is NULL for IPG="${invResult.row.inv_posting_group_code ?? 'DEFAULT'}" x PPG="${invResult.row.prod_posting_group_code ?? 'DEFAULT'}" and no FINISHED_GOODS control rule is active.`)
+  }
+  if (!wipAcc) {
+    errors.push(`PG-HRV-002: wip_account is NULL for IPG="${invResult.row.inv_posting_group_code ?? 'DEFAULT'}" x PPG="${invResult.row.prod_posting_group_code ?? 'DEFAULT'}" and no 'wip_asset' control rule is active.`)
+  }
+  if (errors.length > 0) return blocked(errors, warnings)
+
+  const trace = buildTrace(
+    'harvest',
+    null,
+    ppg_code,
+    ipg_code,
+    invResult.step,
+    invResult.row.id,
+    {
+      finished_goods_account: finishedGoodsAcc!,
+      wip_account: wipAcc!,
+    },
+  )
+
+  const lines: JournalLine[] = [
+    { account_code: finishedGoodsAcc!, debit: amount, credit: 0, description, ...dimensions, rule_slot: 'finished_goods_account' },
+    { account_code: wipAcc!, debit: 0, credit: amount, description, ...dimensions, rule_slot: 'wip_account' },
+  ]
+
+  const validationErrors = await validateAccounts(db, company_id, [finishedGoodsAcc!, wipAcc!])
+  return { lines, validationErrors, warnings, isBlocked: validationErrors.length > 0, trace }
 }
 
 // ── Public: resolveInventoryTransfer ──────────────────────────────────────────
@@ -670,5 +777,55 @@ export async function resolveContractAdvance(
     { account_code: deferred_account, debit: 0,      credit: amount, description, ...dimensions, rule_slot: 'deferred_account' },
   ]
   const errors = await validateAccounts(db, company_id, [cash_account, deferred_account])
+  return { lines, validationErrors: errors, warnings: [], isBlocked: errors.length > 0, trace }
+}
+
+// ── Public: resolvePartnerCapital ────────────────────────────────────────────
+
+export async function resolvePartnerCapital(
+  db: D1Database, company_id: number,
+  cash_account: string, equity_account: string,
+  amount: number, isReceipt = true,
+  description?: string, dimensions?: DimOpts,
+): Promise<JournalBlueprint> {
+  const trace = buildTrace('partner_capital', null, null, null, 0, null,
+    { cash_account, equity_account })
+  
+  const lines: JournalLine[] = isReceipt 
+    ? [
+        { account_code: cash_account,   debit: amount, credit: 0,      description, ...dimensions, rule_slot: 'cash_account' },
+        { account_code: equity_account, debit: 0,      credit: amount, description, ...dimensions, rule_slot: 'equity_account' },
+      ]
+    : [
+        { account_code: equity_account, debit: amount, credit: 0,      description, ...dimensions, rule_slot: 'equity_account' },
+        { account_code: cash_account,   debit: 0,      credit: amount, description, ...dimensions, rule_slot: 'cash_account' },
+      ]
+
+  const errors = await validateAccounts(db, company_id, [cash_account, equity_account])
+  return { lines, validationErrors: errors, warnings: [], isBlocked: errors.length > 0, trace }
+}
+
+// ── Public: resolvePartnerCurrent ────────────────────────────────────────────
+
+export async function resolvePartnerCurrent(
+  db: D1Database, company_id: number,
+  cash_account: string, current_account: string,
+  amount: number, isReceipt = false,
+  description?: string, dimensions?: DimOpts,
+): Promise<JournalBlueprint> {
+  const trace = buildTrace('partner_current', null, null, null, 0, null,
+    { cash_account, current_account })
+  
+  const lines: JournalLine[] = isReceipt 
+    ? [
+        { account_code: cash_account,    debit: amount, credit: 0,      description, ...dimensions, rule_slot: 'cash_account' },
+        { account_code: current_account, debit: 0,      credit: amount, description, ...dimensions, rule_slot: 'partner_current_account' },
+      ]
+    : [
+        { account_code: current_account, debit: amount, credit: 0,      description, ...dimensions, rule_slot: 'partner_current_account' },
+        { account_code: cash_account,    debit: 0,      credit: amount, description, ...dimensions, rule_slot: 'cash_account' },
+      ]
+
+  const errors = await validateAccounts(db, company_id, [cash_account, current_account])
   return { lines, validationErrors: errors, warnings: [], isBlocked: errors.length > 0, trace }
 }

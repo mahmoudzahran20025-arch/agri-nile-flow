@@ -1,42 +1,74 @@
 import type { D1Database } from '@cloudflare/workers-types'
+import {
+  resolvePartnerCapital as peResolveCapital,
+  resolvePartnerCurrent as peResolveCurrent,
+  resolveControlAccount,
+} from '../../posting_engine'
 import { postFromBusinessEvent } from '../business_events'
-import { resolveControlAccount } from '../../posting_engine'
 
 export async function resolvePartnerCapital(
   db: D1Database,
   opts: {
     company_id: number
     ref_id: number
-    partner_id: number
     amount: number
     date: string
     description: string
-    direction: 'injection' | 'withdrawal'
+    partner_id: number
     created_by?: number
+    direction?: 'injection' | 'withdrawal'
+    financial_account_id?: number
   },
 ): Promise<number | null> {
-  const cashAcc = await resolveControlAccount(db, opts.company_id, 'cash')
-  const equityAcc = await resolveControlAccount(db, opts.company_id, 'partner_capital')
+  const [cashAccRow, equityAcc] = await Promise.all([
+    opts.financial_account_id
+      ? db.prepare('SELECT gl_account_code FROM bank_accounts WHERE id = ?').bind(opts.financial_account_id).first<{ gl_account_code: string }>()
+      : Promise.resolve(null),
+    resolveControlAccount(db, opts.company_id, 'equity'),
+  ])
 
-  if (!cashAcc || !equityAcc) {
-    throw new Error('PARTNER_CAPITAL_POSTING_BLOCKED: Missing cash or equity account mapping')
+  const cashAcc = cashAccRow?.gl_account_code || (await resolveControlAccount(db, opts.company_id, 'cash')) || ''
+  const isReceipt = opts.direction !== 'withdrawal'
+
+  const blueprint = await peResolveCapital(
+    db, 
+    opts.company_id, 
+    cashAcc, 
+    equityAcc || '', 
+    opts.amount, 
+    isReceipt,
+    opts.description
+  )
+
+  if (blueprint.isBlocked || !blueprint.lines.length) {
+    throw new Error(`PARTNER_CAPITAL_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
 
-  const isInjection = opts.direction === 'injection'
-
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'partner_capital',
-    source_module: 'partners',
-    source_id:     opts.ref_id,
+    source_module: 'treasury',
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
-    description:   `${isInjection ? 'تمويل' : 'سحب'} رأس مال | ${opts.description}`,
+    description:   `رأس مال شريك | ${opts.description}`,
     created_by:    opts.created_by,
-    payload:       { partner_id: opts.partner_id, amount: opts.amount, direction: opts.direction },
-    lines:         [
-      { account_code: isInjection ? cashAcc : equityAcc, debit: opts.amount, credit: 0, description: `${isInjection ? 'تمويل' : 'سحب'} رأس مال | ${opts.description}`, rule_slot: isInjection ? 'cash' : 'equity' },
-      { account_code: isInjection ? equityAcc : cashAcc, debit: 0, credit: opts.amount, description: `${isInjection ? 'تمويل' : 'سحب'} رأس مال | ${opts.description}`, rule_slot: isInjection ? 'equity' : 'cash' },
-    ],
+    payload:       { partner_id: opts.partner_id, amount: opts.amount },
+    trace:         blueprint.trace ?? null,
+    lines:         blueprint.lines.map((l: any) => ({
+      account_code:  l.account_code!,
+      debit:         l.debit ?? 0,
+      credit:        l.credit ?? 0,
+      description:   l.description ?? `رأس مال شريك | ${opts.description}`,
+      rule_slot:     l.rule_slot,
+      source_ledger: 'cash',
+      source_record_id: refId,
+    })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
 }
 
@@ -45,35 +77,63 @@ export async function resolvePartnerCurrent(
   opts: {
     company_id: number
     ref_id: number
-    partner_id: number
     amount: number
     date: string
     description: string
-    direction: 'deposit' | 'withdrawal'
+    partner_id: number
     created_by?: number
+    direction?: 'deposit' | 'withdrawal'
+    financial_account_id?: number
   },
 ): Promise<number | null> {
-  const cashAcc = await resolveControlAccount(db, opts.company_id, 'cash')
-  const currentAcc = await resolveControlAccount(db, opts.company_id, 'partner_current_account')
+  const [cashAccRow, currentAcc] = await Promise.all([
+    opts.financial_account_id
+      ? db.prepare('SELECT gl_account_code FROM bank_accounts WHERE id = ?').bind(opts.financial_account_id).first<{ gl_account_code: string }>()
+      : Promise.resolve(null),
+    resolveControlAccount(db, opts.company_id, 'partner_current_account'),
+  ])
 
-  if (!cashAcc || !currentAcc) {
-    throw new Error('PARTNER_CURRENT_POSTING_BLOCKED: Missing cash or current account mapping')
+  const cashAcc = cashAccRow?.gl_account_code || (await resolveControlAccount(db, opts.company_id, 'cash')) || ''
+  const isReceipt = opts.direction === 'deposit'
+
+  const blueprint = await peResolveCurrent(
+    db, 
+    opts.company_id, 
+    cashAcc, 
+    currentAcc || '', 
+    opts.amount, 
+    isReceipt,
+    opts.description
+  )
+
+  if (blueprint.isBlocked || !blueprint.lines.length) {
+    throw new Error(`PARTNER_CURRENT_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
 
-  const isDeposit = opts.direction === 'deposit'
-
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'partner_current',
-    source_module: 'partners',
-    source_id:     opts.ref_id,
+    source_module: 'treasury',
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
-    description:   `${isDeposit ? 'إيداع' : 'سحب'} حساب جاري | ${opts.description}`,
+    description:   `جاري شريك | ${opts.description}`,
     created_by:    opts.created_by,
-    payload:       { partner_id: opts.partner_id, amount: opts.amount, direction: opts.direction },
-    lines:         [
-      { account_code: isDeposit ? cashAcc : currentAcc, debit: opts.amount, credit: 0, description: `${isDeposit ? 'إيداع' : 'سحب'} حساب جاري | ${opts.description}`, rule_slot: isDeposit ? 'cash' : 'current' },
-      { account_code: isDeposit ? currentAcc : cashAcc, debit: 0, credit: opts.amount, description: `${isDeposit ? 'إيداع' : 'سحب'} حساب جاري | ${opts.description}`, rule_slot: isDeposit ? 'current' : 'cash' },
-    ],
+    payload:       { partner_id: opts.partner_id, amount: opts.amount },
+    trace:         blueprint.trace ?? null,
+    lines:         blueprint.lines.map((l: any) => ({
+      account_code:  l.account_code!,
+      debit:         l.debit ?? 0,
+      credit:        l.credit ?? 0,
+      description:   l.description ?? `جاري شريك | ${opts.description}`,
+      rule_slot:     l.rule_slot,
+      source_ledger: 'cash',
+      source_record_id: refId,
+    })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
 }

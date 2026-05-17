@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Download, Printer, ArrowRight, BookOpen } from 'lucide-react';
+import { Download, Printer, ArrowRight, BookOpen, ShieldCheck, AlertTriangle, Clock } from 'lucide-react';
 import { glApi, downloadCsv } from '../../api/client';
 import { GlPeriod, fiscalYearStart, fiscalYearEnd, periodLabel } from '../../lib/gl/glPeriods';
 import { KpiStrip, KpiItem } from '../../components/ui/KpiStrip';
@@ -76,6 +76,13 @@ export default function FinancialStatementsPage() {
     queryKey: ['gl-tb', startDate, endDate],
     queryFn: () => glApi.trialBalance(startDate, endDate),
     enabled: tab === 'trial',
+  });
+
+  // Trust indicators: unposted count + balance check
+  const { data: unpostedData } = useQuery({
+    queryKey: ['gl-unposted-count'],
+    queryFn: () => glApi.entries({ page: 1, size: 1, is_posted: 0 } as any),
+    staleTime: 60_000,
   });
 
   const pl = plData as any;
@@ -186,6 +193,29 @@ export default function FinancialStatementsPage() {
       </div>
 
       <CommandBar actions={actions} rightSlot={rightSlot} />
+
+      {/* ── Trust Indicator Banner ──────────────────────────── */}
+      {(() => {
+        const unposted = (unpostedData as any)?.total ?? 0
+        const tbVariance = Math.abs(((tbData as any)?.total_debit || 0) - ((tbData as any)?.total_credit || 0))
+        const isBalanced = tbVariance < 1
+        const hasIssue = unposted > 0 || (tab === 'trial' && !isBalanced && !tbLoading)
+        return (
+          <div className={`flex items-center gap-4 px-6 py-2 text-xs border-b shrink-0 ${hasIssue ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
+            {tab === 'trial' && !tbLoading && (
+              isBalanced
+                ? <span className="flex items-center gap-1 text-emerald-700"><ShieldCheck size={13}/> الميزانية متوازنة</span>
+                : <span className="flex items-center gap-1 text-red-700"><AlertTriangle size={13}/> خلل في التوازن — الفارق {fmt(tbVariance)}</span>
+            )}
+            {unposted > 0
+              ? <span className="flex items-center gap-1 text-amber-700"><Clock size={13}/> {unposted} حركة غير مرحَّلة — الأرقام ليست نهائية</span>
+              : <span className="flex items-center gap-1 text-emerald-700"><ShieldCheck size={13}/> جميع الحركات مرحَّلة</span>
+            }
+            <span className="mr-auto text-slate-400">آخر تحديث: {new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</span>
+          </div>
+        )
+      })()}
+
       <KpiStrip items={kpiItems} />
 
       <div className="px-6 pt-4 bg-white border-b border-slate-200 shrink-0">

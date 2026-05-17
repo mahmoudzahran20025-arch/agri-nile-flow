@@ -23,9 +23,17 @@ function ToastItem({ toast, dismiss }: { toast: Toast; dismiss: (id: number) => 
     >
       {ICONS[toast.type]}
       <span className="flex-1 text-sm text-gray-800">{toast.message}</span>
+      {toast.onUndo && (
+        <button
+          onClick={() => { toast.onUndo!(); dismiss(toast.id) }}
+          className="text-blue-600 text-[12px] font-semibold hover:text-blue-800 whitespace-nowrap shrink-0"
+        >
+          {toast.undoLabel ?? 'تراجع'}
+        </button>
+      )}
       <button
         onClick={() => dismiss(toast.id)}
-        className="text-gray-400 hover:text-gray-600 transition-colors"
+        className="text-gray-400 hover:text-gray-600 transition-colors shrink-0"
       >
         <X size={14} />
       </button>

@@ -1,4 +1,4 @@
-﻿import { useState } from 'react'
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { Users, TrendingDown, Download, ExternalLink, X, ChevronRight, RefreshCw } from 'lucide-react'
@@ -6,10 +6,11 @@ import { reportsApi, configApi } from '../../api/client'
 import { KpiStrip, type KpiItem } from '../../components/ui/KpiStrip'
 import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
 import SectionCard from '../../components/ui/SectionCard'
+import CertificationBadge from '../../components/ui/CertificationBadge'
 import type { Season } from '../../types'
 
 function egp(n: number | null | undefined) {
-  if (n == null || n === 0) return 'â€”'
+  if (n == null || n === 0) return '—'
   return new Intl.NumberFormat('en-US', {
     style: 'currency', currency: 'EGP', maximumFractionDigits: 0,
   }).format(n)
@@ -28,20 +29,29 @@ export default function SuppliersBalancePage() {
   const [seasonId, setSeasonId]   = useState<number | undefined>(undefined)
   const [sortKey, setSortKey]     = useState<'name' | 'credit' | 'debit' | 'balance'>('balance')
   const [selected, setSelected]   = useState<BalanceRow | null>(null)
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'supplier_transactions'>('all')
 
   const { data: seasons } = useQuery({
     queryKey: ['config', 'seasons'],
     queryFn:  configApi.seasons as () => Promise<Season[]>,
   })
 
-  const { data: rows = [], isLoading, refetch } = useQuery({
+  const { data: balanceData, isLoading, refetch } = useQuery({
     queryKey: ['reports', 'suppliers-balance', seasonId],
     queryFn:  () => reportsApi.suppliersBalance(seasonId),
   })
 
+  const rows = balanceData?.data ?? []
+  const legacyCoverage = balanceData?.legacy_coverage
+  const postingMeta = balanceData?.meta ?? null
+
   const { data: paymentsData } = useQuery({
-    queryKey: ['reports', 'supplier-payments', selected?.code, seasonId],
-    queryFn:  () => reportsApi.supplierPayments({ supplier_code: selected?.code, season_id: seasonId }),
+    queryKey: ['reports', 'supplier-payments', selected?.code, seasonId, sourceFilter],
+    queryFn:  () => reportsApi.supplierPayments({
+      supplier_code: selected?.code,
+      season_id: seasonId,
+      source_table: sourceFilter === 'all' ? undefined : sourceFilter,
+    }),
     enabled: !!selected,
   })
 
@@ -58,21 +68,21 @@ export default function SuppliersBalancePage() {
 
   function downloadCsv() {
     const BOM = '\uFEFF'
-    const header = ['Ø§Ù„ÙƒÙˆØ¯', 'Ø§Ø³Ù… Ø§Ù„Ù…ÙˆØ±Ø¯/Ø§Ù„Ø¹Ù…ÙŠÙ„', 'Ø§Ù„Ù†Ø´Ø§Ø·', 'Ø¥Ø¬Ù…Ø§Ù„ÙŠ Ø¯Ø§Ø¦Ù†', 'Ø¥Ø¬Ù…Ø§Ù„ÙŠ Ù…Ø¯ÙŠÙ†', 'Ø§Ù„Ø±ØµÙŠØ¯', 'Ø¹Ø¯Ø¯ Ø§Ù„Ù…Ø¹Ø§Ù…Ù„Ø§Øª']
+    const header = ['الكود', 'اسم المورد/العميل', 'النشاط', 'إجمالي دائن', 'إجمالي مدين', 'الرصيد', 'عدد المعاملات']
     const csvRows = sorted.map(r => [r.code, r.name, r.activity ?? '', r.total_credit, r.total_debit, r.balance, r.tx_count])
     const csv = BOM + [header, ...csvRows].map(row => row.join(',')).join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const link = document.createElement('a')
     link.href = URL.createObjectURL(blob)
-    link.download = `Ù…ÙŠØ²Ø§Ù†_Ø§Ù„Ù…ÙˆØ±Ø¯ÙŠÙ†_${seasonId ?? 'ÙƒÙ„_Ø§Ù„Ù…ÙˆØ§Ø³Ù…'}.csv`
+    link.download = `ميزان_الموردين_${seasonId ?? 'كل_المواسم'}.csv`
     link.click()
   }
 
   const kpis: KpiItem[] = [
-    { id: 'suppliers', label: 'SUPPLIERS',           value: rows.length },
-    { id: 'credit',    label: 'TOTAL PAYABLE',        value: egp(totalCredit) ?? 'â€”',  variant: 'warning' },
-    { id: 'debit',     label: 'TOTAL PAID',           value: egp(totalDebit)  ?? 'â€”',  variant: 'success' },
-    { id: 'balance',   label: 'NET OUTSTANDING',      value: egp(Math.abs(totalBalance)) ?? 'â€”', variant: Math.abs(totalBalance) > 0 ? 'warning' : 'success' },
+    { id: 'suppliers', label: 'عدد الموردين',          value: rows.length },
+    { id: 'credit',    label: 'إجمالي الدائن',         value: egp(totalCredit),  variant: 'warning' },
+    { id: 'debit',     label: 'إجمالي المدين',         value: egp(totalDebit),   variant: 'success' },
+    { id: 'balance',   label: 'صافي المستحق',          value: egp(Math.abs(totalBalance)), variant: Math.abs(totalBalance) > 0 ? 'warning' : 'success' },
   ]
 
   const actions: CommandAction[] = [
@@ -87,18 +97,18 @@ export default function SuppliersBalancePage() {
         value={seasonId ?? ''}
         onChange={e => setSeasonId(e.target.value ? Number(e.target.value) : undefined)}
       >
-        <option value="">All Seasons</option>
+        <option value="">كل المواسم</option>
         {(seasons ?? []).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
       </select>
       <div className="flex items-center gap-1 text-[11px] text-slate-500">
-        Sort:
+        ترتيب:
         {(['balance', 'credit', 'debit', 'name'] as const).map(k => (
           <button
             key={k}
             onClick={() => setSortKey(k)}
             className={`px-2 py-0.5 rounded text-[11px] ${sortKey === k ? 'bg-[#0F2D5C] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
           >
-            {k === 'balance' ? 'Ø±ØµÙŠØ¯' : k === 'credit' ? 'Ø¯Ø§Ø¦Ù†' : k === 'debit' ? 'Ù…Ø¯ÙŠÙ†' : 'Ø§Ø³Ù…'}
+            {k === 'balance' ? 'رصيد' : k === 'credit' ? 'دائن' : k === 'debit' ? 'مدين' : 'اسم'}
           </button>
         ))}
       </div>
@@ -108,10 +118,24 @@ export default function SuppliersBalancePage() {
   const payments = (paymentsData?.data as PaymentRow[] | undefined) ?? []
 
   return (
-    <div className={`flex flex-col h-full bg-[#f8fafc] ${selected ? '' : ''}`}>
+    <div className="flex flex-col h-full bg-[#f8fafc]">
       <div className="px-6 py-5 bg-white border-b border-slate-200">
-        <h1 className="text-[18px] font-bold text-[#0F2D5C]">Ù…ÙŠØ²Ø§Ù† Ø§Ù„Ù…ÙˆØ±Ø¯ÙŠÙ† ÙˆØ§Ù„Ø¹Ù…Ù„Ø§Ø¡</h1>
-        <p className="text-[12px] text-slate-500 mt-0.5">Ù…Ù„Ø®Øµ Ø£Ø±ØµØ¯Ø© Ø§Ù„Ù…ÙˆØ±Ø¯ÙŠÙ† Â· Ø¯Ø§Ø¦Ù† / Ù…Ø¯ÙŠÙ† / Ø§Ù„Ø±ØµÙŠØ¯ Ø§Ù„ØµØ§ÙÙŠ</p>
+        <h1 className="text-[18px] font-bold text-[#0F2D5C]">ميزان الموردين والعملاء</h1>
+        <p className="text-[12px] text-slate-500 mt-0.5">ملخص أرصدة الموردين · دائن / مدين / الرصيد الصافي</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <CertificationBadge meta={postingMeta} showReason />
+          {legacyCoverage ? (
+            legacyCoverage.has_legacy_gaps ? (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border bg-amber-50 text-amber-700 border-amber-200">
+                تغطية السجلات القديمة: {legacyCoverage.coverage_rate_pct}% · {legacyCoverage.missing_journal_link_events + legacyCoverage.missing_supplier_code_events} فجوة
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border bg-emerald-50 text-emerald-700 border-emerald-200">
+                تغطية السجلات القديمة: {legacyCoverage.coverage_rate_pct}% — لا فجوات
+              </span>
+            )
+          ) : null}
+        </div>
       </div>
 
       <CommandBar actions={actions} rightSlot={rightSlot} />
@@ -121,8 +145,8 @@ export default function SuppliersBalancePage() {
         {/* â”€â”€ Main table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <div className={`flex-1 overflow-y-auto p-6 transition-all ${selected ? 'lg:pr-3' : ''}`}>
           <SectionCard
-            title="Supplier Balances"
-            subtitle={`${rows.length} supplier(s)`}
+            title="أرصدة الموردين"
+            subtitle={`${rows.length} مورد`}
             icon={<Users size={14} />}
           >
             {isLoading ? (
@@ -132,19 +156,19 @@ export default function SuppliersBalancePage() {
             ) : rows.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-40 text-slate-400">
                 <Users size={36} className="mb-3 opacity-30" />
-                <p className="text-[13px]">Ù„Ø§ ØªÙˆØ¬Ø¯ Ø¨ÙŠØ§Ù†Ø§Øª Ù„Ù„Ù…ÙˆØ±Ø¯ÙŠÙ†</p>
+                <p className="text-[13px]">لا توجد بيانات للموردين</p>
               </div>
             ) : (
               <table className="w-full text-[12px]">
                 <thead className="bg-slate-50 border-b border-slate-200">
                   <tr>
-                    <th className="px-3 py-2.5 text-right text-slate-500 font-medium w-16">Ø§Ù„ÙƒÙˆØ¯</th>
-                    <th className="px-3 py-2.5 text-right text-slate-500 font-medium">Ø§Ù„Ù…ÙˆØ±Ø¯</th>
-                    <th className="px-3 py-2.5 text-right text-slate-500 font-medium w-28">Ø§Ù„Ù†Ø´Ø§Ø·</th>
-                    <th className="px-3 py-2.5 text-right text-amber-700 font-medium w-32">Ø¯Ø§Ø¦Ù†</th>
-                    <th className="px-3 py-2.5 text-right text-blue-700 font-medium w-32">Ù…Ø¯ÙŠÙ†</th>
-                    <th className="px-3 py-2.5 text-right text-slate-700 font-medium w-32">Ø§Ù„Ø±ØµÙŠØ¯</th>
-                    <th className="px-3 py-2.5 text-center text-slate-500 font-medium w-20">Ù…Ø¹Ø§Ù…Ù„Ø§Øª</th>
+                    <th className="px-3 py-2.5 text-right text-slate-500 font-medium w-16">الكود</th>
+                    <th className="px-3 py-2.5 text-right text-slate-500 font-medium">المورد</th>
+                    <th className="px-3 py-2.5 text-right text-slate-500 font-medium w-28">النشاط</th>
+                    <th className="px-3 py-2.5 text-right text-amber-700 font-medium w-32">دائن</th>
+                    <th className="px-3 py-2.5 text-right text-blue-700 font-medium w-32">مدين</th>
+                    <th className="px-3 py-2.5 text-right text-slate-700 font-medium w-32">الرصيد</th>
+                    <th className="px-3 py-2.5 text-center text-slate-500 font-medium w-20">معاملات</th>
                     <th className="px-3 py-2.5 w-8"></th>
                   </tr>
                 </thead>
@@ -167,14 +191,14 @@ export default function SuppliersBalancePage() {
                             </div>
                           )}
                         </td>
-                        <td className="px-3 py-2.5 text-slate-400">{r.activity ?? 'â€”'}</td>
-                        <td className="px-3 py-2.5 text-right font-semibold text-amber-700">{r.total_credit > 0 ? egp(r.total_credit) : 'â€”'}</td>
-                        <td className="px-3 py-2.5 text-right font-semibold text-blue-700">{r.total_debit > 0 ? egp(r.total_debit) : 'â€”'}</td>
+                        <td className="px-3 py-2.5 text-slate-400">{r.activity ?? '—'}</td>
+                        <td className="px-3 py-2.5 text-right font-semibold text-amber-700">{r.total_credit > 0 ? egp(r.total_credit) : '—'}</td>
+                        <td className="px-3 py-2.5 text-right font-semibold text-blue-700">{r.total_debit > 0 ? egp(r.total_debit) : '—'}</td>
                         <td className="px-3 py-2.5 text-right">
                           <span className={`font-bold ${r.balance > 0 ? 'text-red-600' : r.balance < 0 ? 'text-[#1D9E75]' : 'text-slate-400'}`}>
-                            {r.balance === 0 ? 'ØµÙØ±' : egp(Math.abs(r.balance))}
-                            {r.balance > 0 && <span className="text-[10px] mr-1 font-normal opacity-70">(Ø¹Ù„ÙŠÙ†Ø§)</span>}
-                            {r.balance < 0 && <span className="text-[10px] mr-1 font-normal opacity-70">(Ù„Ù†Ø§)</span>}
+                            {r.balance === 0 ? 'صفر' : egp(Math.abs(r.balance))}
+                            {r.balance > 0 && <span className="text-[10px] mr-1 font-normal opacity-70">(علينا)</span>}
+                            {r.balance < 0 && <span className="text-[10px] mr-1 font-normal opacity-70">(لنا)</span>}
                           </span>
                         </td>
                         <td className="px-3 py-2.5 text-center">
@@ -190,7 +214,7 @@ export default function SuppliersBalancePage() {
                 <tfoot className="bg-slate-50 border-t-2 border-slate-300">
                   <tr>
                     <td className="px-3 py-2.5" />
-                    <td className="px-3 py-2.5 font-bold text-slate-700">Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠ</td>
+                    <td className="px-3 py-2.5 font-bold text-slate-700">الإجمالي</td>
                     <td />
                     <td className="px-3 py-2.5 text-right font-bold text-amber-700">{egp(totalCredit)}</td>
                     <td className="px-3 py-2.5 text-right font-bold text-blue-700">{egp(totalDebit)}</td>
@@ -211,14 +235,20 @@ export default function SuppliersBalancePage() {
             <div className="px-4 py-3 border-b border-slate-100 flex items-start justify-between">
               <div>
                 <p className="text-[13px] font-bold text-[#0F2D5C]">{selected.name}</p>
-                <p className="text-[11px] text-slate-500 font-mono">Code #{selected.code} Â· {selected.activity ?? 'N/A'}</p>
+                <p className="text-[11px] text-slate-500 font-mono">Code #{selected.code} · {selected.activity ?? 'N/A'}</p>
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  className="text-[11px] text-indigo-600 hover:underline flex items-center gap-1"
+                  onClick={() => navigate(`/gl/entries?ref_type=supplier_transaction&source_code=${selected.code}`)}
+                >
+                  <ExternalLink size={11} /> قيود GL
+                </button>
                 <button
                   className="text-[11px] text-[#0F2D5C] hover:underline flex items-center gap-1"
                   onClick={() => navigate(`/suppliers/${selected.code}`)}
                 >
-                  <ExternalLink size={11} /> Profile
+                  <ExternalLink size={11} /> الملف
                 </button>
                 <button className="text-slate-400 hover:text-slate-700" onClick={() => setSelected(null)}>
                   <X size={16} />
@@ -229,9 +259,9 @@ export default function SuppliersBalancePage() {
             {/* Panel KPIs */}
             <div className="grid grid-cols-3 gap-2 px-4 py-3 border-b border-slate-100">
               {[
-                { label: 'Ø¯Ø§Ø¦Ù†', value: egp(selected.total_credit), color: 'text-amber-700' },
-                { label: 'Ù…Ø¯ÙŠÙ†', value: egp(selected.total_debit),  color: 'text-blue-700' },
-                { label: 'Ø±ØµÙŠØ¯', value: egp(Math.abs(selected.balance)),
+                { label: 'دائن', value: egp(selected.total_credit), color: 'text-amber-700' },
+                { label: 'مدين', value: egp(selected.total_debit),  color: 'text-blue-700' },
+                { label: 'رصيد', value: egp(Math.abs(selected.balance)),
                   color: selected.balance > 0 ? 'text-red-600' : selected.balance < 0 ? 'text-[#1D9E75]' : 'text-slate-400' },
               ].map(k => (
                 <div key={k.label} className="text-center">
@@ -243,28 +273,43 @@ export default function SuppliersBalancePage() {
 
             {/* Payments list */}
             <div className="flex-1 overflow-y-auto px-4 py-3">
-              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-2">Payment History</p>
+              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-2">سجل المدفوعات</p>
+              <div className="mb-3 flex items-center gap-1 text-[11px]">
+                <span className="text-slate-500">المصدر:</span>
+                {([
+                  { id: 'all', label: 'الكل' },
+                  { id: 'supplier_transactions', label: 'حركات المورد' },
+                ] as const).map(opt => (
+                  <button
+                    key={opt.id}
+                    onClick={() => setSourceFilter(opt.id)}
+                    className={`px-2 py-0.5 rounded ${sourceFilter === opt.id ? 'bg-[#0F2D5C] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
               {payments.length === 0 ? (
                 <div className="text-center text-slate-400 py-8">
                   <TrendingDown size={28} className="mx-auto mb-2 opacity-30" />
-                  <p className="text-[12px]">No payment records</p>
+                  <p className="text-[12px]">لا توجد مدفوعات مسجلة</p>
                 </div>
               ) : (
                 <div className="space-y-1.5">
                   {payments.slice(0, 50).map((p, i) => (
                     <div key={i} className="flex items-start justify-between gap-2 py-2 border-b border-slate-50 last:border-0">
                       <div className="flex-1 min-w-0">
-                        <p className="text-[11px] font-mono text-slate-400">{String(p.date ?? 'â€”')}</p>
+                        <p className="text-[11px] font-mono text-slate-400">{String(p.date ?? '—')}</p>
                         {p.notes && <p className="text-[11px] text-slate-500 truncate mt-0.5">{String(p.notes)}</p>}
                         {p.type && <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded mt-0.5 inline-block">{String(p.type)}</span>}
                       </div>
                       <span className="text-[12px] font-semibold text-blue-700 shrink-0">
-                        {p.amount != null ? egp(Number(p.amount)) : 'â€”'}
+                        {p.amount != null ? egp(Number(p.amount)) : '—'}
                       </span>
                     </div>
                   ))}
                   {payments.length > 50 && (
-                    <p className="text-[11px] text-slate-400 text-center py-2">+ {payments.length - 50} more</p>
+                    <p className="text-[11px] text-slate-400 text-center py-2">+ {payments.length - 50} المزيد</p>
                   )}
                 </div>
               )}
@@ -290,3 +335,4 @@ export default function SuppliersBalancePage() {
     </div>
   )
 }
+

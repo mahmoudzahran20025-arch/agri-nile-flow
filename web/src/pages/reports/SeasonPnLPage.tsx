@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   Leaf, TrendingUp, TrendingDown, Banknote, Package,
   Users, Wrench, ArrowRight, CheckCircle, AlertTriangle,
-  DollarSign, Home, ShieldCheck,
+  DollarSign, Home, ShieldCheck, BookOpen,
 } from 'lucide-react'
 import { reportsApi, configApi } from '../../api/client'
 import type { Season } from '../../types'
@@ -72,6 +72,7 @@ function WaterfallRow({ icon, label, value, sub, variant, pctOfRev }: WaterfallR
 type FieldRow = {
   id: number; code: string; field_name: string; area_feddan: number; crop_type: string | null
   field_revenue: number; inv_cost: number; labor_cost: number
+  equipment_cost: number; cash_cost: number
   field_cost: number; field_margin: number; margin_per_feddan: number | null
 }
 
@@ -110,8 +111,10 @@ function FieldPnLRow({ row }: { row: FieldRow }) {
       <td className="px-4 py-3">
         <div className="space-y-0.5">
           <p className="font-semibold text-red-600 text-sm">{row.field_cost > 0 ? egp(row.field_cost) : <span className="text-slate-300">—</span>}</p>
-          {row.inv_cost > 0 && <p className="text-xs text-violet-600">مخزون: {egp(row.inv_cost)}</p>}
-          {row.labor_cost > 0 && <p className="text-xs text-blue-600">عمالة: {egp(row.labor_cost)}</p>}
+          {row.inv_cost       > 0 && <p className="text-xs text-violet-600">مخزون: {egp(row.inv_cost)}</p>}
+          {row.labor_cost     > 0 && <p className="text-xs text-blue-600">عمالة: {egp(row.labor_cost)}</p>}
+          {row.equipment_cost > 0 && <p className="text-xs text-purple-600">معدات: {egp(row.equipment_cost)}</p>}
+          {row.cash_cost      > 0 && <p className="text-xs text-sky-600">نقدي: {egp(row.cash_cost)}</p>}
         </div>
       </td>
 
@@ -175,11 +178,15 @@ export default function SeasonPnLPage() {
     enabled:  !!seasonId,
   })
 
-  const revenue   = data?.revenue.contracts_value ?? 0
-  const costs     = data?.costs.total ?? 0
-  const margin    = data?.net_margin ?? 0
-  const totalArea = data?.total_area ?? 0
+  const revenue    = data?.revenue.contracts_value ?? 0
+  const costs      = data?.costs.total ?? 0
+  const margin     = data?.net_margin ?? 0
+  const totalArea  = data?.total_area ?? 0
   const profitable = margin >= 0
+  const glRev      = (data as any)?.gl_actuals?.revenue ?? 0
+  const glExp      = (data as any)?.gl_actuals?.expenses ?? 0
+  const glNet      = (data as any)?.gl_actuals?.net_income ?? 0
+  const hasGlData  = glRev > 0 || glExp > 0
 
   return (
     <div className="space-y-6">
@@ -302,11 +309,58 @@ export default function SeasonPnLPage() {
             </div>
           </div>
 
+          {/* GL Actuals Panel — shown when GL has data for this season */}
+          {hasGlData && (
+            <div className={`card overflow-hidden border-2 ${Math.abs(glRev - revenue) > 1000 || revenue === 0 ? 'border-amber-200 bg-amber-50/30' : 'border-emerald-100'}`}>
+              <div className="px-5 py-3 border-b border-slate-200 bg-white flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <BookOpen size={15} className="text-indigo-500" />
+                  <h2 className="text-sm font-bold text-slate-700">الأرقام المحاسبية الفعلية</h2>
+                  <span className="text-[11px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-semibold">من دفتر الأستاذ العام</span>
+                </div>
+                {revenue === 0 && glRev > 0 && (
+                  <span className="text-[11px] text-amber-700 bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
+                    <AlertTriangle size={10} /> لا توجد عقود بيع — الإيراد من القيود فقط
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-3 divide-x divide-slate-100 rtl:divide-x-reverse" dir="rtl">
+                <div className="px-5 py-4">
+                  <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">الإيرادات المرحّلة</p>
+                  <p className="text-2xl font-bold text-emerald-700 tabular-nums">{egp(glRev)}</p>
+                  {revenue > 0 && Math.abs(glRev - revenue) > 1000 && (
+                    <p className="text-[11px] text-amber-600 mt-1">
+                      فارق {egp(Math.abs(glRev - revenue))} عن الإيراد التشغيلي
+                    </p>
+                  )}
+                </div>
+                <div className="px-5 py-4">
+                  <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">المصاريف المرحّلة</p>
+                  <p className="text-2xl font-bold text-red-600 tabular-nums">{egp(glExp)}</p>
+                  {costs > 0 && Math.abs(glExp - costs) > 1000 && (
+                    <p className="text-[11px] text-amber-600 mt-1">
+                      فارق {egp(Math.abs(glExp - costs))} عن التكاليف التشغيلية
+                    </p>
+                  )}
+                </div>
+                <div className={`px-5 py-4 ${glNet >= 0 ? 'bg-emerald-50/40' : 'bg-red-50/40'}`}>
+                  <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">صافي الدخل المحاسبي</p>
+                  <p className={`text-2xl font-bold tabular-nums ${glNet >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                    {egp(glNet, true)}
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    {glRev > 0 ? `هامش ${pct((glNet / glRev) * 100)}` : '—'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* P&L Waterfall Statement */}
           <div className="card overflow-hidden">
             <div className="px-5 py-3 border-b border-slate-200 bg-slate-50 flex items-center gap-2">
               <ArrowRight size={15} className="text-slate-400" />
-              <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">بيان الأرباح والخسائر</h2>
+              <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">بيان الأرباح والخسائر التشغيلي</h2>
             </div>
 
             {/* Revenue line */}
@@ -335,6 +389,16 @@ export default function SeasonPnLPage() {
               variant="cost"
               pctOfRev={revenue > 0 ? (data.costs.labor / revenue) * 100 : undefined}
             />
+            {(data.costs.equipment ?? 0) > 0 && (
+              <WaterfallRow
+                icon={<Wrench size={16} className="text-purple-500" />}
+                label="تكلفة تشغيل المعدات"
+                sub="ساعات تشغيل × تكلفة الساعة"
+                value={data.costs.equipment}
+                variant="cost"
+                pctOfRev={revenue > 0 ? (data.costs.equipment / revenue) * 100 : undefined}
+              />
+            )}
             <WaterfallRow
               icon={<Banknote size={16} className="text-sky-500" />}
               label="المصروفات النقدية"
@@ -369,6 +433,16 @@ export default function SeasonPnLPage() {
                 value={data.costs.payroll}
                 variant="cost"
                 pctOfRev={revenue > 0 ? (data.costs.payroll / revenue) * 100 : undefined}
+              />
+            )}
+            {(data.costs.depreciation ?? 0) > 0 && (
+              <WaterfallRow
+                icon={<TrendingDown size={16} className="text-slate-500" />}
+                label="إهلاك الأصول الثابتة"
+                sub="أصول مرتبطة بهذا الموسم"
+                value={data.costs.depreciation}
+                variant="cost"
+                pctOfRev={revenue > 0 ? (data.costs.depreciation / revenue) * 100 : undefined}
               />
             )}
 

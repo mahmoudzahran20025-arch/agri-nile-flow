@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { 
-  History, User, Database, 
+  History, User, Database,
   ChevronRight, ChevronDown, ArrowRight, Clock,
-  Terminal, AlertCircle, Shield, Download
+  AlertCircle, Shield, Download
 } from 'lucide-react'
 import { auditApi, adminApi, downloadCsv } from '../../api/client'
+import { TableSkeleton } from '../../components/ui/Skeleton'
 import type { Company } from '../../types'
 import { useAppStore } from '../../store/appStore'
 
@@ -234,10 +235,7 @@ export default function AuditLogPage() {
       {/* Main List */}
       <div className="card overflow-hidden border-none shadow-xl">
         {isLoading ? (
-          <div className="flex flex-col items-center justify-center py-20 animate-pulse">
-            <Terminal className="text-slate-200 mb-4 animate-bounce" size={48} />
-            <p className="text-slate-400 font-bold italic text-sm tracking-widest uppercase">جاري استرجاع السجلات...</p>
-          </div>
+          <TableSkeleton rows={12} cols={5} />
         ) : entries.length === 0 ? (
           <div className="py-20 text-center">
             <AlertCircle size={48} className="mx-auto text-slate-200 mb-4" />

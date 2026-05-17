@@ -44,7 +44,7 @@ costCenters.get('/cost-centers', async (c) => {
   const { results } = await c.env.DB.prepare(`
     SELECT
       jl.center_code,
-      cc.name                          AS center_name,
+      COALESCE(cc.name_ar, cc.name_en) AS center_name,
       a.account_type,
       SUM(jl.debit)                    AS total_debit,
       SUM(jl.credit)                   AS total_credit,
@@ -167,7 +167,7 @@ costCenters.get('/cost-centers/:code/detail', async (c) => {
 
   // Center info
   const center = await c.env.DB.prepare(
-    'SELECT code, name FROM cost_centers WHERE code = ? AND company_id = ?'
+    "SELECT code, COALESCE(name_ar, name_en, CAST(code AS TEXT)) AS name FROM cost_centers WHERE code = ? AND company_id = ?"
   ).bind(centerCode, company_id).first<{ code: number; name: string }>()
 
   if (!center) return c.json({ success: false, error: 'مركز التكلفة غير موجود' }, 404)
@@ -299,7 +299,7 @@ costCenters.get('/cost-centers/compare', async (c) => {
   const queryForSeason = (seasonId: number) => c.env.DB.prepare(`
     SELECT
       jl.center_code,
-      cc.name AS center_name,
+      COALESCE(cc.name_ar, cc.name_en) AS center_name,
       SUM(CASE WHEN a.account_type = 'expense' THEN jl.debit - jl.credit ELSE 0 END) AS expense_total,
       SUM(CASE WHEN a.account_type = 'revenue' THEN jl.credit - jl.debit ELSE 0 END) AS revenue_total
     FROM journal_entry_lines jl

@@ -1,9 +1,10 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Building2, Plus, Users, ArrowLeftRight, ToggleLeft, ToggleRight,
   ChevronDown, ChevronUp, LayoutDashboard, Loader2,
-  TrendingUp, AlertTriangle, Briefcase, Activity,
+  TrendingUp, AlertTriangle, Briefcase, Activity, Wand2, BarChart2,
 } from 'lucide-react'
 import { adminApi, type CompanyOverview } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
@@ -32,6 +33,7 @@ export default function SuperAdminPage() {
   const { toast } = useToast()
   const qc = useQueryClient()
   const { setAuth } = useAppStore()
+  const navigate = useNavigate()
 
   const [openAdd,     setOpenAdd]   = useState(false)
   const [expanded,    setExpanded]  = useState<number | null>(null)
@@ -51,7 +53,7 @@ export default function SuperAdminPage() {
   })
 
   const createMutation = useMutation({
-    mutationFn: () => adminApi.createCompany(form),
+    mutationFn: () => adminApi.createCompanyRaw(form),
     onSuccess: (res: { success: boolean; error?: string }) => {
       if (!res.success) { setErr((res as { error: string }).error ?? 'خطأ'); return }
       qc.invalidateQueries({ queryKey: ['admin-companies'] })
@@ -105,9 +107,27 @@ export default function SuperAdminPage() {
           </div>
           <span className="badge badge-blue">{(companies as CompanyRow[]).length} شركة</span>
         </div>
-        <button className="btn btn-primary gap-2" onClick={() => setOpenAdd(true)}>
-          <Plus size={16} /> شركة جديدة
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 transition-colors"
+            onClick={() => setOpenAdd(true)}
+            title="إضافة سريعة"
+          >
+            <Plus size={14} />
+          </button>
+          <button
+            className="btn btn-secondary gap-2"
+            onClick={() => navigate('/admin/consolidated-pnl')}
+          >
+            <BarChart2 size={16} /> P&L مجمع
+          </button>
+          <button
+            className="btn btn-primary gap-2"
+            onClick={() => navigate('/admin/onboarding')}
+          >
+            <Wand2 size={16} /> معالج إعداد شركة
+          </button>
+        </div>
       </div>
 
       {/* Tabs */}

@@ -57,6 +57,8 @@ export type DbCashTransaction = {
   document_number: number | null
   recipient_name:  string | null
   narration:       string | null
+  statement_text?: string | null
+  service_type_code?: string | null
   amount:          number
   debit:           number
   credit:          number
@@ -64,6 +66,7 @@ export type DbCashTransaction = {
   year:            number | null
   month:           number | null
   notes:           string | null
+  notes_internal?: string | null
   created_at:      string
 }
 
@@ -92,6 +95,7 @@ export type DbSupplierTransaction = {
   document_type:        string | null
   document_number:      number | null
   expense_category:     string | null
+  service_type_code?:   string | null
   unit:                 string | null
   quantity:             number | null
   unit_price:           number | null
@@ -102,5 +106,7 @@ export type DbSupplierTransaction = {
   balance_no_checks:    number | null
   balance_with_checks:  number | null
   notes:                string | null
+  statement_text?:      string | null
+  notes_internal?:      string | null
   created_at:           string
 }

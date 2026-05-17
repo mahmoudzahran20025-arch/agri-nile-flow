@@ -1,6 +1,7 @@
 import type { D1Database } from '@cloudflare/workers-types'
 import {
-  resolvePayrollPosting as peResolvePayroll,
+  resolvePayrollPosting as peResolvePayrollPosting,
+  resolveControlAccount,
 } from '../../posting_engine'
 import { postFromBusinessEvent } from '../business_events'
 
@@ -13,44 +14,44 @@ export async function resolvePayrollPosting(
     date: string
     description: string
     created_by?: number
-    center_code?: number
-    season_id?: number | null
-    field_id?: number | null
   },
 ): Promise<number | null> {
-  const wagesAcc = '5100' // Default wages expense account
-  const wagesPayableAcc = '2101' // Default wages payable account
-  const blueprint = await peResolvePayroll(
-    db,
-    opts.company_id,
-    wagesAcc,
-    wagesPayableAcc,
+  const [wagesAcc, wagesPayableAcc] = await Promise.all([
+    resolveControlAccount(db, opts.company_id, 'wages_expense'),
+    resolveControlAccount(db, opts.company_id, 'wages_payable'),
+  ])
+
+  const blueprint = await peResolvePayrollPosting(
+    db, 
+    opts.company_id, 
+    wagesAcc || '', 
+    wagesPayableAcc || '', 
     opts.amount,
+    opts.description
   )
+
   if (blueprint.isBlocked || !blueprint.lines.length) {
     throw new Error(`PAYROLL_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
 
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
-    event_type:    'payroll_run',
-    source_module: 'hr',
+    event_type:    'payroll_accrual',
+    source_module: 'payroll',
     source_id:     opts.ref_id,
+    source_link_id: opts.ref_id,
     event_date:    opts.date,
-    description:   `رواتب | ${opts.description}`,
+    description:   `استحقاق رواتب | ${opts.description}`,
     created_by:    opts.created_by,
-    payload:       { amount: opts.amount, season_id: opts.season_id, field_id: opts.field_id },
+    payload:       { amount: opts.amount },
     trace:         blueprint.trace ?? null,
-    lines:         blueprint.lines.map((l) => ({
+    lines:         blueprint.lines.map((l: any) => ({
       account_code:  l.account_code!,
       debit:         l.debit ?? 0,
       credit:        l.credit ?? 0,
-      description:   l.description ?? `رواتب | ${opts.description}`,
-      center_code:   opts.center_code,
-      season_id:     opts.season_id ?? undefined,
-      field_id:      opts.field_id ?? undefined,
+      description:   l.description ?? `استحقاق رواتب | ${opts.description}`,
       rule_slot:     l.rule_slot,
-      source_ledger: 'payroll' as const,
+      source_ledger: 'payroll',
       source_record_id: opts.ref_id,
     })),
   })
@@ -64,25 +65,57 @@ export async function resolvePayrollPayment(
     amount: number
     date: string
     description: string
+    financial_account_id?: number | null
     created_by?: number
   },
 ): Promise<number | null> {
-  // Payroll payment: DR Wages Payable / CR Cash
-  const wagesPayableAcc = '2101' // Wages Payable - should come from posting setup
-  const cashAcc = '1001' // Cash - should come from posting setup
+  const [cashAccRow, wagesPayableAcc] = await Promise.all([
+    opts.financial_account_id
+      ? db.prepare('SELECT gl_account_code FROM bank_accounts WHERE id = ? AND company_id = ?').bind(opts.financial_account_id, opts.company_id).first<{ gl_account_code: string }>()
+      : Promise.resolve(null),
+    resolveControlAccount(db, opts.company_id, 'wages_payable'),
+  ])
 
+  const cashAcc = cashAccRow?.gl_account_code || (await resolveControlAccount(db, opts.company_id, 'cash')) || ''
+  
+  // Payroll payment is a cash transaction: Debit Wages Payable, Credit Cash
+  const blueprint = await peResolvePayrollPosting(
+    db,
+    opts.company_id,
+    wagesPayableAcc || '',
+    cashAcc,
+    opts.amount,
+    opts.description
+  )
+
+  if (blueprint.isBlocked || !blueprint.lines.length) {
+    throw new Error(`PAYROLL_PAYMENT_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
+  }
+
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'payroll_payment',
-    source_module: 'hr',
-    source_id:     opts.ref_id,
+    source_module: 'payroll',
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
     description:   `صرف رواتب | ${opts.description}`,
     created_by:    opts.created_by,
-    payload:       { amount: opts.amount },
-    lines:         [
-      { account_code: wagesPayableAcc, debit: opts.amount, credit: 0, description: `صرف رواتب | ${opts.description}`, rule_slot: 'wages_payable' },
-      { account_code: cashAcc, debit: 0, credit: opts.amount, description: `صرف رواتب | ${opts.description}`, rule_slot: 'cash' },
-    ],
+    payload:       { amount: opts.amount, financial_account_id: opts.financial_account_id },
+    trace:         blueprint.trace ?? null,
+    lines:         blueprint.lines.map((l: any) => ({
+      account_code:  l.account_code!,
+      debit:         l.debit ?? 0,
+      credit:        l.credit ?? 0,
+      description:   l.description ?? `صرف رواتب | ${opts.description}`,
+      rule_slot:     l.rule_slot,
+      source_ledger: 'cash',
+      source_record_id: refId,
+    })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE payroll_runs SET payment_gl_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
 }

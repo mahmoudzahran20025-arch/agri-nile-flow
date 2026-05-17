@@ -1,12 +1,20 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
-import { getUser } from '../../middleware/auth'
+import { getUser, permissionGuard } from '../../middleware/auth'
 import { getOpenPeriod } from '../../lib/gl'
-import { FinanceCore } from '../../lib/finance_core'
+import { yearMonthParts } from '../../lib/utils/date'
+import {
+  readInventoryBalance,
+  enforceInventoryLockDate,
+  enqueueInventoryPostingOutbox,
+  getInventoryPostingControls,
+  upsertInventoryBalance,
+  validateZeroValuePolicy,
+} from '../../lib/inventory_posting'
 
 const adjustments = new Hono<{ Bindings: Env }>()
 
-adjustments.get('/adjustments', async (c) => {
+adjustments.get('/adjustments', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const { results } = await c.env.DB.prepare(
     `SELECT a.*, w.name as warehouse_name
@@ -17,12 +25,19 @@ adjustments.get('/adjustments', async (c) => {
   return c.json({ success: true, data: results })
 })
 
-adjustments.post('/adjustments', async (c) => {
+adjustments.post('/adjustments', permissionGuard('inventory', 'create'), async (c) => {
   const { company_id, sub: userId } = getUser(c)
-  const b = await c.req.json<{ warehouse_id: number; adjustment_date: string; notes?: string; lines: any[] }>()
+  const b = await c.req.json<{ warehouse_id: number; adjustment_date: string; notes?: string; lines?: any[] }>()
 
-  if (!b.warehouse_id || !b.adjustment_date || !b.lines || b.lines.length === 0) {
-    return c.json({ success: false, error: 'البيانات غير مكتملة' }, 400)
+  if (!b.warehouse_id || !b.adjustment_date) {
+    return c.json({ success: false, error: 'بيانات التسوية غير مكتملة' }, 400)
+  }
+
+  const controls = await getInventoryPostingControls(c.env.DB, company_id)
+  try {
+    enforceInventoryLockDate(controls, b.adjustment_date)
+  } catch {
+    return c.json({ success: false, error: `الفترة المخزنية مغلقة حتى ${controls.locked_through_date}`, code: 'INVENTORY_PERIOD_LOCKED' }, 422)
   }
 
   const result = await c.env.DB.prepare(
@@ -31,8 +46,11 @@ adjustments.post('/adjustments', async (c) => {
   ).bind(company_id, b.warehouse_id, b.adjustment_date, b.notes ?? null, userId).run()
 
   const adjId = result.meta.last_row_id
+  const lines = Array.isArray(b.lines) ? b.lines : []
 
-  const lineStmts = b.lines.map((l: any) =>
+  const lineStmts = lines
+    .filter((l: any) => l?.item_code && l?.counted_qty != null)
+    .map((l: any) =>
     c.env.DB.prepare(
       `INSERT INTO inventory_adjustment_lines (adjustment_id, item_code, theoretical_qty, counted_qty, difference, notes)
        VALUES (?, ?, ?, ?, ?, ?)`
@@ -44,7 +62,45 @@ adjustments.post('/adjustments', async (c) => {
   return c.json({ success: true, id: adjId })
 })
 
-adjustments.get('/adjustments/:id', async (c) => {
+adjustments.put('/adjustments/:id/lines', permissionGuard('inventory', 'create'), async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const b = await c.req.json<{ lines: Array<{ item_code: number; theoretical_qty: number; counted_qty: number; notes?: string }> }>()
+
+  if (!Array.isArray(b.lines) || b.lines.length === 0) {
+    return c.json({ success: false, error: 'أضف بند جرد واحد على الأقل قبل الحفظ' }, 400)
+  }
+
+  const adj = await c.env.DB.prepare(
+    'SELECT id, status FROM inventory_adjustments WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ id: number; status: string }>()
+
+  if (!adj) return c.json({ success: false, error: 'التسوية غير موجودة' }, 404)
+  if (adj.status !== 'draft') return c.json({ success: false, error: 'لا يمكن تعديل بنود تسوية مرحّلة' }, 400)
+
+  await c.env.DB.prepare(
+    `DELETE FROM inventory_adjustment_lines
+     WHERE adjustment_id = ?
+       AND adjustment_id IN (
+         SELECT id FROM inventory_adjustments WHERE id = ? AND company_id = ?
+       )`
+  ).bind(id, id, company_id).run()
+
+  const lineStmts = b.lines.map((l) => {
+    const theoreticalQty = Number(l.theoretical_qty ?? 0)
+    const countedQty = Number(l.counted_qty ?? 0)
+    return c.env.DB.prepare(
+      `INSERT INTO inventory_adjustment_lines (adjustment_id, item_code, theoretical_qty, counted_qty, difference, notes)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(id, Number(l.item_code), theoreticalQty, countedQty, countedQty - theoreticalQty, l.notes ?? null)
+  })
+
+  if (lineStmts.length > 0) await c.env.DB.batch(lineStmts)
+
+  return c.json({ success: true, data: { lines_count: lineStmts.length } })
+})
+
+adjustments.get('/adjustments/:id', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const id = Number(c.req.param('id'))
 
@@ -67,8 +123,8 @@ adjustments.get('/adjustments/:id', async (c) => {
   return c.json({ success: true, data: { ...adj, lines } })
 })
 
-adjustments.post('/adjustments/:id/post', async (c) => {
-  const { company_id, sub: userId } = getUser(c)
+adjustments.post('/adjustments/:id/post', permissionGuard('inventory', 'create'), async (c) => {
+  const { company_id, sub: userId, role } = getUser(c)
   const id = Number(c.req.param('id'))
 
   const adj = await c.env.DB.prepare(
@@ -79,78 +135,92 @@ adjustments.post('/adjustments/:id/post', async (c) => {
   if (!adj) return c.json({ success: false, error: 'التسوية غير موجودة' }, 404)
   if (adj.status !== 'draft') return c.json({ success: false, error: 'التسوية تم ترحيلها بالفعل' }, 400)
 
-  const wh = await c.env.DB.prepare('SELECT name FROM warehouses WHERE id = ?')
-    .bind(adj.warehouse_id).first<{ name: string }>()
-  const warehouseName = wh?.name || 'مخزن'
-
   const { results: lines } = await c.env.DB.prepare(
-    'SELECT * FROM inventory_adjustment_lines WHERE adjustment_id = ?'
-  ).bind(id).all<{ item_code: number; difference: number; theoretical_qty: number; counted_qty: number }>()
+    `SELECT al.*
+     FROM inventory_adjustment_lines al
+     JOIN inventory_adjustments a ON a.id = al.adjustment_id
+     WHERE al.adjustment_id = ? AND a.company_id = ?`
+  ).bind(id, company_id).all<{ item_code: number; difference: number; theoretical_qty: number; counted_qty: number }>()
+
+  if (!lines.length) {
+    return c.json({ success: false, error: 'لا يمكن ترحيل تسوية بدون بنود محفوظة', code: 'ADJUSTMENT_LINES_REQUIRED' }, 422)
+  }
 
   const periodId = await getOpenPeriod(c.env.DB, company_id, adj.adjustment_date)
   if (!periodId) return c.json({ success: false, error: 'الفترة المالية مغلقة' }, 400)
 
-  const yr = new Date(adj.adjustment_date).getFullYear()
-  const mo = new Date(adj.adjustment_date).getMonth() + 1
+  const controls = await getInventoryPostingControls(c.env.DB, company_id)
+  try {
+    enforceInventoryLockDate(controls, adj.adjustment_date)
+  } catch {
+    return c.json({ success: false, error: `الفترة المخزنية مغلقة حتى ${controls.locked_through_date}`, code: 'INVENTORY_PERIOD_LOCKED' }, 422)
+  }
+
   const batchKey = `adj_${id}_${Date.now()}`
+  const adjTransactionId = Math.floor(Date.now() / 1000) * 1000 + Math.floor(Math.random() * 1000)
 
   for (const l of lines) {
     if (l.difference === 0) continue
 
-    const movementType = l.difference > 0 ? 'اضافة' : 'صرف'
+    const movementType = l.difference > 0 ? 'ADJUSTMENT_PROFIT' : 'ADJUSTMENT_LOSS'
     const absQty = Math.abs(l.difference)
 
-    const lastRow = await c.env.DB.prepare(
-      `SELECT balance_qty, balance_value FROM inventory_movements
-       WHERE company_id = ? AND item_code = ? AND warehouse = ?
-       ORDER BY movement_date DESC, id DESC LIMIT 1`
-    ).bind(company_id, l.item_code, warehouseName)
-      .first<{ balance_qty: number; balance_value: number }>()
-
-    const prevQty = lastRow?.balance_qty ?? 0
-    const prevVal = lastRow?.balance_value ?? 0
+    const lastRow = await readInventoryBalance(c.env.DB, company_id, l.item_code, adj.warehouse_id)
+    const prevQty = lastRow.balance_qty ?? 0
+    const prevVal = lastRow.balance_value ?? 0
     const unitPrice  = prevQty > 0 ? prevVal / prevQty : 0
-    const totalValue = absQty * unitPrice
+    const totalValue = Math.round(absQty * unitPrice * 100) / 100
 
-    const qtyIn  = movementType === 'اضافة' ? absQty : 0
-    const qtyOut = movementType === 'صرف'   ? absQty : 0
-    const valIn  = movementType === 'اضافة' ? totalValue : 0
-    const valOut = movementType === 'صرف'   ? totalValue : 0
+    if (movementType === 'ADJUSTMENT_LOSS' && absQty > prevQty) {
+      return c.json({ success: false, error: `الصنف #${l.item_code}: الرصيد المتاح (${prevQty}) أقل من كمية التسوية (${absQty})`, code: 'INSUFFICIENT_STOCK' }, 409)
+    }
 
-    await c.env.DB.prepare(
-      `INSERT INTO inventory_movements
-       (company_id, item_code, movement_date, warehouse, movement_type,
-        quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
-        notes, year, month, created_by_user_id, local_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(
-      company_id, l.item_code, adj.adjustment_date, warehouseName, movementType,
-      absQty, unitPrice, qtyIn, qtyOut, prevQty + qtyIn - qtyOut, valIn, valOut, prevVal + valIn - valOut,
-      `تسوية جردية رقم #${id}`, yr, mo, userId, `${batchKey}_${l.item_code}`
-    ).run()
+    const qtyIn  = movementType === 'ADJUSTMENT_PROFIT' ? absQty : 0
+    const qtyOut = movementType === 'ADJUSTMENT_LOSS'   ? absQty : 0
+    const valIn  = movementType === 'ADJUSTMENT_PROFIT' ? totalValue : 0
+    const valOut = movementType === 'ADJUSTMENT_LOSS'   ? totalValue : 0
 
     try {
-      await FinanceCore.resolveInventoryMovement(c.env.DB, {
-        company_id,
-        ref_id: id,
-        item_code: l.item_code,
-        warehouse: warehouseName,
-        movement_type: movementType,
-        value: totalValue,
-        date: adj.adjustment_date,
-        item_name: `تسوية جردية - ${l.item_code}`,
-        created_by: userId,
-        // Adjustments are internal, no supplier or payment method
-      })
+      validateZeroValuePolicy(controls, role, totalValue, `inventory_adjustment:${id}`)
     } catch {
-      // GL failure on adjustment lines is logged but non-fatal;
-      // the physical count correction is committed, GL needs manual fix.
+      return c.json({ success: false, error: `الصنف #${l.item_code}: حركة تسوية صفرية غير مسموحة بدون اعتماد`, code: 'ZERO_VALUE_POLICY_BLOCKED' }, 422)
+    }
+
+    const ym = yearMonthParts(adj.adjustment_date)
+    const insertRes = await c.env.DB.prepare(
+      `INSERT INTO inventory_movements
+       (company_id, item_code, movement_date, warehouse_id, movement_type,
+        quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
+        notes, created_by_user_id, local_id,
+        zero_value_reason, zero_value_approved_by_role, gl_posting_status, transaction_id,
+        year, month)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(
+      company_id, l.item_code, adj.adjustment_date, adj.warehouse_id, movementType,
+      absQty, unitPrice, qtyIn, qtyOut, prevQty + qtyIn - qtyOut, valIn, valOut, prevVal + valIn - valOut,
+      `تسوية جردية رقم #${id}`, userId, `${batchKey}_${l.item_code}`,
+      totalValue === 0 ? `inventory_adjustment:${id}` : null,
+      totalValue === 0 ? role : null,
+      totalValue === 0 ? 'exempt_zero_value' : 'pending',
+      adjTransactionId,
+      ym.year, ym.month,
+    ).run()
+
+    const movementId = Number(insertRes.meta.last_row_id)
+    await upsertInventoryBalance(c.env.DB, company_id, l.item_code, adj.warehouse_id, prevQty + qtyIn - qtyOut, prevVal + valIn - valOut, movementId)
+
+    if (totalValue > 0) {
+      await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', movementId, {
+        company_id, ref_id: movementId, item_code: l.item_code, warehouse_id: adj.warehouse_id,
+        movement_type: movementType, value: totalValue, date: adj.adjustment_date,
+        item_name: `تسوية جردية - ${l.item_code}`, created_by: userId,
+      })
     }
   }
 
   await c.env.DB.prepare(
-    'UPDATE inventory_adjustments SET status = "posted" WHERE id = ?'
-  ).bind(id).run()
+    'UPDATE inventory_adjustments SET status = "posted" WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).run()
 
   return c.json({ success: true })
 })

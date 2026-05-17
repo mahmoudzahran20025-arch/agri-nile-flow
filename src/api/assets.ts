@@ -1,17 +1,21 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
-import { getUser, permissionGuard } from '../middleware/auth'
+import { authMiddleware, getUser, permissionGuard } from '../middleware/auth'
 import { FinanceCore } from '../lib/finance_core'
 
 const assets = new Hono<{ Bindings: Env }>()
+assets.use('*', authMiddleware)
 
-// GET /api/assets — list fixed assets
+// GET /api/assets — list fixed assets with GL linkage from supplier_transactions
 assets.get('/', permissionGuard('admin', 'read'), async (c) => {
   const { company_id } = getUser(c)
   const { results } = await c.env.DB.prepare(`
-    SELECT * FROM fixed_assets
-    WHERE company_id = ?
-    ORDER BY acquisition_date DESC
+    SELECT fa.*, st.journal_entry_id
+    FROM fixed_assets fa
+    LEFT JOIN supplier_transactions st
+      ON st.id = fa.supplier_transaction_id AND st.company_id = fa.company_id
+    WHERE fa.company_id = ?
+    ORDER BY fa.acquisition_date DESC
   `).bind(company_id).all()
   return c.json({ success: true, data: results })
 })
@@ -51,6 +55,7 @@ assets.post('/', permissionGuard('admin', 'write'), async (c) => {
     depreciation_method?: string
     center_code?: number | null
     field_id?: number | null
+    season_id?: number | null
     notes?: string
   }>()
 
@@ -60,8 +65,8 @@ assets.post('/', permissionGuard('admin', 'write'), async (c) => {
 
   const result = await c.env.DB.prepare(`
     INSERT INTO fixed_assets
-    (company_id, asset_code, name, category, acquisition_date, cost, salvage_value, useful_life_months, depreciation_method, center_code, field_id, notes, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (company_id, asset_code, name, category, acquisition_date, cost, salvage_value, useful_life_months, depreciation_method, center_code, field_id, season_id, notes, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     company_id,
     body.asset_code,
@@ -73,7 +78,8 @@ assets.post('/', permissionGuard('admin', 'write'), async (c) => {
     body.useful_life_months || 60,
     body.depreciation_method || 'straight_line',
     body.center_code || null,
-    body.field_id || null,
+    body.field_id    || null,
+    body.season_id   || null,
     body.notes || null,
     userId
   ).run()
@@ -83,18 +89,23 @@ assets.post('/', permissionGuard('admin', 'write'), async (c) => {
   // Generate depreciation schedules from acquisition month to now
   const acqDate = new Date(body.acquisition_date)
   const now = new Date()
+  const usefulLife = body.useful_life_months ?? 60
+  const salvage    = body.salvage_value ?? 0
+  const monthlyDep = usefulLife > 0
+    ? Math.round(((body.cost - salvage) / usefulLife) * 100) / 100
+    : 0
   const scheduleStmts: ReturnType<typeof c.env.DB.prepare>[] = []
 
   for (let y = acqDate.getFullYear(); y <= now.getFullYear(); y++) {
     const startMonth = y === acqDate.getFullYear() ? acqDate.getMonth() + 1 : 1
-    const endMonth = y === now.getFullYear() ? now.getMonth() + 1 : 12
+    const endMonth   = y === now.getFullYear() ? now.getMonth() + 1 : 12
 
     for (let m = startMonth; m <= endMonth; m++) {
       scheduleStmts.push(
-        c.env.DB.prepare(`
-          INSERT INTO depreciation_schedules (company_id, asset_id, period_year, period_month, status)
-          VALUES (?, ?, ?, ?, 'pending')
-        `).bind(company_id, assetId, y, m)
+        c.env.DB.prepare(
+          `INSERT INTO depreciation_schedules (company_id, asset_id, period_year, period_month, amount, status)
+           VALUES (?, ?, ?, ?, ?, 'pending')`
+        ).bind(company_id, assetId, y, m, monthlyDep)
       )
     }
   }

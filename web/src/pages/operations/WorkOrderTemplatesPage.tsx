@@ -6,11 +6,12 @@ import {
   Pencil, Trash2, CheckCircle2, Zap, ClipboardList,
   BookTemplate, ArrowLeft, Clock, Leaf,
 } from 'lucide-react'
-import { operationsApi, fieldsApi, configApi, type WOTemplate, type WOTemplateTask } from '../../api/client'
+import { operationsApi, fieldsApi, configApi, type WOTemplate, type WOTemplateTask, type WOTemplateEquipment } from '../../api/client'
 import Modal from '../../components/ui/Modal'
 
 // ── Operation type config ─────────────────────────────────────
-const OP_TYPES = ['ري', 'تسميد', 'رش', 'حصاد', 'حراثة', 'زراعة', 'أخرى'] as const
+// OP_TYPES are loaded from the database via GET /config/operation_types
+// OP_CFG provides display styling; falls back to DEFAULT_CFG for custom types
 
 const OP_CFG: Record<string, {
   label: string; accent: string; bg: string; border: string; dot: string; light: string
@@ -380,6 +381,9 @@ function CreateTemplateModal({ onClose, onSuccess }: { onClose: () => void; onSu
   const [tasks, setTasks]     = useState<NewTask[]>([{ task_name: '', estimated_hours: '' }])
   const addTaskRef = useRef<HTMLInputElement>(null)
 
+  const { data: opTypesData = [] } = useQuery({ queryKey: ['operation-types'], queryFn: configApi.operationTypes })
+  const opTypes = (opTypesData as { id: number; name: string; is_active: number }[]).filter(t => t.is_active === 1)
+
   const createMut = useMutation({
     mutationFn: () => operationsApi.createTemplate({
       name, operation_type: opType, description: desc || undefined,
@@ -416,7 +420,7 @@ function CreateTemplateModal({ onClose, onSuccess }: { onClose: () => void; onSu
               value={opType}
               onChange={e => setOpType(e.target.value)}
             >
-              {OP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              {opTypes.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
             </select>
           </div>
           <div>
@@ -508,6 +512,7 @@ function CreateTemplateModal({ onClose, onSuccess }: { onClose: () => void; onSu
 // ── Edit Template Modal ───────────────────────────────────────
 function EditTemplateModal({ tpl, onClose }: { tpl: WOTemplate; onClose: () => void }) {
   const qc = useQueryClient()
+  const [tab, setTab] = useState<'tasks' | 'equipment'>('tasks')
   const [name, setName]     = useState(tpl.name)
   const [desc, setDesc]     = useState(tpl.description ?? '')
   const [newTask, setNewTask] = useState('')
@@ -515,12 +520,18 @@ function EditTemplateModal({ tpl, onClose }: { tpl: WOTemplate; onClose: () => v
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editingName, setEditingName] = useState('')
 
+  // Equipment form state
+  const [newEquipName,  setNewEquipName]  = useState('')
+  const [newEquipHours, setNewEquipHours] = useState('')
+  const [newEquipRate,  setNewEquipRate]  = useState('')
+
   const { data, isLoading } = useQuery({
     queryKey: ['wo-template', tpl.id],
     queryFn:  () => operationsApi.getTemplate(tpl.id),
     staleTime: 0,
   })
-  const tasks: WOTemplateTask[] = data?.tasks ?? []
+  const tasks: WOTemplateTask[]         = data?.tasks     ?? []
+  const equipment: WOTemplateEquipment[] = data?.equipment ?? []
 
   function invalidate() {
     qc.invalidateQueries({ queryKey: ['wo-template', tpl.id] })
@@ -557,6 +568,20 @@ function EditTemplateModal({ tpl, onClose }: { tpl: WOTemplate; onClose: () => v
     onSuccess: () => { setEditingId(null); invalidate() },
   })
 
+  const addEquipMut = useMutation({
+    mutationFn: (equipName: string) => operationsApi.addTemplateEquipment(tpl.id, {
+      equipment_name:  equipName,
+      estimated_hours: newEquipHours ? Number(newEquipHours) : undefined,
+      cost_per_hour:   newEquipRate  ? Number(newEquipRate)  : 0,
+    }),
+    onSuccess: () => { setNewEquipName(''); setNewEquipHours(''); setNewEquipRate(''); invalidate() },
+  })
+
+  const delEquipMut = useMutation({
+    mutationFn: (id: number) => operationsApi.deleteTemplateEquipment(id),
+    onSuccess: invalidate,
+  })
+
   function moveTask(task: WOTemplateTask, dir: 'up' | 'down') {
     const sorted = [...tasks].sort((a, b) => a.task_order - b.task_order)
     const idx    = sorted.findIndex(t => t.id === task.id)
@@ -572,6 +597,21 @@ function EditTemplateModal({ tpl, onClose }: { tpl: WOTemplate; onClose: () => v
   return (
     <Modal open onClose={onClose} title={`تعديل: ${tpl.name}`}>
       <div className="space-y-5 p-1 max-h-[75vh] overflow-y-auto">
+
+        {/* Tab switcher */}
+        <div className="flex gap-1 bg-gray-100 rounded-xl p-1">
+          {(['tasks', 'equipment'] as const).map(t => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                tab === t ? 'bg-white shadow text-indigo-700' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {t === 'tasks' ? `المهام (${tasks.length})` : `المعدات (${equipment.length})`}
+            </button>
+          ))}
+        </div>
 
         {/* Name / Desc */}
         <div className="grid grid-cols-2 gap-3">
@@ -595,7 +635,7 @@ function EditTemplateModal({ tpl, onClose }: { tpl: WOTemplate; onClose: () => v
         </div>
 
         {/* Task list manager */}
-        <div>
+        {tab === 'tasks' && <div>
           <p className="text-sm font-semibold text-gray-700 mb-2">المهام التسلسلية</p>
           {isLoading ? (
             <div className="flex justify-center py-4"><Loader2 className="animate-spin text-gray-400" size={18} /></div>
@@ -697,7 +737,76 @@ function EditTemplateModal({ tpl, onClose }: { tpl: WOTemplate; onClose: () => v
               {addTaskMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
             </button>
           </div>
-        </div>
+        </div>}
+
+        {/* Equipment list manager */}
+        {tab === 'equipment' && <div>
+          <p className="text-sm font-semibold text-gray-700 mb-2">المعدات المتوقعة</p>
+          {isLoading ? (
+            <div className="flex justify-center py-4"><Loader2 className="animate-spin text-gray-400" size={18} /></div>
+          ) : equipment.length === 0 ? (
+            <p className="text-xs text-gray-400 text-center py-3">لا توجد معدات — أضف أدناه</p>
+          ) : (
+            <div className="space-y-1.5 mb-3">
+              {[...equipment].sort((a, b) => a.item_order - b.item_order).map((eq) => (
+                <div key={eq.id} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-purple-200 bg-purple-50 group">
+                  <span className="w-5 h-5 rounded-full bg-purple-600 text-white flex items-center justify-center shrink-0">
+                    <Zap size={10} />
+                  </span>
+                  <span className="flex-1 text-sm text-gray-700">{eq.equipment_name}</span>
+                  {eq.estimated_hours != null && (
+                    <span className="text-[10px] text-gray-400 flex items-center gap-0.5 shrink-0">
+                      <Clock size={9} /> {eq.estimated_hours}س
+                    </span>
+                  )}
+                  {eq.cost_per_hour > 0 && (
+                    <span className="text-[10px] text-purple-600 shrink-0">{eq.cost_per_hour} ج/س</span>
+                  )}
+                  <button
+                    onClick={() => delEquipMut.mutate(eq.id)}
+                    className="p-1 text-gray-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 shrink-0"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add equipment inline */}
+          <div className="flex items-center gap-2 mt-2">
+            <input
+              className="flex-1 border border-dashed border-gray-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-purple-400 focus:border-purple-400 bg-gray-50"
+              placeholder="+ اسم المعدة (Enter للإضافة)"
+              value={newEquipName}
+              onChange={e => setNewEquipName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && newEquipName.trim()) addEquipMut.mutate(newEquipName.trim())
+              }}
+            />
+            <input
+              type="number" min="0" step="0.5"
+              className="w-16 border border-gray-200 rounded-xl px-2 py-2 text-xs text-center focus:ring-1 focus:ring-purple-400"
+              placeholder="ساعات"
+              value={newEquipHours}
+              onChange={e => setNewEquipHours(e.target.value)}
+            />
+            <input
+              type="number" min="0" step="any"
+              className="w-20 border border-gray-200 rounded-xl px-2 py-2 text-xs text-center focus:ring-1 focus:ring-purple-400"
+              placeholder="ج/ساعة"
+              value={newEquipRate}
+              onChange={e => setNewEquipRate(e.target.value)}
+            />
+            <button
+              onClick={() => newEquipName.trim() && addEquipMut.mutate(newEquipName.trim())}
+              disabled={!newEquipName.trim() || addEquipMut.isPending}
+              className="px-3 py-2 rounded-xl text-white text-sm font-medium transition-colors disabled:opacity-40 bg-purple-600 hover:bg-purple-700"
+            >
+              {addEquipMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+            </button>
+          </div>
+        </div>}
 
         {/* Footer */}
         <div className="flex gap-3 pt-2 sticky bottom-0 bg-white pb-1">
@@ -739,7 +848,8 @@ function UseTemplateModal({
     queryFn:  () => operationsApi.getTemplate(tpl.id),
     staleTime: 120_000,
   })
-  const tasks = tplDetail?.tasks ?? []
+  const tasks     = tplDetail?.tasks     ?? []
+  const equipment = tplDetail?.equipment ?? []
 
   const useMut = useMutation({
     mutationFn: () => operationsApi.useTemplate(tpl.id, {
@@ -767,7 +877,7 @@ function UseTemplateModal({
           <div>
             <p className={`text-sm font-bold ${cfg.accent}`}>{tpl.name}</p>
             <p className="text-xs text-gray-500">
-              {tpl.operation_type} · {tasks.length} مهمة ستُنشأ تلقائياً
+              {tpl.operation_type} · {tasks.length} مهمة{equipment.length > 0 ? ` · ${equipment.length} معدة` : ''} ستُنشأ تلقائياً
             </p>
           </div>
         </div>

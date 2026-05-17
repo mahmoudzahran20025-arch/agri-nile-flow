@@ -10,6 +10,8 @@ import Modal from '../../components/ui/Modal'
 import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
 import { KpiStrip, type KpiItem } from '../../components/ui/KpiStrip'
 import SectionCard from '../../components/ui/SectionCard'
+import { useToast } from '../../contexts/ToastContext'
+import DataTableV2, { type ColumnV2 } from '../../components/ui/DataTableV2'
 
 // ── Helpers ───────────────────────────────────────────────────
 function fmtCurrency(n: number) {
@@ -26,6 +28,7 @@ function diffColor(diff: number) {
 // ════════════════════════════════════════════════════════════
 export default function BankReconciliationPage() {
   const qc = useQueryClient()
+  const { toast } = useToast()
   const [selectedAccount, setSelectedAccount] = useState<BankAccount | null>(null)
   const [showAddAccount, setShowAddAccount] = useState(false)
   const [showImport, setShowImport] = useState(false)
@@ -56,7 +59,9 @@ export default function BankReconciliationPage() {
       qc.invalidateQueries({ queryKey: ['bank-accounts'] })
       setShowAddAccount(false)
       setAccountForm({ bank_name: '', account_name: '', account_number: '', iban: '', currency: 'EGP', opening_balance: '0' })
+      toast('تم إضافة الحساب البنكي بنجاح', 'success')
     },
+    onError: (err: { message?: string }) => toast(err.message || 'فشل إضافة الحساب', 'error'),
   })
 
   const importMut = useMutation({
@@ -78,8 +83,9 @@ export default function BankReconciliationPage() {
       qc.invalidateQueries({ queryKey: ['bank-statements', selectedAccount?.id] })
       setShowImport(false)
       setImportText('')
-      alert(`تم استيراد ${res.imported} سطر بنجاح`)
+      toast(`تم استيراد ${res.imported} سطر بنجاح`, 'success')
     },
+    onError: (err: { message?: string }) => toast(err.message || 'فشل الاستيراد', 'error'),
   })
 
   const createReconMut = useMutation({
@@ -97,7 +103,9 @@ export default function BankReconciliationPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['bank-recon', selectedAccount?.id] })
       setShowRecon(false)
+      toast('تم حفظ المطابقة بنجاح', 'success')
     },
+    onError: (err: { message?: string }) => toast(err.message || 'فشل حفظ المطابقة', 'error'),
   })
 
   const totalBalance = accounts.reduce((s, a) => s + (a.current_balance ?? a.opening_balance), 0)
@@ -353,6 +361,87 @@ function AccountCard({ account, selected, onSelect }: {
   )
 }
 
+// ── Statement columns for DataTableV2 ────────────────────────
+function stmtColumns(
+  matchMut: { mutate: (v: { stmtId: number; txId: number | null }) => void; isPending: boolean },
+  setMatchingStmt: (s: BankStatement) => void,
+): ColumnV2<BankStatement>[] {
+  return [
+    {
+      key: 'statement_date',
+      header: 'التاريخ',
+      sortable: true,
+      render: s => <span className="text-gray-600 whitespace-nowrap font-mono text-xs">{s.statement_date}</span>,
+      csvValue: s => s.statement_date,
+    },
+    {
+      key: 'description',
+      header: 'البيان',
+      render: s => <span className="text-gray-800 max-w-xs truncate block">{s.description}</span>,
+      csvValue: s => s.description,
+    },
+    {
+      key: 'ref_number',
+      header: 'مرجع',
+      render: s => <span className="text-gray-400 font-mono text-xs">{s.ref_number ?? '—'}</span>,
+      csvValue: s => s.ref_number ?? '',
+    },
+    {
+      key: 'amount_in',
+      header: 'إيداع',
+      align: 'left',
+      sortable: true,
+      render: s => s.amount_in > 0
+        ? <span className="text-emerald-600 font-medium font-mono text-xs">{new Intl.NumberFormat('en-US', { minimumFractionDigits: 2 }).format(s.amount_in)}</span>
+        : <span className="text-gray-300">—</span>,
+      csvValue: s => s.amount_in > 0 ? String(s.amount_in) : '',
+    },
+    {
+      key: 'amount_out',
+      header: 'سحب',
+      align: 'left',
+      sortable: true,
+      render: s => s.amount_out > 0
+        ? <span className="text-red-500 font-medium font-mono text-xs">{new Intl.NumberFormat('en-US', { minimumFractionDigits: 2 }).format(s.amount_out)}</span>
+        : <span className="text-gray-300">—</span>,
+      csvValue: s => s.amount_out > 0 ? String(s.amount_out) : '',
+    },
+    {
+      key: 'is_matched',
+      header: 'المطابقة',
+      align: 'center',
+      sortable: true,
+      render: s => s.is_matched
+        ? <span className="inline-flex items-center gap-1 text-xs text-emerald-600"><Link2 size={12} /> مطابق</span>
+        : <span className="inline-flex items-center gap-1 text-xs text-amber-500"><Unlink size={12} /> غير مطابق</span>,
+      csvValue: s => s.is_matched ? 'مطابق' : 'غير مطابق',
+    },
+    {
+      key: 'action',
+      header: 'إجراء',
+      align: 'center',
+      render: s => s.is_matched
+        ? (
+          <button
+            onClick={() => matchMut.mutate({ stmtId: s.id, txId: null })}
+            disabled={matchMut.isPending}
+            className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1 mx-auto transition-colors"
+            title="إلغاء المطابقة"
+          >
+            <X size={12} /> إلغاء
+          </button>
+        ) : (
+          <button
+            onClick={() => setMatchingStmt(s)}
+            className="text-xs text-brand-600 hover:text-brand-800 flex items-center gap-1 mx-auto transition-colors"
+          >
+            <Link2 size={12} /> طابق
+          </button>
+        ),
+    },
+  ]
+}
+
 // ── Account Detail Panel ──────────────────────────────────────
 function AccountDetail({ account, onImport, onNewRecon }: {
   account: BankAccount; onImport: () => void; onNewRecon: () => void
@@ -438,73 +527,16 @@ function AccountDetail({ account, onImport, onNewRecon }: {
 
       {/* Statements Table */}
       {showStmts && (
-        <div className="overflow-x-auto">
-          {stmtLoading ? (
-            <div className="flex justify-center py-8 text-gray-400"><Loader2 className="animate-spin" size={24} /></div>
-          ) : statements.length === 0 ? (
-            <div className="text-center py-10 text-gray-400 text-sm">
-              لا توجد حركات — استورد كشف حساب البنك
-            </div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 text-gray-500 text-xs">
-                  <th className="px-4 py-2.5 text-right font-medium">التاريخ</th>
-                  <th className="px-4 py-2.5 text-right font-medium">البيان</th>
-                  <th className="px-4 py-2.5 text-right font-medium">مرجع</th>
-                  <th className="px-4 py-2.5 text-left font-medium">إيداع</th>
-                  <th className="px-4 py-2.5 text-left font-medium">سحب</th>
-                  <th className="px-4 py-2.5 text-center font-medium">المطابقة</th>
-                  <th className="px-4 py-2.5 text-center font-medium">إجراء</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {statements.map(s => (
-                  <tr key={s.id} className={`hover:bg-gray-50 transition-colors ${s.is_matched ? 'opacity-60' : ''}`}>
-                    <td className="px-4 py-2.5 text-gray-600 whitespace-nowrap">{s.statement_date}</td>
-                    <td className="px-4 py-2.5 text-gray-800 max-w-xs truncate">{s.description}</td>
-                    <td className="px-4 py-2.5 text-gray-400 font-mono text-xs">{s.ref_number ?? '—'}</td>
-                    <td className="px-4 py-2.5 text-left">
-                      {s.amount_in > 0 ? <span className="text-emerald-600 font-medium">{fmtCurrency(s.amount_in)}</span> : '—'}
-                    </td>
-                    <td className="px-4 py-2.5 text-left">
-                      {s.amount_out > 0 ? <span className="text-red-500 font-medium">{fmtCurrency(s.amount_out)}</span> : '—'}
-                    </td>
-                    <td className="px-4 py-2.5 text-center">
-                      {s.is_matched ? (
-                        <span className="inline-flex items-center gap-1 text-xs text-emerald-600">
-                          <Link2 size={12} /> مطابق
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-xs text-amber-500">
-                          <Unlink size={12} /> غير مطابق
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2.5 text-center">
-                      {s.is_matched ? (
-                        <button
-                          onClick={() => matchMut.mutate({ stmtId: s.id, txId: null })}
-                          disabled={matchMut.isPending}
-                          className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1 mx-auto transition-colors"
-                          title="إلغاء المطابقة"
-                        >
-                          <X size={12} /> إلغاء
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => setMatchingStmt(s)}
-                          className="text-xs text-brand-600 hover:text-brand-800 flex items-center gap-1 mx-auto transition-colors"
-                        >
-                          <Link2 size={12} /> طابق
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+        <div className="p-4">
+          <DataTableV2<BankStatement>
+            columns={stmtColumns(matchMut, setMatchingStmt)}
+            data={statements}
+            rowKey={s => s.id}
+            loading={stmtLoading}
+            emptyText="لا توجد حركات — استورد كشف حساب البنك"
+            exportFilename={`bank_statements_${account.id}`}
+            searchPlaceholder="بحث في الحركات..."
+          />
         </div>
       )}
 

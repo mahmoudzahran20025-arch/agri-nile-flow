@@ -1,6 +1,8 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
+import { getTodayIsoDate } from '../lib/utils/date'
+import { resolveMovementDirection } from '../lib/posting_engine'
 
 const exportApi = new Hono<{ Bindings: Env }>()
 exportApi.use('*', authMiddleware)
@@ -120,19 +122,49 @@ exportApi.get('/inventory', async (c) => {
 // GET /api/export/inventory/movements — movements log
 exportApi.get('/inventory/movements', async (c) => {
   const { company_id } = getUser(c)
+  const type = c.req.query('type')
+  const warehouse = c.req.query('warehouse')
+  const seasonId = c.req.query('season_id')
+  const start = c.req.query('start')
+  const end = c.req.query('end')
+
+  const where: string[] = ['im.company_id = ?']
+  const binds: unknown[] = [company_id]
+
+  if (type) {
+    where.push('im.movement_type = ?')
+    binds.push(type)
+  }
+  if (warehouse) {
+    where.push('im.warehouse = ?')
+    binds.push(warehouse)
+  }
+  if (seasonId) {
+    where.push('im.season_id = ?')
+    binds.push(Number(seasonId))
+  }
+  if (start) {
+    where.push('im.movement_date >= ?')
+    binds.push(start)
+  }
+  if (end) {
+    where.push('im.movement_date <= ?')
+    binds.push(end)
+  }
+
   const { results } = await c.env.DB.prepare(`
     SELECT im.movement_date, im.warehouse, im.movement_type, i.name AS item_name,
            i.unit, im.quantity, im.unit_price, im.qty_in, im.qty_out,
            im.balance_qty, im.balance_value, im.document_number, im.notes
     FROM inventory_movements im
     LEFT JOIN items i ON i.code = im.item_code AND i.company_id = im.company_id
-    WHERE im.company_id = ?
+    WHERE ${where.join(' AND ')}
     ORDER BY im.movement_date, im.id
-  `).bind(company_id).all()
+  `).bind(...binds).all()
 
   const headers = ['التاريخ','المخزن','النوع','الصنف','الوحدة','الكمية','سعر الوحدة','وارد','منصرف','رصيد كمية','رصيد قيمة','المستند','ملاحظات']
   const rows    = results.map((r: Record<string,unknown>) => [
-    r.movement_date, r.warehouse, r.movement_type === 'اضافة' ? 'وارد' : 'منصرف',
+    r.movement_date, r.warehouse, resolveMovementDirection(String(r.movement_type ?? '')) === 'IN' ? 'وارد' : 'منصرف',
     r.item_name, r.unit, r.quantity, r.unit_price, r.qty_in, r.qty_out,
     r.balance_qty, r.balance_value, r.document_number, r.notes
   ])
@@ -323,7 +355,7 @@ exportApi.get('/audit', async (c) => {
 // GET /api/export/gl/balance-sheet?as_of=
 exportApi.get('/gl/balance-sheet', async (c) => {
   const { company_id } = getUser(c)
-  const asOf = c.req.query('as_of') ?? new Date().toISOString().slice(0, 10)
+  const asOf = c.req.query('as_of') ?? getTodayIsoDate()
 
   const { results } = await c.env.DB.prepare(
     `SELECT a.code, a.name, a.account_type, a.is_header,

@@ -1,13 +1,14 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
 import { getUser } from '../../middleware/auth'
+import { getTodayIsoDate } from '../../lib/utils/date'
 
 const dashboard = new Hono<{ Bindings: Env }>()
 
 dashboard.get('/dashboard', async (c) => {
   const { company_id } = getUser(c)
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = getTodayIsoDate()
 
   const [
     totalEmpsRes,

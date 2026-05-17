@@ -7,7 +7,6 @@ import {
   BarChart3, Download, Plus,
 } from 'lucide-react'
 import { inventoryApi, configApi, downloadCsv } from '../../api/client'
-import AddInventoryBatchModal from '../../components/forms/AddInventoryBatchModal'
 import { usePermission } from '../../hooks/usePermission'
 import type { Item } from '../../types'
 
@@ -81,7 +80,6 @@ export default function ItemCardPage() {
   const { canWrite } = usePermission()
 
   const itemCode    = Number(code)
-  const [addOpen,   setAddOpen]   = useState(false)
   const [warehouse, setWarehouse] = useState('')
 
   // Item meta
@@ -171,7 +169,7 @@ export default function ItemCardPage() {
             <Download size={15} /> تصدير CSV
           </button>
           {canWrite('inventory') && (
-            <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
+            <button className="btn-primary gap-2" onClick={() => navigate('/inventory/workspace/create' + (warehouse ? '?warehouse=' + encodeURIComponent(warehouse) : ''))}>
               <Plus size={15} /> حركة جديدة
             </button>
           )}
@@ -260,7 +258,7 @@ export default function ItemCardPage() {
               {card.slice(-15).map((row, i) => {
                 const maxBal = Math.max(...card.slice(-15).map(r => Math.abs(r.balance_qty ?? 0)), 1)
                 const h      = Math.max(((row.balance_qty ?? 0) / maxBal) * 100, 4)
-                const isAdd  = row.movement_type === 'اضافة'
+                const isAdd  = ['GRN','TRANSFER_IN','RETURN_CUSTOMER','ADJUSTMENT_PROFIT','PRODUCTION_OUTPUT'].includes(row.movement_type)
                 return (
                   <div key={i} className="flex-1 flex flex-col items-center group relative h-full justify-end"
                     title={`${DATE_AR(row.movement_date)} — ${row.movement_type}: ${NUM(row.quantity)}\nالرصيد: ${NUM(row.balance_qty)}`}>
@@ -279,7 +277,7 @@ export default function ItemCardPage() {
           {lastRow && (
             <p className="text-xs text-slate-400 mt-3 text-center">
               آخر حركة: {DATE_AR(lastRow.movement_date)} ·
-              الرصيد الحالي: <span className="font-semibold text-slate-600">{NUM(lastRow.balance_qty)} {item?.unit ?? ''}</span>
+              الرصيد الحالي: <span className="font-semibold text-slate-600">{NUM(stockData?.total_qty)} {item?.unit ?? ''}</span>
             </p>
           )}
         </div>
@@ -334,7 +332,7 @@ export default function ItemCardPage() {
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {card.map((row, i) => {
-                  const isAdd  = row.movement_type === 'اضافة'
+                  const isAdd  = ['GRN','TRANSFER_IN','RETURN_CUSTOMER','ADJUSTMENT_PROFIT','PRODUCTION_OUTPUT'].includes(row.movement_type)
                   const isLast = i === card.length - 1
                   return (
                     <tr key={i} className={`hover:bg-slate-50 transition-colors ${isLast ? 'bg-brand-50/40 font-medium' : ''}`}>
@@ -381,11 +379,11 @@ export default function ItemCardPage() {
                   <td className="px-3 py-2.5 text-green-700 text-center">{NUM(totalIn)}</td>
                   <td className="px-3 py-2.5 text-red-600  text-center">{NUM(totalOut)}</td>
                   <td className="px-3 py-2.5 text-center">
-                    <span className={lastRow && (lastRow.balance_qty ?? 0) > 0 ? 'text-brand-700' : 'text-slate-400'}>
-                      {NUM(lastRow?.balance_qty)}
+                    <span className={(stockData?.total_qty ?? 0) > 0 ? 'text-brand-700' : 'text-slate-400'}>
+                      {NUM(stockData?.total_qty)}
                     </span>
                   </td>
-                  <td className="px-3 py-2.5 text-brand-700 text-center">{EGP(lastRow?.balance_value)}</td>
+                  <td className="px-3 py-2.5 text-brand-700 text-center">{EGP(stockData?.total_value)}</td>
                   <td colSpan={2}></td>
                 </tr>
               </tfoot>
@@ -400,12 +398,6 @@ export default function ItemCardPage() {
         className="btn-secondary gap-2 text-sm">
         <ArrowRight size={14} /> العودة إلى أرصدة المخازن
       </button>
-
-      <AddInventoryBatchModal
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        defaultWarehouse={warehouse || undefined}
-      />
     </div>
   )
 }

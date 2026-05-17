@@ -1,11 +1,36 @@
 import { ExternalLink, GitBranch, Link2, X } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import type { EntryTraceResult } from '../../api/gl'
+
+// Maps source_module + event_type + payload to a navigable UI route.
+// Returns null when no dedicated screen exists for this module.
+function resolveSourceRoute(
+  sourceModule: string | undefined,
+  sourceId: number | string | undefined,
+  payload: Record<string, unknown> | null,
+): string | null {
+  if (!sourceModule || !sourceId) return null
+  switch (sourceModule) {
+    case 'suppliers': {
+      const supplierCode = payload?.supplier_code
+      if (supplierCode) return `/suppliers/${supplierCode}?highlight=${sourceId}`
+      return `/suppliers?tab=list`
+    }
+    case 'inventory': return `/inventory/movements?highlight=${sourceId}`
+    case 'gl':        return `/gl/entries?id=${sourceId}`
+    case 'treasury':  return `/treasury?highlight=${sourceId}`
+    case 'hr':        return `/hr/payroll`
+    case 'fields':    return `/fields/harvest`
+    default:          return null
+  }
+}
 
 type TraceTab = 'source' | 'lines' | 'trace'
 
 interface GlEntryTraceDrawerProps {
   isOpen: boolean
   loading?: boolean
+  errorMessage?: string
   tab: TraceTab
   onTabChange: (tab: TraceTab) => void
   onClose: () => void
@@ -19,12 +44,14 @@ function currency(n: number) {
 export default function GlEntryTraceDrawer({
   isOpen,
   loading,
+  errorMessage,
   tab,
   onTabChange,
   onClose,
   trace,
 }: GlEntryTraceDrawerProps) {
-  const payload = trace?.data
+  const navigate = useNavigate()
+  const payload = trace
 
   return (
     <div
@@ -74,6 +101,14 @@ export default function GlEntryTraceDrawer({
             <div className="h-4 w-1/2 rounded bg-slate-100 animate-pulse" />
             <div className="h-24 w-full rounded bg-slate-100 animate-pulse" />
           </div>
+        ) : errorMessage ? (
+          <div className="rounded border border-rose-200 bg-rose-50 p-3 text-[12px] text-rose-700">
+            <div className="font-semibold">Unable to load trace data</div>
+            <div className="mt-1">{errorMessage}</div>
+            <div className="mt-2 text-[11px] text-rose-600">
+              This usually means the journal entry does not exist anymore, or your session does not have access.
+            </div>
+          </div>
         ) : !payload ? (
           <div className="text-[12px] text-slate-500">No trace data found for this entry.</div>
         ) : (
@@ -107,6 +142,43 @@ export default function GlEntryTraceDrawer({
                     <div className="text-slate-500">No source document link available.</div>
                   )}
                 </div>
+
+                {/* Open Source action — lives here on the Source tab */}
+                {(() => {
+                  const src = payload.source_event ?? payload.source_document
+                  const module    = src && 'source_module' in src ? src.source_module as string : undefined
+                  const eventType = payload.source_event && 'event_type' in payload.source_event ? payload.source_event.event_type as string : undefined
+                  const id        = src && 'source_id' in src ? src.source_id : undefined
+                  const evPayload = payload.source_event && 'payload' in payload.source_event
+                    ? (() => { try { return typeof payload.source_event.payload === 'string' ? JSON.parse(payload.source_event.payload) : payload.source_event.payload } catch { return null } })()
+                    : null
+                  const route  = resolveSourceRoute(module, id, evPayload)
+                  return (
+                    <div className="border border-slate-200 rounded p-3 flex items-center justify-between bg-slate-50">
+                      <div className="text-slate-600 flex items-center gap-2">
+                        <Link2 size={14} />
+                        <span className="text-[12px]">
+                          {route
+                            ? `${module ?? 'source'}${eventType ? ` · ${eventType.replace(/_/g, ' ')}` : ''} #${id}`
+                            : 'Source document reference'}
+                        </span>
+                      </div>
+                      {route ? (
+                        <button
+                          className="btn-secondary h-8 px-3 text-[12px] inline-flex items-center gap-1"
+                          onClick={() => { onClose(); navigate(route) }}
+                        >
+                          فتح المستند
+                          <ExternalLink size={13} />
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-slate-400 italic">
+                          {module ? `لا توجد شاشة مرتبطة بـ '${module}'` : 'لا يوجد مستند مصدر'}
+                        </span>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
             )}
 
@@ -141,23 +213,25 @@ export default function GlEntryTraceDrawer({
             {tab === 'trace' && (
               <div className="space-y-3 text-[12px]">
                 {payload.trace ? (
-                  <pre className="bg-slate-900 text-slate-100 rounded p-3 overflow-auto text-[11px] leading-relaxed">
-                    {JSON.stringify(payload.trace, null, 2)}
-                  </pre>
-                ) : (
-                  <div className="text-slate-500">No rule trace metadata recorded for this entry.</div>
-                )}
-
-                <div className="border border-slate-200 rounded p-3 flex items-center justify-between">
-                  <div className="text-slate-600 flex items-center gap-2">
-                    <Link2 size={14} />
-                    <span>View entry details and source references</span>
+                  <div className="space-y-2">
+                    {Object.entries(payload.trace as Record<string, unknown>).map(([key, val]) => (
+                      <div key={key} className="border border-slate-200 rounded p-2.5 flex gap-3">
+                        <span className="text-[11px] font-mono font-bold text-slate-500 min-w-[140px] shrink-0 pt-0.5">
+                          {key}
+                        </span>
+                        <span className="text-slate-700 break-all">
+                          {typeof val === 'object' ? (
+                            <pre className="bg-slate-50 rounded px-2 py-1 text-[10px] overflow-auto whitespace-pre-wrap">
+                              {JSON.stringify(val, null, 2)}
+                            </pre>
+                          ) : String(val)}
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                  <button className="btn-secondary h-8 px-3 text-[12px] inline-flex items-center gap-1" disabled>
-                    Open Source
-                    <ExternalLink size={13} />
-                  </button>
-                </div>
+                ) : (
+                  <div className="text-slate-500 italic text-center py-6">No rule trace metadata recorded for this entry.</div>
+                )}
               </div>
             )}
           </>

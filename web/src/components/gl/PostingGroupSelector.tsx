@@ -12,6 +12,7 @@ interface PostingGroupSelectorProps {
   usageStats?: Record<string, number>
   label?: string
   helpText?: string
+  expectedCodes?: string[]
 }
 
 const RECENT_LIMIT = 5
@@ -45,6 +46,7 @@ export function PostingGroupSelector({
   usageStats,
   label,
   helpText,
+  expectedCodes,
 }: PostingGroupSelectorProps) {
   const [query, setQuery] = useState('')
   const [recent, setRecent] = useState<string[]>([])
@@ -78,6 +80,12 @@ export function PostingGroupSelector({
   const recentGroups = recent
     .map(code => data.find(group => group.code === code))
     .filter((group): group is PostingGroup => !!group)
+
+  const missingExpected = useMemo(() => {
+    if (!expectedCodes?.length) return []
+    const activeCodes = new Set(data.filter(group => group.is_active === 1).map(group => group.code))
+    return expectedCodes.filter(code => !activeCodes.has(code))
+  }, [data, expectedCodes])
 
   return (
     <div className="space-y-2">
@@ -124,6 +132,12 @@ export function PostingGroupSelector({
       ) : (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           سيتم استخدام قاعدة الترحيل الافتراضية إذا تُرك الحقل فارغاً.
+        </div>
+      )}
+      {missingExpected.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <div className="font-semibold">مجموعات متوقعة غير ظاهرة في القائمة</div>
+          <div className="mt-1 font-mono">{missingExpected.join(', ')}</div>
         </div>
       )}
       {helpText && <p className="text-xs text-slate-500">{helpText}</p>}

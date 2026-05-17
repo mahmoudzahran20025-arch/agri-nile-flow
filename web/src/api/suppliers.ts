@@ -23,7 +23,40 @@ export const suppliersApi = {
     api.post(`/suppliers/${code}/transactions`, body),
   postTransaction: (code: number, id: number) =>
     unwrap(api.patch<null>(`/suppliers/${code}/transactions/${id}/post`, {})),
+  deleteTransaction: (code: number, id: number) =>
+    unwrap(api.delete<null>(`/suppliers/${code}/transactions/${id}`)),
 
   aging: (asOf?: string) =>
     unwrap(api.get(`/suppliers/aging${asOf ? `?as_of=${asOf}` : ''}`)),
+
+  agingSummary: (asOf?: string) =>
+    unwrap(api.get(`/suppliers/aging-summary${asOf ? `?as_of=${asOf}` : ''}`)),
+
+  supplierOpenItems: (code: string) =>
+    unwrap(api.get(`/suppliers/${code}/open-items`)),
+
+  matchPayment: (code: number | string, body: { payment_id: number; invoice_id?: number; allow_partial?: boolean }) =>
+    unwrap(api.post(`/suppliers/${code}/match-payment`, body)),
+
+  drafts: () => unwrap(api.get<SupplierDraft[]>('/suppliers/drafts')),
+}
+
+export interface SupplierDraft {
+  id:                  number
+  supplier_code:       number
+  supplier_name:       string
+  supplier_activity:   string | null
+  transaction_date:    string
+  entry_type:          'د' | 'م'
+  document_type:       string | null
+  document_number:     number | null
+  expense_category:    string | null
+  amount:              number
+  credit:              number
+  debit:               number
+  notes:               string | null
+  season_id:           number | null
+  center_code:         number | null
+  financial_account_id: number | null
+  created_at:          string
 }

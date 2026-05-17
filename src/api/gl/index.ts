@@ -10,6 +10,15 @@ import batchJobs from './batch-jobs'
 import reconciliation from './reconciliation'
 import reports from './reports'
 import integrity from './integrity'
+import masterData from './master-data'
+import exchangeRates from './exchange-rates'
+import eventTypes from './event-types'
+import accountRolePolicy from './account-role-policy'
+import hardening from './hardening'
+import enhancedLedger from './enhanced_ledger'
+import journalEntryEngine from './journal_entry_regeneration'
+import preview from './preview'
+import depreciation from './depreciation'
 
 // Main GL router - aggregator for all GL sub-modules
 const gl = new Hono<{ Bindings: Env }>()
@@ -23,31 +32,61 @@ gl.route('/periods', periods)
 
 // Entries: Journal entries, reversals, manual entries
 gl.route('/entries', entries)
-gl.route('/manual-entries', entries)
+
+// Master Data: Material Groups, Business Units, Currencies, Roles (Phase 1)
+gl.route('/master-data', masterData)
+
+// Exchange Rates: FX rates for multi-currency support (Phase 2)
+gl.route('/exchange-rates', exchangeRates)
+
+// Event Types: Business event type catalogue (Phase 2 Task 2)
+gl.route('/event-types', eventTypes)
+
+// Account Role Policy: Role → Account mapping engine (Phase 3)
+gl.route('/account-role-policy', accountRolePolicy)
 
 // Posting Setup: Posting groups, posting rules, validation
-gl.route('/posting-groups', postingSetup)
-gl.route('/posting-rules', postingSetup)
-gl.route('/posting-setup', postingSetup)
+gl.route('/', postingSetup)
 
 // Batch Jobs: Batch posting and processing
-gl.route('/batch-post', batchJobs)
+gl.route('/', batchJobs)
 
 // Reconciliation: Source documents reconciliation
 gl.route('/reconciliation', reconciliation)
 
 // Reports: Ledger, Trial Balance, Income Statement, Balance Sheet
-gl.route('/ledger', reports)
-gl.route('/trial-balance', reports)
-gl.route('/trial-balance-fast', reports)
-gl.route('/income-statement', reports)
-gl.route('/balance-sheet', reports)
+gl.route('/', reports)
 
 // Integrity: System integrity checks, audit logs, health score
-gl.route('/integrity-check', integrity)
-gl.route('/audit-log', integrity)
-gl.route('/system-integrity-score', integrity)
-gl.route('/orphans', integrity)
+gl.route('/', integrity)
+
+// Hardening: Feature flags, baseline metrics, governance controls
+gl.route('/hardening', hardening)
+
+// Enhanced Ledger: Server-side filtered ledger + CSV export
+gl.route('/', enhancedLedger)
+
+// JE Regeneration: Rebuild journal entries from business events with trace metadata
+gl.route('/regeneration', journalEntryEngine)
+
+// Preview: Dry-run GL line resolution without writing to DB
+gl.route('/', preview)
+
+// Depreciation: Monthly batch depreciation posting and schedule view
+gl.route('/', depreciation)
+
+// Schema migrations registry — read-only admin visibility
+gl.get('/migrations/registry', async (c) => {
+  const db = c.env.DB
+  try {
+    const rows = await db
+      .prepare('SELECT id, filename, name, source, applied_at FROM schema_migrations ORDER BY id ASC')
+      .all<{ id: number; filename: string; name: string; source: string; applied_at: string }>()
+    return c.json({ success: true, data: { total: rows.results.length, migrations: rows.results } })
+  } catch {
+    return c.json({ success: false, error: 'schema_migrations table not found — migration 0126 not applied' }, 404)
+  }
+})
 
 // Health check endpoint for the GL module
 gl.get('/health', (c) => {
@@ -59,6 +98,7 @@ gl.get('/health', (c) => {
       'accounts',
       'periods',
       'entries',
+      'master-data',
       'posting-setup',
       'batch-jobs',
       'reconciliation',

@@ -1,12 +1,14 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Search, Plus, ExternalLink, FileText, X } from 'lucide-react'
+import { Search, Plus, ExternalLink, FileText, X, Clock } from 'lucide-react'
 import { suppliersApi } from '../../api/client'
 import { usePermission } from '../../hooks/usePermission'
-import DataTable, { type Column, type SortState } from '../../components/ui/DataTable'
+import { useNewShortcut } from '../../hooks/useNewShortcut'
+import DataTableV2, { type ColumnV2 } from '../../components/ui/DataTableV2'
 import SidePanel from '../../components/ui/SidePanel'
 import AddSupplierModal from '../../components/forms/AddSupplierModal'
+import AddSupplierTransactionModal from '../../components/forms/AddSupplierTransactionModal'
 import type { Supplier } from '../../types'
 
 function egp(n: number | undefined) {
@@ -14,15 +16,16 @@ function egp(n: number | undefined) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EGP', maximumFractionDigits: 0 }).format(n)
 }
 
-// ── Filter types ──────────────────────────────────────────────
+// ── Filter types ─────────────────────────────────────────────
 type StatusFilter  = 'all' | 'active' | 'inactive'
 type BalanceFilter = 'all' | 'credit' | 'debit' | 'zero'
 
 // ── Supplier Quick-View Panel ─────────────────────────────────
-function SupplierPanel({ supplier, onClose, onNavigate }: {
+function SupplierPanel({ supplier, onClose, onNavigate, onAddTransaction }: {
   supplier: Supplier | null
   onClose:  () => void
   onNavigate: (code: number) => void
+  onAddTransaction?: (supplier: Supplier) => void
 }) {
   if (!supplier) return null
   const balance = supplier.current_balance ?? 0
@@ -88,23 +91,35 @@ function SupplierPanel({ supplier, onClose, onNavigate }: {
           <ExternalLink size={15} />
           عرض التفاصيل الكاملة
         </button>
+
+        {onAddTransaction && (
+          <button
+            onClick={() => onAddTransaction(supplier)}
+            className="btn-secondary w-full gap-2 justify-center"
+          >
+            <Plus size={15} />
+            إضافة حركة مالية
+          </button>
+        )}
       </div>
     </SidePanel>
   )
 }
 
 // ── Columns ───────────────────────────────────────────────────
-const COLUMNS: Column<Supplier>[] = [
-  { key: 'code',     header: 'الكود',          width: '90px',  sortable: true },
-  { key: 'name',     header: 'المورد / العميل',                sortable: true },
-  { key: 'activity', header: 'النشاط',          render: r => r.activity ?? '—' },
+const COLUMNS: ColumnV2<Supplier>[] = [
+  { key: 'code',     header: 'الكود',          width: '90px',  sortable: true, csvValue: r => String(r.code) },
+  { key: 'name',     header: 'المورد / العميل',                sortable: true, csvValue: r => r.name },
+  { key: 'activity', header: 'النشاط',          render: r => r.activity ?? '—', csvValue: r => r.activity ?? '' },
   {
     key: 'total_credit', header: 'إجمالي الدائن', sortable: true,
     render: r => <span className="text-green-700 font-medium">{egp(r.total_credit)}</span>,
+    csvValue: r => String(r.total_credit ?? 0),
   },
   {
     key: 'total_debit', header: 'إجمالي المدين', sortable: true,
     render: r => <span className="text-red-600 font-medium">{egp(r.total_debit)}</span>,
+    csvValue: r => String(r.total_debit ?? 0),
   },
   {
     key: 'current_balance', header: 'الرصيد الحالي', sortable: true,
@@ -116,6 +131,7 @@ const COLUMNS: Column<Supplier>[] = [
         </span>
       )
     },
+    csvValue: r => String(r.current_balance ?? 0),
   },
   {
     key: 'is_active', header: 'الحالة',
@@ -124,6 +140,7 @@ const COLUMNS: Column<Supplier>[] = [
         {r.is_active ? 'نشط' : 'موقوف'}
       </span>
     ),
+    csvValue: r => r.is_active ? 'نشط' : 'موقوف',
   },
 ]
 
@@ -136,19 +153,34 @@ export default function SupplierListPage() {
   const [q,            setQ]            = useState('')
   const [qInput,       setQInput]       = useState('')
   const [addOpen,      setAddOpen]      = useState(false)
+  const [txnSupplier,  setTxnSupplier]  = useState<Supplier | null>(null)
+  useNewShortcut(() => setAddOpen(true))
   const [selected,     setSelected]     = useState<Supplier | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [balFilter,    setBalFilter]    = useState<BalanceFilter>('all')
-  const [sort,         setSort]         = useState<SortState | undefined>(undefined)
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['suppliers', page, q],
-    queryFn:  () => suppliersApi.list({ page, size: 200, q: q || undefined }) as Promise<{
+    queryFn:  () => suppliersApi.list({ page, size: 100, q: q || undefined }) as Promise<{
       data: Supplier[]; total: number; page: number; page_size: number; has_more: boolean
+      meta?: { draft_count: number; suppliers_with_drafts: number }
     }>,
+    staleTime: 30_000,
   })
 
-  if (error) console.error('❌ Suppliers query error:', error)
+  const draftMeta = (data as { meta?: { draft_count: number; suppliers_with_drafts: number } } | undefined)?.meta
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const nextQ = qInput.trim()
+      if (nextQ !== q) {
+        setQ(nextQ)
+        setPage(1)
+      }
+    }, 350)
+    return () => clearTimeout(timer)
+  }, [qInput, q])
+
 
   // ── Client-side filter + sort ──────────────────────────────
   const filtered = useMemo(() => {
@@ -161,32 +193,47 @@ export default function SupplierListPage() {
     if (balFilter === 'debit')  rows = rows.filter(r => (r.current_balance ?? 0) < 0)
     if (balFilter === 'zero')   rows = rows.filter(r => (r.current_balance ?? 0) === 0)
 
-    if (sort) {
-      const k = sort.key as keyof Supplier
-      rows = [...rows].sort((a, b) => {
-        const av = a[k] ?? 0
-        const bv = b[k] ?? 0
-        const cmp = typeof av === 'string' ? av.localeCompare(String(bv), 'ar') : Number(av) - Number(bv)
-        return sort.dir === 'asc' ? cmp : -cmp
-      })
-    }
-
     return rows
-  }, [data, statusFilter, balFilter, sort])
+  }, [data, statusFilter, balFilter])
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
-    setQ(qInput)
+    setQ(qInput.trim())
     setPage(1)
   }
 
   const clearFilters = () => {
     setStatusFilter('all')
     setBalFilter('all')
-    setSort(undefined)
   }
 
   const hasActiveFilters = statusFilter !== 'all' || balFilter !== 'all'
+
+  const columns = useMemo<ColumnV2<Supplier>[]>(() => {
+    if (!canWrite('suppliers')) return COLUMNS
+    return [
+      ...COLUMNS,
+      {
+        key: 'actions',
+        header: 'إجراء',
+        align: 'center',
+        width: '120px',
+        sortable: false,
+        render: (r) => (
+          <button
+            type="button"
+            className="btn-secondary text-xs px-2.5 py-1"
+            onClick={(e) => {
+              e.stopPropagation()
+              setTxnSupplier(r)
+            }}
+          >
+            إضافة قيد
+          </button>
+        ),
+      },
+    ]
+  }, [canWrite])
 
   return (
     <div className="space-y-5">
@@ -204,6 +251,13 @@ export default function SupplierListPage() {
         <div className="card bg-red-50 border border-red-200 p-4">
           <p className="text-red-700 font-medium">❌ خطأ في تحميل البيانات</p>
           <p className="text-red-600 text-sm">{String(error)}</p>
+        </div>
+      )}
+
+      {(draftMeta?.draft_count ?? 0) > 0 && (
+        <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-amber-800 text-xs font-semibold">
+          <Clock size={13} className="text-amber-500 shrink-0" />
+          يوجد {draftMeta!.draft_count} قيد في المسودة لدى {draftMeta!.suppliers_with_drafts} مورد — لن تؤثر على الأرصدة حتى يتم ترحيلها
         </div>
       )}
 
@@ -285,8 +339,8 @@ export default function SupplierListPage() {
         )}
       </div>
 
-      <DataTable<Supplier>
-        columns={COLUMNS}
+      <DataTableV2<Supplier>
+        columns={columns}
         data={filtered}
         loading={isLoading}
         total={filtered.length}
@@ -295,9 +349,9 @@ export default function SupplierListPage() {
         onPage={setPage}
         rowKey={r => r.code}
         onRowClick={r => setSelected(r)}
-        sort={sort}
-        onSort={setSort}
         emptyText="لا يوجد موردين أو عملاء مسجلين"
+        searchPlaceholder="بحث في الموردين..."
+        exportFilename={`suppliers-${new Date().toISOString().slice(0,10)}.csv`}
       />
 
       {/* Side panel for quick view */}
@@ -305,9 +359,17 @@ export default function SupplierListPage() {
         supplier={selected}
         onClose={() => setSelected(null)}
         onNavigate={code => { setSelected(null); navigate(`/suppliers/${code}`) }}
+        onAddTransaction={canWrite('suppliers') ? (supplier) => setTxnSupplier(supplier) : undefined}
       />
 
       <AddSupplierModal open={addOpen} onClose={() => setAddOpen(false)} />
+
+      <AddSupplierTransactionModal
+        open={!!txnSupplier}
+        onClose={() => setTxnSupplier(null)}
+        supplierCode={txnSupplier?.code ?? 0}
+        supplierName={txnSupplier?.name ?? ''}
+      />
     </div>
   )
 }

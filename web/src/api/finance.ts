@@ -133,20 +133,25 @@ export const financeApi = {
   }) => unwrap(api.post<{id:number; po_number:string}>('/finance/purchase-orders', b)),
   updatePOStatus: (id: number, status: string, notes?: string) =>
     unwrap(api.patch<null>(`/finance/purchase-orders/${id}/status`, { status, notes })),
-  receivePO: (id: number, b: { received_date: string; items: Array<{ po_item_id: number; qty_received: number; warehouse: string }> }) =>
+  
+  // Realignment: PO Receipt moves to /inventory
+  receivePO: (id: number, b: { received_date: string; season_id?: number; items: Array<{ po_item_id: number; qty_received: number; warehouse: string }> }) =>
     unwrap(api.post<{status:string}>(`/inventory/receive-po/${id}`, b)),
+
+  // Realignment: PO matching and Invoicing moves to /suppliers (Modular Context)
   getPOMatch: (id: number) =>
     unwrap(api.get<{ po: PurchaseOrder; match_rows: POMatchRow[]; invoices: POInvoiceSummary[] }>(
-      `/finance/purchase-orders/${id}/match`
+      `/suppliers/purchase-orders/${id}/match`
     )),
   createInvoice: (poId: number, body: {
     invoice_number: string; invoice_date: string; notes?: string
     items: Array<{ po_item_id: number; qty_invoiced: number; unit_price: number }>
-  }) => unwrap(api.post<{id:number}>(`/finance/purchase-orders/${poId}/invoices`, body)),
+  }) => unwrap(api.post<{id:number}>(`/suppliers/purchase-orders/${poId}/invoices`, body)),
 
-  // AP Aging
+  // Realignment: AP Aging moves to /suppliers
   getAPAging: () =>
-    unwrap(api.get<APAgingRow[]>('/finance/ap-aging')),
+    unwrap(api.get<APAgingRow[]>('/suppliers/aging-summary')),
+
   payInvoice: (id: number, body: { paid_amount: number; payment_date?: string; payment_ref?: string }) =>
     unwrap(api.patch<null>(`/finance/supplier-invoices/${id}/pay`, body)),
 

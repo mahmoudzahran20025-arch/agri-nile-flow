@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Leaf, TrendingUp, Package, Wheat, AlertTriangle, CheckCircle,
-  Target, Edit3, X, ChevronDown, ChevronUp, Minus,
+  Target, Edit3, X, ChevronDown, ChevronUp, Minus, ClipboardList, Loader2,
 } from 'lucide-react'
-import { inventoryApi, configApi, budgetsApi } from '../../api/client'
+import { inventoryApi, configApi, budgetsApi, operationsApi } from '../../api/client'
 
 // ─── Formatters ───────────────────────────────────────────────
 
@@ -28,9 +28,14 @@ interface FieldCost {
   crop_type:          string | null
   season_id:          number | null
   season_name:        string | null
-  total_consumed:     number
+  total_consumed:     number   // inventory issues only (legacy column kept for compat)
   total_added:        number
   items_consumed:     number
+  labor_cost:         number
+  equipment_cost:     number
+  cash_cost:          number
+  supplier_cost:      number
+  total_cost:         number   // inv + labor + equipment + cash + supplier
   cost_per_feddan:    number | null
   budget_id:          number | null
   budget_per_feddan:  number | null
@@ -198,7 +203,18 @@ function AlertStrip({ overBudget }: { overBudget: FieldCost[] }) {
 export default function CostByFieldPage() {
   const qc = useQueryClient()
   const navigate = useNavigate()
-  const [seasonId, setSeasonId] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const seasonId = searchParams.get('season_id') ?? ''
+
+  const setSeasonFilter = (nextSeasonId: string) => {
+    const next = new URLSearchParams(searchParams)
+    if (nextSeasonId) {
+      next.set('season_id', nextSeasonId)
+    } else {
+      next.delete('season_id')
+    }
+    setSearchParams(next, { replace: true })
+  }
 
   // ── Data ──────────────────────────────────────────────────────
   const { data: seasons = [] } = useQuery({
@@ -207,9 +223,21 @@ export default function CostByFieldPage() {
     staleTime: 120_000,
   })
 
+  const seasonOptions = (seasons as { id: number; name: string; status: string }[])
+  const activeSeason = seasonOptions.find(s => s.status === 'active')
+
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ['inventory', 'cost-by-field', seasonId],
     queryFn:  () => inventoryApi.costByField(seasonId ? Number(seasonId) : undefined) as Promise<FieldCost[]>,
+  })
+
+  // ── Drill-down state ─────────────────────────────────────────
+  const [drillRow, setDrillRow] = useState<FieldCost | null>(null)
+
+  const { data: drillOrders = [], isFetching: drillLoading } = useQuery({
+    queryKey: ['operations', 'by-field', drillRow?.id, seasonId],
+    queryFn:  () => operationsApi.ordersByField(drillRow!.id, seasonId ? Number(seasonId) : undefined),
+    enabled:  !!drillRow,
   })
 
   // ── Budget mutations ──────────────────────────────────────────
@@ -225,9 +253,9 @@ export default function CostByFieldPage() {
   })
 
   // ── KPIs ──────────────────────────────────────────────────────
-  const totalConsumed    = rows.reduce((s, r) => s + r.total_consumed, 0)
+  const totalCost        = rows.reduce((s, r) => s + (r.total_cost ?? r.total_consumed), 0)
   const totalArea        = rows.reduce((s, r) => s + r.area_feddan, 0)
-  const avgCostPerFeddan = totalArea > 0 ? totalConsumed / totalArea : 0
+  const avgCostPerFeddan = totalArea > 0 ? totalCost / totalArea : 0
 
   const withBudget   = rows.filter(r => r.budget_per_feddan != null)
   const overBudget   = rows.filter(r => getBudgetStatus(r) === 'over_budget')
@@ -243,7 +271,7 @@ export default function CostByFieldPage() {
             <Wheat size={20} className="text-brand-700" />
           </div>
           <div>
-            <h1 className="page-title">تكلفة المدخلات بالفدان</h1>
+            <h1 className="page-title">تكلفة الإنتاج بالفدان</h1>
             <p className="text-sm text-slate-400">تحليل التكلفة الفعلية مقابل الميزانية المستهدفة</p>
           </div>
         </div>
@@ -254,15 +282,39 @@ export default function CostByFieldPage() {
           <select
             className="input w-52 text-sm"
             value={seasonId}
-            onChange={e => setSeasonId(e.target.value)}
+            onChange={e => setSeasonFilter(e.target.value)}
           >
             <option value="">كل المواسم</option>
-            {(seasons as { id: number; name: string; status: string }[]).map(s => (
+            {seasonOptions.map(s => (
               <option key={s.id} value={s.id}>
                 {s.name}{s.status === 'active' ? ' ✓' : ''}
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+              seasonId === ''
+                ? 'bg-slate-100 border-slate-300 text-slate-700'
+                : 'bg-white border-slate-200 text-slate-500 hover:text-slate-700'
+            }`}
+            onClick={() => setSeasonFilter('')}
+          >
+            الكل
+          </button>
+          {activeSeason && (
+            <button
+              type="button"
+              className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+                seasonId === String(activeSeason.id)
+                  ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                  : 'bg-white border-emerald-200 text-emerald-600 hover:bg-emerald-50'
+              }`}
+              onClick={() => setSeasonFilter(String(activeSeason.id))}
+            >
+              الموسم النشط
+            </button>
+          )}
         </div>
       </div>
 
@@ -279,11 +331,11 @@ export default function CostByFieldPage() {
             <p className="text-xs text-slate-400 mt-0.5">فدان • {rows.length} حقل</p>
           </div>
 
-          {/* Total consumed */}
+          {/* Total cost (all types) */}
           <div className="card p-4">
-            <p className="text-xs text-slate-500 font-medium mb-1">إجمالي المدخلات المُصرفة</p>
-            <p className="text-xl font-bold text-red-600">{egp(totalConsumed)}</p>
-            <p className="text-xs text-slate-400 mt-0.5">قيمة صرف المخزون</p>
+            <p className="text-xs text-slate-500 font-medium mb-1">إجمالي التكاليف الكلية</p>
+            <p className="text-xl font-bold text-red-600">{egp(totalCost)}</p>
+            <p className="text-xs text-slate-400 mt-0.5">مخزون + عمالة + معدات + نقدي</p>
           </div>
 
           {/* Avg cost / feddan */}
@@ -341,7 +393,7 @@ export default function CostByFieldPage() {
               <tr className="bg-slate-50 border-b border-slate-200">
                 {[
                   'الحقل', 'المساحة (فدان)', 'الموسم / المحصول',
-                  'المدخلات', 'تكلفة الفدان',
+                  'التكاليف الكلية', 'تكلفة الفدان',
                   'الميزانية / فدان', 'الانحراف', 'الحالة',
                 ].map(h => (
                   <th key={h}
@@ -359,7 +411,7 @@ export default function CostByFieldPage() {
 
                 return (
                   <tr key={row.id}
-                    onClick={() => navigate(`/inventory/movements?field_id=${row.id}`)}
+                    onClick={() => setDrillRow(row)}
                     className={`cursor-pointer transition-colors ${rowAlert ? 'bg-red-50/50 hover:bg-red-50' : 'hover:bg-slate-50'}`}
                   >
                     {/* Field */}
@@ -387,16 +439,23 @@ export default function CostByFieldPage() {
                       {row.crop_type && <p className="text-slate-400 text-xs mt-0.5">{row.crop_type}</p>}
                     </td>
 
-                    {/* Items consumed */}
+                    {/* Cost breakdown */}
                     <td className="px-4 py-3">
                       <div className="space-y-0.5">
-                        <span className="flex items-center gap-1 text-slate-600">
-                          <Package size={11} />
-                          <span className="text-xs">{row.items_consumed} صنف</span>
-                        </span>
-                        <p className="font-medium text-red-600 text-xs">
-                          {row.total_consumed > 0 ? egp(row.total_consumed) : <span className="text-slate-300">—</span>}
+                        <p className="font-semibold text-red-600 text-sm">
+                          {(row.total_cost ?? row.total_consumed) > 0
+                            ? egp(row.total_cost ?? row.total_consumed)
+                            : <span className="text-slate-300">—</span>}
                         </p>
+                        {row.total_consumed  > 0 && (
+                          <span className="flex items-center gap-1 text-violet-600 text-xs">
+                            <Package size={10} />{row.items_consumed} صنف · {egp(row.total_consumed)}
+                          </span>
+                        )}
+                        {row.labor_cost     > 0 && <p className="text-xs text-blue-600">عمالة: {egp(row.labor_cost)}</p>}
+                        {row.equipment_cost > 0 && <p className="text-xs text-purple-600">معدات: {egp(row.equipment_cost)}</p>}
+                        {row.cash_cost      > 0 && <p className="text-xs text-sky-600">نقدي: {egp(row.cash_cost)}</p>}
+                        {row.supplier_cost  > 0 && <p className="text-xs text-amber-600">موردين: {egp(row.supplier_cost)}</p>}
                       </div>
                     </td>
 
@@ -462,8 +521,121 @@ export default function CostByFieldPage() {
               تجاوز الحد (&gt; 15%)
             </span>
             <span className="mr-auto text-slate-400 italic">
-              اضغط على خلية الميزانية لضبط الهدف
+              اضغط على صف للاطلاع على تفاصيل أوامر العمل
             </span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Work Order Drill-Down Drawer ─────────────────────── */}
+      {drillRow && (
+        <div className="fixed inset-0 z-50 flex">
+          {/* Backdrop */}
+          <div className="flex-1 bg-black/30" onClick={() => setDrillRow(null)} />
+
+          {/* Panel */}
+          <div className="w-full max-w-md bg-white shadow-2xl flex flex-col h-full overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+              <div>
+                <p className="font-bold text-slate-800 text-base flex items-center gap-2">
+                  <ClipboardList size={16} className="text-brand-600" />
+                  {drillRow.field_name}
+                </p>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  {drillRow.code} · {drillRow.season_name ?? 'كل المواسم'}
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => {
+                    const qs = new URLSearchParams({ field_id: String(drillRow.id) })
+                    if (seasonId) qs.set('season_id', seasonId)
+                    navigate(`/inventory/movements?${qs.toString()}`)
+                  }}
+                  className="text-xs text-brand-600 underline hover:opacity-75"
+                >
+                  حركات المخزون
+                </button>
+                <button onClick={() => setDrillRow(null)} className="p-1 rounded hover:bg-slate-100 text-slate-500">
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            {/* Cost summary */}
+            <div className="grid grid-cols-2 gap-3 px-5 py-3 bg-slate-50 border-b border-slate-100 text-xs">
+              <div>
+                <p className="text-slate-400">إجمالي التكاليف</p>
+                <p className="font-bold text-red-600 text-sm">{egp(drillRow.total_cost ?? drillRow.total_consumed)}</p>
+              </div>
+              <div>
+                <p className="text-slate-400">تكلفة الفدان</p>
+                <p className="font-bold text-brand-700 text-sm">{egp(drillRow.cost_per_feddan)}</p>
+              </div>
+              {drillRow.total_consumed > 0 && (
+                <div><p className="text-slate-400">مخزون</p><p className="font-semibold text-violet-700">{egp(drillRow.total_consumed)}</p></div>
+              )}
+              {drillRow.labor_cost > 0 && (
+                <div><p className="text-slate-400">عمالة</p><p className="font-semibold text-blue-600">{egp(drillRow.labor_cost)}</p></div>
+              )}
+              {drillRow.equipment_cost > 0 && (
+                <div><p className="text-slate-400">معدات</p><p className="font-semibold text-purple-600">{egp(drillRow.equipment_cost)}</p></div>
+              )}
+              {drillRow.cash_cost > 0 && (
+                <div><p className="text-slate-400">نقدي مباشر</p><p className="font-semibold text-sky-600">{egp(drillRow.cash_cost)}</p></div>
+              )}
+              {drillRow.supplier_cost > 0 && (
+                <div><p className="text-slate-400">موردين مباشر</p><p className="font-semibold text-amber-600">{egp(drillRow.supplier_cost)}</p></div>
+              )}
+            </div>
+
+            {/* Work orders list */}
+            <div className="flex-1 overflow-y-auto px-5 py-3">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
+                أوامر العمل ({drillOrders.length})
+              </p>
+
+              {drillLoading ? (
+                <div className="flex justify-center py-8"><Loader2 size={20} className="animate-spin text-slate-400" /></div>
+              ) : drillOrders.length === 0 ? (
+                <p className="text-xs text-slate-400 text-center py-8">لا توجد أوامر عمل مرتبطة بهذا الحقل</p>
+              ) : (
+                <div className="space-y-2">
+                  {drillOrders.map(wo => (
+                    <div
+                      key={wo.id}
+                      className="border border-slate-200 rounded-xl px-4 py-3 hover:border-brand-300 cursor-pointer transition-colors"
+                      onClick={() => navigate(`/operations?id=${wo.id}`)}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="font-semibold text-slate-800 text-sm truncate">{wo.name}</p>
+                          <p className="text-xs text-slate-400 mt-0.5">
+                            {wo.operation_type} · {wo.planned_date}
+                          </p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="font-bold text-red-600 text-sm">{egp(wo.total_cost)}</p>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${
+                            wo.status === 'costed' ? 'bg-emerald-100 text-emerald-700'
+                            : wo.status === 'done'   ? 'bg-blue-100 text-blue-700'
+                            : 'bg-slate-100 text-slate-500'
+                          }`}>{wo.status}</span>
+                        </div>
+                      </div>
+                      {(wo.inv_cost > 0 || wo.labor_cost > 0 || wo.equipment_cost > 0) && (
+                        <div className="flex gap-3 mt-2 text-[10px] text-slate-500">
+                          {wo.inv_cost      > 0 && <span>مخزون: {egp(wo.inv_cost)}</span>}
+                          {wo.labor_cost    > 0 && <span>عمالة: {egp(wo.labor_cost)}</span>}
+                          {wo.equipment_cost > 0 && <span>معدات: {egp(wo.equipment_cost)}</span>}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

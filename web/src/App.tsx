@@ -1,78 +1,119 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { useEffect } from 'react'
+import { useEffect, Suspense, lazy } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAppStore, useIsAuth } from './store/appStore'
 import { configApi, authApi } from './api/client'
 import { AppShell } from './components/shell/AppShell'
+
+// ── Always-eager (critical path) ───────────────────────────────────────────
 import LoginPage     from './pages/LoginPage'
 import DebugPage     from './pages/DebugPage'
 import DashboardPage from './pages/DashboardPage'
-import SuppliersPage         from './pages/suppliers/SuppliersPage'
-import SupplierDetailPage    from './pages/suppliers/SupplierDetailPage'
-import CashJournalPage       from './pages/treasury/CashJournalPage'
-import WarehouseBalancesPage from './pages/inventory/WarehouseBalancesPage'
-import WarehousesPage        from './pages/inventory/WarehousesPage'
-import InventoryMovementsPage from './pages/inventory/InventoryMovementsPage'
-import ItemCardPage from './pages/inventory/ItemCardPage'
-import CostByFieldPage from './pages/inventory/CostByFieldPage'
-import ItemCategoriesPage from './pages/inventory/ItemCategoriesPage'
-import InventoryAdjustmentsPage from './pages/inventory/InventoryAdjustmentsPage'
-import AdjustmentDetailPage from './pages/inventory/AdjustmentDetailPage'
-import ItemMasterPage from './pages/inventory/ItemMasterPage'
-import InventoryPostingHealthPage from './pages/inventory/InventoryPostingHealthPage'
-import UsersPage       from './pages/users/UsersPage'
-import PartnersPage    from './pages/treasury/PartnersPage'
-import ReportsPage     from './pages/ReportsPage'
-import ChartsPage      from './pages/reports/ChartsPage'
-import ConfigPage      from './pages/config/ConfigPage'
-import FieldsPage      from './pages/fields/FieldsPage'
-import WorkOrdersPage  from './pages/operations/WorkOrdersPage'
-import WorkOrderTemplatesPage from './pages/operations/WorkOrderTemplatesPage'
-import ContractsPage   from './pages/contracts/ContractsPage'
-import ChartOfAccountsPage   from './pages/gl/ChartOfAccountsPage'
-import JournalEntriesPage    from './pages/gl/JournalEntriesPage'
-import FinancialStatementsPage from './pages/gl/FinancialStatementsPage'
-import AccountLedgerPage     from './pages/gl/AccountLedgerPage'
-import PeriodsPage           from './pages/gl/PeriodsPage'
-import PostingSimulatorPage  from './pages/gl/PostingSimulatorPage'
-import ReconciliationPage    from './pages/gl/ReconciliationPage'
-import PeriodCloseCockpit    from './pages/gl/PeriodCloseCockpit'
-import BatchPostingCenterPage from './pages/gl/BatchPostingCenterPage'
-import FinanceHomePage       from './pages/gl/FinanceHomePage'
-import HealthIntegrityPage   from './pages/gl/HealthIntegrityPage'
-import BankReconciliationPage from './pages/treasury/BankReconciliationPage'
-import PurchaseOrdersPage    from './pages/treasury/PurchaseOrdersPage'
-import APAgingPage           from './pages/treasury/APAgingPage'
-import SuperAdminPage        from './pages/admin/SuperAdminPage'
-import AuditLogPage          from './pages/audit/AuditLogPage'
-import ErrorLogPage          from './pages/audit/ErrorLogPage'
-import IntegrityPage         from './pages/audit/IntegrityPage'
-import EmployeeListPage      from './pages/hr/EmployeeListPage'
-import EmployeeProfilePage   from './pages/hr/EmployeeProfilePage'
-import AttendancePage        from './pages/hr/AttendancePage'
-import LeavesAdvancesPage    from './pages/hr/LeavesAdvancesPage'
-import PayrollPage           from './pages/hr/PayrollPage'
-import OrgChartPage          from './pages/hr/OrgChartPage'
-import DocumentsPage         from './pages/documents/DocumentsPage'
-import HarvestPage           from './pages/fields/HarvestPage'
-import LocationTasksPage     from './pages/hr/LocationTasksPage'
-import HrDashboardPage       from './pages/hr/HrDashboardPage'
-import CalendarPage          from './pages/calendar/CalendarPage'
-import CostCenterReportPage  from './pages/reports/CostCenterReportPage'
-import SuppliersBalancePage  from './pages/reports/SuppliersBalancePage'
-import SeasonSummaryPage     from './pages/reports/SeasonSummaryPage'
-import SeasonPnLPage        from './pages/reports/SeasonPnLPage'
-import SeasonClosePage      from './pages/reports/SeasonClosePage'
-import SeasonReadinessPage  from './pages/reports/SeasonReadinessPage'
-import BudgetVsActualPage      from './pages/reports/BudgetVsActualPage'
-import SeasonReportsPage       from './pages/reports/SeasonReportsPage'
-import SeasonsPage             from './pages/fields/SeasonsPage'
-import GLSettingsPage          from './pages/gl/GLSettingsPage'
-import PostingGroupsPage       from './pages/gl/PostingGroupsPage'
-import PostingSetupPage        from './pages/gl/PostingSetupPage'
-import PostingRulesPage        from './pages/gl/PostingRulesPage'
-import SetupWizardPage         from './pages/gl/SetupWizardPage'
-import AuditCenterPage         from './pages/audit/AuditCenterPage'
+
+// ── Lazy chunks: GL / Finance ───────────────────────────────────────────────
+// ── Lazy chunks: GL / Finance (core) ────────────────────────────────────────
+const FinanceHomePage          = lazy(() => import('./pages/gl/FinanceHomePage'))
+const ChartOfAccountsPage      = lazy(() => import('./pages/gl/ChartOfAccountsPage'))
+const JournalEntriesPage       = lazy(() => import('./pages/gl/JournalEntriesPage'))
+const FinancialStatementsPage  = lazy(() => import('./pages/gl/FinancialStatementsPage'))
+const AccountLedgerPage        = lazy(() => import('./pages/gl/AccountLedgerPage'))
+const PeriodsPage              = lazy(() => import('./pages/gl/PeriodsPage'))
+const PeriodCloseCockpit       = lazy(() => import('./pages/gl/PeriodCloseCockpit'))
+const ReconciliationPage       = lazy(() => import('./pages/gl/ReconciliationPage'))
+const BatchPostingCenterPage   = lazy(() => import('./pages/gl/BatchPostingCenterPage'))
+const PostingGroupsPage        = lazy(() => import('./pages/gl/PostingGroupsPage'))
+const PostingRulesPage         = lazy(() => import('./pages/gl/PostingRulesPage'))
+const PostingSetupPage         = lazy(() => import('./pages/gl/PostingSetupPage'))
+const PostingSetupHealthPage   = lazy(() => import('./pages/gl/PostingSetupHealthPage'))
+const GLSettingsPage           = lazy(() => import('./pages/gl/GLSettingsPage'))
+// Merged workspaces
+const HardeningDashboardPage   = lazy(() => import('./pages/gl/HardeningDashboardPage'))
+const HealthIntegrityPage      = lazy(() => import('./pages/gl/HealthIntegrityPage'))
+const GlIntegrityAuditPage     = lazy(() => import('./pages/gl/GlIntegrityAuditPage'))
+const JERegenerationPage       = lazy(() => import('./pages/gl/JERegenerationPage'))
+const VerificationDashboardPage = lazy(() => import('./pages/gl/VerificationDashboardPage'))
+const ServiceTypesPage          = lazy(() => import('./pages/gl/ServiceTypesPage'))
+const DepreciationPage          = lazy(() => import('./pages/gl/DepreciationPage'))
+
+// ── Lazy chunks: HR ─────────────────────────────────────────────────────────
+const EmployeeListPage    = lazy(() => import('./pages/hr/EmployeeListPage'))
+const EmployeeProfilePage = lazy(() => import('./pages/hr/EmployeeProfilePage'))
+const AttendancePage      = lazy(() => import('./pages/hr/AttendancePage'))
+const LeavesAdvancesPage  = lazy(() => import('./pages/hr/LeavesAdvancesPage'))
+const PayrollPage         = lazy(() => import('./pages/hr/PayrollPage'))
+const OrgChartPage        = lazy(() => import('./pages/hr/OrgChartPage'))
+const LocationTasksPage   = lazy(() => import('./pages/hr/LocationTasksPage'))
+const HrDashboardPage     = lazy(() => import('./pages/hr/HrDashboardPage'))
+
+// ── Lazy chunks: Reports ─────────────────────────────────────────────────────
+const ReportsPage           = lazy(() => import('./pages/ReportsPage'))
+const ChartsPage            = lazy(() => import('./pages/reports/ChartsPage'))
+const CostCenterReportPage  = lazy(() => import('./pages/reports/CostCenterReportPage'))
+const SuppliersBalancePage  = lazy(() => import('./pages/reports/SuppliersBalancePage'))
+const SeasonSummaryPage     = lazy(() => import('./pages/reports/SeasonSummaryPage'))
+const SeasonPnLPage         = lazy(() => import('./pages/reports/SeasonPnLPage'))
+const PivotCostsPage        = lazy(() => import('./pages/reports/PivotCostsPage'))
+const CostPerFeddanPage     = lazy(() => import('./pages/reports/CostPerFeddanPage'))
+const SupplierAPSummaryPage    = lazy(() => import('./pages/reports/SupplierAPSummaryPage'))
+const ServiceTypeSummaryPage   = lazy(() => import('./pages/reports/ServiceTypeSummaryPage'))
+const SeasonClosePage       = lazy(() => import('./pages/reports/SeasonClosePage'))
+const SeasonReadinessPage   = lazy(() => import('./pages/reports/SeasonReadinessPage'))
+const BudgetVsActualPage    = lazy(() => import('./pages/reports/BudgetVsActualPage'))
+const SeasonReportsPage     = lazy(() => import('./pages/reports/SeasonReportsPage'))
+
+// ── Lazy chunks: Operations / misc ──────────────────────────────────────────
+const SupplierHubPage          = lazy(() => import('./pages/suppliers/SupplierHubPage'))
+const ProcurementGatewayPage   = lazy(() => import('./pages/suppliers/ProcurementGatewayPage'))
+const SupplierDetailPage       = lazy(() => import('./pages/suppliers/SupplierDetailPage'))
+const PendingApprovalsPage     = lazy(() => import('./pages/suppliers/PendingApprovalsPage'))
+const APAgingPage              = lazy(() => import('./pages/suppliers/APAgingPage'))
+const TreasuryHubPage          = lazy(() => import('./pages/treasury/TreasuryHubPage'))
+const PartnersPage             = lazy(() => import('./pages/treasury/PartnersPage'))
+const BankReconciliationPage   = lazy(() => import('./pages/treasury/BankReconciliationPage'))
+const WarehouseBalancesPage    = lazy(() => import('./pages/inventory/WarehouseBalancesPage'))
+const WarehousesPage           = lazy(() => import('./pages/inventory/WarehousesPage'))
+const MovementWorkspacePage    = lazy(() => import('./pages/inventory/MovementWorkspacePage'))
+const InventoryMovementsPage   = lazy(() => import('./pages/inventory/InventoryMovementsPage'))
+const TransactionHistoryPage   = lazy(() => import('./pages/inventory/TransactionHistoryPage'))
+const ItemCardPage             = lazy(() => import('./pages/inventory/ItemCardPage'))
+const CostByFieldPage          = lazy(() => import('./pages/inventory/CostByFieldPage'))
+const ItemCategoriesPage       = lazy(() => import('./pages/inventory/ItemCategoriesPage'))
+const ItemMasterPage           = lazy(() => import('./pages/inventory/ItemMasterPage'))
+const InventoryPostingHealthPage = lazy(() => import('./pages/inventory/InventoryPostingHealthPage'))
+const PhysicalCountPage          = lazy(() => import('./pages/inventory/PhysicalCountPage'))
+const FixedAssetsPage            = lazy(() => import('./pages/inventory/FixedAssetsPage'))
+const WipBalancesPage            = lazy(() => import('./pages/inventory/WipBalancesPage'))
+
+const UsersPage                = lazy(() => import('./pages/users/UsersPage'))
+const ConfigPage               = lazy(() => import('./pages/config/ConfigPage'))
+const BulkImportPage           = lazy(() => import('./pages/config/BulkImportPage'))
+const FieldsPage               = lazy(() => import('./pages/fields/FieldsPage'))
+const SeasonsPage              = lazy(() => import('./pages/fields/SeasonsPage'))
+const HarvestPage              = lazy(() => import('./pages/fields/HarvestPage'))
+const CropCyclesPage           = lazy(() => import('./pages/fields/CropCyclesPage'))
+const CropCycleDetailPage      = lazy(() => import('./pages/fields/CropCycleDetailPage'))
+const HarvestSettlementPage    = lazy(() => import('./pages/fields/HarvestSettlementPage'))
+const WorkOrdersPage           = lazy(() => import('./pages/operations/WorkOrdersPage'))
+const WorkOrderTemplatesPage   = lazy(() => import('./pages/operations/WorkOrderTemplatesPage'))
+const ContractsPage            = lazy(() => import('./pages/contracts/ContractsPage'))
+const SuperAdminPage           = lazy(() => import('./pages/admin/SuperAdminPage'))
+const OnboardingPage           = lazy(() => import('./pages/admin/OnboardingPage'))
+const ConsolidatedPnlPage      = lazy(() => import('./pages/admin/ConsolidatedPnlPage'))
+const AuditLogPage             = lazy(() => import('./pages/audit/AuditLogPage'))
+const ErrorLogPage             = lazy(() => import('./pages/audit/ErrorLogPage'))
+const IntegrityPage            = lazy(() => import('./pages/audit/IntegrityPage'))
+const AuditCenterPage          = lazy(() => import('./pages/audit/AuditCenterPage'))
+const DocumentsPage            = lazy(() => import('./pages/documents/DocumentsPage'))
+const CalendarPage             = lazy(() => import('./pages/calendar/CalendarPage'))
+
+// ── Fallback while lazy chunks load ─────────────────────────────────────────
+function PageLoader() {
+  return (
+    <div className="flex items-center justify-center h-full min-h-[200px]">
+      <div className="w-6 h-6 border-2 border-[#0F2D5C] border-t-transparent rounded-full animate-spin" />
+    </div>
+  )
+}
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuth = useIsAuth()
@@ -81,6 +122,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   const isAuth        = useIsAuth()
+  const isDebugEnabled = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
   const setSeasons     = useAppStore(s => s.setSeasons)
   const setPermissions = useAppStore(s => s.setPermissions)
 
@@ -108,9 +150,12 @@ export default function App() {
   }, [meData, setPermissions])
 
   return (
+    <Suspense fallback={<PageLoader />}>
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route path="/debug" element={<DebugPage />} />
+      {isDebugEnabled && (
+        <Route path="/debug" element={isDebugEnabled ? <RequireAuth><DebugPage /></RequireAuth> : <Navigate to="/dashboard" replace />} />
+      )}
 
       <Route
         path="/"
@@ -124,24 +169,30 @@ export default function App() {
         <Route path="dashboard"  element={<DashboardPage />} />
 
         {/* Suppliers */}
-        <Route path="suppliers"        element={<SuppliersPage />} />
-        <Route path="suppliers/:code"  element={<SupplierDetailPage />} />
+        <Route path="suppliers"              element={<SupplierHubPage />} />
+        <Route path="suppliers/procurement"  element={<ProcurementGatewayPage />} />
+        <Route path="suppliers/aging"        element={<APAgingPage />} />
+        <Route path="suppliers/pending"      element={<PendingApprovalsPage />} />
+        <Route path="suppliers/:code"        element={<SupplierDetailPage />} />
 
-        {/* Treasury */}
-        <Route path="treasury"          element={<CashJournalPage />} />
+        {/* Treasury Hub — unified Procure-to-Pay workspace */}
+        <Route path="treasury"          element={<TreasuryHubPage />} />
         <Route path="treasury/partners" element={<PartnersPage />} />
 
         {/* Inventory */}
         <Route path="inventory"                  element={<WarehouseBalancesPage />} />
         <Route path="inventory/items"            element={<ItemMasterPage />} />
         <Route path="inventory/categories"       element={<ItemCategoriesPage />} />
-        <Route path="inventory/adjustments"      element={<InventoryAdjustmentsPage />} />
-        <Route path="inventory/adjustments/:id"  element={<AdjustmentDetailPage />} />
         <Route path="inventory/setup"            element={<WarehousesPage />} />
+        <Route path="inventory/workspace/create"    element={<MovementWorkspacePage />} />
         <Route path="inventory/movements"        element={<InventoryMovementsPage />} />
+        <Route path="inventory/transactions"     element={<TransactionHistoryPage />} />
         <Route path="inventory/item/:code"       element={<ItemCardPage />} />
         <Route path="inventory/cost-by-field"    element={<CostByFieldPage />} />
         <Route path="inventory/posting-health"   element={<InventoryPostingHealthPage />} />
+        <Route path="inventory/physical-count"   element={<PhysicalCountPage />} />
+        <Route path="inventory/fixed-assets"     element={<FixedAssetsPage />} />
+        <Route path="inventory/wip-balances"     element={<WipBalancesPage />} />
 
         {/* HR Module */}
         <Route path="hr/dashboard"            element={<HrDashboardPage />} />
@@ -160,41 +211,57 @@ export default function App() {
         <Route path="documents" element={<DocumentsPage />} />
 
         {/* Agricultural ERP */}
-        <Route path="fields"          element={<FieldsPage />} />
-        <Route path="seasons"         element={<SeasonsPage />} />
-        <Route path="fields/harvest"  element={<HarvestPage />} />
+        <Route path="fields"                    element={<FieldsPage />} />
+        <Route path="seasons"                   element={<SeasonsPage />} />
+        <Route path="fields/harvest"            element={<HarvestPage />} />
+        <Route path="fields/crop-cycles"        element={<CropCyclesPage />} />
+        <Route path="fields/crop-cycles/:id"    element={<CropCycleDetailPage />} />
+        <Route path="fields/harvest-settlement" element={<HarvestSettlementPage />} />
         <Route path="operations" element={<WorkOrdersPage />} />
         <Route path="operations/templates" element={<WorkOrderTemplatesPage />} />
         <Route path="contracts"  element={<ContractsPage />} />
 
-        {/* General Ledger */}
-        <Route path="gl"             element={<FinanceHomePage />} />
+        {/* ── General Ledger: core workspaces ─────────────────────────────── */}
+        <Route path="gl"              element={<FinanceHomePage />} />
         <Route path="gl/accounts"     element={<ChartOfAccountsPage />} />
         <Route path="gl/ledger/:code" element={<AccountLedgerPage />} />
         <Route path="gl/entries"      element={<JournalEntriesPage />} />
         <Route path="gl/statements"   element={<FinancialStatementsPage />} />
-        <Route path="gl/health-integrity" element={<HealthIntegrityPage />} />
-        {/* GL Settings hub — tabs: mappings | integrations | periods */}
+        <Route path="gl/batch-posting" element={<BatchPostingCenterPage />} />
+        <Route path="gl/reconciliation" element={<ReconciliationPage />} />
+        <Route path="gl/periods"       element={<PeriodsPage />} />
+        <Route path="gl/period-close"  element={<PeriodCloseCockpit />} />
+
+        {/* ── Posting workspace (rules + tables + health as tabs) ──────────── */}
+        <Route path="gl/posting-groups"       element={<PostingGroupsPage />} />
+        <Route path="gl/posting-rules"        element={<PostingRulesPage />} />
+        <Route path="gl/posting-setup"        element={<PostingSetupPage />} />
+        <Route path="gl/posting-setup/health" element={<PostingSetupHealthPage />} />
+
+        {/* ── GL Hardening workspace (governance + health + integrity) ─────── */}
+        <Route path="gl/hardening"           element={<HardeningDashboardPage />} />
+        <Route path="gl/health-integrity"    element={<HealthIntegrityPage />} />
+        <Route path="gl/integrity-audit"     element={<GlIntegrityAuditPage />} />
+        <Route path="gl/je-regeneration"     element={<JERegenerationPage />} />
+        <Route path="gl/verification"        element={<VerificationDashboardPage />} />
+
+        {/* ── GL Settings ─────────────────────────────────────────────────── */}
         <Route path="gl/settings"      element={<GLSettingsPage />} />
-        <Route path="gl/posting-groups" element={<PostingGroupsPage />} />
-        <Route path="gl/posting-setup"  element={<PostingSetupPage />} />
-        <Route path="gl/posting-setup/health" element={<PostingRulesPage />} />
-        <Route path="gl/setup-wizard" element={<SetupWizardPage />} />
-        {/* Sprint 2 Finance epics */}
-        <Route path="gl/posting-simulator" element={<PostingSimulatorPage />} />
-        <Route path="gl/reconciliation"    element={<ReconciliationPage />} />
-        <Route path="gl/period-close"      element={<PeriodCloseCockpit />} />
-        {/* Sprint 3 Finance epics */}
-        <Route path="gl/batch-posting"     element={<BatchPostingCenterPage />} />
-        {/* Keep direct routes alive for backward-compat / deep-linking */}
-        <Route path="gl/periods"      element={<PeriodsPage />} />
-        <Route path="gl/classifier"   element={<Navigate to="/gl" replace />} />
-        <Route path="gl/integrations" element={<Navigate to="/gl" replace />} />
-        <Route path="treasury/ap"     element={<APAgingPage />} />
+        <Route path="gl/service-types" element={<ServiceTypesPage />} />
+        <Route path="gl/depreciation"  element={<DepreciationPage />} />
+
+        {/* ── Archived pages: redirect to nearest live workspace ───────────── */}
+        <Route path="gl/posting-simulator"   element={<Navigate to="/gl/posting-rules" replace />} />
+        <Route path="gl/setup-wizard"        element={<Navigate to="/gl/settings"      replace />} />
+        <Route path="gl/master-data"         element={<Navigate to="/gl/settings"      replace />} />
+        <Route path="gl/exchange-rates"      element={<Navigate to="/gl/settings"      replace />} />
+        <Route path="gl/account-role-policy" element={<Navigate to="/gl/hardening"     replace />} />
+        {/* legacy treasury sub-routes — redirect to live destinations */}
+        <Route path="treasury/ap"  element={<Navigate to="/suppliers/aging"        replace />} />
+        <Route path="treasury/po"  element={<Navigate to="/suppliers/procurement"  replace />} />
 
         {/* Finance */}
         <Route path="treasury/bank"      element={<BankReconciliationPage />} />
-        <Route path="treasury/po"        element={<PurchaseOrdersPage />} />
 
         {/* Reports */}
         <Route path="reports"                    element={<ReportsPage />} />
@@ -206,12 +273,18 @@ export default function App() {
         {/* Keep individual routes for backward-compat */}
         <Route path="reports/season-summary"     element={<SeasonSummaryPage />} />
         <Route path="reports/season-pnl"         element={<SeasonPnLPage />} />
+        <Route path="reports/pivot-costs"        element={<PivotCostsPage />} />
+        <Route path="reports/cost-per-feddan"    element={<CostPerFeddanPage />} />
+        <Route path="reports/supplier-ap-summary"    element={<SupplierAPSummaryPage />} />
+        <Route path="reports/service-type-summary"  element={<ServiceTypeSummaryPage />} />
         <Route path="reports/season-close"       element={<SeasonClosePage />} />
         <Route path="reports/season-readiness"   element={<SeasonReadinessPage />} />
         <Route path="reports/budget-vs-actual"   element={<BudgetVsActualPage />} />
 
         {/* Super Admin */}
-        <Route path="admin" element={<SuperAdminPage />} />
+        <Route path="admin"                  element={<SuperAdminPage />} />
+        <Route path="admin/onboarding"       element={<OnboardingPage />} />
+        <Route path="admin/consolidated-pnl" element={<ConsolidatedPnlPage />} />
 
         {/* Audit Center — unified with tabs: log | errors | integrity */}
         <Route path="audit"           element={<AuditCenterPage />} />
@@ -224,12 +297,14 @@ export default function App() {
         <Route path="users" element={<UsersPage />} />
 
         {/* Config */}
-        <Route path="config"       element={<ConfigPage />} />
-        <Route path="config/:tab"  element={<ConfigPage />} />
+        <Route path="config"             element={<ConfigPage />} />
+        <Route path="config/:tab"        element={<ConfigPage />} />
+        <Route path="config/bulk-import" element={<BulkImportPage />} />
 
         {/* Catch-all */}
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>
+    </Suspense>
   )
 }

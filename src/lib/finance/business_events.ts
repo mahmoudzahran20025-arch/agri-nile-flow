@@ -1,12 +1,59 @@
 import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types'
 import { postAutoEntry } from '../gl'
 import type { RuleTrace } from '../posting_engine'
+import { normalizeIsoDate } from '../utils/date'
+
+const OPERATION_KEY_BY_EVENT_TYPE: Record<string, string> = {
+  supplier_invoice:     'SUPPLIER_INVOICE',
+  supplier_payment:     'SUPPLIER_PAYMENT',
+  sales_invoice:        'SALES_INVOICE',
+  sale_receipt:         'SALE_RECEIPT',
+  inventory_movement:   'INVENTORY_MOVEMENT',
+  purchase_receipt:     'INVENTORY_IN',
+  work_order_labor:     'PRODUCTION_CONSUMPTION',
+  harvest_cost:         'PRODUCTION_OUTPUT',
+  expense:              'CASH_EXPENSE',
+  cash_transaction:     'CASH_EXPENSE',  // covers both receipt and payment directions
+  revenue:              'SALE_RECEIPT',  // cash sales revenue → same matrix row as sale_receipt
+  cash_receipt:         'CASH_INCOME',   // direct cash receipt (non-sales)
+}
+
+async function ensureDeterministicMatrixCoverage(
+  db: D1Database,
+  companyId: number,
+  eventType: string,
+): Promise<void> {
+  const operationKey = OPERATION_KEY_BY_EVENT_TYPE[eventType]
+  if (!operationKey) return
+
+  try {
+    const row = await db.prepare(
+      `SELECT id
+       FROM posting_operation_matrix
+       WHERE company_id = ? AND operation_key = ? AND is_active = 1
+       LIMIT 1`
+    ).bind(companyId, operationKey).first<{ id: number }>()
+
+    if (!row) {
+      throw new Error(
+        `POSTING_MATRIX_MISSING: event_type ${eventType} requires operation_key ${operationKey} in posting_operation_matrix.`
+      )
+    }
+  } catch (error: any) {
+    const msg = String(error?.message || error)
+    if (msg.includes('no such table: posting_operation_matrix')) {
+      throw new Error('POSTING_MATRIX_SCHEMA_MISSING: migration 0094_coa_governance_phase.sql must be applied.')
+    }
+    throw error
+  }
+}
 
 export interface EventBackedPostOpts {
   company_id: number
   event_type: string
   source_module: string
   source_id: number
+  source_link_id?: number | null // NEW: for native traceability
   event_date: string
   description: string
   created_by?: number
@@ -24,6 +71,12 @@ export interface EventBackedPostOpts {
     source_ledger?: 'cash' | 'supplier' | 'inventory' | 'payroll' | 'manual' | 'adjustment' | 'harvest'
     source_record_id?: number | null
   }>
+  /**
+   * Domain-owned callback invoked after the journal entry is committed.
+   * When provided, the legacy linkJournalEntryToSource switch-case is skipped
+   * for this call, making business_events.ts independent of source table schemas.
+   */
+  onJournalEntryPosted?: (entryId: number) => Promise<void>
 }
 
 async function logPostingResolution(
@@ -84,10 +137,6 @@ async function linkJournalEntryToSource(
       db.prepare('UPDATE supplier_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
         .bind(entryId, opts.source_id, opts.company_id)
     )
-    stmts.push(
-      db.prepare('UPDATE supplier_invoices SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
-        .bind(entryId, opts.source_id, opts.company_id)
-    )
   }
 
   if (opts.event_type === 'supplier_payment') {
@@ -126,12 +175,13 @@ async function linkJournalEntryToSource(
   }
 
   if (opts.event_type === 'depreciation') {
-    const periodYear = opts.payload?.period_year || opts.payload?.year
+    const periodYear  = opts.payload?.period_year  || opts.payload?.year
     const periodMonth = opts.payload?.period_month || opts.payload?.month
-    if (periodYear && periodMonth) {
+    const assetId     = opts.payload?.asset_id     ?? opts.source_id
+    if (periodYear && periodMonth && assetId) {
       stmts.push(
-        db.prepare('UPDATE depreciation_schedules SET journal_entry_id = ? WHERE company_id = ? AND period_year = ? AND period_month = ?')
-          .bind(entryId, opts.company_id, periodYear, periodMonth)
+        db.prepare('UPDATE depreciation_schedules SET journal_entry_id = ? WHERE company_id = ? AND asset_id = ? AND period_year = ? AND period_month = ?')
+          .bind(entryId, opts.company_id, assetId, periodYear, periodMonth)
       )
     }
   }
@@ -197,8 +247,26 @@ export async function postFromBusinessEvent(
   db: D1Database,
   opts: EventBackedPostOpts,
 ): Promise<number | null> {
+  const normalizedEventDate = normalizeIsoDate(opts.event_date)
   const eventPayload = JSON.stringify(opts.payload)
   let eventId: number | null = null
+
+  await ensureDeterministicMatrixCoverage(db, opts.company_id, opts.event_type)
+
+  // Reject posting into a locked GL period
+  const lockedPeriod = await db.prepare(
+    `SELECT id, name FROM financial_periods
+     WHERE company_id = ? AND is_closed = 1
+       AND start_date <= ? AND end_date >= ?
+     LIMIT 1`
+  ).bind(opts.company_id, normalizedEventDate, normalizedEventDate)
+    .first<{ id: number; name: string }>()
+
+  if (lockedPeriod) {
+    throw new Error(
+      `GL_PERIOD_LOCKED: الفترة المحاسبية "${lockedPeriod.name}" مغلقة. لا يمكن الترحيل في تاريخ ${opts.event_date}.`
+    )
+  }
 
   // Idempotency key: (company_id, source_module, source_id, event_type)
   let existing = await db.prepare(
@@ -231,7 +299,7 @@ export async function postFromBusinessEvent(
       ).bind(
         opts.company_id,
         opts.event_type,
-        opts.event_date,
+        normalizedEventDate,
         opts.source_module,
         opts.source_id,
         eventPayload,
@@ -286,7 +354,7 @@ export async function postFromBusinessEvent(
       `UPDATE business_events
        SET status = 'pending', error_message = NULL, payload = ?, event_date = ?, posted_by = ?, posted_at = NULL
        WHERE id = ? AND company_id = ?`
-    ).bind(eventPayload, opts.event_date, opts.created_by ?? null, eventId, opts.company_id).run()
+    ).bind(eventPayload, normalizedEventDate, opts.created_by ?? null, eventId, opts.company_id).run()
   }
 
   if (!eventId) {
@@ -298,17 +366,22 @@ export async function postFromBusinessEvent(
   try {
     const entryId = await postAutoEntry(db, {
       company_id:         opts.company_id,
-      entry_date:         opts.event_date,
+      entry_date:         normalizedEventDate,
       description:        opts.description,
       ref_type:           'business_event',
       ref_id:             eventId,
+      source_link_id:     opts.source_link_id ?? null,
       created_by:         opts.created_by,
       posting_rule_trace: opts.trace ? JSON.stringify(opts.trace) : undefined,
       lines:              opts.lines,
     })
 
     if (entryId) {
-      await linkJournalEntryToSource(db, opts, entryId)
+      if (opts.onJournalEntryPosted) {
+        await opts.onJournalEntryPosted(entryId)
+      } else {
+        await linkJournalEntryToSource(db, opts, entryId)
+      }
     }
 
     await db.prepare(

@@ -4,6 +4,20 @@ import {
   resolveSupplierPayment as peResolveSupplierPayment,
 } from '../../posting_engine'
 import { postFromBusinessEvent } from '../business_events'
+import { resolveSupplierPayableAccount } from './supplier_payable_account'
+
+async function resolveBpgFromServiceType(
+  db: D1Database,
+  company_id: number,
+  service_type_code: string | null | undefined,
+): Promise<string | null> {
+  if (!service_type_code) return null
+  const row = await db
+    .prepare('SELECT bus_posting_group_code FROM service_types WHERE company_id = ? AND code = ? LIMIT 1')
+    .bind(company_id, service_type_code)
+    .first<{ bus_posting_group_code: string | null }>()
+  return row?.bus_posting_group_code ?? null
+}
 
 export async function resolveSupplierInvoice(
   db: D1Database,
@@ -14,14 +28,22 @@ export async function resolveSupplierInvoice(
     amount: number
     date: string
     description: string
+    expense_category?: string | null
+    service_type_code?: string | null
     created_by?: number
+    center_code?: number
+    season_id?: number
+    field_id?: number
   },
 ): Promise<number | null> {
-  const apCode = '2100' // Default AP code - should come from control accounts
+  const [apCode, bpgCode] = await Promise.all([
+    resolveSupplierPayableAccount(db, opts.company_id, opts.supplier_code, opts.expense_category, opts.service_type_code),
+    resolveBpgFromServiceType(db, opts.company_id, opts.service_type_code),
+  ])
   const blueprint = await peResolveSupplierInvoice(
     db,
     opts.company_id,
-    null,
+    bpgCode,
     null,
     apCode,
     opts.amount,
@@ -30,11 +52,13 @@ export async function resolveSupplierInvoice(
     throw new Error(`SUPPLIER_INVOICE_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
 
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'supplier_invoice',
     source_module: 'suppliers',
-    source_id:     opts.ref_id,
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
     description:   `فاتورة مورد | ${opts.description}`,
     created_by:    opts.created_by,
@@ -47,8 +71,15 @@ export async function resolveSupplierInvoice(
       description:   l.description ?? `فاتورة مورد | ${opts.description}`,
       rule_slot:     l.rule_slot,
       source_ledger: 'supplier' as const,
-      source_record_id: opts.ref_id,
+      source_record_id: refId,
+      center_code:   opts.center_code,
+      season_id:     opts.season_id,
+      field_id:      opts.field_id,
     })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE supplier_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
 }
 
@@ -62,15 +93,21 @@ export async function resolveSupplierPayment(
     description: string
     created_by?: number
     center_code?: number
+    season_id?: number
+    field_id?: number
     supplier_code?: number | null
+    expense_category?: string | null
+    service_type_code?: string | null
     financial_account_id?: number | null
   },
 ): Promise<number | null> {
-  const cashAcc = opts.financial_account_id
-    ? (await db.prepare('SELECT gl_account_code FROM bank_accounts WHERE id = ?').bind(opts.financial_account_id).first<{ gl_account_code: string }>())?.gl_account_code || ''
-    : ''
-
-  const apCode = '2100' // Default AP code
+  const [cashAccRow, apCode] = await Promise.all([
+    opts.financial_account_id
+      ? db.prepare('SELECT gl_account_code FROM bank_accounts WHERE id = ? AND company_id = ?').bind(opts.financial_account_id, opts.company_id).first<{ gl_account_code: string }>()
+      : Promise.resolve(null),
+    resolveSupplierPayableAccount(db, opts.company_id, opts.supplier_code, opts.expense_category, opts.service_type_code),
+  ])
+  const cashAcc = cashAccRow?.gl_account_code ?? ''
   const blueprint = await peResolveSupplierPayment(
     db,
     opts.company_id,
@@ -82,25 +119,33 @@ export async function resolveSupplierPayment(
     throw new Error(`SUPPLIER_PAYMENT_POSTING_BLOCKED: ${blueprint.validationErrors.join(', ')}`)
   }
 
+  const refId = opts.ref_id
   return postFromBusinessEvent(db, {
     company_id:    opts.company_id,
     event_type:    'supplier_payment',
     source_module: 'suppliers',
-    source_id:     opts.ref_id,
+    source_id:     refId,
+    source_link_id: refId,
     event_date:    opts.date,
-    description:   `دفع لمورد | ${opts.description}`,
+    description:   `سداد مورد | ${opts.description}`,
     created_by:    opts.created_by,
-    payload:       { supplier_code: opts.supplier_code, amount: opts.amount, financial_account_id: opts.financial_account_id },
+    payload:       { supplier_code: opts.supplier_code, amount: opts.amount, description: opts.description },
     trace:         blueprint.trace ?? null,
     lines:         blueprint.lines.map((l) => ({
       account_code:  l.account_code!,
       debit:         l.debit ?? 0,
       credit:        l.credit ?? 0,
-      description:   l.description ?? `دفع لمورد | ${opts.description}`,
-      center_code:   opts.center_code,
+      description:   l.description ?? `سداد مورد | ${opts.description}`,
       rule_slot:     l.rule_slot,
       source_ledger: 'supplier' as const,
-      source_record_id: opts.ref_id,
+      source_record_id: refId,
+      center_code:   opts.center_code,
+      season_id:     opts.season_id,
+      field_id:      opts.field_id,
     })),
+    onJournalEntryPosted: async (entryId) => {
+      await db.prepare('UPDATE supplier_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?')
+        .bind(entryId, refId, opts.company_id).run()
+    },
   })
 }

@@ -1,4 +1,6 @@
 import { api, unwrap, unwrapPaginated, paginatedUrl } from './core'
+import type { BankAccount } from './finance'
+export type { BankAccount }
 
 export interface IntegrityCheck {
   key:         string
@@ -36,6 +38,109 @@ export interface IntegrityCheckV2Result {
   checks: IntegrityIssue[]
 }
 
+// ── Hardening / PostingMeta types ───────────────────────────────────────────
+
+export type CertificationStatus = 'certified' | 'degraded' | 'blocked'
+export type DataSource = 'gl_primary' | 'source_table_fallback'
+
+export interface PostingMeta {
+  certification_status: CertificationStatus
+  degraded_mode:        boolean
+  degraded_reason?:     string
+  data_source:          DataSource
+  strict_posting_active: boolean
+}
+
+export interface HardeningFlag {
+  flag_key:    string
+  flag_value:  number
+  description: string | null
+  set_by:      number | null
+  set_at:      string
+  expires_at:  string | null
+}
+
+export interface HardeningBaseline {
+  posting_success: {
+    total_events:    number
+    linked:          number
+    unlinked:        number
+    success_rate_pct: number
+  }
+  dimension_completeness: Array<{
+    source:     string
+    total:      number
+    has_center: number
+    has_season: number
+  }>
+  subledger_drift: { suppliers_with_drift: number }
+  rule_health: {
+    total_active_rules: number
+    catchall_rules:     number
+    ap_rule_active:     number
+    ap_rule_inactive:   number
+  }
+  hardening_flags: Record<string, boolean>
+}
+
+export interface AuditRecord {
+  id:              number
+  rule_id:         number
+  action:          string
+  changed_by:      number
+  changed_by_name: string | null
+  changed_at:      string
+  change_reason:   string
+  approval_status: 'pending' | 'approved' | 'rejected'
+  approved_by:     number | null
+  approved_at:     string | null
+  old_values:      string | null
+  new_values:      string | null
+}
+
+// ── Hardening API namespace (appended to glApi) ──────────────────────────────
+export const hardeningApi = {
+  flags: () =>
+    unwrap(api.get<{ success: true; data: HardeningFlag[] }>('/gl/hardening/flags')),
+
+  setFlag: (key: string, value: 0 | 1, reason: string, expires_at?: string) =>
+    unwrap(api.patch<{ success: true; data: { key: string; old_value: number; new_value: number } }>(
+      `/gl/hardening/flags/${key}`,
+      { value, reason, expires_at }
+    )),
+
+  baseline: () =>
+    unwrap(api.get<{ success: true; snapshot_date: string; data: HardeningBaseline; meta: PostingMeta }>(
+      '/gl/hardening/baseline'
+    )),
+
+  pendingAudit: () =>
+    unwrap(api.get<{ success: true; data: AuditRecord[]; count: number }>('/gl/hardening/audit/pending')),
+
+  auditLog: (p?: { page?: number; size?: number; status?: string }) => {
+    const params = new URLSearchParams()
+    if (p?.page)   params.set('page',   String(p.page))
+    if (p?.size)   params.set('size',   String(p.size))
+    if (p?.status) params.set('status', p.status)
+    const qs = params.toString()
+    return unwrap(api.get<{ success: true; data: AuditRecord[]; pagination: { page: number; size: number; total: number } }>(
+      `/gl/hardening/audit${qs ? `?${qs}` : ''}`
+    ))
+  },
+
+  approve: (id: number, reason?: string) =>
+    unwrap(api.post<{ success: true; data: { audit_id: number; approved_by: number } }>(
+      `/gl/hardening/audit/${id}/approve`,
+      { reason }
+    )),
+
+  reject: (id: number, reason: string) =>
+    unwrap(api.post<{ success: true; data: { audit_id: number; rejected_by: number } }>(
+      `/gl/hardening/audit/${id}/reject`,
+      { reason }
+    )),
+}
+
 export interface SystemIntegrityScoreResult {
   success: true
   overall_score: number
@@ -50,6 +155,101 @@ export interface SystemIntegrityScoreResult {
     missing_periods: number
     invalid_accounts: number
   }
+}
+
+export interface GlEngineHealthResult {
+  success: true
+  data: {
+    status: 'healthy' | 'attention'
+    summary: {
+      unbalanced_journal_entries: number
+      empty_posted_entries: number
+      header_account_postings: number
+      posted_cash_missing_journal: number
+      posted_supplier_missing_journal: number
+      inventory_ghost_posted: number
+      inventory_failed: number
+      inventory_outbox_stuck: number
+      inventory_outbox_failed: number
+      recent_workflow_failures: number
+    }
+    details: {
+      recent_failures: Array<{
+        id: number
+        endpoint: string
+        method: string
+        error_message: string
+        created_at: string
+      }>
+      cash_missing_journal: Array<{
+        id: number
+        transaction_date: string
+        narration: string
+        amount: number
+        financial_account_id: number | null
+      }>
+      supplier_missing_journal: Array<{
+        id: number
+        transaction_date: string
+        notes: string | null
+        amount: number
+        supplier_code: number | null
+      }>
+      inventory_inconsistencies: Array<{
+        id: number
+        movement_date: string
+        movement_type: string
+        gl_posting_status: string
+        gl_posting_error: string | null
+      }>
+    }
+  }
+}
+
+export interface FinancialPeriod {
+  id: number
+  company_id: number
+  name: string
+  period_type: string
+  start_date: string
+  end_date: string
+  is_closed: number
+  status?: 'open' | 'closed' | 'locked'
+  closed_at?: string | null
+  closed_by?: number | null
+  created_at?: string
+}
+
+export interface PeriodCloseChecklistStep {
+  step_key: string
+  step_order: number
+  step_label: string
+  is_critical: boolean
+  status: 'pending' | 'running' | 'passed' | 'failed' | 'warning'
+  count_blocked: number
+  details: string
+  completed_at?: string | null
+}
+
+export interface PeriodCloseChecklistResult {
+  period: FinancialPeriod
+  checks: PeriodCloseChecklistStep[]
+  all_critical_passed: boolean
+}
+
+export interface PeriodCloseRunResult {
+  checks: Array<{
+    step_key: string
+    step_order: number
+    step_label: string
+    is_critical: boolean
+    status: 'pending' | 'running' | 'passed' | 'failed' | 'warning'
+    count_blocked: number
+    details: string
+    action_url?: string
+  }>
+  all_critical_passed: boolean
+  blockers: string[]
 }
 
 export interface GlAuditLogRow {
@@ -102,55 +302,51 @@ export interface BatchPostJobsResult {
 }
 
 export interface EntryTraceResult {
-  success: true
-  data: {
-    entry: {
-      id: number
-      entry_number: string | null
-      entry_date: string
-      description: string
-      ref_type: string | null
-      ref_id: number | null
-      is_posted: number
-      created_by: number | null
-      created_at: string
-    }
-    lines: Array<{
-      id: number
-      account_code: string
-      account_name?: string
-      account_type?: string
-      debit: number
-      credit: number
-      description?: string
-      rule_slot?: string | null
-      center_code?: number | null
-      season_id?: number | null
-      field_id?: number | null
-    }>
-    trace: Record<string, unknown> | null
-    source_event: {
-      id: number
-      event_type: string
-      event_date: string
-      source_module: string
-      source_id: number
-      status?: string
-      payload?: string
-    } | null
-    source_document: {
-      id: number
-      source_module: string
-      source_id: number
-      document_type: string
-      event_id?: number
-      event_date?: string
-      status?: string
-      link_type?: string
-      journal_entry_id?: number
-    } | null
-    has_trace: boolean
+  entry: {
+    id: number
+    entry_number: string | null
+    entry_date: string
+    description: string
+    ref_type: string | null
+    ref_id: number | null
+    is_posted: number
+    created_by: number | null
+    created_at: string
   }
+  lines: Array<{
+    id: number
+    account_code: string
+    account_name?: string
+    account_type?: string
+    debit: number
+    credit: number
+    description?: string
+    rule_slot?: string | null
+    center_code?: number | null
+    season_id?: number | null
+    field_id?: number | null
+  }>
+  trace: Record<string, unknown> | null
+  source_event: {
+    id: number
+    event_type: string
+    event_date: string
+    source_module: string
+    source_id: number
+    status: string
+    payload: string | Record<string, unknown> | null
+  } | null
+  source_document: {
+    id: number
+    source_module: string
+    source_id: number
+    document_type: string
+    event_id: number | null
+    event_date: string | null
+    status: string | null
+    link_type: string | null
+  } | null
+  has_trace: boolean
 }
 
 export type PgType = 'business' | 'product' | 'inventory'
@@ -181,6 +377,8 @@ export interface InventorySetupRow {
   inv_posting_group_code:  string | null
   prod_posting_group_code: string | null
   inventory_account:       string | null
+  wip_account:             string | null
+  finished_goods_account:  string | null
   is_active:               number
 }
 
@@ -220,6 +418,36 @@ export interface ValidationBlueprint {
   isBlocked:        boolean
 }
 
+export interface GlPreviewLine {
+  account_code:  string
+  account_label?: string
+  debit:         number
+  credit:        number
+  description:   string
+  rule_slot:     string
+}
+
+export interface GlPreviewResult {
+  event_type:   string
+  amount:       number
+  lines:        GlPreviewLine[]
+  balanced:     boolean
+  total_debit:  number
+  total_credit: number
+  warning:      string | null
+}
+
+export interface GlPreviewRequest {
+  event_type:     string
+  amount:         number
+  description?:   string
+  season_id?:     number
+  center_code?:   number
+  field_id?:      number
+  debit_account?: string
+  credit_account?: string
+}
+
 export interface AccountUsageMetadata {
   account_code:   string
   usage_count:    number
@@ -245,6 +473,8 @@ export interface PostingRule {
   purch_returns_account:    string | null
   expense_account:          string | null
   inventory_account:        string | null
+  wip_account:              string | null
+  finished_goods_account:   string | null
   priority:                 number
   is_active:                number
   created_at:               string
@@ -262,6 +492,74 @@ export interface PostingRuleFilters {
   size?:                     number
 }
 
+// ── Phase 2+3 Types ──────────────────────────────────────────────────────────
+
+export interface ExchangeRateRow {
+  id: number
+  from_currency: string
+  to_currency:   string
+  rate:          number
+  effective_date: string
+  source:        string
+  is_active:     number
+  created_at?:   string
+}
+
+export interface EventTypeRow {
+  id:               number
+  code:             string
+  name:             string
+  description?:     string
+  module_name?:     string
+  affects_inventory: number
+  affects_wip:      number
+  affects_cogs:     number
+  affects_revenue:  number
+  affects_expense:  number
+  debit_role?:      string | null
+  credit_role?:     string | null
+  is_active:        number
+}
+
+export interface RolePolicyRow {
+  id:           number
+  role_code:    string
+  account_code: string
+  priority:     number
+  notes?:       string | null
+  is_active:    number
+  role_name?:   string
+  role_category?: string
+  account_name?:  string
+  account_type?:  string
+}
+
+export interface RoleCoverageRow {
+  role_code:  string
+  role_name:  string
+  category:   string
+  is_mapped:  boolean
+}
+
+export interface RoleCoverageMeta {
+  total_roles:    number
+  mapped_roles:   number
+  unmapped_roles: number
+  coverage_pct:   number
+  gaps:           string[]
+}
+
+export interface RoleResolutionRow {
+  role_code:      string
+  role_name:      string
+  category:       string
+  account_code:   string
+  account_name:   string
+  account_type:   string
+  normal_balance: string
+  notes?:         string | null
+}
+
 export const glApi = {
   /**
    * Fetch chart-of-accounts entries.
@@ -274,25 +572,51 @@ export const glApi = {
   createAccount: (body: unknown) => api.post('/gl/accounts', body),
   updateAccount: (code: string, body: unknown) => api.patch(`/gl/accounts/${code}`, body),
 
-  periods:      () => unwrap(api.get<unknown[]>('/gl/periods')),
+  periods:      () => unwrap(api.get<FinancialPeriod[]>('/gl/periods')),
   createPeriod: (body: unknown) => api.post('/gl/periods', body),
   closePeriod:  (id: number) => api.patch(`/gl/periods/${id}/close`, {}),
+  closePeriodForce: (id: number) => api.patch(`/gl/periods/${id}/close?force=1`, {}),
   reopenPeriod: (id: number) => api.patch(`/gl/periods/${id}/reopen`, {}),
+  periodChecklist: (id: number) => unwrap(api.get<PeriodCloseChecklistResult>(`/gl/periods/${id}/checklist`)),
+  runPeriodChecklist: (id: number) => unwrap(api.post<PeriodCloseRunResult>(`/gl/periods/${id}/checklist/run`, {})),
+  runPeriodChecklistStep: (id: number, stepKey: string) =>
+    unwrap(api.post<PeriodCloseChecklistStep>(`/gl/periods/${id}/checklist/run/${stepKey}`, {})),
+  wipFlush: (id: number, body: { season_id: number; memo?: string }) =>
+    unwrap(api.post<{ entry_id: number; wip_account: string; cogs_account: string; amount: number }>(`/gl/periods/${id}/wip-flush`, body)),
 
-  entries:     (p?: { page?: number; size?: number; start?: string; end?: string; ref_type?: string }) =>
+  entries:     (p?: { page?: number; size?: number; start?: string; end?: string; module?: 'supplier' | 'inventory' | 'cash'; ref_type?: string; search?: string; expense_code?: number; center_code?: string }) =>
     unwrapPaginated<unknown>(api.get(paginatedUrl('/gl/entries', p ?? {}))),
   getEntry:    (id: number) => unwrap(api.get(`/gl/entries/${id}`)),
-  createEntry: (body: unknown) => api.post('/gl/manual-entries', body),
+  createEntry: (body: unknown) => api.post('/gl/entries/manual-entries', body),
   reverseEntry: (id: number) =>
     unwrap(api.post<{ reversal_entry_id: number }>(`/gl/entries/${id}/reverse`, {})),
 
-  ledger: (code: string, start?: string, end?: string, page = 1, size = 100) => {
+  ledger: (code: string, start?: string, end?: string, page = 1, size = 100, search?: string, refType?: string) => {
     const params = new URLSearchParams()
-    if (start) params.set('start', start)
-    if (end)   params.set('end',   end)
+    if (start)   params.set('start',   start)
+    if (end)     params.set('end',     end)
+    if (search)  params.set('search',  search)
+    if (refType) params.set('refType', refType)
     params.set('page', String(page))
     params.set('size', String(size))
     return unwrap(api.get(`/gl/ledger/${code}?${params.toString()}`))
+  },
+
+  ledgerTraceInfo: (code: string, start?: string, end?: string) => {
+    const params = new URLSearchParams()
+    if (start) params.set('start', start)
+    if (end)   params.set('end',   end)
+    return unwrap(api.get(`/gl/ledger/${code}/trace-info?${params.toString()}`))
+  },
+
+  regenerationProgress: () => unwrap(api.get('/gl/regeneration/progress')),
+  regenerationReport:   () => unwrap(api.get('/gl/regeneration/reconciliation-report')),
+  regenerationRebuild:  (scope?: string, scopeValue?: string, dryRun = false) => {
+    const params = new URLSearchParams()
+    if (scope)      params.set('scope',       scope)
+    if (scopeValue) params.set('scope_value', scopeValue)
+    if (dryRun)     params.set('dry_run',     'true')
+    return unwrap(api.post(`/gl/regeneration/rebuild?${params.toString()}`, {}))
   },
 
   trialBalance:    (start?: string, end?: string) =>
@@ -307,6 +631,7 @@ export const glApi = {
     unwrap(api.get<IntegrityCheckV2Result>(`/gl/integrity-check?detailed=${detailed ? '1' : '0'}`)),
   systemIntegrityScore: () => unwrap(api.get<SystemIntegrityScoreResult>('/gl/system-integrity-score')),
   integrityScore: () => unwrap(api.get<SystemIntegrityScoreResult>('/gl/system-integrity-score')),
+  engineHealth: () => unwrap(api.get<GlEngineHealthResult>('/gl/engine-health')),
   recomputeIntegrityScore: () => unwrap(api.post<SystemIntegrityScoreResult>('/gl/system-integrity-score/recompute', {})),
 
   auditLog: (p?: { page?: number; size?: number; table?: string; action?: string; from?: string; to?: string }) =>
@@ -337,7 +662,7 @@ export const glApi = {
   entryTrace: (id: number) => unwrap(api.get<EntryTraceResult>(`/gl/entries/${id}/trace`)),
 
   // Note: bankAccounts lives in finance domain but kept here for backward compat
-  bankAccounts: () => unwrap(api.get<unknown[]>('/finance/bank-accounts')),
+  bankAccounts: () => unwrap(api.get<BankAccount[]>('/finance/bank-accounts')),
 
   // ── Posting Groups ──────────────────────────────────────────────────────────
   postingGroups:       (type: PgType) => unwrap(api.get<PostingGroup[]>(`/gl/posting-groups/${type}`)),
@@ -378,16 +703,265 @@ export const glApi = {
   // ── Health & Validate ───────────────────────────────────────────────────────
   postingHealth:    () => unwrap(api.get<PostingHealthResult>('/gl/posting-setup/health')),
   validatePosting:  (body: {
-    type: 'inventory_in' | 'inventory_out' | 'supplier_invoice' | 'supplier_payment' | 'expense' | 'revenue'
+    type: 'inventory_in' | 'inventory_out' | 'harvest' | 'supplier_invoice' | 'supplier_payment' | 'expense' | 'revenue'
     bpg_code?: string | null; ppg_code?: string | null; ipg_code?: string | null
     ap_code?: string; cash_code?: string; receivable_code?: string; amount?: number
   }) => unwrap(api.post<ValidationBlueprint>('/gl/posting-setup/validate', body)),
+
+  // ── GL Preview (dry-run) ────────────────────────────────────────────────────
+  preview: (body: GlPreviewRequest) =>
+    unwrap(api.post<GlPreviewResult>('/gl/preview', body)),
+
+  // ── Depreciation ───────────────────────────────────────────────────────────
+  depreciationSchedule: () =>
+    unwrap(api.get<{
+      assets: Array<{
+        id: number; asset_code: string; name: string; category: string
+        acquisition_date: string; cost: number; salvage_value: number
+        useful_life_months: number; depreciation_method: string
+        center_code: number | null; center_name: string | null
+        field_id: number | null; field_name: string | null; season_id: number | null
+        monthly_amount: number; posted_months: number; remaining_months: number
+        accumulated: number; book_value: number; pct_complete: number; fully_depreciated: boolean
+      }>
+      summary: {
+        active_assets: number; fully_depreciated: number
+        pending_assets: number; total_monthly_charge: number
+      }
+    }>('/gl/depreciation/schedule')),
+
+  runDepreciation: (period_year: number, period_month: number) =>
+    unwrap(api.post<{
+      period_year: number; period_month: number
+      total_assets: number; posted: number; skipped: number; total_charge: number
+      entries: Array<{ asset_id: number; asset_name: string; depreciation_amount: number; entry_id: number | null }>
+    }>('/gl/depreciation/run', { period_year, period_month })),
 
   // ── Reconciliation ──────────────────────────────────────────────────────────
   reconciliationSourceDocs: (p?: {
     page?: number; size?: number; source_module?: string; status?: string
     from?: string; to?: string; mismatch_only?: '1'
-  }) => unwrap(api.get<ReconciliationResult>(paginatedUrl('/gl/reconciliation/source-documents', p ?? {}))),
+  }) => api.get<SourceDocRow[]>(paginatedUrl('/gl/reconciliation/source-documents', p ?? {})).then((raw) => {
+    const response = raw as unknown as {
+      success: boolean
+      error?: string
+      data?: SourceDocRow[]
+      total?: number
+      page?: number
+      page_size?: number
+      summary?: ReconciliationSummary
+    }
+
+    if (!response.success) throw new Error(response.error || 'API returned success=false')
+
+    return {
+      data: response.data ?? [],
+      total: response.total ?? 0,
+      page: response.page ?? 1,
+      page_size: response.page_size ?? 50,
+      summary: response.summary ?? {
+        total: 0,
+        missing_business_event: 0,
+        missing_journal_link: 0,
+        event_link_mismatch: 0,
+        posted_without_journal: 0,
+        fully_linked: 0,
+      },
+    } satisfies ReconciliationResult
+  }),
+
+  // ── Master Data (Phase 1) ───────────────────────────────────────────────────
+  // Material Groups
+  materialGroups: (active?: boolean) =>
+    unwrap(api.get<{ success: boolean; data: unknown[]; count: number }>(`/gl/master-data/material-groups${active ? '?active=1' : ''}`)),
+  getMaterialGroup: (id: number) =>
+    unwrap(api.get<{ success: boolean; data: unknown }>(`/gl/master-data/material-groups/${id}`)),
+  createMaterialGroup: (body: { code: string; name: string; description?: string }) =>
+    unwrap(api.post<{ success: boolean; data: unknown }>('/gl/master-data/material-groups', body)),
+  updateMaterialGroup: (id: number, body: Partial<{ code: string; name: string; description: string }>) =>
+    unwrap(api.patch<{ success: boolean; data: unknown }>(`/gl/master-data/material-groups/${id}`, body)),
+
+  // Business Units
+  businessUnits: (active?: boolean) =>
+    unwrap(api.get<{ success: boolean; data: unknown[]; count: number }>(`/gl/master-data/business-units${active ? '?active=1' : ''}`)),
+  getBusinessUnit: (id: number) =>
+    unwrap(api.get<{ success: boolean; data: unknown }>(`/gl/master-data/business-units/${id}`)),
+  createBusinessUnit: (body: { code: string; name: string; description?: string }) =>
+    unwrap(api.post<{ success: boolean; data: unknown }>('/gl/master-data/business-units', body)),
+  updateBusinessUnit: (id: number, body: Partial<{ code: string; name: string; description: string }>) =>
+    unwrap(api.patch<{ success: boolean; data: unknown }>(`/gl/master-data/business-units/${id}`, body)),
+
+  // Account Roles (read-only reference data)
+  accountRoles: (category?: string) =>
+    unwrap(api.get<{ success: boolean; data: unknown[]; count: number }>(`/gl/master-data/account-roles${category ? `?category=${category}` : ''}`)),
+
+  // Currencies (read-only reference data)
+  currencies: () =>
+    unwrap(api.get<{ success: boolean; data: unknown[]; count: number }>('/gl/master-data/currencies')),
+
+  // Costing Methods (read-only reference data)
+  costingMethods: () =>
+    unwrap(api.get<{ success: boolean; data: unknown[]; count: number }>('/gl/master-data/costing-methods')),
+
+  // ── Exchange Rates (Phase 2) ─────────────────────────────────────────────────
+  exchangeRates: (p?: { from?: string; to?: string; date?: string }) => {
+    const params = new URLSearchParams()
+    if (p?.from)  params.set('from',  p.from)
+    if (p?.to)    params.set('to',    p.to)
+    if (p?.date)  params.set('date',  p.date)
+    const qs = params.toString()
+    return unwrap(api.get<{ success: boolean; data: ExchangeRateRow[]; meta: { count: number } }>(
+      `/gl/exchange-rates${qs ? `?${qs}` : ''}`
+    ))
+  },
+  convertCurrency: (from: string, to: string, amount: number, date?: string) => {
+    const params = new URLSearchParams({ from, to, amount: String(amount) })
+    if (date) params.set('date', date)
+    return unwrap(api.get<{ success: boolean; data: { from: string; to: string; amount: number; converted: number; rate: number } }>(
+      `/gl/exchange-rates/convert?${params.toString()}`
+    ))
+  },
+  createExchangeRate: (body: { from_currency: string; to_currency: string; rate: number; effective_date: string; source?: string }) =>
+    unwrap(api.post<{ success: boolean; data: ExchangeRateRow }>('/gl/exchange-rates', body)),
+
+  // ── Event Types (Phase 2) ────────────────────────────────────────────────────
+  eventTypes: () =>
+    unwrap(api.get<{ success: boolean; data: EventTypeRow[]; meta: { count: number } }>('/gl/event-types')),
+  eventTypeModules: () =>
+    unwrap(api.get<{ success: boolean; data: string[] }>('/gl/event-types/modules')),
+
+  // ── Account Role Policy (Phase 3) ────────────────────────────────────────────
+  accountRolePolicy: (active = true) =>
+    unwrap(api.get<{ success: boolean; data: RolePolicyRow[]; meta: { count: number } }>(
+      `/gl/account-role-policy${active ? '?active=1' : ''}`
+    )),
+  accountRolePolicyCoverage: () =>
+    unwrap(api.get<{ success: boolean; data: RoleCoverageRow[]; meta: RoleCoverageMeta }>('/gl/account-role-policy/coverage')),
+  resolveAccountByRole: (role: string) =>
+    unwrap(api.get<{ success: boolean; data: RoleResolutionRow }>(`/gl/account-role-policy/resolve/${role}`)),
+  createRoleMapping: (body: { role_code: string; account_code: string; priority?: number; notes?: string }) =>
+    unwrap(api.post<{ success: boolean; data: RolePolicyRow }>('/gl/account-role-policy', body)),
+  deleteRoleMapping: (id: number) =>
+    unwrap(api.delete<{ success: boolean; data: { id: number; deactivated: boolean } }>(`/gl/account-role-policy/${id}`)),
+
+  // ── GL Integrity Audit ───────────────────────────────────────────────────────
+  glIntegrity: () => unwrap(api.get<{
+    health: 'clean' | 'warning' | 'critical'
+    critical_issues: number
+    generated_at: string
+    unbalanced_entries: {
+      count: number
+      rows: Array<{ id: number; entry_number: string | null; entry_date: string; description: string | null; source_module: string | null; total_dr: number; total_cr: number; imbalance: number }>
+    }
+    phantom_accounts: {
+      count: number
+      rows: Array<{ account_code: string; line_count: number; net_impact: number; first_seen: string; last_seen: string }>
+      note: string | null
+    }
+    ops_vs_gl: {
+      cash:      { ops_total: number; gl_total: number; gap: number; ok: boolean }
+      suppliers: { ops_total: number; gl_total: number; gap: number; ok: boolean }
+      inventory: { ops_total: number; gl_total: number; gap: number; ok: boolean }
+      note: string
+    }
+    missing_period: { entry_count: number; total_debit: number; note: string | null }
+    duplicate_events: {
+      count: number
+      rows: Array<{ event_type: string; source_module: string; source_id: number; entry_count: number }>
+      note: string | null
+    }
+  }>('/gl/reconciliation/integrity')),
+
+  glTrialBalance: (p?: { from?: string; to?: string }) => {
+    const params = new URLSearchParams()
+    if (p?.from) params.set('from', p.from)
+    if (p?.to)   params.set('to',   p.to)
+    const qs = params.toString()
+    return unwrap(api.get<{
+      rows: Array<{
+        account_code: string; account_name: string | null
+        account_type: string | null; normal_balance: string | null
+        total_debit: number; total_credit: number
+        net_balance: number; entry_count: number
+      }>
+      totals: { total_debit: number; total_credit: number }
+      is_balanced: boolean
+      phantom_count: number
+      date_range: { from: string | null; to: string | null }
+    }>(`/gl/reconciliation/trial-balance${qs ? '?' + qs : ''}`))
+  },
+
+  repairPhantomAccounts: () => unwrap(api.post<{
+    inserted: number; codes: string[]; message: string
+  }>('/gl/reconciliation/repair-phantom-accounts', {})),
+
+  backfillAccountCodes: () => unwrap(api.post<{
+    total_lines_updated: number
+    detail: Array<{ from: string; to: string; label: string; rows_updated: number; skipped: boolean }>
+    message: string
+  }>('/gl/reconciliation/backfill-account-codes', {})),
+
+  orphans: () => unwrap(api.get<{
+    total: number
+    rows: Array<{
+      id: number
+      entry_date: string
+      description: string | null
+      ref_type: string | null
+      ref_id: number | null
+      debit_total: number
+      credit_total: number
+      diff: number
+    }>
+  }>('/gl/orphans')),
+
+  serviceTypes: () => unwrap(api.get<Array<{
+    id: number; code: string; name_ar: string; name_en: string | null
+    service_group: string; default_expense_account_code: string | null
+    default_ap_account_code: string | null; requires_supplier: number
+    requires_document: number; requires_center: number; is_active: number
+  }>>('/gl/service-types')),
+
+  createServiceType: (body: {
+    code: string; name_ar: string; name_en?: string; service_group: string
+    default_expense_account_code?: string; default_ap_account_code?: string
+    requires_supplier?: number; requires_document?: number; requires_center?: number
+  }) => unwrap(api.post('/gl/service-types', body)),
+
+  updateServiceType: (id: number, body: Record<string, unknown>) =>
+    unwrap(api.patch(`/gl/service-types/${id}`, body)),
+
+  supplierServiceMap: () => unwrap(api.get<Array<{
+    id: number; supplier_code: number; supplier_name: string | null
+    service_type_code: string; default_ap_account_code: string | null
+    default_expense_account_code: string | null; is_primary: number; is_active: number
+  }>>('/gl/supplier-service-map')),
+
+  addSupplierServiceMap: (body: {
+    supplier_code: number; service_type_code: string
+    default_ap_account_code?: string; is_primary?: number
+  }) => unwrap(api.post('/gl/supplier-service-map', body)),
+
+  removeSupplierServiceMap: (id: number) =>
+    unwrap(api.delete(`/gl/supplier-service-map/${id}`)),
+
+  controlAccounts: () => unwrap(api.get<Array<{
+    mapping_key: string; id: number | null; account_code: string | null
+    is_active: number; updated_at: string | null; seeded: boolean
+  }>>('/gl/control-accounts')),
+
+  upsertControlAccount: (mapping_key: string, account_code: string) =>
+    unwrap(api.post('/gl/control-accounts', { mapping_key, account_code })),
+
+  deleteControlAccount: (mapping_key: string) =>
+    unwrap(api.delete(`/gl/control-accounts/${mapping_key}`)),
+
+  verificationChecklist: () => unwrap(api.get('/gl/hardening/verification/checklist')),
+
+  healthDailyLog: (limit = 30) =>
+    unwrap(api.get(`/gl/hardening/health/daily-log?limit=${limit}`)),
+  healthRunNow: () =>
+    unwrap(api.post('/gl/hardening/health/run-now', {})),
 }
 
 // ── Reconciliation types (shared with ReconciliationPage, PeriodCloseCockpit) ─

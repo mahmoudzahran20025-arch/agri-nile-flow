@@ -1,0 +1,504 @@
+# Agri-Nile ERP — Enterprise Transformation Architecture
+**Date:** 2026-05-13 | **Analyst:** Antigravity | **Status:** Runtime-Evidence-Based
+
+---
+
+## PART 1 — RUNTIME EVIDENCE SUMMARY
+
+### Live Data Snapshot
+
+| Module | Table | Count | Key Finding |
+|--------|-------|-------|-------------|
+| Supplier Ledger | `supplier_transactions` | 286 posted, 40 blocked | 40 rows `duplicate_accrual_blocked` = EGP 16.7M frozen |
+| Supplier Payments | `supplier_transactions` entry_type=م | 43 posted | EGP 17.5M paid out |
+| Inventory | `inventory_movements` | 700 total, 642 GL-posted | 0 pending, 0 failed ✅ |
+| Treasury | `cash_transactions` | 69 posted | All GL-linked ✅ |
+| GL | `journal_entries` | 957 total | 642 inv + 246 supplier + 69 cash |
+| Work Orders | `work_orders` | **0** | Not yet in use |
+| Work Tasks | `work_tasks` | **0** | Not yet in use |
+| Work Equipment | `work_order_equipment` | **0** | Not yet in use |
+| Purchase Orders | `purchase_orders` | **0** | Not yet in use |
+| Contract Advances | `contract_advances` | **0** | Not yet in use |
+| Harvest Records | `harvest_records` | **0** | Not yet in use |
+| Fields (Pivots) | `fields` | 11 | All mapped to cost centers |
+| Cost Centers | `cost_centers` | 13 active | 10 pivot + 2 booster + 1 admin |
+| Seasons | `seasons` | 2 | Active season tracking |
+
+### Supplier Activity Breakdown (Posted Invoices)
+| Service Code | Group | Invoiced (EGP) | Count |
+|---|---|---|---|
+| `SRV_MECH` | Mechanization | 2,743,069 | 190 |
+| `SRV_LABOR` | Labor | 46,975 | 13 |
+| Admin supplier 20900151 | Admin Services | 1,959,600 | 74 (but **0 paid**) |
+| Arafa supplier 20900353 | Supply | 415,616 | 128 invoices |
+
+### GL Linkage Health
+- **Supplier transactions with no JE:** 0 ✅
+- **Cash transactions with no JE:** 0 ✅
+- **Inventory movements failed GL:** 0 ✅
+- **GL balance (DR − CR):** 0 ✅
+- **Dimension completeness (supplier invoices with no season):** 0 ✅
+
+### Critical Anomalies Found
+1. **40 rows `duplicate_accrual_blocked`** — EGP 16.7M in supplier debit transactions blocked from posting. These appear to be the admin supplier (20900151) which has EGP 1.96M invoiced but **EGP 0 paid**, while EGP 17.5M in payments are recorded. This signals a major AP/payment reconciliation gap.
+2. **43 supplier payment rows (entry_type=م) missing `center_code`** — payment rows have no cost center dimension.
+3. **611 ISSUE movements missing `field_id`** — inventory issues have `center_code` but no field-level pivot attribution.
+4. **Work Orders module is empty** — the entire operations layer is not in use; all mechanization (SRV_MECH) and labor (SRV_LABOR) costs flow directly through `supplier_transactions` without Work Order linkage.
+5. **`supplier_transactions.work_order_id` column exists but is always NULL** — the FK bridge to Work Orders was designed but never activated.
+
+---
+
+## PART 2 — LEGACY CONSOLIDATION AUDIT
+
+### 2.1 What Currently Exists (Operational Truth)
+
+```
+CURRENT STATE (Pre-Work-Orders Era):
+
+Mechanization Costs ──► supplier_transactions (SRV_MECH) ──► GL (posting_engine)
+Labor Costs         ──► supplier_transactions (SRV_LABOR) ──► GL (posting_engine)
+Inventory Receipts  ──► inventory_movements (GRN)         ──► GL (outbox)
+Inventory Issues    ──► inventory_movements (ISSUE)        ──► GL (outbox)
+Cash Payments       ──► cash_transactions                  ──► GL (posting_engine)
+```
+
+There are NO work orders. Operations are entirely driven by direct supplier billing.
+
+### 2.2 What the Architecture Intended (Target State)
+
+```
+TARGET STATE (Work-Order-Centric Era):
+
+Field Operation
+  └► Work Order (work_orders)
+        ├── Labor Tasks     (work_tasks)              ──► costed → GL via resolveWorkOrderLabor
+        ├── Equipment Lines (work_order_equipment)    ──► immediate GL per line
+        └── Inventory Issue (inventory_movements)     ──► GL via outbox
+              └── linked via work_order_id
+
+Supplier Invoice
+  └► supplier_transactions (linked to work_order_id) ──► GL via resolveSupplierInvoice
+```
+
+### 2.3 What Must Remain
+
+| Entity | Keep | Reason |
+|--------|------|--------|
+| `supplier_transactions` | ✅ Keep | Authoritative AP ledger — all 286 posted transactions are GL-linked |
+| `inventory_movements` | ✅ Keep | Authoritative inventory ledger — all 700 movements are GL-linked |
+| `cash_transactions` | ✅ Keep | Authoritative treasury — all 69 posted are GL-linked |
+| `posting_engine` + `posting_rules` | ✅ Keep | Single posting truth — never bypass |
+| `business_events` table | ✅ Keep | Audit backbone for all GL entries |
+| Cost center / field / season dimensions | ✅ Keep | Pivot-level profitability infrastructure |
+
+### 2.4 What Must Merge / Consolidate
+
+| Issue | Action |
+|-------|--------|
+| Supplier mechanization (SRV_MECH) entries have no WO link | Add `work_order_id` to future supplier invoices for mechanization |
+| `work_order_equipment` and `supplier_transactions` for rental mechanization are parallel paths | Unify: rental mechanization posts through Work Order equipment line → GL. Supplier invoice is the payment document only, not the cost document |
+| `work_tasks` (labor) and supplier transactions for labor (SRV_LABOR) are parallel paths | Unify: labor costs either via work_tasks OR supplier invoice, not both |
+| `supplier_transactions.duplicate_accrual_blocked` (40 rows) | Audit and resolve: either reclassify or reverse — EGP 16.7M is frozen |
+
+### 2.5 What Should Be Deprecated / Removed
+
+| Entity | Status | Action |
+|--------|--------|--------|
+| `inventory_posting_setup` (old table) | Legacy — superseded by `posting_rules` | Already marked, safe to ignore |
+| `general_posting_setup` (old table) | Legacy — superseded by `posting_rules` | Already marked, safe to ignore |
+| `stock_quants` | Shadowing `inventory_balances` | Consolidate to `inventory_balances` as single snapshot |
+| `staging_movements` | Import staging — data already migrated | Can be archived |
+| `cash_transactions_corrupted_*`, `inventory_movements_corrupted_*` backup tables | Forensic backup tables | Archive to cold storage after 90 days |
+| `gl.ts.legacy.backup` | Legacy API backup | Delete — superseded |
+
+---
+
+## PART 3 — UNIFIED WORK ORDER ARCHITECTURE
+
+### 3.1 Target Operational Entity Hierarchy
+
+```
+Season (موسم)
+  └── Field / Pivot (بيفوت)  ← maps 1:1 to cost_center
+        └── Work Order (أمر عمل)
+              ├── operation_type: SRV_MECH | SRV_LABOR | SRV_IRRIG | SRV_CHEM | SRV_HARVEST
+              ├── Work Tasks (مهام عمالة)   ← quantity × unit_cost → labor cost
+              ├── Equipment Lines (معدات)    ← hours × cost/h → equipment cost → immediate GL
+              └── Inventory Issues (صرف)     ← item × qty × cost → inventory cost → GL via outbox
+```
+
+### 3.2 Unified Lifecycle Per Work Order
+
+```
+STEP 1: Create Work Order
+  POST /api/operations/orders
+  Required: name, operation_type, planned_date, season_id, field_id
+  Auto-derive: center_code ← fields.center_code
+  Status: pending
+
+STEP 2: Execute — Add Tasks / Equipment / Inventory Issues
+  POST /api/operations/orders/:id/tasks         → work_tasks (no immediate GL)
+  POST /api/operations/orders/:id/equipment     → work_order_equipment + immediate GL
+  POST /api/inventory/movements/batch (ISSUE)   → inventory_movements + GL via outbox
+    Payload MUST include: work_order_id, center_code (inherited), field_id (inherited)
+  Status: in_progress
+
+STEP 3: Complete
+  PATCH /api/operations/orders/:id/status → done
+
+STEP 4: Cost & Close
+  PATCH /api/operations/orders/:id/status → costed
+  TRIGGERS: resolveWorkOrderLabor() for all unposted work_tasks + unposted equipment
+  Status: costed (terminal — immutable)
+
+STEP 5: Supplier Invoice Matching (optional, for externally supplied services)
+  POST /api/suppliers/:code/transactions (entry_type=د)
+    Payload MUST include: work_order_id (links invoice to WO)
+  This does NOT double-post: supplier invoice posts AP/Expense GL.
+  Work order tasks/equipment already posted the operational cost GL.
+  → These are DIFFERENT GL entries: one for accrual, one for payable recognition.
+```
+
+### 3.3 Duplicate Prevention Rules
+
+| Scenario | Prevention |
+|----------|-----------|
+| Equipment posted via WO + also via supplier invoice | Work Order equipment GL = operational cost (DR WIP/Expense / CR Accrued Liabilities). Supplier invoice GL = AP recognition (DR Accrued Liabilities / CR AP). Net = zero double-posting. |
+| Labor posted via work_tasks + also via supplier invoice | Only one path allowed per WO. If SRV_LABOR supplier invoice exists, do NOT add work_tasks for same labor. |
+| Inventory already issued (ISSUE movement) + WO costed | Work_tasks cost does NOT include inventory. `inventory_cost` on WO is read from `inventory_movements.value_out WHERE work_order_id = ?` — never double-posted. |
+
+### 3.4 Current Gap vs. Target — What Needs to Change
+
+| Gap | Fix Required |
+|-----|-------------|
+| All 700 inventory ISSUE movements have no `work_order_id` | Backfill where possible; enforce FK going forward |
+| 203 supplier invoices (SRV_MECH + SRV_LABOR) have no `work_order_id` | Create WOs retroactively for historical data OR accept as pre-WO era legacy |
+| `supplier_transactions.work_order_id` column exists but is always NULL | Activate: enforce `work_order_id` required for SRV_MECH invoices going forward |
+| Work Order module UI exists but is unused | Training + process rollout |
+
+---
+
+## PART 4 — COST CENTER & PIVOT GOVERNANCE
+
+### 4.1 Current Cost Center Map
+
+```
+Company Level
+  ├── 1006011 — إدارية أرض الدلتا (Admin)
+  │
+  ├── Booster 128 Station (5 pivots × 55 fed + 1 × 100 fed)
+  │     ├── 1006006 — بيفوت 1044 (55 fed)
+  │     ├── 1006007 — بيفوت 1047 (55 fed)
+  │     ├── 1006008 — بيفوت 1048 (55 fed)
+  │     ├── 1006009 — بيفوت 1049 (55 fed)
+  │     └── 1006010 — بيفوت 1050 (100 fed)
+  │
+  └── Booster 129 Station (5 pivots × 55 fed)
+        ├── 1006001 — بيفوت 718 (55 fed)
+        ├── 1006002 — بيفوت 719 (55 fed)
+        ├── 1006003 — بيفوت 720 (55 fed)
+        ├── 1006004 — بيفوت 722 (55 fed)
+        └── 1006005 — بيفوت 723 (55 fed)
+```
+
+**Total agricultural area:** 10 pivots × avg 55 fed + 1 × 100 fed = **650 feddan**
+
+### 4.2 Unified Cost Allocation Model
+
+Every financial transaction MUST carry all applicable dimensions:
+
+| Dimension | Column | Required For | Current State |
+|-----------|--------|-------------|---------------|
+| `company_id` | All tables | Always | ✅ Enforced |
+| `season_id` | All posted transactions | Always | ✅ 0 missing on supplier invoices |
+| `center_code` | All cost transactions | Always | ⚠️ 43 payment rows missing |
+| `field_id` | Pivot-level transactions | ISSUE movements, WO tasks | ⚠️ 611 ISSUE movements missing |
+| `work_order_id` | Operational costs | Equipment, Tasks, Inventory Issues | ❌ Always NULL currently |
+
+### 4.3 Cost Propagation Flow
+
+```
+Source Transaction
+  │
+  ├── season_id     → Season P&L reporting
+  ├── center_code   → Cost Center reporting (pivot-level)
+  ├── field_id      → Field/Pivot profitability
+  └── work_order_id → Operation-level cost drill-down
+
+journal_entry_lines
+  ├── center_code   → propagated from source via postFromBusinessEvent()
+  ├── season_id     → propagated from source via postFromBusinessEvent()
+  └── field_id      → propagated from source via postFromBusinessEvent()
+```
+
+> **Rule:** `postFromBusinessEvent()` already accepts and propagates all four dimensions. The data model is correct. The enforcement gap is at the API input layer.
+
+### 4.4 Pivot-Level Profitability Model
+
+```
+Pivot P&L (per field/pivot per season):
+
+REVENUE:
+  + harvest_records.total_revenue (when harvest is recorded)
+  + sales_contracts linked to field
+
+DIRECT COSTS:
+  + SUM(inventory_movements.value_out) WHERE field_id = pivot
+  + SUM(supplier_transactions.amount)  WHERE center_code = pivot_center
+  + SUM(work_tasks.quantity * unit_cost) WHERE work_order.field_id = pivot
+  + SUM(work_order_equipment.total_cost) WHERE work_order.field_id = pivot
+
+ALLOCATED ADMIN COSTS:
+  + center_code = 1006011 (admin) costs allocated by area proportion:
+    pivot_area_feddan / total_area_feddan × total_admin_cost
+
+GROSS MARGIN = REVENUE − DIRECT COSTS − ALLOCATED ADMIN
+MARGIN PER FEDDAN = GROSS MARGIN / pivot_area_feddan
+```
+
+### 4.5 Detected Cost Allocation Issues
+
+| Issue | Severity | Fix |
+|-------|----------|-----|
+| 43 supplier payment rows (entry_type=م) have no `center_code` | ⚠️ Medium | Payments are AP clearing, not cost. Acceptable — payments don't need center_code. Document this rule. |
+| 611 ISSUE movements have no `field_id` | ⚠️ Medium | Backfill from `center_code → fields.center_code` where 1:1 mapping exists. Enforce going forward. |
+| Admin supplier (20900151) 74 transactions with no payment | 🔴 High | AP reconciliation required. EGP 1.96M owed vs EGP 17.5M paid total. Investigate offset. |
+| 40 `duplicate_accrual_blocked` rows = EGP 16.7M | 🔴 Critical | These are blocked because the system detected duplicate accruals. Must be reviewed and either reversed or reclassified. |
+
+---
+
+## PART 5 — FINANCIAL INTEGRITY & GOVERNANCE
+
+### 5.1 Posting Path Map (All Modules)
+
+```
+MODULE          → RESOLVER                          → BUSINESS_EVENT           → JE
+─────────────────────────────────────────────────────────────────────────────────────
+Inventory GRN   → resolveInventoryMovement()        → inventory_movement        → DR Inventory / CR AP
+Inventory ISSUE → resolveInventoryMovement()        → inventory_movement        → DR Expense / CR Inventory
+Inventory XFER  → resolveInventoryTransfer()        → inventory_transfer        → DR Dest / CR Source
+Supplier Inv.   → resolveSupplierInvoice()          → supplier_transaction      → DR Expense / CR AP
+Supplier Pay.   → resolveSupplierPayment()          → supplier_transaction      → DR AP / CR Cash
+Cash Out        → resolveCashLedger()               → cash_transaction          → DR Expense / CR Cash
+WO Equipment    → resolveWorkOrderLabor()           → work_order_equipment      → DR WIP/Expense / CR Accrued
+WO Costing      → resolveWorkOrderLabor()           → work_order_labor          → DR WIP/Expense / CR Payroll
+Depreciation    → postMonthlyDepreciation()         → depreciation              → DR Dep.Exp / CR Accum.Dep
+Harvest         → postHarvestLedger()               → harvest_cost/revenue      → DR COGS / CR Inventory
+```
+
+**Single rule: ALL GL postings pass through `postFromBusinessEvent()` → `posting_engine.ts` cascade → `journal_entries`.**
+
+### 5.2 Idempotency & Replay Safety
+
+| Control | Status |
+|---------|--------|
+| `business_events` table with unique `(company_id, event_type, source_id)` | ✅ Present |
+| `inventory_posting_outbox` with `status = pending/processed` | ✅ Present — prevents double-posting |
+| `work_order_equipment.operation_id` uniqueness constraint | ✅ Present |
+| `supplier_transactions.local_id` | ✅ Present |
+| Period lock date enforcement on inventory | ✅ Present via `enforceInventoryLockDate()` |
+| Open period check before all GL postings | ✅ Present via `getOpenPeriod()` |
+| `duplicate_accrual_blocked` status in supplier ledger | ✅ Present — blocks detected duplicates |
+
+### 5.3 Verified Financial Integrity Scores
+
+| Check | Result |
+|-------|--------|
+| GL balance (Debit − Credit) | **0** ✅ |
+| Supplier transactions without JE | **0** ✅ |
+| Cash transactions without JE | **0** ✅ |
+| Inventory movements failed GL | **0** ✅ |
+| Unlinked inventory movements | **0** ✅ |
+| GL pending (not yet posted) | **0** ✅ |
+
+### 5.4 Outstanding Integrity Risks
+
+| Risk | Impact | Resolution |
+|------|--------|-----------|
+| 40 `duplicate_accrual_blocked` rows — EGP 16.7M | 🔴 Critical | Run SQL audit: identify which transactions were detected as duplicates and what original transaction they shadow. Either reverse duplicates or reclassify to correct status. |
+| Admin supplier (20900151) EGP 1.96M invoiced / EGP 0 paid | 🔴 High | Cross-check against GL. The EGP 17.5M in payments may all be to Arafa (20900353). Need explicit AP aging reconciliation. |
+| 611 ISSUE movements with no `field_id` | 🟡 Medium | No financial impact (GL is balanced). Impacts pivot profitability reporting only. |
+
+---
+
+## PART 6 — USER EXPERIENCE & ENTERPRISE WORKFLOW
+
+### 6.1 Current Operational UX Pain Points
+
+| Pain Point | Module | Impact |
+|------------|--------|--------|
+| Mechanization costs entered as supplier invoices with no operational context | Suppliers | Zero pivot-level drill-down. Can't see "how much did I spend on mechanization for pivot 1044?" |
+| Inventory issues have no pivot/field attribution (611 movements) | Inventory | Pivot cost reports are incomplete |
+| 40 transactions silently blocked as `duplicate_accrual_blocked` — users may not know | Suppliers | Financial blindspot — EGP 16.7M not visible in normal views |
+| Work Orders module exists in UI but has no data — appears broken | Operations | User confusion |
+| Item picker shows 4,829 items in dropdown (now fixed to smart search) | Inventory | Fixed ✅ |
+| No harvest records exist despite having 2 seasons | Harvest | Revenue side of P&L is missing entirely |
+
+### 6.2 Recommended Workflow Improvements
+
+#### Priority 1 — Immediate (Month 1)
+
+1. **Duplicate Accrual Resolution**: Add a dedicated "مراجعة القيود المحجوبة" screen showing all `duplicate_accrual_blocked` transactions with a Resolve/Reverse action. This is EGP 16.7M that must be reconciled.
+
+2. **AP Aging Dashboard**: Build supplier AP aging by pivot/season. Currently the aging page exists but doesn't break down by `center_code`. Users need to see "ما المبلغ المستحق لمورد الميكنة لبيفوت 1044 في موسم القمح؟"
+
+3. **Inventory Issue Field Attribution**: Add field picker to the ISSUE form (partially exists via `field_id` param) and enforce it as required.
+
+#### Priority 2 — Short-term (Month 2-3)
+
+4. **Work Order Rollout**: Activate Work Orders for all new field operations. Map existing SRV_MECH supplier transactions retroactively using a backfill script linking `supplier_transactions.work_order_id`.
+
+5. **Pivot Profitability Report**: Build a report: `Cost by Field × Season` showing labor + mechanization + inventory + allocated admin, vs. budget. The `CostByFieldPage` exists but uses only WO costs.
+
+6. **Harvest Record Entry**: Enable harvest record entry to populate the revenue side of the P&L. Currently zero harvest records exist despite 2 active seasons.
+
+#### Priority 3 — Medium-term (Month 4-6)
+
+7. **Work Order ↔ Supplier Invoice Matching**: When a supplier invoice is submitted, allow it to be linked to an existing Work Order. This enables reconciliation: "WO planned cost vs. actual supplier invoice."
+
+8. **Season Close Automation**: Add a season-close checklist: all WOs costed, all supplier invoices matched, all GL periods closed, pivot P&L generated.
+
+---
+
+## PART 7 — ENTERPRISE READINESS ROADMAP
+
+### Phase 0 — Data Integrity (NOW — Week 1)
+
+```
+ACTIONS:
+✅ GL balance = 0 (DONE)
+✅ 0 unlinked inventory movements (DONE)
+✅ 0 pending GL postings (DONE)
+✅ 0 failed GL postings (DONE)
+⬜ Resolve 40 duplicate_accrual_blocked transactions (EGP 16.7M)
+⬜ Backfill field_id on 611 ISSUE movements from center_code
+⬜ Verify admin supplier (20900151) AP balance vs. payments
+```
+
+### Phase 1 — Operational Activation (Month 1-2)
+
+```
+ACTIONS:
+⬜ Train operations team on Work Order module
+⬜ Enforce work_order_id on all new SRV_MECH supplier invoices
+⬜ Enforce field_id on all new ISSUE inventory movements
+⬜ Add "Blocked Transactions" screen for duplicate_accrual_blocked
+⬜ Deploy Pivot Profitability report
+```
+
+### Phase 2 — Work Order Integration (Month 2-3)
+
+```
+ACTIONS:
+⬜ All field operations originate from Work Orders
+⬜ Equipment rental: WO Equipment Line → immediate GL (already built)
+⬜ Labor: WO Tasks → costed GL (already built)
+⬜ Inventory: ISSUE with work_order_id (field already exists)
+⬜ Supplier invoice linked to WO (work_order_id FK activation)
+⬜ Duplicate prevention: WO-linked invoice cannot create double cost
+```
+
+### Phase 3 — Revenue & Season Close (Month 4-5)
+
+```
+ACTIONS:
+⬜ Harvest records entered → postHarvestLedger() → GL revenue entry
+⬜ Pivot P&L = Revenue − (WO costs + Inventory + allocated Admin)
+⬜ Season close checklist enforced before period close
+⬜ WIP balances carried forward for multi-season crops
+⬜ Fixed asset depreciation automated monthly
+```
+
+### Phase 4 — Enterprise Governance (Month 6+)
+
+```
+ACTIONS:
+⬜ Budget vs. Actual per pivot per season
+⬜ Approval workflow for supplier invoices > EGP 50,000
+⬜ Three-way match: PO → GRN → Supplier Invoice
+⬜ Cost variance reporting: planned WO cost vs. actual
+⬜ Audit trail: every GL entry traceable to source operation
+```
+
+---
+
+## PART 8 — UNIFIED ARCHITECTURE MAP
+
+```
+╔══════════════════════════════════════════════════════════════════════╗
+║                    AGRI-NILE ERP — ONE TRUTH                        ║
+╠══════════════════════════════════════════════════════════════════════╣
+║                                                                      ║
+║  AGRICULTURAL DIMENSIONS                                             ║
+║  Season ──► Field/Pivot ──► Cost Center (1:1)                       ║
+║                                                                      ║
+║  OPERATIONAL LAYER (Single Origin)                                   ║
+║  Work Order (أمر عمل)                                               ║
+║    ├── Labor Tasks     ──► costed GL (resolveWorkOrderLabor)         ║
+║    ├── Equipment Lines ──► immediate GL (resolveWorkOrderLabor)      ║
+║    └── Inventory ISSUE ──► outbox GL (resolveInventoryMovement)      ║
+║                                                                      ║
+║  PROCUREMENT LAYER (Supporting, Not Duplicating)                     ║
+║  Supplier Invoice                                                    ║
+║    ├── linked to WO (work_order_id) when applicable                  ║
+║    └── posts AP/Expense GL (resolveSupplierInvoice)                  ║
+║                                                                      ║
+║  INVENTORY LAYER                                                     ║
+║  Purchase Order → GRN → Inventory → ISSUE (linked to WO)            ║
+║    Each step posts via posting_engine cascade                        ║
+║                                                                      ║
+║  TREASURY LAYER                                                      ║
+║  Cash Transaction ──► GL (resolveCashLedger / resolveSupplierPayment)║
+║                                                                      ║
+║  POSTING ENGINE (Single Gate — Never Bypass)                         ║
+║  All sources → postFromBusinessEvent()                               ║
+║    → resolveInventorySetup() / resolveGeneralSetup()                 ║
+║    → journal_entries + journal_entry_lines                           ║
+║    → business_events (audit backbone)                                ║
+║                                                                      ║
+║  REPORTING LAYER                                                     ║
+║  journal_entry_lines WHERE center_code = pivot                       ║
+║    → Pivot P&L (by season)                                           ║
+║  journal_entry_lines WHERE season_id = X                             ║
+║    → Season P&L                                                      ║
+║  supplier_transactions aging                                         ║
+║    → AP aging by supplier × pivot                                    ║
+╚══════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## PART 9 — IMMEDIATE ACTION ITEMS (Prioritized)
+
+### 🔴 Critical — This Week
+
+1. **Audit the 40 `duplicate_accrual_blocked` transactions** (EGP 16.7M)
+   ```sql
+   SELECT id, transaction_date, supplier_code, amount, notes, document_number
+   FROM supplier_transactions
+   WHERE company_id=1 AND status='duplicate_accrual_blocked'
+   ORDER BY transaction_date;
+   ```
+   Determine: are these legitimate invoices blocked incorrectly, or true duplicates?
+
+2. **Reconcile Admin Supplier 20900151**
+   - EGP 1.96M invoiced, EGP 0 paid
+   - EGP 17.5M in total payments — verify recipients
+   - Is this a government fee supplier that should be on accrual?
+
+### 🟡 High — This Month
+
+3. **Backfill `field_id` on 611 ISSUE movements**
+   - Use `center_code → fields.center_code` mapping (10 pivots are 1:1)
+   - Run SQL update: `UPDATE inventory_movements SET field_id = (SELECT id FROM fields WHERE center_code = inventory_movements.center_code AND company_id = 1 LIMIT 1) WHERE movement_type = 'ISSUE' AND field_id IS NULL AND company_id = 1`
+
+4. **Start using Work Orders** — create WOs for all current operations
+
+5. **Enter first harvest record** — the revenue side of the P&L is entirely missing
+
+### 🟢 Medium — Next Quarter
+
+6. Enforce `work_order_id` on all SRV_MECH supplier invoices
+7. Build Pivot Profitability Report
+8. Implement three-way match (PO → GRN → Invoice)
+9. Activate supplier invoice approval workflow for amounts > EGP 50K

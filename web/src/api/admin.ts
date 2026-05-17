@@ -32,8 +32,23 @@ export interface AdminSwitchPayload {
 
 export const adminApi = {
   companies:     () => unwrap(api.get<unknown[]>('/admin/companies')),
-  createCompany: (body: unknown) => api.post('/admin/companies', body),
+
+  // Used by the onboarding wizard (full unwrapped response)
+  createCompany: (body: { code: string; name: string; address?: string; phone?: string; fiscal_year?: number }) =>
+    unwrap(api.post<{ id: number; seeding: Record<string, number | string> }>('/admin/companies', body)),
+
+  // Legacy raw form used by SuperAdminPage quick-add modal
+  createCompanyRaw: (body: unknown) => api.post('/admin/companies', body),
+
   updateCompany: (id: number, body: unknown) => api.patch(`/admin/companies/${id}`, body),
+
+  seedServiceTypes: (id: number) =>
+    unwrap(api.post<{ company_id: number; seeded: number }>(`/admin/companies/${id}/seed-service-types`, {})),
+
+  inviteUser: (id: number, body: { email: string; full_name: string; role?: string }) =>
+    unwrap(api.post<{ user_id: number; company_id: number; role: string; created_new_user: boolean }>(
+      `/admin/companies/${id}/invite-user`, body
+    )),
 
   switchCompany: async (
     companyId: number,
@@ -53,6 +68,24 @@ export const adminApi = {
     return res
   },
 
-  companyUsers: (id: number) => unwrap(api.get<unknown[]>(`/admin/companies/${id}/users`)),
-  overview:     () => unwrap(api.get<CompanyOverview[]>('/admin/overview')),
+  companyUsers:    (id: number) => unwrap(api.get<unknown[]>(`/admin/companies/${id}/users`)),
+  overview:        () => unwrap(api.get<CompanyOverview[]>('/admin/overview')),
+  consolidatedPnl: (start: string, end: string) =>
+    unwrap(api.get<ConsolidatedPnlResponse>(`/admin/consolidated-pnl?start=${start}&end=${end}`)),
+}
+
+export interface ConsolidatedPnlCompany {
+  company_id:   number
+  company_name: string
+  company_code: string
+  revenue:      number
+  expense:      number
+  net_income:   number
+}
+
+export interface ConsolidatedPnlResponse {
+  period:        { start: string; end: string }
+  company_count: number
+  totals:        { revenue: number; expense: number; net_income: number }
+  companies:     ConsolidatedPnlCompany[]
 }
