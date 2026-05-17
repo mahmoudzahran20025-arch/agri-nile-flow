@@ -59,4 +59,5 @@ export interface InventoryMovementRow {
   service_type_code:           string | null
   requires_human_review:       number             // 0 | 1
   blocking_reason:             string | null
+  crop_cycle_id:               number | null
 }
