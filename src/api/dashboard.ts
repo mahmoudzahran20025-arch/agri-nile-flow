@@ -16,14 +16,14 @@ dashboard.get('/stats', async (c) => {
        WHERE company_id = ? ORDER BY transaction_date DESC, id DESC LIMIT 1`
     ).bind(company_id).first<{ running_balance: number }>(),
 
-    // Total payables (supplier balance with checks)
+    // Total payables — posted transactions only
     c.env.DB.prepare(
-      `SELECT SUM(credit) - SUM(debit) AS net_payable FROM supplier_transactions WHERE company_id = ?`
+      `SELECT SUM(credit) - SUM(debit) AS net_payable FROM supplier_transactions WHERE company_id = ? AND status = 'posted'`
     ).bind(company_id).first<{ net_payable: number }>(),
 
-    // Total inventory value (sum of value_in - value_out)
+    // Total inventory value — posted movements only
     c.env.DB.prepare(
-      `SELECT SUM(value_in) - SUM(value_out) AS total_value FROM inventory_movements WHERE company_id = ?`
+      `SELECT SUM(value_in) - SUM(value_out) AS total_value FROM inventory_movements WHERE company_id = ? AND gl_posting_status = 'posted'`
     ).bind(company_id).first<{ total_value: number }>(),
 
     // Partners equity

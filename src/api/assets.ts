@@ -117,7 +117,7 @@ assets.post('/', permissionGuard('admin', 'write'), async (c) => {
   return c.json({ success: true, data: { id: assetId, asset_code: body.asset_code } }, 201)
 })
 
-// PATCH /api/assets/:id — update asset details
+// PATCH /api/assets/:id — update asset details including WIP allocation routing
 assets.patch('/:id', permissionGuard('admin', 'write'), async (c) => {
   const { company_id } = getUser(c)
   const id = Number(c.req.param('id'))
@@ -128,6 +128,10 @@ assets.patch('/:id', permissionGuard('admin', 'write'), async (c) => {
     useful_life_months?: number
     is_active?: boolean
     notes?: string
+    // WIP allocation routing (Phase 5 depreciation engine)
+    crop_cycle_id?:                   number | null
+    allocation_method?:               string | null
+    depreciation_allocation_method?:  string | null
   }>()
 
   const asset = await c.env.DB.prepare(`
@@ -162,6 +166,33 @@ assets.patch('/:id', permissionGuard('admin', 'write'), async (c) => {
   if (body.notes !== undefined) {
     updates.push('notes = ?')
     values.push(body.notes)
+  }
+  if ('crop_cycle_id' in body) {
+    // Validate crop_cycle belongs to company if non-null
+    if (body.crop_cycle_id != null) {
+      const cc = await c.env.DB.prepare(
+        'SELECT id FROM crop_cycles WHERE id = ? AND company_id = ? AND status = ?'
+      ).bind(body.crop_cycle_id, company_id, 'active').first()
+      if (!cc) return c.json({ success: false, error: 'دورة المحصول غير موجودة أو غير نشطة' }, 422)
+    }
+    updates.push('crop_cycle_id = ?')
+    values.push(body.crop_cycle_id ?? null)
+  }
+  if (body.allocation_method !== undefined) {
+    const allowed = ['percentage', 'machine_hours', 'acreage', 'manual']
+    if (body.allocation_method !== null && !allowed.includes(body.allocation_method)) {
+      return c.json({ success: false, error: `طريقة التوزيع غير صالحة. المسموح: ${allowed.join(', ')}` }, 422)
+    }
+    updates.push('allocation_method = ?')
+    values.push(body.allocation_method ?? null)
+  }
+  if (body.depreciation_allocation_method !== undefined) {
+    const allowed = ['machine_hours', 'area_ratio', 'manual']
+    if (body.depreciation_allocation_method !== null && !allowed.includes(body.depreciation_allocation_method)) {
+      return c.json({ success: false, error: `طريقة توزيع الإهلاك غير صالحة. المسموح: ${allowed.join(', ')}` }, 422)
+    }
+    updates.push('depreciation_allocation_method = ?')
+    values.push(body.depreciation_allocation_method ?? null)
   }
 
   if (updates.length === 0) {

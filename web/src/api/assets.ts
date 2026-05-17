@@ -17,6 +17,10 @@ export interface FixedAsset {
   created_at: string
   supplier_transaction_id: number | null
   journal_entry_id: number | null
+  // WIP allocation routing (Phase 5)
+  crop_cycle_id:                  number | null
+  allocation_method:              'percentage' | 'machine_hours' | 'acreage' | 'manual' | null
+  depreciation_allocation_method: 'machine_hours' | 'area_ratio' | 'manual' | null
 }
 
 export interface DepreciationScheduleRow {
@@ -54,6 +58,19 @@ export const assetsApi = {
     notes?: string
   }) =>
     unwrap(api.post<{ id: number }>('/assets', body)),
+
+  update: (id: number, body: {
+    name?: string
+    cost?: number
+    salvage_value?: number
+    useful_life_months?: number
+    is_active?: boolean
+    notes?: string
+    crop_cycle_id?: number | null
+    allocation_method?: string | null
+    depreciation_allocation_method?: string | null
+  }) =>
+    unwrap(api.patch<void>(`/assets/${id}`, body)),
 
   schedule: (id: number) =>
     unwrap(api.get<{ schedule: DepreciationScheduleRow[] }>(`/assets/${id}/schedule`)),

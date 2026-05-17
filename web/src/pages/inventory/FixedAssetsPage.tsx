@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { assetsApi, type FixedAsset } from '../../api/assets'
 import { configApi, fieldsApi } from '../../api/client'
-import { ChevronRight, Play, PlusCircle } from 'lucide-react'
+import { cropCyclesApi } from '../../api/crop-cycles'
+import { ChevronRight, Play, PlusCircle, Settings2 } from 'lucide-react'
 
 const CATEGORY_LABELS: Record<string, string> = {
   equipment:        'معدات',
@@ -136,6 +137,91 @@ function AddAssetForm({ onClose }: { onClose: () => void }) {
   )
 }
 
+function WipAllocationDrawer({ asset, onClose }: { asset: FixedAsset; onClose: () => void }) {
+  const qc = useQueryClient()
+  const [cropCycleId, setCropCycleId] = useState<string>(asset.crop_cycle_id?.toString() ?? '')
+  const [method, setMethod]           = useState<string>(asset.depreciation_allocation_method ?? '')
+
+  const { data: activeCycles = [] } = useQuery({
+    queryKey: ['crop-cycles-active'],
+    queryFn: () => cropCyclesApi.list({ status: 'active' }),
+  })
+
+  const mut = useMutation({
+    mutationFn: () => assetsApi.update(asset.id, {
+      crop_cycle_id:                  cropCycleId ? Number(cropCycleId) : null,
+      depreciation_allocation_method: method || null,
+    }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['assets'] }); onClose() },
+  })
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" dir="rtl">
+      <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
+        <h2 className="text-base font-bold text-slate-800 mb-1">توزيع الإهلاك على WIP</h2>
+        <p className="text-xs text-slate-500 mb-4">
+          حدد دورة المحصول المستفيدة وطريقة توزيع الإهلاك. يُطبَّق هذا الإعداد في دورة الإهلاك الشهرية التالية.
+        </p>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">
+              دورة المحصول (مباشر)
+              <span className="text-slate-400 font-normal mr-1">— يخصص الإهلاك بالكامل لهذه الدورة</span>
+            </label>
+            <select
+              value={cropCycleId}
+              onChange={e => setCropCycleId(e.target.value)}
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F2D5C]"
+            >
+              <option value="">— بدون تخصيص مباشر —</option>
+              {(activeCycles as Array<{ id: number; crop_name: string; field_name: string; season_name: string }>).map(cc => (
+                <option key={cc.id} value={cc.id}>
+                  {cc.crop_name} · {cc.field_name} · {cc.season_name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">
+              طريقة التوزيع (متعدد الدورات)
+              <span className="text-slate-400 font-normal mr-1">— عند عدم تحديد دورة مباشرة</span>
+            </label>
+            <select
+              value={method}
+              onChange={e => setMethod(e.target.value)}
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F2D5C]"
+            >
+              <option value="">— ورَّث من الدورة أو يُوزَّع بالمساحة —</option>
+              <option value="machine_hours">ساعات التشغيل</option>
+              <option value="area_ratio">نسبة المساحة</option>
+              <option value="manual">يدوي (لا توزيع على WIP)</option>
+            </select>
+          </div>
+        </div>
+
+        {mut.isError && (
+          <p className="mt-3 text-xs text-red-600">{String(mut.error)}</p>
+        )}
+
+        <div className="flex gap-3 justify-end mt-5">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
+            إلغاء
+          </button>
+          <button
+            onClick={() => mut.mutate()}
+            disabled={mut.isPending}
+            className="px-4 py-2 text-sm bg-[#0F2D5C] text-white rounded-lg font-medium disabled:opacity-50 hover:bg-[#1a3d6b] transition-colors"
+          >
+            {mut.isPending ? 'جاري الحفظ...' : 'حفظ الإعداد'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ScheduleDrawer({ asset, onClose }: { asset: FixedAsset; onClose: () => void }) {
   const { data, isLoading } = useQuery({
     queryKey: ['asset-schedule', asset.id],
@@ -190,10 +276,17 @@ function ScheduleDrawer({ asset, onClose }: { asset: FixedAsset; onClose: () => 
   )
 }
 
+const ALLOC_METHOD_LABELS: Record<string, string> = {
+  machine_hours: 'ساعات تشغيل',
+  area_ratio:    'نسبة مساحة',
+  manual:        'يدوي',
+}
+
 export default function FixedAssetsPage() {
   const qc = useQueryClient()
   const [showAdd, setShowAdd] = useState(false)
-  const [scheduleAsset, setScheduleAsset] = useState<FixedAsset | null>(null)
+  const [scheduleAsset, setScheduleAsset]   = useState<FixedAsset | null>(null)
+  const [wipAsset, setWipAsset]             = useState<FixedAsset | null>(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ['assets'],
@@ -255,7 +348,7 @@ export default function FixedAssetsPage() {
                 <th className="text-right p-3">تاريخ الاقتناء</th>
                 <th className="text-right p-3">التكلفة</th>
                 <th className="text-right p-3">العمر (شهر)</th>
-                <th className="text-right p-3">الطريقة</th>
+                <th className="text-right p-3">توزيع WIP</th>
                 <th className="p-3"></th>
               </tr>
             </thead>
@@ -268,15 +361,31 @@ export default function FixedAssetsPage() {
                   <td className="p-3">{asset.acquisition_date}</td>
                   <td className="p-3">{formatEGP(asset.cost)}</td>
                   <td className="p-3">{asset.useful_life_months}</td>
-                  <td className="p-3 text-xs text-gray-500">
-                    {asset.depreciation_method === 'straight_line' ? 'قسط ثابت' : 'قسط متناقص'}
+                  <td className="p-3">
+                    {asset.crop_cycle_id ? (
+                      <span className="px-1.5 py-0.5 rounded text-xs bg-emerald-100 text-emerald-700">دورة #{asset.crop_cycle_id}</span>
+                    ) : asset.depreciation_allocation_method ? (
+                      <span className="px-1.5 py-0.5 rounded text-xs bg-blue-100 text-blue-700">
+                        {ALLOC_METHOD_LABELS[asset.depreciation_allocation_method] ?? asset.depreciation_allocation_method}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-gray-400">غير محدد</span>
+                    )}
                   </td>
                   <td className="p-3">
-                    <button onClick={() => setScheduleAsset(asset)}
-                      className="flex items-center gap-1 text-xs text-[#0F2D5C] hover:underline">
-                      <ChevronRight className="w-3 h-3" />
-                      الجدول
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => setWipAsset(asset)}
+                        title="إعدادات توزيع الإهلاك على WIP"
+                        className="flex items-center gap-1 text-xs text-amber-600 hover:underline">
+                        <Settings2 className="w-3 h-3" />
+                        WIP
+                      </button>
+                      <button onClick={() => setScheduleAsset(asset)}
+                        className="flex items-center gap-1 text-xs text-[#0F2D5C] hover:underline">
+                        <ChevronRight className="w-3 h-3" />
+                        الجدول
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -287,6 +396,7 @@ export default function FixedAssetsPage() {
 
       {showAdd && <AddAssetForm onClose={() => setShowAdd(false)} />}
       {scheduleAsset && <ScheduleDrawer asset={scheduleAsset} onClose={() => setScheduleAsset(null)} />}
+      {wipAsset && <WipAllocationDrawer asset={wipAsset} onClose={() => setWipAsset(null)} />}
     </div>
   )
 }
