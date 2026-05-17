@@ -343,33 +343,43 @@ operations.patch('/orders/:id/status', async (c) => {
           ).bind(entryId, id, company_id).run()
         }
 
-        // ── WIP dual-write: if WO is linked to a crop cycle, post labor+equipment cost ──
+        // ── WIP dual-write: non-blocking side-effect after GL is committed ──
+        // GL already posted above; WIP errors must never roll back the status transition.
         if (order?.crop_cycle_id && order.season_id) {
+          const glId = typeof entryId === 'number' ? entryId : null
           if (laborCost > 0) {
-            await postCostToWIP({
-              db: c.env.DB, company_id,
-              crop_cycle_id: order.crop_cycle_id,
-              season_id: order.season_id,
-              transaction_date: costingDate,
-              cost_category: 'labor',
-              debit: laborCost,
-              description: `عمالة — أمر عمل #${id}`,
-              source_module: 'operations', source_id: id,
-              journal_entry_id: typeof entryId === 'number' ? entryId : null,
-            })
+            try {
+              await postCostToWIP({
+                db: c.env.DB, company_id,
+                crop_cycle_id: order.crop_cycle_id,
+                season_id: order.season_id,
+                transaction_date: costingDate,
+                cost_category: 'labor',
+                debit: laborCost,
+                description: `عمالة — أمر عمل #${id}`,
+                source_module: 'operations', source_id: id,
+                journal_entry_id: glId,
+              })
+            } catch (wipErr) {
+              console.error(`WIP_LABOR_FAILED work_order=${id}:`, (wipErr as Error).message)
+            }
           }
           if (equipmentUnposted > 0) {
-            await postCostToWIP({
-              db: c.env.DB, company_id,
-              crop_cycle_id: order.crop_cycle_id,
-              season_id: order.season_id,
-              transaction_date: costingDate,
-              cost_category: 'equipment',
-              debit: equipmentUnposted,
-              description: `معدات — أمر عمل #${id}`,
-              source_module: 'operations', source_id: id,
-              journal_entry_id: typeof entryId === 'number' ? entryId : null,
-            })
+            try {
+              await postCostToWIP({
+                db: c.env.DB, company_id,
+                crop_cycle_id: order.crop_cycle_id,
+                season_id: order.season_id,
+                transaction_date: costingDate,
+                cost_category: 'equipment',
+                debit: equipmentUnposted,
+                description: `معدات — أمر عمل #${id}`,
+                source_module: 'operations', source_id: id,
+                journal_entry_id: glId,
+              })
+            } catch (wipErr) {
+              console.error(`WIP_EQUIPMENT_FAILED work_order=${id}:`, (wipErr as Error).message)
+            }
           }
         }
       }

@@ -73,12 +73,12 @@ dashboard.get('/cost-by-crop', async (c) => {
     ? `SELECT COALESCE(cc.name_ar, 'غير محدد') AS crop, SUM(st.amount) AS total_cost
        FROM supplier_transactions st
        LEFT JOIN cost_centers cc ON cc.code = st.center_code AND cc.company_id = st.company_id
-       WHERE st.company_id = ? AND st.season_id = ?
+       WHERE st.company_id = ? AND st.season_id = ? AND st.status = 'posted'
        GROUP BY st.center_code ORDER BY total_cost DESC LIMIT 10`
     : `SELECT COALESCE(cc.name_ar, 'غير محدد') AS crop, SUM(st.amount) AS total_cost
        FROM supplier_transactions st
        LEFT JOIN cost_centers cc ON cc.code = st.center_code AND cc.company_id = st.company_id
-       WHERE st.company_id = ?
+       WHERE st.company_id = ? AND st.status = 'posted'
        GROUP BY st.center_code ORDER BY total_cost DESC LIMIT 10`
 
   const { results } = seasonId
