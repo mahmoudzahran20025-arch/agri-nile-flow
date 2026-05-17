@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, AlertTriangle, TrendingUp, Layers, Calendar, Wheat } from 'lucide-react'
 import { cropCyclesApi, type WIPCategory, type CycleStatus } from '../../api/crop-cycles'
+import { costCategoriesApi } from '../../api/cost-categories'
 import { useToast } from '../../contexts/ToastContext'
 import { TableSkeleton } from '../../components/ui/Skeleton'
 import { useAppStore } from '../../store/appStore'
@@ -14,7 +15,8 @@ const STATUS_CONFIG: Record<CycleStatus, { label: string; className: string }> =
   written_off: { label: 'مشطوبة',    className: 'bg-red-100 text-red-700' },
 }
 
-const CATEGORY_LABELS: Record<WIPCategory, string> = {
+// Fallback labels for legacy cost_category enum values not yet in cost_categories table.
+const CATEGORY_LABELS_FALLBACK: Record<WIPCategory, string> = {
   materials:    'مواد',
   labor:        'عمالة',
   equipment:    'معدات',
@@ -55,6 +57,15 @@ export default function CropCycleDetailPage() {
     queryFn: () => cropCyclesApi.wipSummary(cycleId),
     enabled: activeTab === 'summary',
   })
+
+  const { data: costCats } = useQuery({
+    queryKey: ['cost-categories'],
+    queryFn: () => costCategoriesApi.list(),
+    staleTime: 5 * 60_000,
+  })
+  const catLabelMap = Object.fromEntries(
+    (costCats ?? []).map(c => [c.code.toLowerCase(), c.name_ar])
+  )
 
   const canWrite = role === 'super_admin' || role === 'company_admin' || role === 'field_supervisor' || role === 'accountant'
 
@@ -253,7 +264,10 @@ export default function CropCycleDetailPage() {
                       <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{row.transaction_date}</td>
                       <td className="px-4 py-3">
                         <span className="px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-600">
-                          {CATEGORY_LABELS[row.cost_category] ?? row.cost_category}
+                          {catLabelMap[row.cost_category_code?.toLowerCase() ?? '']
+                            ?? catLabelMap[row.cost_category?.toLowerCase() ?? '']
+                            ?? CATEGORY_LABELS_FALLBACK[row.cost_category as WIPCategory]
+                            ?? row.cost_category}
                         </span>
                         {row.subcategory_code && (
                           <span className="ml-1 text-xs text-slate-400">{row.subcategory_code}</span>
@@ -319,7 +333,9 @@ export default function CropCycleDetailPage() {
                     {wipSummary.by_category.map(r => (
                       <tr key={r.cost_category} className="hover:bg-slate-50">
                         <td className="px-4 py-2.5 font-medium text-slate-700">
-                          {CATEGORY_LABELS[r.cost_category as WIPCategory] ?? r.cost_category}
+                          {catLabelMap[r.cost_category?.toLowerCase() ?? '']
+                            ?? CATEGORY_LABELS_FALLBACK[r.cost_category as WIPCategory]
+                            ?? r.cost_category}
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono text-emerald-700">{fmt(r.total_debit)}</td>
                         <td className="px-4 py-2.5 text-right font-mono text-red-600">{fmt(r.total_credit)}</td>

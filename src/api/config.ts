@@ -391,7 +391,7 @@ config.get('/seasons/:id/close-check', async (c) => {
 config.post('/seasons/:id/close', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))
-  const { close_notes, force } = await c.req.json<{ close_notes?: string; force?: boolean }>()
+  const { close_notes, force, to_season_id } = await c.req.json<{ close_notes?: string; force?: boolean; to_season_id?: number }>()
 
   const season = await c.env.DB.prepare(
     'SELECT status FROM seasons WHERE id = ? AND company_id = ?'
@@ -431,16 +431,32 @@ config.post('/seasons/:id/close', async (c) => {
        AND crop_type IN ('long_cycle','perennial')`
   ).bind(company_id, id).all<{ id: number; crop_name: string }>()
 
-  // Legacy GL carry-forward (field-level, no crop_cycle_id context — keep for backward compat)
+  // Cycle-aware WIP carry-forward: long_cycle/perennial active cycles → post GL + wip_ledger markers.
+  let cycleWipEntries: Array<{ crop_cycle_id: number; crop_name: string; wip_balance: number; entry_id: number | null }> = []
+  if (to_season_id) {
+    try {
+      cycleWipEntries = await FinanceCore.carryForwardCropCycleWIP(c.env.DB, {
+        company_id,
+        from_season_id: id,
+        to_season_id,
+        user_id: userId,
+      })
+    } catch (err: unknown) {
+      console.warn('Cycle WIP carry-forward warning (non-fatal):', (err as Error).message)
+    }
+  }
+
+  // Legacy GL carry-forward (field-level, keep for backwards compatibility with pre-Phase-3 data)
   let wipEntries: Array<{ field_id: number; crop_name: string; cost_balance: number }> = []
   try {
     wipEntries = await FinanceCore.carryForwardWIP(c.env.DB, {
       company_id,
       season_id: id,
+      to_season_id,
       user_id: userId,
     })
-  } catch (err: any) {
-    console.warn('WIP carry-forward warning (non-fatal):', err.message)
+  } catch (err: unknown) {
+    console.warn('WIP carry-forward warning (non-fatal):', (err as Error).message)
   }
 
   await c.env.DB.prepare(
@@ -456,7 +472,9 @@ config.post('/seasons/:id/close', async (c) => {
     new_value: {
       status: 'closed',
       wip_carried: wipEntries.length,
+      cycle_wip_carried: cycleWipEntries.length,
       carry_forward_cycles: carryForwardCycles.length,
+      to_season_id: to_season_id ?? null,
       force_override: force ?? false,
       close_notes: close_notes ?? null,
     },
@@ -469,6 +487,8 @@ config.post('/seasons/:id/close', async (c) => {
       status: 'closed',
       wip_carried: wipEntries.length,
       wip_details: wipEntries,
+      cycle_wip_carried: cycleWipEntries.length,
+      cycle_wip_details: cycleWipEntries,
       carry_forward_cycles: carryForwardCycles,
       force_override: force ?? false,
     },
@@ -540,10 +560,11 @@ config.post('/wip/:id/assign', async (c) => {
 })
 
 // ── POST /config/wip/carry-forward — trigger WIP carry-forward for a season ──
-// Wraps FinanceCore.carryForwardWIP; safe to call multiple times (idempotent).
+// Runs cycle-aware carry-forward (Phase 3+) when to_season_id is provided,
+// plus the legacy field-level carry-forward for backwards compatibility.
 config.post('/wip/carry-forward', async (c) => {
   const { company_id, sub: userId } = getUser(c)
-  const { season_id } = await c.req.json<{ season_id: number }>()
+  const { season_id, to_season_id } = await c.req.json<{ season_id: number; to_season_id?: number }>()
   if (!season_id) return c.json({ success: false, error: 'season_id مطلوب' }, 400)
 
   const season = await c.env.DB.prepare(
@@ -552,10 +573,24 @@ config.post('/wip/carry-forward', async (c) => {
   if (!season) return c.json({ success: false, error: 'الموسم غير موجود' }, 404)
 
   try {
-    const entries = await FinanceCore.carryForwardWIP(c.env.DB, {
-      company_id, season_id, user_id: userId,
+    let cycleEntries: Array<{ crop_cycle_id: number; crop_name: string; wip_balance: number; entry_id: number | null }> = []
+    if (to_season_id) {
+      cycleEntries = await FinanceCore.carryForwardCropCycleWIP(c.env.DB, {
+        company_id, from_season_id: season_id, to_season_id, user_id: userId,
+      })
+    }
+    const legacyEntries = await FinanceCore.carryForwardWIP(c.env.DB, {
+      company_id, season_id, to_season_id, user_id: userId,
     })
-    return c.json({ success: true, data: { entries_created: entries.length, entries } })
+    return c.json({
+      success: true,
+      data: {
+        cycle_entries_created: cycleEntries.length,
+        cycle_entries: cycleEntries,
+        legacy_entries_created: legacyEntries.length,
+        legacy_entries: legacyEntries,
+      },
+    })
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
     return c.json({ success: false, error: msg }, 500)

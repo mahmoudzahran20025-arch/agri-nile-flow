@@ -38,8 +38,9 @@ export interface WIPLedgerEntry {
   season_id:        number
   season_name:      string
   transaction_date: string
-  cost_category:    WIPCategory
-  subcategory_code: string | null
+  cost_category:      WIPCategory
+  cost_category_code: string | null
+  subcategory_code:   string | null
   debit:            number
   credit:           number
   running_balance:  number
