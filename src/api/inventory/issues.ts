@@ -47,7 +47,10 @@ async function ensureOutboxQueued(
 }
 
 // ── POST /issues ──────────────────────────────────────────────────────────────
+// DEPRECATED: use POST /movements/batch with movement_type=ISSUE instead.
 issues.post('/issues', permissionGuard('inventory', 'create'), async (c) => {
+  c.header('X-Deprecated', 'true')
+  c.header('X-Deprecated-Use', 'POST /movements/batch with movement_type=ISSUE')
   const { company_id, sub: userId, role } = getUser(c)
   const b = await c.req.json<{
     issue_date:       string
@@ -155,7 +158,10 @@ issues.post('/issues', permissionGuard('inventory', 'create'), async (c) => {
 })
 
 // ── POST /issues/batch ────────────────────────────────────────────────────────
+// DEPRECATED: use POST /movements/batch with movement_type=ISSUE instead.
 issues.post('/issues/batch', permissionGuard('inventory', 'create'), async (c) => {
+  c.header('X-Deprecated', 'true')
+  c.header('X-Deprecated-Use', 'POST /movements/batch with movement_type=ISSUE')
   const { company_id, sub: userId, role } = getUser(c)
   const b = await c.req.json<{
     issue_date:       string

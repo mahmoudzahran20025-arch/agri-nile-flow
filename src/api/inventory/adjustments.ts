@@ -133,7 +133,10 @@ adjustments.get('/adjustments/:id', permissionGuard('inventory', 'read'), async 
   return c.json({ success: true, data: { ...adj, lines } })
 })
 
+// DEPRECATED: PhysicalCountPage now uses POST /movements/batch via useMovementPostingPipeline.
 adjustments.post('/adjustments/:id/post', permissionGuard('inventory', 'create'), async (c) => {
+  c.header('X-Deprecated', 'true')
+  c.header('X-Deprecated-Use', 'POST /movements/batch with movement_type=ADJUSTMENT_PROFIT or ADJUSTMENT_LOSS')
   const { company_id, sub: userId, role } = getUser(c)
   const id = Number(c.req.param('id'))
 
