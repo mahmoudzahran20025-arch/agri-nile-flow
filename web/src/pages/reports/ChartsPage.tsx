@@ -9,6 +9,7 @@ import { BarChart3, TrendingUp, Package, Users, TrendingDown, RefreshCw, Banknot
 import { dashboardApi, suppliersApi, inventoryApi } from '../../api/client'
 import { useSeasonId } from '../../store/appStore'
 import { CommandBar } from '../../components/ui/CommandBar'
+import { FilterBar, SegmentedControl } from '../../components/ui/FilterBar'
 
 // ─── Formatters ────────────────────────────────────────────────
 function egp(n: number) {
@@ -195,24 +196,14 @@ export default function ChartsPage() {
         subtitle="مؤشرات التدفق النقدي · المخزون · الذمم"
       />
 
-      {/* Cashflow period filter sub-bar */}
-      <div className="flex items-center gap-3 px-5 py-2.5 border-b border-slate-200 bg-white shrink-0">
+      <FilterBar>
         <span className="text-xs text-slate-400">فترة التدفق النقدي:</span>
-        <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
-          {[6, 12, 24].map(m => (
-            <button
-              key={m}
-              onClick={() => setCashflowMonths(m)}
-              className={`px-3 py-1 text-xs rounded-md font-semibold transition-all ${
-                cashflowMonths === m
-                  ? 'bg-white shadow text-brand-700'
-                  : 'text-slate-500 hover:text-slate-700'}`}
-            >
-              {m} شهر
-            </button>
-          ))}
-        </div>
-      </div>
+        <SegmentedControl
+          options={[6, 12, 24].map(m => ({ value: m, label: `${m} شهر` }))}
+          value={cashflowMonths}
+          onChange={setCashflowMonths}
+        />
+      </FilterBar>
 
       <div className="flex-1 overflow-y-auto p-5 pb-10 space-y-5">
 

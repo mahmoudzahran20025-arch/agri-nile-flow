@@ -9,6 +9,7 @@ import {
 import { reportsApi, configApi } from '../../api/client'
 import type { Season } from '../../types'
 import { CommandBar } from '../../components/ui/CommandBar'
+import { FilterBar } from '../../components/ui/FilterBar'
 
 // ─── Formatters ───────────────────────────────────────────────
 
@@ -202,8 +203,7 @@ export default function SeasonPnLPage() {
         }] : []}
       />
 
-      {/* Season selector sub-bar */}
-      <div className="flex items-center gap-3 px-5 py-2.5 border-b border-slate-200 bg-white shrink-0">
+      <FilterBar>
         <select
           className="input w-52 text-sm"
           value={seasonId ?? ''}
@@ -214,7 +214,7 @@ export default function SeasonPnLPage() {
             <option key={s.id} value={s.id}>{s.name}{s.status === 'active' ? ' ✓' : ''}</option>
           ))}
         </select>
-      </div>
+      </FilterBar>
 
       <div className="flex-1 overflow-y-auto p-5 space-y-6">
 
