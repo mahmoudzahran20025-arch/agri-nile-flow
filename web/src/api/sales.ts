@@ -79,6 +79,47 @@ export interface DailySummary {
   by_hour:      DailyHourBreakdown[]
 }
 
+export interface SalesTrendRow {
+  period_label:  string
+  order_count:   number
+  revenue:       number
+  subtotal:      number
+  tax_amount:    number
+  voided_count:  number
+}
+
+export interface SalesTopItem {
+  item_code:     number
+  item_name:     string | null
+  unit:          string | null
+  order_count:   number
+  total_qty:     number
+  total_revenue: number
+  avg_price:     number
+}
+
+export interface SalesReturnsTrendRow {
+  period_label:  string
+  return_count:  number
+  return_total:  number
+}
+
+export interface SalesAnalytics {
+  period:       'daily' | 'monthly'
+  date_from:    string
+  date_to:      string
+  summary: {
+    total_revenue:   number
+    total_orders:    number
+    total_returns:   number
+    net_revenue:     number
+    avg_order_value: number
+  }
+  trend:         SalesTrendRow[]
+  top_items:     SalesTopItem[]
+  returns_trend: SalesReturnsTrendRow[]
+}
+
 export interface SalesReturnRow {
   id:                number
   original_order_id: number
@@ -122,6 +163,16 @@ export const salesApi = {
 
   voidSale: (id: number) =>
     unwrap(api.patch<{ voided: boolean; order_id: number }>(`/sales/${id}/void`, {})),
+
+  getAnalytics: (params?: { period?: 'daily' | 'monthly'; date_from?: string; date_to?: string; top_n?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.period)    qs.set('period',    params.period)
+    if (params?.date_from) qs.set('date_from', params.date_from)
+    if (params?.date_to)   qs.set('date_to',   params.date_to)
+    if (params?.top_n)     qs.set('top_n',     String(params.top_n))
+    const q = qs.toString()
+    return unwrap(api.get<SalesAnalytics>(`/sales/analytics${q ? `?${q}` : ''}`))
+  },
 
   getDailySummary: (params?: { date?: string; branch_id?: number }) => {
     const qs = new URLSearchParams()

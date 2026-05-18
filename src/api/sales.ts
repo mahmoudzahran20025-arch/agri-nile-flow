@@ -431,6 +431,105 @@ sales.get('/daily', permissionGuard('inventory', 'read'), async (c) => {
   })
 })
 
+// ── GET /api/sales/analytics — revenue trends + top items ────────────────────
+// Query params:
+//   period: 'daily' | 'monthly' (default 'daily')
+//   date_from, date_to: YYYY-MM-DD range (defaults: last 30 days)
+//   top_n: number of top-selling items to return (default 10)
+sales.get('/analytics', permissionGuard('inventory', 'read'), async (c) => {
+  const { company_id } = getUser(c)
+
+  const period   = (c.req.query('period') ?? 'daily') as 'daily' | 'monthly'
+  const topN     = Math.min(50, Math.max(1, Number(c.req.query('top_n') ?? 10)))
+  const today    = new Date().toISOString().slice(0, 10)
+  const dateTo   = c.req.query('date_to')   ?? today
+  const dateFrom = c.req.query('date_from') ?? new Date(Date.now() - 29 * 86400_000).toISOString().slice(0, 10)
+
+  const groupExpr = period === 'monthly'
+    ? `strftime('%Y-%m', so.order_date)`
+    : `so.order_date`
+
+  const [trend, topItems, returnsTrend] = await Promise.all([
+    // Revenue trend over period
+    c.env.DB.prepare(
+      `SELECT ${groupExpr} AS period_label,
+              COUNT(CASE WHEN so.status != 'voided' THEN 1 END) AS order_count,
+              COALESCE(SUM(CASE WHEN so.status != 'voided' THEN so.total ELSE 0 END), 0) AS revenue,
+              COALESCE(SUM(CASE WHEN so.status != 'voided' THEN so.subtotal ELSE 0 END), 0) AS subtotal,
+              COALESCE(SUM(CASE WHEN so.status != 'voided' THEN so.tax_amount ELSE 0 END), 0) AS tax_amount,
+              COUNT(CASE WHEN so.status = 'voided' THEN 1 END) AS voided_count
+       FROM sales_orders so
+       WHERE so.company_id = ?
+         AND so.order_date BETWEEN ? AND ?
+       GROUP BY period_label
+       ORDER BY period_label`
+    ).bind(company_id, dateFrom, dateTo).all<{
+      period_label: string; order_count: number; revenue: number
+      subtotal: number; tax_amount: number; voided_count: number
+    }>(),
+
+    // Top selling items by qty and revenue
+    c.env.DB.prepare(
+      `SELECT soi.item_code,
+              COALESCE(i.name, soi.item_name) AS item_name,
+              i.unit,
+              COUNT(DISTINCT soi.order_id) AS order_count,
+              SUM(soi.quantity)             AS total_qty,
+              SUM(soi.line_total)           AS total_revenue,
+              AVG(soi.unit_price)           AS avg_price
+       FROM sales_order_items soi
+       JOIN sales_orders so ON so.id = soi.order_id AND so.company_id = soi.company_id
+       LEFT JOIN items i ON i.code = soi.item_code AND i.company_id = soi.company_id
+       WHERE soi.company_id = ?
+         AND so.order_date BETWEEN ? AND ?
+         AND so.status != 'voided'
+       GROUP BY soi.item_code
+       ORDER BY total_revenue DESC
+       LIMIT ?`
+    ).bind(company_id, dateFrom, dateTo, topN).all<{
+      item_code: number; item_name: string | null; unit: string | null
+      order_count: number; total_qty: number; total_revenue: number; avg_price: number
+    }>(),
+
+    // Returns trend over same period
+    c.env.DB.prepare(
+      `SELECT ${period === 'monthly' ? "strftime('%Y-%m', sr.return_date)" : 'sr.return_date'} AS period_label,
+              COUNT(*) AS return_count,
+              COALESCE(SUM(sr.total), 0) AS return_total
+       FROM sales_returns sr
+       WHERE sr.company_id = ?
+         AND sr.return_date BETWEEN ? AND ?
+       GROUP BY period_label
+       ORDER BY period_label`
+    ).bind(company_id, dateFrom, dateTo).all<{
+      period_label: string; return_count: number; return_total: number
+    }>(),
+  ])
+
+  const totalRevenue = trend.results.reduce((s, r) => s + r.revenue, 0)
+  const totalOrders  = trend.results.reduce((s, r) => s + r.order_count, 0)
+  const totalReturns = returnsTrend.results.reduce((s, r) => s + r.return_total, 0)
+
+  return c.json({
+    success: true,
+    data: {
+      period,
+      date_from:     dateFrom,
+      date_to:       dateTo,
+      summary: {
+        total_revenue:  Math.round(totalRevenue * 100) / 100,
+        total_orders:   totalOrders,
+        total_returns:  Math.round(totalReturns * 100) / 100,
+        net_revenue:    Math.round((totalRevenue - totalReturns) * 100) / 100,
+        avg_order_value: totalOrders > 0 ? Math.round(totalRevenue / totalOrders * 100) / 100 : 0,
+      },
+      trend:          trend.results,
+      top_items:      topItems.results,
+      returns_trend:  returnsTrend.results,
+    },
+  })
+})
+
 // ── GET /api/sales/returns — must be before /:id ──────────────────────────────
 sales.get('/returns', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)

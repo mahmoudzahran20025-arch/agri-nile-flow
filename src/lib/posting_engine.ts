@@ -376,6 +376,7 @@ export async function resolveControlAccount(
 
 export function resolveMovementDirection(movementType: string): 'IN' | 'OUT' {
   const IN_CODES = new Set(['GRN', 'TRANSFER_IN', 'RETURN_CUSTOMER', 'ADJUSTMENT_PROFIT', 'PRODUCTION_OUTPUT'])
+  // GRN_REVERSE reduces stock (reversal of a purchase receipt) — treated as OUT
   return IN_CODES.has(movementType) ? 'IN' : 'OUT'
 }
 
@@ -398,7 +399,7 @@ export async function resolveInventoryMovement(
   // Normalise to a known code or null so the movement_type cascade is skipped for
   // legacy Arabic strings that don't exist in posting_rules.movement_type.
   const mtCode = resolveMovementDirection(movementType) === 'IN' || resolveMovementDirection(movementType) === 'OUT'
-    ? (['GRN','ISSUE','TRANSFER_IN','TRANSFER_OUT','RETURN_CUSTOMER','RETURN_SUPPLIER',
+    ? (['GRN','GRN_REVERSE','ISSUE','TRANSFER_IN','TRANSFER_OUT','RETURN_CUSTOMER','RETURN_SUPPLIER',
         'ADJUSTMENT_PROFIT','ADJUSTMENT_LOSS','PRODUCTION_INPUT','PRODUCTION_OUTPUT'].includes(movementType)
         ? movementType : null)
     : null

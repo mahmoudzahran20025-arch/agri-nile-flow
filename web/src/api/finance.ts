@@ -133,6 +133,8 @@ export const financeApi = {
   }) => unwrap(api.post<{id:number; po_number:string}>('/finance/purchase-orders', b)),
   updatePOStatus: (id: number, status: string, notes?: string) =>
     unwrap(api.patch<null>(`/finance/purchase-orders/${id}/status`, { status, notes })),
+  voidPurchaseOrder: (id: number) =>
+    unwrap(api.patch<{ voided: boolean; po_id: number; reversed_movements: number }>(`/finance/purchase-orders/${id}/void`, {})),
   
   // Realignment: PO Receipt moves to /inventory
   receivePO: (id: number, b: { received_date: string; season_id?: number; items: Array<{ po_item_id: number; qty_received: number; warehouse: string }> }) =>

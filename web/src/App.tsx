@@ -90,6 +90,7 @@ const PhysicalCountPage          = lazy(() => import('./pages/inventory/Physical
 const FixedAssetsPage            = lazy(() => import('./pages/inventory/FixedAssetsPage'))
 const WipBalancesPage            = lazy(() => import('./pages/inventory/WipBalancesPage'))
 const SalesPage                  = lazy(() => import('./pages/sales/SalesPage'))
+const SalesAnalyticsPage         = lazy(() => import('./pages/sales/SalesAnalyticsPage'))
 const PosPage                    = lazy(() => import('./pages/pos/PosPage'))
 const CustomersPage              = lazy(() => import('./pages/customers/CustomersPage'))
 
@@ -216,6 +217,7 @@ export default function App() {
         <Route path="inventory/fixed-assets"     element={<FixedAssetsPage />} />
         <Route path="inventory/wip-balances"     element={<WipBalancesPage />} />
         <Route path="sales"                      element={<SalesPage />} />
+        <Route path="sales/analytics"            element={<SalesAnalyticsPage />} />
         <Route path="pos"                        element={<PosPage />} />
         <Route path="customers"                  element={<CustomersPage />} />
 

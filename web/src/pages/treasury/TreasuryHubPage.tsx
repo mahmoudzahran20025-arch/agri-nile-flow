@@ -741,6 +741,17 @@ function POTab() {
     onError: (err: { message?: string }) => toast(err.message || 'فشل تسجيل الاستلام', 'error'),
   })
 
+  const voidPOMut = useMutation({
+    mutationFn: (id: number) => financeApi.voidPurchaseOrder(id),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['purchase-orders'] })
+      qc.invalidateQueries({ queryKey: ['purchase-order', expandedId] })
+      qc.invalidateQueries({ queryKey: ['warehouse-balances'] })
+      toast(`تم إلغاء الطلب وعكس ${data.reversed_movements} حركة مخزنية`, 'success')
+    },
+    onError: (err: { message?: string }) => toast(err.message || 'فشل إلغاء أمر الشراء', 'error'),
+  })
+
   function openReceive(po: PurchaseOrder) {
     if (!detail?.items) return
     setReceiveItems(detail.items.map(i => ({
@@ -821,7 +832,12 @@ function POTab() {
                   onStatus={(status) => statusMut.mutate({ id: po.id, status })}
                   onReceive={() => openReceive(po)}
                   onInvoice={() => { setShowInvoice(po); setInvoiceDate(new Date().toISOString().slice(0, 10)) }}
-                  statusPending={statusMut.isPending}
+                  onVoid={() => {
+                    if (confirm(`هل تريد إلغاء أمر الشراء #${po.po_number} مع عكس جميع حركات المخزون؟`)) {
+                      voidPOMut.mutate(po.id)
+                    }
+                  }}
+                  statusPending={statusMut.isPending || voidPOMut.isPending}
                 />
               ))}
             </div>
@@ -1105,7 +1121,7 @@ function POTab() {
 // ── PO Row ─────────────────────────────────────────────────────
 function PORow({
   po, expanded, detail, detailLoading,
-  onToggle, onStatus, onReceive, onInvoice, statusPending,
+  onToggle, onStatus, onReceive, onInvoice, onVoid, statusPending,
 }: {
   po: PurchaseOrder
   expanded: boolean
@@ -1115,6 +1131,7 @@ function PORow({
   onStatus: (status: string) => void
   onReceive: () => void
   onInvoice: () => void
+  onVoid: () => void
   statusPending: boolean
 }) {
   const s = PO_STATUS[po.status] ?? { label: po.status, color: 'bg-gray-100 text-gray-500', icon: null }
@@ -1122,6 +1139,7 @@ function PORow({
   const canReceive = ['sent', 'partial'].includes(po.status)
   const canInvoice = ['partial', 'received'].includes(po.status)
   const canCancel  = ['draft', 'sent'].includes(po.status)
+  const canVoid    = ['partial', 'received'].includes(po.status)
 
   return (
     <div>
@@ -1203,6 +1221,12 @@ function PORow({
                   <button onClick={() => onStatus('cancelled')} disabled={statusPending}
                     className="flex items-center gap-1.5 text-xs border border-red-200 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg px-3 py-1.5 transition-colors">
                     <X size={12} /> إلغاء الطلب
+                  </button>
+                )}
+                {canVoid && (
+                  <button onClick={onVoid} disabled={statusPending}
+                    className="flex items-center gap-1.5 text-xs border border-rose-300 text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50">
+                    <X size={12} /> إلغاء مع عكس المخزون
                   </button>
                 )}
                 {po.status === 'received' && (

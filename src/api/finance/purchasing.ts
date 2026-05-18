@@ -1,10 +1,12 @@
 import { Hono } from 'hono'
 import type { Env } from '../../types'
-import { getUser } from '../../middleware/auth'
+import { getUser, permissionGuard } from '../../middleware/auth'
 import { getTodayIsoDate } from '../../lib/utils/date'
 import { logAudit } from '../../lib/audit'
 import { getOpenPeriod } from '../../lib/gl'
 import { FinanceCore } from '../../lib/finance_core'
+import { postFromBusinessEvent } from '../../lib/finance'
+import { resolveControlAccount } from '../../lib/posting_engine'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 
@@ -298,6 +300,120 @@ purchasing.get('/cash-tx-search', async (c) => {
   ).bind(...binds).all()
 
   return c.json({ success: true, data: results })
+})
+
+// ── PATCH /purchase-orders/:id/void ──────────────────────────────────────────
+// Cancels a PO that has already been (partially or fully) received and:
+//   1. Reverses all GRN inventory movements (adds stock back via GRN_REVERSE type)
+//   2. Updates inventory_balances accordingly
+//   3. Non-blocking GL reversal: DR accounts_payable / CR inventory asset account
+//   4. Sets PO status = 'cancelled'
+// Only 'partial' or 'received' POs with GRN movements qualify; 'sent'/'draft'
+// POs (no stock yet) are cancelled via the existing status PATCH.
+purchasing.patch('/purchase-orders/:id/void', permissionGuard('suppliers', 'update'), async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+  if (!id) return c.json({ success: false, error: 'معرف أمر الشراء غير صحيح' }, 400)
+
+  const po = await c.env.DB.prepare(
+    'SELECT id, status, supplier_code FROM purchase_orders WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ id: number; status: string; supplier_code: number | null }>()
+
+  if (!po) return c.json({ success: false, error: 'أمر الشراء غير موجود' }, 404)
+  if (po.status === 'cancelled') return c.json({ success: false, error: 'أمر الشراء ملغى مسبقاً' }, 422)
+
+  // Load all GRN movements for this PO
+  const grnMovements = await c.env.DB.prepare(
+    `SELECT id, item_code, warehouse_id, qty_in, value_in, unit_price, journal_entry_id
+     FROM inventory_movements
+     WHERE company_id = ? AND po_id = ? AND movement_type = 'GRN'
+     ORDER BY id`
+  ).bind(company_id, id).all<{
+    id: number
+    item_code: number
+    warehouse_id: number
+    qty_in: number
+    value_in: number
+    unit_price: number
+    journal_entry_id: number | null
+  }>()
+
+  const today = getTodayIsoDate()
+  let reversedMovements = 0
+
+  // Reverse each GRN movement
+  for (const mov of grnMovements.results) {
+    const bal = await c.env.DB.prepare(
+      'SELECT balance_qty, balance_value FROM inventory_balances WHERE company_id = ? AND item_code = ? AND warehouse_id = ?'
+    ).bind(company_id, mov.item_code, mov.warehouse_id).first<{ balance_qty: number; balance_value: number }>()
+
+    const newQty = Math.round(((bal?.balance_qty ?? 0) - mov.qty_in) * 1000) / 1000
+    const newVal = Math.round(((bal?.balance_value ?? 0) - mov.value_in) * 100) / 100
+
+    await c.env.DB.prepare(
+      `INSERT INTO inventory_movements
+         (company_id, item_code, warehouse_id, movement_type, movement_date,
+          quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
+          statement_text, created_by, gl_posting_status, po_id)
+       VALUES (?, ?, ?, 'GRN_REVERSE', ?, ?, ?, 0, ?, ?, 0, ?, ?, ?, ?, 'pending', ?)`
+    ).bind(
+      company_id, mov.item_code, mov.warehouse_id,
+      today,
+      mov.qty_in, mov.unit_price,
+      mov.qty_in, newQty, mov.value_in, newVal,
+      `إلغاء أمر شراء رقم ${id} — عكس GRN`,
+      userId,
+      id,
+    ).run()
+
+    await c.env.DB.prepare(
+      `INSERT INTO inventory_balances (company_id, item_code, warehouse_id, balance_qty, balance_value)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(company_id, item_code, warehouse_id) DO UPDATE
+         SET balance_qty = excluded.balance_qty, balance_value = excluded.balance_value`
+    ).bind(company_id, mov.item_code, mov.warehouse_id, newQty < 0 ? 0 : newQty, newVal < 0 ? 0 : newVal).run()
+
+    reversedMovements++
+
+    // Non-blocking GL reversal per GRN line
+    if (mov.value_in > 0) {
+      try {
+        const apAcc  = await resolveControlAccount(c.env.DB, company_id, 'accounts_payable')
+        const invAcc = await resolveControlAccount(c.env.DB, company_id, 'inventory')
+        if (apAcc && invAcc) {
+          await postFromBusinessEvent(c.env.DB, {
+            company_id,
+            event_type:    'purchase_order_void',
+            source_module: 'purchases',
+            source_id:     mov.id,
+            event_date:    today,
+            description:   `عكس استلام مشتريات — إلغاء أمر شراء رقم ${id}`,
+            created_by:    userId,
+            payload:       { voided_po_id: id, original_grn_movement: mov.id, original_gl_entry: mov.journal_entry_id },
+            trace:         null,
+            lines: [
+              { account_code: apAcc,  debit: mov.value_in, credit: 0, description: `إلغاء ذمم موردين — أمر #${id}`, rule_slot: 'accounts_payable', source_ledger: 'inventory' as const, source_record_id: mov.id },
+              { account_code: invAcc, debit: 0, credit: mov.value_in, description: `إلغاء مخزون — أمر #${id}`,      rule_slot: 'inventory',         source_ledger: 'inventory' as const, source_record_id: mov.id },
+            ],
+          })
+        }
+      } catch {
+        // Non-blocking — void proceeds even if GL reversal fails
+      }
+    }
+  }
+
+  await c.env.DB.prepare(
+    "UPDATE purchase_orders SET status = 'cancelled', updated_at = datetime('now') WHERE id = ? AND company_id = ?"
+  ).bind(id, company_id).run()
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'VOID',
+    table_name: 'purchase_orders', record_id: id,
+    new_value: { status: 'cancelled', reversed_movements: reversedMovements },
+  })
+
+  return c.json({ success: true, data: { voided: true, po_id: id, reversed_movements: reversedMovements } })
 })
 
 export default purchasing
