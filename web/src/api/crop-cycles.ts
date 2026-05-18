@@ -30,6 +30,7 @@ export interface CropCycle {
   total_wip_cost:        number
   total_settled:         number
   wip_balance:           number
+  days_overdue:          number | null
 }
 
 export interface WIPLedgerEntry {

@@ -31,6 +31,25 @@ export interface InventoryAlertRow {
   balance_qty: number
 }
 
+export interface OverdueCycleRow {
+  id:                     number
+  crop_name:              string
+  planting_date:          string
+  expected_harvest_date:  string
+  area_feddan:            number | null
+  status:                 string
+  field_name:             string
+  season_name:            string
+  days_overdue:           number
+  wip_balance:            number
+}
+
+export interface OverdueCyclesResponse {
+  count:              number
+  total_wip_at_risk:  number
+  cycles:             OverdueCycleRow[]
+}
+
 export const dashboardApi = {
   stats:              () => unwrap(api.get<DashboardStats>('/dashboard/stats')),
   monthlyCashflow:    (months = 12) =>
@@ -40,4 +59,5 @@ export const dashboardApi = {
   recentTransactions: (limit = 15) =>
     unwrap(api.get<RecentTransactionRow[]>(`/dashboard/recent-transactions?limit=${limit}`)),
   inventoryAlerts:    () => unwrap(api.get<InventoryAlertRow[]>('/dashboard/inventory-alerts')),
+  overdueCycles:      () => unwrap(api.get<OverdueCyclesResponse>('/dashboard/overdue-cycles')),
 }

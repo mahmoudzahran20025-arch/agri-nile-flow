@@ -16,6 +16,7 @@ cropCycles.get('/', async (c) => {
   const season_id = c.req.query('season_id')
   const status    = c.req.query('status')
 
+  const today = new Date().toISOString().slice(0, 10)
   let sql = `
     SELECT cc.*,
            f.name  AS field_name,
@@ -23,7 +24,14 @@ cropCycles.get('/', async (c) => {
            s.name  AS season_name,
            COALESCE(wl.total_debit,  0) AS total_wip_cost,
            COALESCE(wl.total_credit, 0) AS total_settled,
-           COALESCE(wl.total_debit - wl.total_credit, 0) AS wip_balance
+           COALESCE(wl.total_debit - wl.total_credit, 0) AS wip_balance,
+           CASE
+             WHEN cc.status = 'active'
+               AND cc.expected_harvest_date IS NOT NULL
+               AND cc.expected_harvest_date < ?
+             THEN CAST(julianday(?) - julianday(cc.expected_harvest_date) AS INTEGER)
+             ELSE NULL
+           END AS days_overdue
     FROM crop_cycles cc
     JOIN fields  f ON f.id = cc.field_id  AND f.company_id  = cc.company_id
     JOIN seasons s ON s.id = cc.season_id AND s.company_id  = cc.company_id
@@ -37,7 +45,7 @@ cropCycles.get('/', async (c) => {
     ) wl ON wl.crop_cycle_id = cc.id
     WHERE cc.company_id = ?`
 
-  const params: unknown[] = [company_id, company_id]
+  const params: unknown[] = [today, today, company_id, company_id]
 
   if (field_id)  { sql += ' AND cc.field_id = ?';  params.push(Number(field_id)) }
   if (season_id) { sql += ' AND cc.season_id = ?'; params.push(Number(season_id)) }

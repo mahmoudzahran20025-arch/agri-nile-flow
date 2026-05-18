@@ -126,4 +126,48 @@ dashboard.get('/inventory-alerts', async (c) => {
   return c.json({ success: true, data: results })
 })
 
+// GET /api/dashboard/overdue-cycles
+// Returns active crop cycles whose expected_harvest_date has passed without
+// being settled. Used for dashboard alerts and the overdue badge on CropCyclesPage.
+dashboard.get('/overdue-cycles', async (c) => {
+  const { company_id } = getUser(c)
+  const today = new Date().toISOString().slice(0, 10)
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT cc.id, cc.crop_name, cc.planting_date, cc.expected_harvest_date,
+            cc.area_feddan, cc.status,
+            f.name AS field_name,
+            s.name AS season_name,
+            CAST(julianday(?) - julianday(cc.expected_harvest_date) AS INTEGER) AS days_overdue,
+            COALESCE(wl.wip_balance, 0) AS wip_balance
+     FROM crop_cycles cc
+     JOIN fields  f ON f.id = cc.field_id  AND f.company_id = cc.company_id
+     JOIN seasons s ON s.id = cc.season_id AND s.company_id = cc.company_id
+     LEFT JOIN (
+       SELECT crop_cycle_id, SUM(debit - credit) AS wip_balance
+       FROM wip_ledger WHERE company_id = ?
+       GROUP BY crop_cycle_id
+     ) wl ON wl.crop_cycle_id = cc.id
+     WHERE cc.company_id = ?
+       AND cc.status = 'active'
+       AND cc.expected_harvest_date IS NOT NULL
+       AND cc.expected_harvest_date < ?
+     ORDER BY days_overdue DESC`
+  ).bind(today, company_id, company_id, today).all<{
+    id: number; crop_name: string; planting_date: string
+    expected_harvest_date: string; area_feddan: number | null
+    status: string; field_name: string; season_name: string
+    days_overdue: number; wip_balance: number
+  }>()
+
+  return c.json({
+    success: true,
+    data: {
+      count: results.length,
+      total_wip_at_risk: results.reduce((s, r) => s + r.wip_balance, 0),
+      cycles: results,
+    },
+  })
+})
+
 export default dashboard

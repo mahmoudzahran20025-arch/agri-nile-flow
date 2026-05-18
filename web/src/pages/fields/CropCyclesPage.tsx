@@ -204,7 +204,17 @@ export default function CropCyclesPage() {
                       className="hover:bg-slate-50 cursor-pointer transition-colors"
                       onClick={() => navigate(`/fields/crop-cycles/${cycle.id}`)}
                     >
-                      <td className="px-4 py-3 font-semibold text-slate-800">{cycle.crop_name}</td>
+                      <td className="px-4 py-3 font-semibold text-slate-800">
+                        <div className="flex items-center gap-2">
+                          {cycle.crop_name}
+                          {cycle.days_overdue != null && cycle.days_overdue > 0 && cycle.status === 'active' && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200 whitespace-nowrap">
+                              <Clock size={10} />
+                              متأخر {cycle.days_overdue} يوم
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-4 py-3 text-slate-600">{cycle.field_name}</td>
                       <td className="px-4 py-3 text-slate-500 text-[12px]">{cycle.season_name}</td>
                       <td className="px-4 py-3">
