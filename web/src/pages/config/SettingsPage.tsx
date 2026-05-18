@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Settings, Save, Loader2, CheckCircle, AlertCircle, Building2, Receipt, Warehouse, Lock } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Settings, Save, Loader2, CheckCircle, AlertCircle, Building2, Receipt, Warehouse, Lock, ShieldCheck, ExternalLink } from 'lucide-react'
 import { api, unwrap } from '../../api/core'
 
 interface CompanySettings {
@@ -28,10 +29,18 @@ const patchSettings = (body: Partial<{
   zero_value_approval_roles: string | null; locked_through_date: string | null
 }>) => unwrap(api.patch<{ success: boolean }>('/config/company-settings', body))
 
-type Tab = 'company' | 'vat' | 'inventory' | 'lock'
+type Tab = 'company' | 'vat' | 'inventory' | 'lock' | 'health'
+
+interface PostingHealthRow {
+  warehouse_id: number; warehouse: string
+  posting_group_code: string; posting_group_name: string | null
+  item_count: number; ready_count: number; gap_count: number
+  status: 'ok' | 'partial' | 'missing'
+}
 
 export default function SettingsPage() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<Tab>('company')
   const [saved, setSaved] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -40,6 +49,14 @@ export default function SettingsPage() {
     queryKey: ['company-settings'],
     queryFn:  fetchSettings,
   })
+
+  const { data: healthData } = useQuery({
+    queryKey: ['posting-health'],
+    queryFn:  () => unwrap(api.get<{ data: PostingHealthRow[] }>('/inventory/posting-health')),
+    staleTime: 60_000,
+  })
+  const healthRows = healthData?.data ?? []
+  const gapCount = healthRows.filter(r => r.status !== 'ok').length
 
   // Company Info
   const [companyForm, setCompany] = useState({ name: '', address: '', phone: '' })
@@ -103,11 +120,12 @@ export default function SettingsPage() {
     })
   }
 
-  const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: 'company',   label: 'بيانات الشركة',         icon: <Building2 size={16} /> },
-    { id: 'vat',       label: 'ضريبة القيمة المضافة',   icon: <Receipt   size={16} /> },
-    { id: 'inventory', label: 'إعدادات المخزون',        icon: <Warehouse size={16} /> },
-    { id: 'lock',      label: 'قفل الفترة',              icon: <Lock      size={16} /> },
+  const tabs: { id: Tab; label: string; icon: React.ReactNode; badge?: number }[] = [
+    { id: 'company',   label: 'بيانات الشركة',         icon: <Building2   size={16} /> },
+    { id: 'vat',       label: 'ضريبة القيمة المضافة',   icon: <Receipt     size={16} /> },
+    { id: 'inventory', label: 'إعدادات المخزون',        icon: <Warehouse   size={16} /> },
+    { id: 'lock',      label: 'قفل الفترة',              icon: <Lock        size={16} /> },
+    { id: 'health',    label: 'صحة النظام',              icon: <ShieldCheck size={16} />, badge: gapCount || undefined },
   ]
 
   if (isLoading) {
@@ -131,14 +149,16 @@ export default function SettingsPage() {
             <p className="text-sm text-slate-500">تهيئة البيانات الأساسية والضريبة والمخزون</p>
           </div>
         </div>
-        <button
-          onClick={handleSave}
-          disabled={saveMut.isPending}
-          className="flex items-center gap-2 px-5 py-2.5 bg-[#0F2D5C] text-white rounded-xl text-sm font-medium hover:bg-[#0F2D5C]/90 disabled:opacity-50"
-        >
-          {saveMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-          حفظ الإعدادات
-        </button>
+        {activeTab !== 'health' && (
+          <button
+            onClick={handleSave}
+            disabled={saveMut.isPending}
+            className="flex items-center gap-2 px-5 py-2.5 bg-[#0F2D5C] text-white rounded-xl text-sm font-medium hover:bg-[#0F2D5C]/90 disabled:opacity-50"
+          >
+            {saveMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            حفظ الإعدادات
+          </button>
+        )}
       </div>
 
       {/* Status */}
@@ -167,6 +187,11 @@ export default function SettingsPage() {
           >
             {t.icon}
             <span className="hidden sm:inline">{t.label}</span>
+            {t.badge ? (
+              <span className="inline-flex items-center justify-center w-4 h-4 text-[10px] font-bold rounded-full bg-rose-500 text-white">
+                {t.badge}
+              </span>
+            ) : null}
           </button>
         ))}
       </div>
@@ -304,6 +329,82 @@ export default function SettingsPage() {
           </div>
         )}
 
+        {/* System Health */}
+        {activeTab === 'health' && (
+          <div className="space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h2 className="text-base font-bold text-slate-700">صحة إعداد قواعد الترحيل</h2>
+              <button
+                onClick={() => navigate('/inventory/posting-health')}
+                className="flex items-center gap-1.5 text-sm text-[#0F2D5C] font-medium hover:underline"
+              >
+                <ExternalLink size={14} />
+                إدارة قواعد الترحيل
+              </button>
+            </div>
+
+            {healthRows.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+                <ShieldCheck size={40} className="mb-3 text-slate-300" />
+                <p className="text-sm">لا توجد بيانات — تأكد من إضافة المستودعات وأصناف المخزون أولاً</p>
+              </div>
+            ) : (
+              <>
+                {gapCount === 0 ? (
+                  <div className="flex items-center gap-2 px-4 py-3 bg-emerald-50 text-emerald-700 rounded-xl text-sm border border-emerald-200">
+                    <CheckCircle size={16} />
+                    جميع مجموعات الترحيل مكتملة — النظام جاهز للعمل
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 px-4 py-3 bg-rose-50 text-rose-700 rounded-xl text-sm border border-rose-200">
+                    <AlertCircle size={16} />
+                    يوجد <strong className="mx-1">{gapCount}</strong> مجموعة غير مكتملة — لن يعمل الترحيل التلقائي حتى تُستكمل
+                  </div>
+                )}
+
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-xs text-slate-500 border-b border-slate-100">
+                      <th className="text-right pb-2 font-medium">المستودع</th>
+                      <th className="text-right pb-2 font-medium">مجموعة الترحيل</th>
+                      <th className="text-center pb-2 font-medium">الأصناف</th>
+                      <th className="text-center pb-2 font-medium">جاهز</th>
+                      <th className="text-center pb-2 font-medium">ناقص</th>
+                      <th className="text-center pb-2 font-medium">الحالة</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {healthRows.map((row, i) => (
+                      <tr key={i} className="hover:bg-slate-50/50">
+                        <td className="py-2.5 text-slate-700">{row.warehouse}</td>
+                        <td className="py-2.5 text-slate-600 font-mono text-xs">{row.posting_group_code}</td>
+                        <td className="py-2.5 text-center text-slate-600">{row.item_count}</td>
+                        <td className="py-2.5 text-center text-emerald-600 font-medium">{row.ready_count}</td>
+                        <td className="py-2.5 text-center text-rose-600 font-medium">{row.gap_count || '—'}</td>
+                        <td className="py-2.5 text-center">
+                          {row.status === 'ok' ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-emerald-100 text-emerald-700 font-medium">
+                              <CheckCircle size={10} /> مكتمل
+                            </span>
+                          ) : row.status === 'partial' ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700 font-medium">
+                              <AlertCircle size={10} /> جزئي
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-rose-100 text-rose-700 font-medium">
+                              <AlertCircle size={10} /> ناقص
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Lock Date */}
         {activeTab === 'lock' && (
           <div className="space-y-5">
@@ -335,17 +436,19 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* Bottom Save */}
-      <div className="flex justify-end mt-6">
-        <button
-          onClick={handleSave}
-          disabled={saveMut.isPending}
-          className="flex items-center gap-2 px-6 py-2.5 bg-[#0F2D5C] text-white rounded-xl text-sm font-medium hover:bg-[#0F2D5C]/90 disabled:opacity-50"
-        >
-          {saveMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-          حفظ الإعدادات
-        </button>
-      </div>
+      {/* Bottom Save — hidden on read-only health tab */}
+      {activeTab !== 'health' && (
+        <div className="flex justify-end mt-6">
+          <button
+            onClick={handleSave}
+            disabled={saveMut.isPending}
+            className="flex items-center gap-2 px-6 py-2.5 bg-[#0F2D5C] text-white rounded-xl text-sm font-medium hover:bg-[#0F2D5C]/90 disabled:opacity-50"
+          >
+            {saveMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            حفظ الإعدادات
+          </button>
+        </div>
+      )}
     </div>
   )
 }

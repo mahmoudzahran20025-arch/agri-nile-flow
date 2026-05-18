@@ -130,6 +130,82 @@ banking.post('/bank-statements/:accountId', async (c) => {
   return c.json({ success: true, data: { imported: body.lines.length, batch_id: batchId } }, 201)
 })
 
+// ── GET /bank-statements/:accountId/suggest-matches ─────────────────────────
+// For each unmatched statement line in the given period, suggest up to 3 candidate
+// cash_transactions ranked by (exact amount match × date proximity).
+// Client uses this to show "did you mean?" UI so users don't hunt by ID.
+banking.get('/bank-statements/:accountId/suggest-matches', async (c) => {
+  const { company_id } = getUser(c)
+  const accountId = Number(c.req.param('accountId'))
+  const start = c.req.query('start')
+  const end   = c.req.query('end')
+
+  // Verify account belongs to company
+  const acct = await c.env.DB
+    .prepare('SELECT id FROM bank_accounts WHERE id = ? AND company_id = ?')
+    .bind(accountId, company_id).first()
+  if (!acct) return c.json({ success: false, error: 'الحساب غير موجود' }, 404)
+
+  // Load unmatched statement lines
+  let stmtWhere = 'WHERE s.company_id = ? AND s.bank_account_id = ? AND s.is_matched = 0'
+  const stmtBinds: unknown[] = [company_id, accountId]
+  if (start) { stmtWhere += ' AND s.statement_date >= ?'; stmtBinds.push(start) }
+  if (end)   { stmtWhere += ' AND s.statement_date <= ?'; stmtBinds.push(end) }
+
+  const { results: lines } = await c.env.DB
+    .prepare(`SELECT id, statement_date, description, amount_in, amount_out FROM bank_statements s ${stmtWhere} ORDER BY s.statement_date ASC`)
+    .bind(...stmtBinds).all<{
+      id: number; statement_date: string; description: string
+      amount_in: number; amount_out: number
+    }>()
+
+  if (!lines.length) return c.json({ success: true, data: [] })
+
+  // For each line find up to 3 cash_transactions with matching direction + amount within ±0.5%,
+  // within a ±7-day window, not already matched to another statement line.
+  const suggestions = await Promise.all(lines.map(async line => {
+    const isCredit = line.amount_in > 0
+    const amount   = isCredit ? line.amount_in : line.amount_out
+    const dir      = isCredit ? 'د' : 'م'
+    const tol      = Math.max(amount * 0.005, 1)   // 0.5% or 1 EGP floor
+
+    const { results: candidates } = await c.env.DB.prepare(`
+      SELECT ct.id, ct.transaction_date, ct.amount, ct.narration, ct.direction, ct.document_number
+      FROM cash_transactions ct
+      WHERE ct.company_id = ?
+        AND ct.direction  = ?
+        AND ct.status     = 'posted'
+        AND ABS(ct.amount - ?) <= ?
+        AND DATE(ct.transaction_date) BETWEEN DATE(?, '-7 days') AND DATE(?, '+7 days')
+        AND ct.id NOT IN (
+          SELECT matched_tx_id FROM bank_statements
+          WHERE company_id = ? AND matched_tx_id IS NOT NULL AND id != ?
+        )
+      ORDER BY ABS(JULIANDAY(ct.transaction_date) - JULIANDAY(?)) ASC, ABS(ct.amount - ?) ASC
+      LIMIT 3
+    `).bind(
+      company_id, dir, amount, tol,
+      line.statement_date, line.statement_date,
+      company_id, line.id,
+      line.statement_date, amount
+    ).all<{
+      id: number; transaction_date: string; amount: number
+      narration: string; direction: string; document_number: string | null
+    }>()
+
+    return {
+      statement_line_id: line.id,
+      statement_date:    line.statement_date,
+      description:       line.description,
+      amount_in:         line.amount_in,
+      amount_out:        line.amount_out,
+      candidates,
+    }
+  }))
+
+  return c.json({ success: true, data: suggestions })
+})
+
 banking.patch('/bank-statements/:id/match', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const id = Number(c.req.param('id'))

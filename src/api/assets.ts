@@ -34,9 +34,9 @@ assets.get('/:id', permissionGuard('admin', 'read'), async (c) => {
 
   const schedule = await c.env.DB.prepare(`
     SELECT * FROM depreciation_schedules
-    WHERE asset_id = ?
+    WHERE asset_id = ? AND company_id = ?
     ORDER BY period_year DESC, period_month DESC
-  `).bind(id).all()
+  `).bind(id, company_id).all()
 
   return c.json({ success: true, data: { ...asset, schedule: schedule.results } })
 })
@@ -254,9 +254,9 @@ assets.get('/:id/schedule', permissionGuard('admin', 'read'), async (c) => {
       status,
       journal_entry_id
     FROM depreciation_schedules
-    WHERE asset_id = ?
+    WHERE asset_id = ? AND company_id = ?
     ORDER BY period_year ASC, period_month ASC
-  `).bind(id).all()
+  `).bind(id, company_id).all()
 
   return c.json({ success: true, data: results })
 })

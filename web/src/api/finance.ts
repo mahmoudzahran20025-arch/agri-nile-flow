@@ -162,4 +162,20 @@ export const financeApi = {
     ).toString()
     return unwrap(api.get<CashTxSearchResult[]>(`/finance/cash-tx-search${qs}`))
   },
+
+  // Smart matching suggestions — returns candidate cash_tx per unmatched statement line
+  suggestStatementMatches: (accountId: number, params?: { start?: string; end?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.start) qs.set('start', params.start)
+    if (params?.end)   qs.set('end',   params.end)
+    const q = qs.toString()
+    return unwrap(api.get<Array<{
+      statement_line_id: number
+      statement_date: string
+      description: string
+      amount_in: number
+      amount_out: number
+      candidates: { id: number; transaction_date: string; amount: number; narration: string; direction: string; document_number: string | null }[]
+    }>>(`/finance/bank-statements/${accountId}/suggest-matches${q ? `?${q}` : ''}`))
+  },
 }

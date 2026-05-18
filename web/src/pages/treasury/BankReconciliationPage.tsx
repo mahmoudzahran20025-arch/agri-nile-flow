@@ -564,6 +564,7 @@ function AccountDetail({ account, onImport, onNewRecon }: {
     {matchingStmt && (
       <CashTxPickerModal
         stmt={matchingStmt}
+        accountId={account.id}
         isPending={matchMut.isPending}
         onSelect={(txId) => matchMut.mutate({ stmtId: matchingStmt.id, txId })}
         onClose={() => setMatchingStmt(null)}
@@ -574,14 +575,26 @@ function AccountDetail({ account, onImport, onNewRecon }: {
 }
 
 // ── CashTx Picker Modal ────────────────────────────────────────
-function CashTxPickerModal({ stmt, onSelect, onClose, isPending }: {
+function CashTxPickerModal({ stmt, accountId, onSelect, onClose, isPending }: {
   stmt: BankStatement
+  accountId: number
   onSelect: (txId: number) => void
   onClose: () => void
   isPending: boolean
 }) {
   const [q, setQ] = useState('')
   const direction = stmt.amount_in > 0 ? 'د' : 'م'
+
+  // Smart suggestions — pre-fetched candidates ranked by amount + date proximity
+  const { data: suggestions } = useQuery({
+    queryKey: ['stmt-suggestions', accountId, stmt.id],
+    queryFn:  () => financeApi.suggestStatementMatches(accountId, {
+      start: stmt.statement_date,
+      end:   stmt.statement_date,
+    }),
+    staleTime: 30_000,
+  })
+  const mySuggestions = suggestions?.find(s => s.statement_line_id === stmt.id)?.candidates ?? []
 
   const { data: results = [], isFetching } = useQuery({
     queryKey: ['cash-tx-search', q, direction],
@@ -612,6 +625,35 @@ function CashTxPickerModal({ stmt, onSelect, onClose, isPending }: {
             autoFocus
           />
         </div>
+
+        {/* Smart suggestions — shown when no search query typed */}
+        {!q && mySuggestions.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold text-indigo-600 mb-1.5 flex items-center gap-1">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-indigo-500" /> اقتراحات تلقائية
+            </p>
+            <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 divide-y divide-indigo-100 mb-3">
+              {mySuggestions.map(tx => (
+                <button
+                  key={tx.id}
+                  onClick={() => onSelect(tx.id)}
+                  disabled={isPending}
+                  className="w-full text-right flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-indigo-100 transition-colors text-sm"
+                >
+                  <div className="min-w-0">
+                    <p className="font-medium text-slate-800 truncate">{tx.narration}</p>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      {tx.transaction_date}{tx.document_number ? ` · ${tx.document_number}` : ''}
+                    </p>
+                  </div>
+                  <span className={`font-bold shrink-0 ${tx.direction === 'د' ? 'text-emerald-600' : 'text-red-500'}`}>
+                    {tx.direction === 'د' ? '+' : '-'} {fmtCurrency(tx.amount)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Results list */}
         <div className="max-h-72 overflow-y-auto divide-y divide-gray-50 border border-gray-200 rounded-xl">
