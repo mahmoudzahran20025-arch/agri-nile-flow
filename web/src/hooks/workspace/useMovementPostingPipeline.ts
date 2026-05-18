@@ -56,9 +56,12 @@ export function useMovementPostingPipeline(): PostingPipelineHook {
           to_warehouse: draft.header.movement_type === 'TRANSFER_OUT'
             ? String(draft.header.target_warehouse_id)
             : String(draft.header.warehouse_id),
-          season_id:   draft.dimensions.season_id ?? undefined,
-          center_code: draft.dimensions.center_code ?? undefined,
-          notes:       draft.header.notes,
+          season_id:      draft.dimensions.season_id      ?? undefined,
+          center_code:    draft.dimensions.center_code    ?? undefined,
+          field_id:       draft.dimensions.field_id       ?? undefined,
+          work_order_id:  draft.dimensions.work_order_id  ?? undefined,
+          crop_cycle_id:  draft.dimensions.crop_cycle_id  ?? undefined,
+          notes:          draft.header.notes,
           items: validLines.map(l => ({
             item_code: l.item_code!,
             quantity:  l.quantity!,
