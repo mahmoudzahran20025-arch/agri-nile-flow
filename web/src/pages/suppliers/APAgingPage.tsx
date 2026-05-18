@@ -1,8 +1,10 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, ChevronRight, Download, RefreshCw, Link2, CheckCircle, X } from 'lucide-react';
+import { AlertTriangle, Download, RefreshCw, Link2, CheckCircle } from 'lucide-react';
 import { suppliersApi } from '../../api/client';
+import { CommandBar } from '../../components/ui/CommandBar';
+import Modal from '../../components/ui/Modal';
+import { FilterBar } from '../../components/ui/FilterBar';
 
 // Shape returned by GET /suppliers/aging-summary (payments.ts)
 interface APAgingRow {
@@ -82,14 +84,8 @@ function MatchPaymentModal({ invoice, onClose, onDone }: MatchPaymentModalProps)
   })
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-xl w-full max-w-md shadow-2xl">
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-          <h2 className="text-[14px] font-bold text-[#0F2D5C]">مطابقة دفعة بالفاتورة</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
-        </div>
-
-        <div className="p-5 space-y-4">
+    <Modal open title="مطابقة دفعة بالفاتورة" onClose={onClose} size="sm">
+        <div className="space-y-4">
           {/* Invoice summary */}
           <div className="bg-slate-50 rounded-lg p-3 text-[12px] space-y-1 text-slate-600">
             <div className="flex justify-between">
@@ -148,8 +144,8 @@ function MatchPaymentModal({ invoice, onClose, onDone }: MatchPaymentModalProps)
           )}
         </div>
 
-        <div className="px-5 py-3 border-t border-slate-100 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg">
+        <div className="flex justify-end gap-2 mt-2">
+          <button onClick={onClose} className="btn-secondary">
             إلغاء
           </button>
           <button
@@ -164,15 +160,13 @@ function MatchPaymentModal({ invoice, onClose, onDone }: MatchPaymentModalProps)
             تأكيد المطابقة
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function APAgingPage() {
-  const navigate = useNavigate();
   const [matchInvoice, setMatchInvoice] = useState<APAgingRow | null>(null);
   const [filterSupplier, setFilterSupplier] = useState('');
 
@@ -205,46 +199,38 @@ export default function APAgingPage() {
   const overduePct = totals.total > 0 ? Math.round((totals.overdue / totals.total) * 100) : 0;
 
   return (
-    <div className="flex flex-col h-full bg-[#f8fafc]">
-      {/* Header */}
-      <div className="px-6 py-5 bg-white border-b border-slate-200 shrink-0">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-2 text-[11px] text-slate-400 mb-1">
-              <button onClick={() => navigate('/suppliers')} className="hover:text-slate-600">الموردون</button>
-              <ChevronRight size={12} />
-              <span className="text-slate-600 font-medium">ذمم الموردين</span>
-            </div>
-            <h1 className="text-[18px] font-bold text-[#0F2D5C]">تقرير ذمم الموردين (AP Aging)</h1>
-            <p className="text-[12px] text-slate-500 mt-0.5">الفواتير المفتوحة غير المُقابَلة — مرتبة حسب تاريخ الاستحقاق</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              placeholder="بحث بالمورد..."
-              value={filterSupplier}
-              onChange={e => setFilterSupplier(e.target.value)}
-              className="border border-slate-200 rounded-lg px-3 py-1.5 text-[12px] w-48 focus:outline-none focus:ring-1 focus:ring-brand-400"
-            />
-            <button
-              onClick={() => exportCsv(rows)}
-              disabled={rows.length === 0}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-slate-600 hover:bg-slate-100 rounded border border-slate-200 disabled:opacity-40"
-            >
-              <Download size={13} /> تصدير CSV
-            </button>
-            <button
-              onClick={() => refetch()}
-              disabled={isRefetching}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-slate-600 hover:bg-slate-100 rounded border border-slate-200"
-            >
-              <RefreshCw size={13} className={isRefetching ? 'animate-spin' : ''} /> تحديث
-            </button>
-          </div>
-        </div>
-      </div>
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="تقرير ذمم الموردين (AP Aging)"
+        subtitle="الفواتير المفتوحة غير المُقابَلة — مرتبة حسب تاريخ الاستحقاق"
+        actions={[
+          {
+            label: 'تصدير CSV',
+            icon: <Download size={14} />,
+            variant: 'secondary',
+            onClick: () => exportCsv(rows),
+            disabled: rows.length === 0,
+          },
+          {
+            label: isRefetching ? 'جاري...' : 'تحديث',
+            icon: <RefreshCw size={14} className={isRefetching ? 'animate-spin' : ''} />,
+            variant: 'secondary',
+            onClick: () => refetch(),
+            disabled: isRefetching,
+          },
+        ]}
+      />
+      <FilterBar>
+        <input
+          type="text"
+          placeholder="بحث بالمورد..."
+          value={filterSupplier}
+          onChange={e => setFilterSupplier(e.target.value)}
+          className="input w-48 text-sm"
+        />
+      </FilterBar>
 
-      <div className="flex-1 overflow-auto p-6 space-y-5">
+      <div className="flex-1 overflow-auto p-5 space-y-5">
 
         {/* KPI strip */}
         <div className="grid grid-cols-3 gap-4">
