@@ -47,6 +47,7 @@ const SUPPORTED_MOVEMENT_TYPES = new Set([
   'RETURN_SUPPLIER', 'RETURN_CUSTOMER',
   'ADJUSTMENT_PROFIT', 'ADJUSTMENT_LOSS',
   'PRODUCTION_INPUT', 'PRODUCTION_OUTPUT',
+  'SALE',
 ])
 
 function isSupportedMovementType(movementType: string): boolean {
@@ -126,6 +127,12 @@ async function validateInventoryGovernance(
     if (input.work_order_id == null) {
       throw new Error('PRODUCTION_MOVEMENT_REQUIRES_WORK_ORDER')
     }
+  }
+
+  // SALE: dedicated governance — does NOT require service_type_code, center_code, or statement_text.
+  // is_sellable enforcement happens before this function is called (item flag check).
+  if (input.movement_type === 'SALE') {
+    return { statementText, serviceTypeCode: null }
   }
 
   return { statementText, serviceTypeCode }
@@ -261,7 +268,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
   if ((b.movement_type === 'GRN' || b.movement_type === 'RETURN_SUPPLIER') && !itemTypeRow.is_purchasable) {
     return c.json({ success: false, error: 'هذا الصنف غير قابل للشراء', code: 'ITEM_NOT_PURCHASABLE' }, 422)
   }
-  if (b.movement_type === 'RETURN_CUSTOMER' && !itemTypeRow.is_sellable) {
+  if ((b.movement_type === 'RETURN_CUSTOMER' || b.movement_type === 'SALE') && !itemTypeRow.is_sellable) {
     return c.json({ success: false, error: 'هذا الصنف غير قابل للبيع', code: 'ITEM_NOT_SELLABLE' }, 422)
   }
   const isNonStock = itemTypeRow.item_type === 'non_stock'
@@ -635,7 +642,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     if ((mType === 'GRN' || mType === 'RETURN_SUPPLIER') && !itemTypeCheck.is_purchasable) {
       throw new Error(`ITEM_NOT_PURCHASABLE:${item.item_code}`)
     }
-    if (mType === 'RETURN_CUSTOMER' && !itemTypeCheck.is_sellable) {
+    if ((mType === 'RETURN_CUSTOMER' || mType === 'SALE') && !itemTypeCheck.is_sellable) {
       throw new Error(`ITEM_NOT_SELLABLE:${item.item_code}`)
     }
     const batchItemIsNonStock = itemTypeCheck.item_type === 'non_stock'
