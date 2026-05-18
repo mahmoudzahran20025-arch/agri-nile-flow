@@ -242,6 +242,15 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     return c.json({ success: false, error: 'نوع حركة غير مدعوم' }, 400)
   }
 
+  // Block inventory movements for non-inventory items (service / non_stock)
+  const itemTypeRow = await c.env.DB.prepare(
+    'SELECT item_type FROM items WHERE code = ? AND company_id = ?'
+  ).bind(b.item_code, company_id).first<{ item_type: string | null }>()
+  if (!itemTypeRow) return c.json({ success: false, error: 'الصنف غير موجود' }, 404)
+  if (itemTypeRow.item_type === 'service') {
+    return c.json({ success: false, error: 'أصناف الخدمة لا تُسجَّل في حركات المخزون', code: 'SERVICE_ITEM_NO_STOCK' }, 422)
+  }
+
   let movementDate: string = normalizeIsoDate(b.movement_date)
   if (isFutureIsoDate(movementDate)) {
     return c.json({ success: false, error: 'غير مسموح بترحيل حركة مخزنية بتاريخ مستقبلي' }, 422)
@@ -574,6 +583,15 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     }
 
     assertPackagingInvariant(item.quantity, item.pack_count, item.pack_capacity, item.item_code)
+
+    // Block service items from inventory movements
+    const itemTypeCheck = await c.env.DB.prepare(
+      'SELECT item_type FROM items WHERE code = ? AND company_id = ?'
+    ).bind(item.item_code, company_id).first<{ item_type: string | null }>()
+    if (!itemTypeCheck) throw new Error(`ITEM_NOT_FOUND:${item.item_code}`)
+    if (itemTypeCheck.item_type === 'service') {
+      throw new Error(`SERVICE_ITEM_NO_STOCK:${item.item_code}`)
+    }
 
     const movementDate = normalizeIsoDate(mDate)
     if (isFutureIsoDate(movementDate)) throw new Error(`FUTURE_DATE_NOT_ALLOWED:${item.item_code}`)

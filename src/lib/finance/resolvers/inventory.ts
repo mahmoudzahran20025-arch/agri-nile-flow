@@ -159,8 +159,14 @@ export async function resolveInventoryTransfer(
     company_id: number
     ref_id: number
     item_code: number
-    from_warehouse_id: number
-    to_warehouse_id: number
+    // Accept both camelCase (direct callers) and snake_case (outbox enqueue path)
+    from_warehouse_id?: number
+    to_warehouse_id?: number
+    src_warehouse_id?: number
+    dst_warehouse_id?: number
+    src_ipg_code?: string | null
+    dst_ipg_code?: string | null
+    ppg_code?: string | null
     quantity?: number
     value: number
     date: string
@@ -171,21 +177,28 @@ export async function resolveInventoryTransfer(
     field_id?: number
   },
 ): Promise<number | null> {
+  const fromWarehouseId = opts.from_warehouse_id ?? opts.src_warehouse_id
+  const toWarehouseId   = opts.to_warehouse_id   ?? opts.dst_warehouse_id
+
   const [itemRow, srcRow, dstRow] = await Promise.all([
     db.prepare(
       'SELECT prod_posting_group_code FROM items WHERE company_id = ? AND code = ? LIMIT 1'
     ).bind(opts.company_id, opts.item_code).first<{ prod_posting_group_code: string | null }>(),
-    db.prepare(
-      'SELECT inv_posting_group_code, name FROM warehouses WHERE company_id = ? AND id = ? AND is_active = 1 LIMIT 1'
-    ).bind(opts.company_id, opts.from_warehouse_id).first<{ inv_posting_group_code: string | null; name: string }>(),
-    db.prepare(
-      'SELECT inv_posting_group_code, name FROM warehouses WHERE company_id = ? AND id = ? AND is_active = 1 LIMIT 1'
-    ).bind(opts.company_id, opts.to_warehouse_id).first<{ inv_posting_group_code: string | null; name: string }>(),
+    fromWarehouseId
+      ? db.prepare(
+          'SELECT inv_posting_group_code, name FROM warehouses WHERE company_id = ? AND id = ? AND is_active = 1 LIMIT 1'
+        ).bind(opts.company_id, fromWarehouseId).first<{ inv_posting_group_code: string | null; name: string }>()
+      : Promise.resolve(null),
+    toWarehouseId
+      ? db.prepare(
+          'SELECT inv_posting_group_code, name FROM warehouses WHERE company_id = ? AND id = ? AND is_active = 1 LIMIT 1'
+        ).bind(opts.company_id, toWarehouseId).first<{ inv_posting_group_code: string | null; name: string }>()
+      : Promise.resolve(null),
   ])
 
-  const ppg    = itemRow?.prod_posting_group_code ?? null
-  const srcIpg = srcRow?.inv_posting_group_code ?? null
-  const dstIpg = dstRow?.inv_posting_group_code ?? null
+  const ppg    = itemRow?.prod_posting_group_code ?? opts.ppg_code ?? null
+  const srcIpg = srcRow?.inv_posting_group_code  ?? opts.src_ipg_code ?? null
+  const dstIpg = dstRow?.inv_posting_group_code  ?? opts.dst_ipg_code ?? null
 
   const blueprint = await peResolveTransfer(
     db,
@@ -210,8 +223,9 @@ export async function resolveInventoryTransfer(
     description:   `تحويل مخزني | ${opts.item_name} | ${srcRow?.name} → ${dstRow?.name}`,
     created_by:    opts.created_by,
     payload:       {
-      item_code: opts.item_code, from_warehouse_id: opts.from_warehouse_id,
-      to_warehouse_id: opts.to_warehouse_id, quantity: opts.quantity, value: opts.value,
+      item_code: opts.item_code,
+      from_warehouse_id: fromWarehouseId, to_warehouse_id: toWarehouseId,
+      quantity: opts.quantity, value: opts.value,
       src_ipg: srcIpg, dst_ipg: dstIpg, ppg,
     },
     trace:         blueprint.trace ?? null,
