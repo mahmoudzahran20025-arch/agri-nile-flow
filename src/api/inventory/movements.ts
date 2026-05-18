@@ -395,7 +395,7 @@ movements.post('/movements/:id/reverse', permissionGuard('inventory', 'create'),
     id: number; company_id: number; item_code: number; warehouse_id: number; warehouse_name: string | null
     movement_type: string; movement_date: string; quantity: number; unit_price: number
     qty_in: number; qty_out: number; value_in: number; value_out: number
-    season_id: number | null; field_id: number | null; work_order_id: number | null
+    season_id: number | null; field_id: number | null; work_order_id: number | null; crop_cycle_id: number | null
     supplier_code: number | null; document_number: string | null; center_code: number | null
     statement_text: string | null; service_type_code: string | null; notes: string | null
     gl_posting_status: string; journal_entry_id: number | null
@@ -473,14 +473,16 @@ movements.post('/movements/:id/reverse', permissionGuard('inventory', 'create'),
   await c.env.DB.batch([
     c.env.DB.prepare(
       `INSERT INTO inventory_movements
-       (company_id, season_id, field_id, work_order_id, supplier_code, item_code, center_code,
+       (company_id, season_id, field_id, work_order_id, crop_cycle_id, supplier_code, item_code, center_code,
         movement_date, warehouse_id, movement_type, document_number,
         quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
         notes, statement_text, service_type_code, year, month, created_by_user_id, local_id,
         posting_mode, gl_posting_status, transaction_id, reversal_of_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
-      company_id, orig.season_id, orig.field_id, orig.work_order_id, orig.supplier_code,
+      company_id, orig.season_id, orig.field_id, orig.work_order_id,
+      orig.crop_cycle_id,
+      orig.supplier_code,
       orig.item_code, orig.center_code, reversalDate, orig.warehouse_id,
       reversalType, orig.document_number ? `REV-${orig.document_number}` : null,
       orig.quantity, orig.unit_price,
@@ -516,6 +518,7 @@ movements.post('/movements/:id/reverse', permissionGuard('inventory', 'create'),
       movement_type: reversalType, value: revValue, date: reversalDate,
       item_name: itemRow?.name ?? String(orig.item_code), created_by: userId,
       center_code: orig.center_code, supplier_code: orig.supplier_code,
+      season_id: orig.season_id, field_id: orig.field_id, crop_cycle_id: orig.crop_cycle_id,
       reversal_of_id: origId,
     })
   }
