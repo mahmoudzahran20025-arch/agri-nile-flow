@@ -43,6 +43,9 @@ interface ItemMaster {
   item_type:               'inventory' | 'service' | 'non_stock' | null
   is_sellable:             number | null
   is_purchasable:          number | null
+  list_price:              number | null
+  barcode:                 string | null
+  expiry_tracking:         number | null
   category_name:           string | null
   total_qty:               number
   total_value:             number
@@ -117,6 +120,9 @@ interface EditForm {
   item_type:               'inventory' | 'service' | 'non_stock'
   is_sellable:             boolean
   is_purchasable:          boolean
+  list_price:              string
+  barcode:                 string
+  expiry_tracking:         boolean
 }
 
 function AccountingEditModal({
@@ -146,6 +152,9 @@ function AccountingEditModal({
     item_type:               (item.item_type ?? 'inventory') as EditForm['item_type'],
     is_sellable:             item.is_sellable !== 0,
     is_purchasable:          item.is_purchasable !== 0,
+    list_price:              item.list_price != null ? String(item.list_price) : '',
+    barcode:                 item.barcode ?? '',
+    expiry_tracking:         !!item.expiry_tracking,
   })
   const [err, setErr] = useState('')
 
@@ -177,6 +186,9 @@ function AccountingEditModal({
       item_type:               form.item_type,
       is_sellable:             form.is_sellable,
       is_purchasable:          form.is_purchasable,
+      list_price:              form.list_price ? Number(form.list_price) : null,
+      barcode:                 form.barcode.trim() || null,
+      expiry_tracking:         form.expiry_tracking,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['inventory', 'items-master'] })
@@ -245,7 +257,7 @@ function AccountingEditModal({
             <label className="label">التكلفة المعيارية (ج.م / وحدة)</label>
             <input type="number" className="input" min="0" step="0.01" placeholder="0.00"
               value={form.standard_cost} onChange={e => set('standard_cost', e.target.value)} />
-            <p className="text-xs text-slate-400 mt-1">للتقارير والمقارنة مع الفعلي</p>
+            <p className="text-xs text-amber-600 mt-1">للتقارير فقط — لا يُستخدم في حساب التكلفة الفعلية</p>
           </div>
           <div>
             <label className="label">حد إعادة الطلب</label>
@@ -340,6 +352,39 @@ function AccountingEditModal({
                 <span className="text-sm">قابل للشراء</span>
               </label>
             </div>
+          </div>
+        </div>
+
+        {/* POS + Expiry fields */}
+        <div className="border-t border-slate-100 pt-4">
+          <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">نقطة البيع والتتبع</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">سعر الإدراج (ج.م / وحدة)</label>
+              <input type="number" className="input" min="0" step="0.01" placeholder="0.00"
+                value={form.list_price} onChange={e => set('list_price', e.target.value)} />
+              <p className="text-xs text-slate-400 mt-1">سعر البيع الأساسي — مطلوب لنقطة البيع</p>
+            </div>
+            <div>
+              <label className="label">الباركود</label>
+              <input type="text" className="input font-mono" placeholder="مثال: 6224000023"
+                value={form.barcode} onChange={e => set('barcode', e.target.value)} />
+              <p className="text-xs text-slate-400 mt-1">فريد لكل شركة — يُستخدم في المسح الضوئي</p>
+            </div>
+          </div>
+          <div className="mt-3">
+            <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl border border-slate-200 hover:bg-slate-50 transition-colors">
+              <input
+                type="checkbox"
+                checked={form.expiry_tracking}
+                onChange={e => set('expiry_tracking', e.target.checked)}
+                className="w-4 h-4 rounded accent-brand-600"
+              />
+              <div>
+                <span className="text-sm text-slate-700 font-medium">تتبع تاريخ الصلاحية</span>
+                <p className="text-xs text-slate-400">عند التفعيل: الحركات الواردة (GRN) تتطلب تاريخ انتهاء الصلاحية</p>
+              </div>
+            </label>
           </div>
         </div>
 

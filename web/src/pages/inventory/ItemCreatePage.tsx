@@ -22,6 +22,9 @@ interface CreateBody {
   item_type:               'inventory' | 'service' | 'non_stock'
   is_sellable:             boolean
   is_purchasable:          boolean
+  list_price:              string
+  barcode:                 string
+  expiry_tracking:         boolean
 }
 
 const EMPTY: CreateBody = {
@@ -29,6 +32,7 @@ const EMPTY: CreateBody = {
   category_id: '', prod_posting_group_code: '', inv_posting_group_code: '',
   reorder_threshold: '', track_lots: false,
   item_type: 'inventory', is_sellable: true, is_purchasable: true,
+  list_price: '', barcode: '', expiry_tracking: false,
 }
 
 export default function ItemCreatePage() {
@@ -73,6 +77,9 @@ export default function ItemCreatePage() {
       item_type:               form.item_type,
       is_sellable:             form.is_sellable ? 1 : 0,
       is_purchasable:          form.is_purchasable ? 1 : 0,
+      list_price:              form.list_price ? Number(form.list_price) : undefined,
+      barcode:                 form.barcode.trim() || undefined,
+      expiry_tracking:         form.expiry_tracking ? 1 : 0,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['inventory', 'items-master'] })
@@ -248,6 +255,34 @@ export default function ItemCreatePage() {
               <label htmlFor="track_lots" className="text-sm text-slate-700 cursor-pointer select-none">
                 تتبع الدفعات (Lot Tracking)
               </label>
+            </div>
+
+            <div className="flex items-center gap-3 pt-1">
+              <input
+                type="checkbox"
+                id="expiry_tracking"
+                checked={form.expiry_tracking}
+                onChange={e => set('expiry_tracking', e.target.checked)}
+                className="w-4 h-4 rounded accent-brand-600"
+              />
+              <label htmlFor="expiry_tracking" className="text-sm text-slate-700 cursor-pointer select-none">
+                تتبع تاريخ الصلاحية — الحركات الواردة تتطلب تاريخ انتهاء الصلاحية
+              </label>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">سعر الإدراج (ج.م / وحدة)</label>
+                <input type="number" className="input" min="0" step="0.01" placeholder="0.00"
+                  value={form.list_price} onChange={e => set('list_price', e.target.value)} />
+                <p className="text-xs text-slate-400 mt-1">سعر البيع الأساسي — مطلوب لنقطة البيع</p>
+              </div>
+              <div>
+                <label className="label">الباركود</label>
+                <input type="text" className="input font-mono" placeholder="مثال: 6224000023"
+                  value={form.barcode} onChange={e => set('barcode', e.target.value)} />
+                <p className="text-xs text-slate-400 mt-1">فريد لكل شركة — يُستخدم في المسح الضوئي</p>
+              </div>
             </div>
           </section>
 

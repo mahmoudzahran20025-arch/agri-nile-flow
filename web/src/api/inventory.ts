@@ -154,6 +154,9 @@ export const inventoryApi = {
     item_type?:               'inventory' | 'service' | 'non_stock' | null
     is_sellable?:             boolean | null
     is_purchasable?:          boolean | null
+    list_price?:              number | null
+    barcode?:                 string | null
+    expiry_tracking?:         boolean | null
   }) => api.patch(`/inventory/items-master/${code}`, body),
 
   postingHealth: () => unwrap(api.get<{

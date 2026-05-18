@@ -264,6 +264,9 @@ governance.get('/items-master', permissionGuard('inventory', 'read'), async (c) 
        i.item_type,
        i.is_sellable,
        i.is_purchasable,
+       i.list_price,
+       i.barcode,
+       i.expiry_tracking,
        ic.name AS category_name,
        COALESCE(ms.balance_qty, 0) AS total_qty,
        COALESCE(ms.balance_value, 0) AS total_value,
@@ -322,6 +325,9 @@ governance.patch('/items-master/:code', permissionGuard('inventory', 'create'), 
     item_type?:               'inventory' | 'service' | 'non_stock' | null
     is_sellable?:             boolean | null
     is_purchasable?:          boolean | null
+    list_price?:              number | null
+    barcode?:                 string | null
+    expiry_tracking?:         boolean | null
   }>()
 
   const VALID_COSTING = ['moving_average', 'standard', 'fifo']
@@ -352,6 +358,9 @@ governance.patch('/items-master/:code', permissionGuard('inventory', 'create'), 
   if ('item_type'               in b) { sets.push('item_type = ?');               binds.push(b.item_type ?? 'inventory') }
   if ('is_sellable'             in b) { sets.push('is_sellable = ?');             binds.push(b.is_sellable ? 1 : 0) }
   if ('is_purchasable'          in b) { sets.push('is_purchasable = ?');          binds.push(b.is_purchasable ? 1 : 0) }
+  if ('list_price'              in b) { sets.push('list_price = ?');              binds.push(b.list_price ?? null) }
+  if ('barcode'                 in b) { sets.push('barcode = ?');                 binds.push(b.barcode?.trim() || null) }
+  if ('expiry_tracking'         in b) { sets.push('expiry_tracking = ?');         binds.push(b.expiry_tracking ? 1 : 0) }
 
   if (sets.length === 0) return c.json({ success: false, error: 'لا توجد حقول للتحديث' }, 400)
 
