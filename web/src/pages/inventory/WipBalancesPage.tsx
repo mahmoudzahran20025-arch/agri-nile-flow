@@ -5,9 +5,10 @@ import { api, unwrap } from '../../api/core'
 import { configApi } from '../../api/client'
 import {
   AlertTriangle, CheckCircle, RefreshCw, ArrowRight,
-  BookOpen, GitBranch, Clock,
+  BookOpen, Clock,
 } from 'lucide-react'
 import { TableSkeleton } from '../../components/ui/Skeleton'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 interface WipBalance {
   id: number
@@ -126,39 +127,18 @@ export default function WipBalancesPage() {
   })
 
   return (
-    <div className="p-6 space-y-6" dir="rtl">
-
-      {/* Page header */}
-      <div className="flex items-start justify-between flex-wrap gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <GitBranch size={20} className="text-slate-600" />
-            <h1 className="text-xl font-bold text-slate-800">أرصدة الإنتاج الجاري (WIP)</h1>
-          </div>
-          <p className="text-sm text-slate-500 mt-1">
-            تكاليف المحاصيل غير المكتملة المحمولة بين المواسم — كل رصيد مرتبط بقيد محاسبي في دفتر الأستاذ
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {totalCost > 0 && (
-            <div className="text-left">
-              <div className="text-xl font-bold text-slate-800">{EGP(totalCost)}</div>
-              <div className="text-xs text-slate-500">إجمالي الأرصدة المعروضة</div>
-            </div>
-          )}
-          <button
-            onClick={() => setShowCarryPanel(v => !v)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
-              showCarryPanel
-                ? 'bg-slate-200 text-slate-700'
-                : 'bg-[#0F2D5C] text-white hover:bg-[#1a3d6b]'
-            }`}
-          >
-            <ArrowRight size={15} />
-            ترحيل WIP جديد
-          </button>
-        </div>
-      </div>
+    <div className="flex flex-col h-full" dir="rtl">
+      <CommandBar
+        title="أرصدة الإنتاج الجاري (WIP)"
+        subtitle="تكاليف المحاصيل غير المكتملة المحمولة بين المواسم"
+        actions={[{
+          label: showCarryPanel ? 'إخفاء الترحيل' : 'ترحيل WIP جديد',
+          icon: <ArrowRight size={14} />,
+          variant: showCarryPanel ? 'secondary' : 'primary',
+          onClick: () => setShowCarryPanel(v => !v),
+        }]}
+      />
+      <div className="flex-1 overflow-y-auto p-5 space-y-5" dir="rtl">
 
       {/* Carry-forward panel */}
       {showCarryPanel && (
@@ -323,6 +303,7 @@ export default function WipBalancesPage() {
           </table>
         </div>
       )}
+      </div>{/* end scroll container */}
     </div>
   )
 }
