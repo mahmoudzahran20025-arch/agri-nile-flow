@@ -251,8 +251,9 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
 
   const wh = await resolveWarehouse(c.env.DB, company_id, b.warehouse_id, b.warehouse)
   if (!wh) return c.json({ success: false, error: 'المخزن غير موجود أو غير نشط' }, 422)
-  
+
   const warehouseId = wh.id
+  const usedStringWarehouse = !b.warehouse_id && !!b.warehouse
 
   if (!isSupportedMovementType(b.movement_type)) {
     return c.json({ success: false, error: 'نوع حركة غير مدعوم' }, 400)
@@ -424,7 +425,12 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     }
   }
 
-  return c.json({ success: true, data: { id: movId } }, 201)
+  const response = c.json({ success: true, data: { id: movId } }, 201)
+  if (usedStringWarehouse) {
+    console.warn(`[DEPRECATION] POST /movements: 'warehouse' string param used by company ${company_id}. Use 'warehouse_id' integer instead.`)
+    c.header('X-Deprecated-Param', 'warehouse; use warehouse_id instead')
+  }
+  return response
 })
 
 // ── POST /movements/:id/reverse ──────────────────────────────
@@ -619,6 +625,18 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
   const results: number[] = []
   const controls = await getInventoryPostingControls(c.env.DB, company_id)
 
+  // ── Phase 1: validate all items before writing any ──────────────────────────
+  // This prevents partial-write states where early items succeed and later items fail validation.
+  const validatedItems: Array<{
+    idx: number; item: any; mDate: string; mType: string; warehouseId: number
+    isInbound: boolean; batchItemIsNonStock: boolean; unitPrice: number; movementValue: number
+    localId: string; ym: { year: number; month: number }; transactionId: number
+    qtyIn: number; qtyOut: number; valueIn: number; valueOut: number
+    supplierCode: any; docNum: any; statementText: string | null; serviceTypeCode: string | null; notes: any
+    seasonId: number | null; fieldId: number | null; woId: number | null; cropCycleId: number | null
+    centerCode: any; periodId: number; prev: { balance_qty: number; balance_value: number; version: number }
+  }> = []
+
   for (const [idx, item] of items.entries()) {
     // Resolve fields: use item-specific value OR fallback to header value
     const mDate = item.movement_date ?? b.movement_date
@@ -718,56 +736,128 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
       work_order_id: woId,
     })
 
-    const insertRes = await c.env.DB.prepare(
-      `INSERT INTO inventory_movements
-       (company_id, season_id, field_id, work_order_id, crop_cycle_id, supplier_code, item_code, center_code,
-        movement_date, warehouse_id, movement_type, document_number, batch_number, expiry_date,
-        pack_capacity, pack_count, quantity, unit_price, total_value_entered, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
-        notes, statement_text, service_type_code, year, month, created_by_user_id, local_id,
-        zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(
-      company_id, seasonId ?? null, fieldId ?? null, woId ?? null, cropCycleId,
-      supplierCode ?? null, item.item_code, centerCode ?? null,
-      movementDate, warehouseId, mType, docNum ?? null,
-      item.batch_number ?? null, item.expiry_date ?? null,
-      item.pack_capacity ?? null, item.pack_count ?? null, item.quantity, unitPrice, item.total_value ?? null,
-      qtyIn, qtyOut,
-      batchItemIsNonStock ? 0 : prev.balance_qty + qtyIn - qtyOut,
-      valueIn, valueOut,
-      batchItemIsNonStock ? 0 : prev.balance_value + valueIn - valueOut,
-      notes ?? null, statementText, serviceTypeCode, ym.year, ym.month, userId, localId,
-      movementValue === 0 ? (item.zero_value_reason ?? b.notes) : null,
-      movementValue === 0 ? role : null,
-      controls.posting_mode,
-      movementValue === 0 ? 'exempt_zero_value' : 'pending',
-      transactionId,
-    ).run()
+    validatedItems.push({
+      idx, item, mDate: movementDate, mType, warehouseId, isInbound, batchItemIsNonStock,
+      unitPrice, movementValue, localId, ym, transactionId,
+      qtyIn, qtyOut, valueIn, valueOut,
+      supplierCode, docNum, statementText, serviceTypeCode, notes,
+      seasonId, fieldId, woId, cropCycleId, centerCode, periodId,
+      prev,
+    })
+  }
 
-    const movId = Number(insertRes.meta.last_row_id)
-    results.push(movId)
+  // ── Phase 2: execute all writes atomically via D1 batch ─────────────────────
+  // All validation passed; submit inserts + propagation updates as one D1 batch.
+  // D1 batch is transactional: either all succeed or all fail.
+  type D1PreparedStatement = ReturnType<typeof c.env.DB.prepare>
+  const writeStatements: D1PreparedStatement[] = []
+  const outboxPayloads: Array<{ movIdx: number; payload: Record<string, unknown> }> = []
+
+  for (const v of validatedItems) {
+    const { item, mDate, mType, warehouseId, batchItemIsNonStock, unitPrice, movementValue,
+            localId, ym, transactionId, qtyIn, qtyOut, valueIn, valueOut,
+            supplierCode, docNum, statementText, serviceTypeCode, notes,
+            seasonId, fieldId, woId, cropCycleId, centerCode, prev } = v
+
+    writeStatements.push(
+      c.env.DB.prepare(
+        `INSERT INTO inventory_movements
+         (company_id, season_id, field_id, work_order_id, crop_cycle_id, supplier_code, item_code, center_code,
+          movement_date, warehouse_id, movement_type, document_number, batch_number, expiry_date,
+          pack_capacity, pack_count, quantity, unit_price, total_value_entered, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
+          notes, statement_text, service_type_code, year, month, created_by_user_id, local_id,
+          zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).bind(
+        company_id, seasonId ?? null, fieldId ?? null, woId ?? null, cropCycleId,
+        supplierCode ?? null, item.item_code, centerCode ?? null,
+        mDate, warehouseId, mType, docNum ?? null,
+        item.batch_number ?? null, item.expiry_date ?? null,
+        item.pack_capacity ?? null, item.pack_count ?? null, item.quantity, unitPrice, item.total_value ?? null,
+        qtyIn, qtyOut,
+        batchItemIsNonStock ? 0 : prev.balance_qty + qtyIn - qtyOut,
+        valueIn, valueOut,
+        batchItemIsNonStock ? 0 : prev.balance_value + valueIn - valueOut,
+        notes ?? null, statementText, serviceTypeCode, ym.year, ym.month, userId, localId,
+        movementValue === 0 ? (item.zero_value_reason ?? b.notes) : null,
+        movementValue === 0 ? role : null,
+        controls.posting_mode,
+        movementValue === 0 ? 'exempt_zero_value' : 'pending',
+        transactionId,
+      )
+    )
 
     if (!batchItemIsNonStock) {
-      // Propagate balance delta to all future movements (backdating fix)
-      await c.env.DB.prepare(
-        `UPDATE inventory_movements
-         SET balance_qty = balance_qty + ?, balance_value = balance_value + ?
-         WHERE company_id = ? AND item_code = ? AND warehouse_id = ?
-           AND (movement_date > ? OR (movement_date = ? AND id > ?))`
-      ).bind(qtyIn - qtyOut, valueIn - valueOut, company_id, item.item_code, warehouseId, movementDate, movementDate, movId).run()
+      // Propagation UPDATE uses last_insert_rowid() so the WHERE clause
+      // excludes the row we just inserted (avoids updating the new row's own balance).
+      writeStatements.push(
+        c.env.DB.prepare(
+          `UPDATE inventory_movements
+           SET balance_qty = balance_qty + ?, balance_value = balance_value + ?
+           WHERE company_id = ? AND item_code = ? AND warehouse_id = ?
+             AND id != last_insert_rowid()
+             AND (movement_date > ? OR (movement_date = ? AND id > last_insert_rowid()))`
+        ).bind(qtyIn - qtyOut, valueIn - valueOut, company_id, item.item_code, warehouseId, mDate, mDate)
+      )
 
-      await upsertInventoryBalance(c.env.DB, company_id, item.item_code, warehouseId, prev.balance_qty + qtyIn - qtyOut, prev.balance_value + valueIn - valueOut, movId, prev.version)
+      writeStatements.push(
+        c.env.DB.prepare(
+          `INSERT INTO inventory_balances
+             (company_id, item_code, warehouse_id, balance_qty, balance_value, version, last_movement_id, last_updated, is_stale)
+           VALUES (?, ?, ?, ?, ?, 1, last_insert_rowid(), datetime('now'), 0)
+           ON CONFLICT(company_id, item_code, warehouse_id) DO UPDATE SET
+             balance_qty      = excluded.balance_qty,
+             balance_value    = excluded.balance_value,
+             version          = inventory_balances.version + 1,
+             last_movement_id = excluded.last_movement_id,
+             last_updated     = excluded.last_updated,
+             is_stale         = 0`
+        ).bind(
+          company_id, item.item_code, warehouseId,
+          prev.balance_qty + qtyIn - qtyOut,
+          prev.balance_value + valueIn - valueOut,
+        )
+      )
     }
 
     if (movementValue > 0) {
-      const itemRow = await c.env.DB.prepare('SELECT name FROM items WHERE code = ? AND company_id = ?').bind(item.item_code, company_id).first<{name:string}>()
-      await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', movId, {
-        company_id, ref_id: movId, item_code: item.item_code, warehouse_id: warehouseId,
-        movement_type: mType, value: movementValue, date: movementDate,
-        item_name: itemRow?.name ?? String(item.item_code), created_by: userId,
-        center_code: centerCode, supplier_code: supplierCode, work_order_id: woId,
-        season_id: seasonId, field_id: fieldId, crop_cycle_id: cropCycleId,
+      outboxPayloads.push({
+        movIdx: v.idx,
+        payload: {
+          company_id, item_code: item.item_code, warehouse_id: warehouseId,
+          movement_type: mType, value: movementValue, date: mDate,
+          item_name: String(item.item_code), created_by: userId,
+          center_code: centerCode, supplier_code: supplierCode, work_order_id: woId,
+          season_id: seasonId, field_id: fieldId, crop_cycle_id: cropCycleId,
+        },
       })
+    }
+  }
+
+  // Execute all write statements atomically
+  const batchResults = await c.env.DB.batch(writeStatements)
+
+  // Extract inserted IDs: batchResults[0], batchResults[N] correspond to INSERT statements
+  // Every non-stock item generates: [INSERT, UPDATE, UPSERT] = 3 statements
+  // Every non-stock item without propagation (batchItemIsNonStock=true) generates: [INSERT] = 1 statement
+  let stmtOffset = 0
+  for (const v of validatedItems) {
+    const insertResult = batchResults[stmtOffset]
+    const movId = Number(insertResult.meta.last_row_id)
+    results.push(movId)
+    stmtOffset += v.batchItemIsNonStock ? 1 : 3
+  }
+
+  // Post outbox entries after successful batch (best-effort; not part of atomic batch due to size limits)
+  for (const { movIdx, payload } of outboxPayloads) {
+    const movId = results[movIdx]
+    if (!movId) continue
+    try {
+      await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', movId, {
+        ...payload, ref_id: movId,
+      })
+    } catch (outboxErr) {
+      console.error(`[Batch] Outbox enqueue failed for movement ${movId}:`, (outboxErr as Error).message)
     }
   }
 
