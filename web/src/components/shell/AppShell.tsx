@@ -137,6 +137,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { label: 'Posting Groups',    icon: <Sliders       size={18} />, path: '/gl/posting-groups' },
       { label: 'Posting Rules',     icon: <FileText      size={18} />, path: '/gl/posting-rules' },
       { label: 'Posting Tables',    icon: <ClipboardList size={18} />, path: '/gl/posting-setup' },
+      { label: 'Warehouses',        icon: <Warehouse     size={18} />, path: '/inventory/setup' },
       { label: 'GL Settings',       icon: <Settings      size={18} />, path: '/gl/settings' },
     ],
   },
