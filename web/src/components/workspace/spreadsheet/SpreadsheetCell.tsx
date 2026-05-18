@@ -5,6 +5,7 @@ interface SpreadsheetCellProps {
   field: string
   value: string | number | null
   type?: 'text' | 'number'
+  placeholder?: string
   isActive?: boolean
   isEditing?: boolean
   error?: string
@@ -21,6 +22,7 @@ const SpreadsheetCell = memo(function SpreadsheetCell({
   field,
   value,
   type = 'text',
+  placeholder,
   isActive = false,
   isEditing = false,
   error,
@@ -175,6 +177,7 @@ const SpreadsheetCell = memo(function SpreadsheetCell({
           error ? 'text-red-700' : ''
         }`}
         value={isEditing ? localValue : (value == null ? '' : String(value))}
+        placeholder={!isEditing && !value && placeholder ? placeholder : undefined}
         onChange={(e) => isEditing && setLocalValue(e.target.value)}
         onKeyDown={handleKeyDown}
         onBlur={handleBlur}

@@ -75,6 +75,10 @@ export interface LineItem {
   // and the field is locked read-only in the UI.
   quantity:         number | null
   _qty_derived:     boolean
+  // Unit conversion: user may enter qty in a different unit (e.g. bags → KG).
+  // transaction_unit is sent to the backend which normalizes to base_unit.
+  // When null/empty, backend treats quantity as already in base_unit.
+  transaction_unit: string | null
   // total_value is the primary user-facing entry when packaging mode is active.
   // unit_price is computed from total_value / quantity before submission.
   total_value:      number | null
@@ -166,6 +170,7 @@ export function createEmptyLine(): LineItem {
     pack_count:       null,
     quantity:         null,
     _qty_derived:     false,
+    transaction_unit: null,
     total_value:      null,
     unit_price:       null,
     notes:            '',

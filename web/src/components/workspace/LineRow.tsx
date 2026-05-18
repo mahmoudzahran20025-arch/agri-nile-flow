@@ -43,7 +43,7 @@ const LineRow = memo(function LineRow({
           ? 'border-red-300 bg-red-50'
           : 'border-slate-200 bg-white hover:bg-slate-50'
       }`}
-      style={{ gridTemplateColumns: '32px 2fr 80px 90px 110px 80px 80px 28px', minHeight: '36px' }}
+      style={{ gridTemplateColumns: '32px 2fr 70px 80px 90px 110px 80px 80px 28px', minHeight: '36px' }}
     >
       {/* Row number */}
       <span className="text-[11px] text-slate-400 text-center font-mono flex items-center justify-center border-r border-slate-100">
@@ -91,6 +91,25 @@ const LineRow = memo(function LineRow({
             <span className="text-[10px] text-slate-300">—</span>
           </div>
         )}
+      </div>
+
+      {/* Transaction unit — optional override for unit conversion */}
+      <div className="border-r border-slate-100">
+        <SpreadsheetCell
+          rowId={line._key}
+          field="transaction_unit"
+          value={line.transaction_unit}
+          type="text"
+          placeholder={line.item_unit || undefined}
+          isActive={isActive('transaction_unit')}
+          isEditing={isEditing('transaction_unit')}
+          onChange={onUpdateCell}
+          onBeginEdit={onBeginEdit}
+          onCommitEdit={onCommitEdit}
+          onCancelEdit={onCancelEdit}
+          onNavigate={onNavigate}
+          registerCell={registerCell}
+        />
       </div>
 
       {/* Quantity — read-only (locked) when derived from packaging */}

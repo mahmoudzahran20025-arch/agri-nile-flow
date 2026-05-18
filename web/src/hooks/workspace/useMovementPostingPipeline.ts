@@ -85,13 +85,14 @@ export function useMovementPostingPipeline(): PostingPipelineHook {
           service_type_code:  draft.dimensions.service_type_code || undefined,
           statement_text:     draft.dimensions.statement_text || undefined,
           items: validLines.map(l => ({
-            item_code:     l.item_code!,
-            quantity:      l.quantity!,
-            unit_price:    l.unit_price ?? undefined,
-            total_value:   l.total_value ?? undefined,
-            notes:         l.notes || undefined,
-            pack_count:    l.pack_count ?? undefined,
-            pack_capacity: l.package_capacity ?? undefined,
+            item_code:        l.item_code!,
+            quantity:         l.quantity!,
+            unit_price:       l.unit_price ?? undefined,
+            total_value:      l.total_value ?? undefined,
+            notes:            l.notes || undefined,
+            pack_count:       l.pack_count ?? undefined,
+            pack_capacity:    l.package_capacity ?? undefined,
+            transaction_unit: l.transaction_unit || undefined,
           }))
         }
         res = await inventoryApi.createBatch(payload)

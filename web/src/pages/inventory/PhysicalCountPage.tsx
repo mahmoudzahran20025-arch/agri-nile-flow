@@ -218,6 +218,7 @@ export default function PhysicalCountPage() {
         pack_count:       null,
         quantity:         Math.abs(l.difference),
         _qty_derived:     false,
+        transaction_unit: null,
         total_value:      null,
         unit_price:       null,
         notes:            '',

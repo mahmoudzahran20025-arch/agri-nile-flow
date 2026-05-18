@@ -8,6 +8,7 @@ import {
   enforceInventoryLockDate,
   enqueueInventoryPostingOutbox,
   getInventoryPostingControls,
+  normalizeMovementQty,
   readInventoryBalance,
   upsertInventoryBalance,
   validateZeroValuePolicy,
@@ -635,6 +636,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     supplierCode: any; docNum: any; statementText: string | null; serviceTypeCode: string | null; notes: any
     seasonId: number | null; fieldId: number | null; woId: number | null; cropCycleId: number | null
     centerCode: any; periodId: number; prev: { balance_qty: number; balance_value: number; version: number }
+    normalizedQuantity: number; transactionUnit: string; transactionQty: number
   }> = []
 
   for (const [idx, item] of items.entries()) {
@@ -651,8 +653,8 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     assertPackagingInvariant(item.quantity, item.pack_count, item.pack_capacity, item.item_code)
 
     const itemTypeCheck = await c.env.DB.prepare(
-      'SELECT item_type, is_purchasable, is_sellable, expiry_tracking FROM items WHERE code = ? AND company_id = ?'
-    ).bind(item.item_code, company_id).first<{ item_type: string | null; is_purchasable: number; is_sellable: number; expiry_tracking: number }>()
+      'SELECT item_type, is_purchasable, is_sellable, expiry_tracking, base_unit FROM items WHERE code = ? AND company_id = ?'
+    ).bind(item.item_code, company_id).first<{ item_type: string | null; is_purchasable: number; is_sellable: number; expiry_tracking: number; base_unit: string | null }>()
     if (!itemTypeCheck) throw new Error(`ITEM_NOT_FOUND:${item.item_code}`)
     if (itemTypeCheck.item_type === 'service') {
       throw new Error(`SERVICE_ITEM_NO_STOCK:${item.item_code}`)
@@ -701,26 +703,33 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
 
     if (mType === 'ISSUE' && seasonId == null) throw new Error(`ISSUE_REQUIRES_SEASON:${item.item_code}`)
 
+    // Unit conversion: normalize transaction_unit → base_unit before any qty math.
+    const unitNorm = await normalizeMovementQty(
+      c.env.DB, company_id, item.item_code,
+      item.quantity, item.transaction_unit ?? null, itemTypeCheck.base_unit ?? null,
+    )
+    const normalizedQuantity = unitNorm.normalizedQty
+
     const prev = batchItemIsNonStock
       ? { balance_qty: 0, balance_value: 0, version: 0 }
       : await readInventoryBalance(c.env.DB, company_id, item.item_code, warehouseId)
-    if (!batchItemIsNonStock && !isInbound && item.quantity > prev.balance_qty) {
+    if (!batchItemIsNonStock && !isInbound && normalizedQuantity > prev.balance_qty) {
       throw new Error(`INSUFFICIENT_STOCK:${item.item_code} (Available: ${prev.balance_qty})`)
     }
 
-    const derivedBatchUnitPrice = item.total_value != null && item.quantity > 0
-      ? item.total_value / item.quantity
+    const derivedBatchUnitPrice = item.total_value != null && normalizedQuantity > 0
+      ? item.total_value / normalizedQuantity
       : (item.unit_price ?? (prev.balance_qty > 0 ? prev.balance_value / prev.balance_qty : 0))
     const unitPrice = Math.max(0, Math.round(derivedBatchUnitPrice * 10000) / 10000)
-    const movementValue = Math.round(item.quantity * unitPrice * 100) / 100
+    const movementValue = Math.round(normalizedQuantity * unitPrice * 100) / 100
     validateZeroValuePolicy(controls, role, movementValue, item.zero_value_reason ?? b.notes)
 
     const localId = `inv_batch_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 9)}`
     const ym = yearMonthParts(movementDate)
     const transactionId = Math.floor(Date.now() / 1000) * 1000 + Math.floor(Math.random() * 1000)
 
-    const qtyIn = isInbound ? item.quantity : 0
-    const qtyOut = isInbound ? 0 : item.quantity
+    const qtyIn = isInbound ? normalizedQuantity : 0
+    const qtyOut = isInbound ? 0 : normalizedQuantity
     const valueIn = Math.round((isInbound ? movementValue : 0) * 100) / 100
     const valueOut = Math.round((isInbound ? 0 : movementValue) * 100) / 100
 
@@ -743,6 +752,9 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
       supplierCode, docNum, statementText, serviceTypeCode, notes,
       seasonId, fieldId, woId, cropCycleId, centerCode, periodId,
       prev,
+      normalizedQuantity,
+      transactionUnit: unitNorm.transactionUnit,
+      transactionQty:  unitNorm.transactionQty,
     })
   }
 
@@ -757,7 +769,8 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     const { item, mDate, mType, warehouseId, batchItemIsNonStock, unitPrice, movementValue,
             localId, ym, transactionId, qtyIn, qtyOut, valueIn, valueOut,
             supplierCode, docNum, statementText, serviceTypeCode, notes,
-            seasonId, fieldId, woId, cropCycleId, centerCode, prev } = v
+            seasonId, fieldId, woId, cropCycleId, centerCode, prev,
+            normalizedQuantity, transactionUnit, transactionQty } = v
 
     writeStatements.push(
       c.env.DB.prepare(
@@ -766,14 +779,15 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
           movement_date, warehouse_id, movement_type, document_number, batch_number, expiry_date,
           pack_capacity, pack_count, quantity, unit_price, total_value_entered, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
           notes, statement_text, service_type_code, year, month, created_by_user_id, local_id,
-          zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+          zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id,
+          transaction_unit, transaction_qty)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       ).bind(
         company_id, seasonId ?? null, fieldId ?? null, woId ?? null, cropCycleId,
         supplierCode ?? null, item.item_code, centerCode ?? null,
         mDate, warehouseId, mType, docNum ?? null,
         item.batch_number ?? null, item.expiry_date ?? null,
-        item.pack_capacity ?? null, item.pack_count ?? null, item.quantity, unitPrice, item.total_value ?? null,
+        item.pack_capacity ?? null, item.pack_count ?? null, normalizedQuantity, unitPrice, item.total_value ?? null,
         qtyIn, qtyOut,
         batchItemIsNonStock ? 0 : prev.balance_qty + qtyIn - qtyOut,
         valueIn, valueOut,
@@ -784,6 +798,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
         controls.posting_mode,
         movementValue === 0 ? 'exempt_zero_value' : 'pending',
         transactionId,
+        transactionUnit, transactionQty,
       )
     )
 

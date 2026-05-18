@@ -195,3 +195,61 @@ export async function upsertInventoryBalance(
     `UPDATE items SET catalog_status = ? WHERE company_id = ? AND code = ?`
   ).bind(newStatus, companyId, itemCode).run()
 }
+
+export interface UnitNormalizationResult {
+  normalizedQty:  number
+  transactionQty: number
+  transactionUnit: string
+  factor:         number
+  precision:      number
+}
+
+/**
+ * Resolve `transaction_unit` → `base_unit` using `unit_conversions`.
+ * If `transaction_unit` is absent, equals base_unit, or no rule exists,
+ * returns the quantity unchanged (factor = 1) without throwing.
+ * Throws only when an explicit unit is provided and no conversion rule exists.
+ */
+export async function normalizeMovementQty(
+  db:              D1Database,
+  companyId:       number,
+  itemCode:        number,
+  quantity:        number,
+  transactionUnit: string | null | undefined,
+  baseUnit:        string | null | undefined,
+): Promise<UnitNormalizationResult> {
+  const tUnit = transactionUnit?.trim() || null
+  const bUnit = baseUnit?.trim() || null
+
+  if (!tUnit || !bUnit || tUnit === bUnit) {
+    return {
+      normalizedQty:  quantity,
+      transactionQty: quantity,
+      transactionUnit: tUnit ?? bUnit ?? 'unit',
+      factor:    1,
+      precision: 3,
+    }
+  }
+
+  const rule = await db.prepare(
+    `SELECT factor, precision FROM unit_conversions
+     WHERE company_id = ? AND (item_code = ? OR item_code IS NULL)
+       AND from_unit = ? AND to_unit = ? AND is_active = 1
+     ORDER BY item_code DESC NULLS LAST LIMIT 1`
+  ).bind(companyId, itemCode, tUnit, bUnit).first<{ factor: number; precision: number }>()
+
+  if (!rule) {
+    throw new Error(`NO_CONVERSION_RULE:${tUnit}→${bUnit} for item ${itemCode}`)
+  }
+
+  const raw = quantity * rule.factor
+  const normalizedQty = Math.round(raw * Math.pow(10, rule.precision)) / Math.pow(10, rule.precision)
+
+  return {
+    normalizedQty,
+    transactionQty: quantity,
+    transactionUnit: tUnit,
+    factor:    rule.factor,
+    precision: rule.precision,
+  }
+}
