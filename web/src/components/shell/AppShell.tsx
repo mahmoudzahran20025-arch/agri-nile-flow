@@ -27,6 +27,7 @@ import {
   Clock,
   ClipboardList,
   ShoppingCart,
+  ShoppingBag,
   X as XIcon,
   Upload,
 } from 'lucide-react';
@@ -120,6 +121,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { label: 'Crop Cycles',        path: '/fields/crop-cycles',         icon: <GitBranch     size={18} /> },
       { label: 'Settlements',        path: '/fields/harvest-settlements', icon: <FileCheck     size={18} /> },
       { label: 'المبيعات',           path: '/sales',                      icon: <ShoppingCart  size={18} /> },
+      { label: 'نقطة البيع (POS)',   path: '/pos',                        icon: <ShoppingBag   size={18} /> },
       { label: 'Work Orders',        path: '/operations',                 icon: <ClipboardList size={18} /> },
       { label: 'HR & Payroll',       path: '/hr',                         icon: <Users         size={18} /> },
       { label: 'Calendar',           path: '/calendar',                   icon: <CalendarDays  size={18} /> },
