@@ -2,10 +2,15 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { assetsApi, type FixedAsset } from '../../api/assets'
-import { configApi, fieldsApi } from '../../api/client'
-import { glApi } from '../../api/client'
+import { configApi, fieldsApi, glApi } from '../../api/client'
 import { cropCyclesApi } from '../../api/crop-cycles'
-import { ChevronRight, Play, PlusCircle, Settings2, TrendingDown, CheckCircle, AlertTriangle, RefreshCw } from 'lucide-react'
+import {
+  ChevronRight, Play, PlusCircle, Settings2, TrendingDown,
+  CheckCircle, AlertTriangle, RefreshCw, Loader2,
+} from 'lucide-react'
+import { CommandBar } from '../../components/ui/CommandBar'
+import Modal from '../../components/ui/Modal'
+import DataTableV2, { type ColumnV2 } from '../../components/ui/DataTableV2'
 
 const CATEGORY_LABELS: Record<string, string> = {
   equipment:        'معدات',
@@ -16,11 +21,18 @@ const CATEGORY_LABELS: Record<string, string> = {
   other:            'أخرى',
 }
 
+const ALLOC_METHOD_LABELS: Record<string, string> = {
+  machine_hours: 'ساعات تشغيل',
+  area_ratio:    'نسبة مساحة',
+  manual:        'يدوي',
+}
+
 function formatEGP(v: number) {
   return new Intl.NumberFormat('ar-EG', { minimumFractionDigits: 2 }).format(v)
 }
 
-function AddAssetForm({ onClose }: { onClose: () => void }) {
+// ── Add Asset Modal ───────────────────────────────────────────
+function AddAssetModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const qc = useQueryClient()
   const [form, setForm] = useState({
     asset_code: '', name: '', category: 'equipment',
@@ -39,11 +51,11 @@ function AddAssetForm({ onClose }: { onClose: () => void }) {
   const mut = useMutation({
     mutationFn: () => assetsApi.create({
       ...form,
-      cost:                parseFloat(form.cost) || 0,
-      salvage_value:       parseFloat(form.salvage_value) || 0,
-      useful_life_months:  parseInt(form.useful_life_months) || 60,
-      season_id:           form.season_id ? Number(form.season_id) : undefined,
-      field_id:            form.field_id  ? Number(form.field_id)  : undefined,
+      cost:               parseFloat(form.cost) || 0,
+      salvage_value:      parseFloat(form.salvage_value) || 0,
+      useful_life_months: parseInt(form.useful_life_months) || 60,
+      season_id:          form.season_id ? Number(form.season_id) : undefined,
+      field_id:           form.field_id  ? Number(form.field_id)  : undefined,
     }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['assets'] }); onClose() },
   })
@@ -51,106 +63,99 @@ function AddAssetForm({ onClose }: { onClose: () => void }) {
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }))
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" dir="rtl">
-      <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-lg">
-        <h2 className="text-lg font-bold mb-4">إضافة أصل ثابت جديد</h2>
-        <div className="grid grid-cols-2 gap-3 text-sm">
-          {[
-            ['asset_code', 'كود الأصل'],
-            ['name', 'اسم الأصل'],
-          ].map(([k, label]) => (
-            <div key={k}>
-              <label className="block text-xs text-gray-500 mb-1">{label}</label>
-              <input value={(form as Record<string, string>)[k]} onChange={e => set(k, e.target.value)}
-                className="w-full border rounded px-2 py-1.5" />
-            </div>
-          ))}
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">الفئة</label>
-            <select value={form.category} onChange={e => set('category', e.target.value)} className="w-full border rounded px-2 py-1.5">
-              {Object.entries(CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">تاريخ الاقتناء</label>
-            <input type="date" value={form.acquisition_date} onChange={e => set('acquisition_date', e.target.value)}
-              className="w-full border rounded px-2 py-1.5" />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">التكلفة (ج.م)</label>
-            <input type="number" value={form.cost} onChange={e => set('cost', e.target.value)}
-              className="w-full border rounded px-2 py-1.5" />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">القيمة التخريدية</label>
-            <input type="number" value={form.salvage_value} onChange={e => set('salvage_value', e.target.value)}
-              className="w-full border rounded px-2 py-1.5" />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">العمر الإنتاجي (شهر)</label>
-            <input type="number" value={form.useful_life_months} onChange={e => set('useful_life_months', e.target.value)}
-              className="w-full border rounded px-2 py-1.5" />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">طريقة الإهلاك</label>
-            <select value={form.depreciation_method} onChange={e => set('depreciation_method', e.target.value)} className="w-full border rounded px-2 py-1.5">
-              <option value="straight_line">القسط الثابت</option>
-              <option value="declining_balance" disabled title="غير متاح حالياً">
-                القسط المتناقص (غير متاح حالياً)
-              </option>
-            </select>
-            <p className="mt-1 text-[11px] text-amber-700" title="سيتم تفعيله بعد اكتمال منطق الحساب في الباك إند">
-              القسط المتناقص غير متاح حالياً.
-            </p>
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">الموسم (اختياري)</label>
-            <select value={form.season_id} onChange={e => { set('season_id', e.target.value); set('field_id', '') }} className="w-full border rounded px-2 py-1.5">
-              <option value="">— بدون موسم —</option>
-              {(seasons as Array<{ id: number; name: string }>).map(s => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">الحقل (اختياري)</label>
-            <select value={form.field_id} onChange={e => set('field_id', e.target.value)} className="w-full border rounded px-2 py-1.5">
-              <option value="">— بدون حقل —</option>
-              {(fields as Array<{ id: number; name: string; code: string }>).map(f => (
-                <option key={f.id} value={f.id}>{f.code} — {f.name}</option>
-              ))}
-            </select>
-          </div>
-          <div className="col-span-2">
-            <label className="block text-xs text-gray-500 mb-1">ملاحظات</label>
-            <input value={form.notes} onChange={e => set('notes', e.target.value)} className="w-full border rounded px-2 py-1.5" />
-          </div>
+    <Modal open={open} onClose={onClose} title="إضافة أصل ثابت جديد" size="md">
+      <div className="grid grid-cols-2 gap-3 text-sm">
+        <div>
+          <label className="label">كود الأصل</label>
+          <input className="input" value={form.asset_code} onChange={e => set('asset_code', e.target.value)} />
         </div>
-        {mut.isError && <p className="text-red-600 text-xs mt-2">{String(mut.error)}</p>}
-        <div className="flex gap-2 mt-4 justify-end">
-          <button onClick={onClose} className="px-4 py-2 border rounded text-sm">إلغاء</button>
-          <button onClick={() => mut.mutate()} disabled={mut.isPending}
-            className="px-4 py-2 bg-[#0F2D5C] text-white rounded text-sm disabled:opacity-50">
-            {mut.isPending ? 'جاري الحفظ...' : 'حفظ'}
-          </button>
+        <div>
+          <label className="label">اسم الأصل</label>
+          <input className="input" value={form.name} onChange={e => set('name', e.target.value)} />
+        </div>
+        <div>
+          <label className="label">الفئة</label>
+          <select className="input" value={form.category} onChange={e => set('category', e.target.value)}>
+            {Object.entries(CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">تاريخ الاقتناء</label>
+          <input className="input" type="date" value={form.acquisition_date}
+            onChange={e => set('acquisition_date', e.target.value)} />
+        </div>
+        <div>
+          <label className="label">التكلفة (ج.م)</label>
+          <input className="input" type="number" value={form.cost} onChange={e => set('cost', e.target.value)} />
+        </div>
+        <div>
+          <label className="label">القيمة التخريدية</label>
+          <input className="input" type="number" value={form.salvage_value}
+            onChange={e => set('salvage_value', e.target.value)} />
+        </div>
+        <div>
+          <label className="label">العمر الإنتاجي (شهر)</label>
+          <input className="input" type="number" value={form.useful_life_months}
+            onChange={e => set('useful_life_months', e.target.value)} />
+        </div>
+        <div>
+          <label className="label">طريقة الإهلاك</label>
+          <select className="input" value={form.depreciation_method}
+            onChange={e => set('depreciation_method', e.target.value)}>
+            <option value="straight_line">القسط الثابت</option>
+            <option value="declining_balance" disabled>القسط المتناقص (غير متاح حالياً)</option>
+          </select>
+          <p className="mt-1 text-[11px] text-amber-700">القسط المتناقص غير متاح حالياً.</p>
+        </div>
+        <div>
+          <label className="label">الموسم (اختياري)</label>
+          <select className="input" value={form.season_id}
+            onChange={e => { set('season_id', e.target.value); set('field_id', '') }}>
+            <option value="">— بدون موسم —</option>
+            {(seasons as Array<{ id: number; name: string }>).map(s => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label">الحقل (اختياري)</label>
+          <select className="input" value={form.field_id} onChange={e => set('field_id', e.target.value)}>
+            <option value="">— بدون حقل —</option>
+            {(fields as Array<{ id: number; name: string; code: string }>).map(f => (
+              <option key={f.id} value={f.id}>{f.code} — {f.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className="col-span-2">
+          <label className="label">ملاحظات</label>
+          <input className="input" value={form.notes} onChange={e => set('notes', e.target.value)} />
         </div>
       </div>
-    </div>
+      {mut.isError && <p className="text-red-600 text-xs mt-2">{String(mut.error)}</p>}
+      <div className="flex justify-end gap-3 mt-5">
+        <button className="btn-secondary" onClick={onClose}>إلغاء</button>
+        <button className="btn-primary" onClick={() => mut.mutate()} disabled={mut.isPending}>
+          {mut.isPending ? 'جاري الحفظ...' : 'حفظ'}
+        </button>
+      </div>
+    </Modal>
   )
 }
 
-function WipAllocationDrawer({ asset, onClose }: { asset: FixedAsset; onClose: () => void }) {
+// ── WIP Allocation Modal ──────────────────────────────────────
+function WipAllocationModal({ asset, onClose }: { asset: FixedAsset | null; onClose: () => void }) {
   const qc = useQueryClient()
-  const [cropCycleId, setCropCycleId] = useState<string>(asset.crop_cycle_id?.toString() ?? '')
-  const [method, setMethod]           = useState<string>(asset.depreciation_allocation_method ?? '')
+  const [cropCycleId, setCropCycleId] = useState<string>(asset?.crop_cycle_id?.toString() ?? '')
+  const [method, setMethod]           = useState<string>(asset?.depreciation_allocation_method ?? '')
 
   const { data: activeCycles = [] } = useQuery({
     queryKey: ['crop-cycles-active'],
     queryFn: () => cropCyclesApi.list({ status: 'active' }),
+    enabled: !!asset,
   })
 
   const mut = useMutation({
-    mutationFn: () => assetsApi.update(asset.id, {
+    mutationFn: () => assetsApi.update(asset!.id, {
       crop_cycle_id:                  cropCycleId ? Number(cropCycleId) : null,
       depreciation_allocation_method: method || null,
     }),
@@ -158,152 +163,107 @@ function WipAllocationDrawer({ asset, onClose }: { asset: FixedAsset; onClose: (
   })
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" dir="rtl">
-      <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
-        <h2 className="text-base font-bold text-slate-800 mb-1">توزيع الإهلاك على WIP</h2>
-        <p className="text-xs text-slate-500 mb-4">
-          حدد دورة المحصول المستفيدة وطريقة توزيع الإهلاك. يُطبَّق هذا الإعداد في دورة الإهلاك الشهرية التالية.
-        </p>
-
-        <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">
-              دورة المحصول (مباشر)
-              <span className="text-slate-400 font-normal mr-1">— يخصص الإهلاك بالكامل لهذه الدورة</span>
-            </label>
-            <select
-              value={cropCycleId}
-              onChange={e => setCropCycleId(e.target.value)}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F2D5C]"
-            >
-              <option value="">— بدون تخصيص مباشر —</option>
-              {(activeCycles as Array<{ id: number; crop_name: string; field_name: string; season_name: string }>).map(cc => (
-                <option key={cc.id} value={cc.id}>
-                  {cc.crop_name} · {cc.field_name} · {cc.season_name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">
-              طريقة التوزيع (متعدد الدورات)
-              <span className="text-slate-400 font-normal mr-1">— عند عدم تحديد دورة مباشرة</span>
-            </label>
-            <select
-              value={method}
-              onChange={e => setMethod(e.target.value)}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F2D5C]"
-            >
-              <option value="">— ورَّث من الدورة أو يُوزَّع بالمساحة —</option>
-              <option value="machine_hours">ساعات التشغيل</option>
-              <option value="area_ratio">نسبة المساحة</option>
-              <option value="manual">يدوي (لا توزيع على WIP)</option>
-            </select>
-          </div>
+    <Modal open={!!asset} onClose={onClose} title="توزيع الإهلاك على WIP" size="sm">
+      <p className="text-xs text-slate-500 mb-4">
+        حدد دورة المحصول المستفيدة وطريقة توزيع الإهلاك. يُطبَّق هذا الإعداد في دورة الإهلاك الشهرية التالية.
+      </p>
+      <div className="space-y-4">
+        <div>
+          <label className="label">دورة المحصول (مباشر)</label>
+          <p className="text-xs text-slate-400 mb-1">يخصص الإهلاك بالكامل لهذه الدورة</p>
+          <select className="input" value={cropCycleId} onChange={e => setCropCycleId(e.target.value)}>
+            <option value="">— بدون تخصيص مباشر —</option>
+            {(activeCycles as Array<{ id: number; crop_name: string; field_name: string; season_name: string }>).map(cc => (
+              <option key={cc.id} value={cc.id}>
+                {cc.crop_name} · {cc.field_name} · {cc.season_name}
+              </option>
+            ))}
+          </select>
         </div>
-
-        {mut.isError && (
-          <p className="mt-3 text-xs text-red-600">{String(mut.error)}</p>
-        )}
-
-        <div className="flex gap-3 justify-end mt-5">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
-            إلغاء
-          </button>
-          <button
-            onClick={() => mut.mutate()}
-            disabled={mut.isPending}
-            className="px-4 py-2 text-sm bg-[#0F2D5C] text-white rounded-lg font-medium disabled:opacity-50 hover:bg-[#1a3d6b] transition-colors"
-          >
-            {mut.isPending ? 'جاري الحفظ...' : 'حفظ الإعداد'}
-          </button>
+        <div>
+          <label className="label">طريقة التوزيع (متعدد الدورات)</label>
+          <p className="text-xs text-slate-400 mb-1">عند عدم تحديد دورة مباشرة</p>
+          <select className="input" value={method} onChange={e => setMethod(e.target.value)}>
+            <option value="">— ورَّث من الدورة أو يُوزَّع بالمساحة —</option>
+            <option value="machine_hours">ساعات التشغيل</option>
+            <option value="area_ratio">نسبة المساحة</option>
+            <option value="manual">يدوي (لا توزيع على WIP)</option>
+          </select>
         </div>
       </div>
-    </div>
+      {mut.isError && <p className="mt-3 text-xs text-red-600">{String(mut.error)}</p>}
+      <div className="flex justify-end gap-3 mt-5">
+        <button className="btn-secondary" onClick={onClose}>إلغاء</button>
+        <button className="btn-primary" onClick={() => mut.mutate()} disabled={mut.isPending}>
+          {mut.isPending ? 'جاري الحفظ...' : 'حفظ الإعداد'}
+        </button>
+      </div>
+    </Modal>
   )
 }
 
-function ScheduleDrawer({ asset, onClose }: { asset: FixedAsset; onClose: () => void }) {
+// ── Schedule Modal ────────────────────────────────────────────
+function ScheduleModal({ asset, onClose }: { asset: FixedAsset | null; onClose: () => void }) {
   const { data, isLoading } = useQuery({
-    queryKey: ['asset-schedule', asset.id],
-    queryFn: () => assetsApi.schedule(asset.id),
+    queryKey: ['asset-schedule', asset?.id],
+    queryFn: () => assetsApi.schedule(asset!.id),
+    enabled: !!asset,
   })
+
+  const scheduleCols: ColumnV2<{ id: number; period_year: number; period_month: number; amount: number; accumulated: number; status: string }>[] = [
+    { key: 'period', header: 'الفترة', render: r => `${r.period_year}/${String(r.period_month).padStart(2, '0')}`, csvValue: r => `${r.period_year}/${String(r.period_month).padStart(2, '0')}` },
+    { key: 'amount', header: 'قسط الإهلاك', sortable: true, render: r => formatEGP(r.amount), csvValue: r => String(r.amount) },
+    { key: 'accumulated', header: 'مجمع الإهلاك', sortable: true, render: r => formatEGP(r.accumulated), csvValue: r => String(r.accumulated) },
+    { key: 'status', header: 'الحالة', render: r => (
+      <span className={`px-2 py-0.5 rounded text-xs ${
+        r.status === 'posted'  ? 'bg-emerald-100 text-emerald-700' :
+        r.status === 'skipped' ? 'bg-slate-100 text-slate-500' :
+                                  'bg-amber-100 text-amber-700'
+      }`}>
+        {r.status === 'posted' ? 'مرحّل' : r.status === 'skipped' ? 'متخطى' : 'معلق'}
+      </span>
+    ), csvValue: r => r.status },
+  ]
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" dir="rtl">
-      <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-2xl max-h-[80vh] flex flex-col">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-bold">جدول إهلاك: {asset.name}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-700">✕</button>
+    <Modal open={!!asset} onClose={onClose} title={`جدول إهلاك: ${asset?.name ?? ''}`} size="lg">
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 size={24} className="animate-spin text-brand-400" />
         </div>
-        {isLoading ? (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="w-6 h-6 border-2 border-[#0F2D5C] border-t-transparent rounded-full animate-spin" />
-          </div>
-        ) : (
-          <div className="overflow-y-auto flex-1">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 sticky top-0">
-                <tr>
-                  <th className="text-right p-2">الفترة</th>
-                  <th className="text-right p-2">قسط الإهلاك</th>
-                  <th className="text-right p-2">مجمع الإهلاك</th>
-                  <th className="text-right p-2">الحالة</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(data?.schedule ?? []).map(row => (
-                  <tr key={row.id} className="border-t hover:bg-gray-50">
-                    <td className="p-2">{row.period_year}/{String(row.period_month).padStart(2, '0')}</td>
-                    <td className="p-2">{formatEGP(row.amount)}</td>
-                    <td className="p-2">{formatEGP(row.accumulated)}</td>
-                    <td className="p-2">
-                      <span className={`px-2 py-0.5 rounded text-xs ${
-                        row.status === 'posted'  ? 'bg-green-100 text-green-700' :
-                        row.status === 'skipped' ? 'bg-gray-100 text-gray-500' :
-                                                    'bg-yellow-100 text-yellow-700'
-                      }`}>
-                        {row.status === 'posted' ? 'مرحّل' : row.status === 'skipped' ? 'متخطى' : 'معلق'}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </div>
+      ) : (
+        <DataTableV2
+          columns={scheduleCols}
+          data={data?.schedule ?? []}
+          rowKey={r => r.id}
+          emptyText="لا توجد سجلات إهلاك"
+          exportFilename={`depreciation_schedule_${asset?.id}`}
+        />
+      )}
+    </Modal>
   )
 }
 
-const ALLOC_METHOD_LABELS: Record<string, string> = {
-  machine_hours: 'ساعات تشغيل',
-  area_ratio:    'نسبة مساحة',
-  manual:        'يدوي',
-}
-
+// ── Main Page ─────────────────────────────────────────────────
 export default function FixedAssetsPage() {
   const qc = useQueryClient()
-  const [showAdd, setShowAdd] = useState(false)
-  const [scheduleAsset, setScheduleAsset]   = useState<FixedAsset | null>(null)
-  const [wipAsset, setWipAsset]             = useState<FixedAsset | null>(null)
-
-  const { data, isLoading } = useQuery({
-    queryKey: ['assets'],
-    queryFn: assetsApi.list,
-  })
+  const [showAdd,       setShowAdd]       = useState(false)
+  const [scheduleAsset, setScheduleAsset] = useState<FixedAsset | null>(null)
+  const [wipAsset,      setWipAsset]      = useState<FixedAsset | null>(null)
+  const [showDepPanel,  setShowDepPanel]  = useState(false)
 
   const currentYear  = new Date().getFullYear()
   const currentMonth = new Date().getMonth() + 1
-  const [depYear,  setDepYear]  = useState(currentYear)
-  const [depMonth, setDepMonth] = useState(currentMonth)
+  const [depYear,   setDepYear]   = useState(currentYear)
+  const [depMonth,  setDepMonth]  = useState(currentMonth)
   const [depResult, setDepResult] = useState<{ posted: number; skipped: number; total_charge: number } | null>(null)
   const [depError,  setDepError]  = useState<string | null>(null)
-  const [showDepPanel, setShowDepPanel] = useState(false)
 
   const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
+
+  const { data, isLoading } = useQuery({ queryKey: ['assets'], queryFn: assetsApi.list })
+  const assets = data ?? []
+  const totalCost = assets.reduce((s, a) => s + a.cost, 0)
 
   const runMut = useMutation({
     mutationFn: () => glApi.runDepreciation(depYear, depMonth),
@@ -315,147 +275,126 @@ export default function FixedAssetsPage() {
     onError: (e: Error) => { setDepError(e.message); setDepResult(null) },
   })
 
-  const assets = data ?? []
-  const totalCost = assets.reduce((s, a) => s + a.cost, 0)
+  const columns: ColumnV2<FixedAsset>[] = [
+    { key: 'asset_code', header: 'الكود',         render: a => <span className="font-mono text-xs">{a.asset_code}</span>, csvValue: a => a.asset_code },
+    { key: 'name',       header: 'الاسم',          render: a => <span className="font-medium">{a.name}</span>, csvValue: a => a.name },
+    { key: 'category',   header: 'الفئة',          render: a => CATEGORY_LABELS[a.category] ?? a.category, csvValue: a => a.category },
+    { key: 'acquisition_date', header: 'تاريخ الاقتناء', sortable: true, render: a => a.acquisition_date, csvValue: a => a.acquisition_date },
+    { key: 'cost',       header: 'التكلفة',        sortable: true, render: a => <span className="font-medium tabular-nums">{formatEGP(a.cost)}</span>, csvValue: a => String(a.cost) },
+    { key: 'useful_life_months', header: 'العمر (شهر)', sortable: true, render: a => String(a.useful_life_months), csvValue: a => String(a.useful_life_months) },
+    { key: 'wip', header: 'توزيع WIP', render: a => (
+      a.crop_cycle_id ? (
+        <span className="px-1.5 py-0.5 rounded text-xs bg-emerald-100 text-emerald-700">دورة #{a.crop_cycle_id}</span>
+      ) : a.depreciation_allocation_method ? (
+        <span className="px-1.5 py-0.5 rounded text-xs bg-blue-100 text-blue-700">
+          {ALLOC_METHOD_LABELS[a.depreciation_allocation_method] ?? a.depreciation_allocation_method}
+        </span>
+      ) : (
+        <span className="text-xs text-slate-400">غير محدد</span>
+      )
+    ), csvValue: a => a.crop_cycle_id ? `دورة #${a.crop_cycle_id}` : a.depreciation_allocation_method ?? '' },
+    { key: 'actions', header: '', render: a => (
+      <div className="flex items-center gap-2">
+        <button onClick={e => { e.stopPropagation(); setWipAsset(a) }}
+          className="flex items-center gap-1 text-xs text-amber-600 hover:underline">
+          <Settings2 size={12} /> WIP
+        </button>
+        <button onClick={e => { e.stopPropagation(); setScheduleAsset(a) }}
+          className="flex items-center gap-1 text-xs text-brand-600 hover:underline">
+          <ChevronRight size={12} /> الجدول
+        </button>
+      </div>
+    ), csvValue: () => '' },
+  ]
 
   return (
-    <div className="p-6 space-y-6" dir="rtl">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-[#0F2D5C]">الأصول الثابتة</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            {assets.length} أصل · إجمالي التكلفة: {formatEGP(totalCost)} ج.م
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={() => setShowDepPanel(v => !v)}
-            className="flex items-center gap-2 px-4 py-2 border border-[#0F2D5C] text-[#0F2D5C] rounded-lg text-sm hover:bg-[#0F2D5C]/5">
-            <TrendingDown className="w-4 h-4" />
-            تشغيل الإهلاك
-          </button>
-          <button onClick={() => setShowAdd(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-[#0F2D5C] text-white rounded-lg text-sm">
-            <PlusCircle className="w-4 h-4" />
-            أصل جديد
-          </button>
-        </div>
+    <div className="flex flex-col h-full" dir="rtl">
+      <CommandBar
+        title="الأصول الثابتة"
+        subtitle={`${assets.length} أصل · إجمالي التكلفة: ${formatEGP(totalCost)} ج.م`}
+        actions={[
+          {
+            label: 'تشغيل الإهلاك',
+            icon: <TrendingDown size={14} />,
+            variant: 'secondary',
+            onClick: () => setShowDepPanel(v => !v),
+          },
+          {
+            label: 'أصل جديد',
+            icon: <PlusCircle size={14} />,
+            variant: 'primary',
+            onClick: () => setShowAdd(true),
+          },
+        ]}
+      />
+
+      <div className="flex-1 overflow-y-auto p-5 space-y-5">
+
+        {/* Depreciation run panel */}
+        {showDepPanel && (
+          <div className="card p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <TrendingDown size={15} className="text-brand-600" />
+                <h2 className="text-sm font-semibold text-slate-800">تشغيل دورة الإهلاك</h2>
+              </div>
+              <Link to="/gl/depreciation" className="text-xs text-brand-600 hover:underline">جدول مفصّل ←</Link>
+            </div>
+            <div className="flex flex-wrap gap-3 items-end">
+              <div className="space-y-1">
+                <label className="text-xs text-slate-500 font-medium">السنة</label>
+                <select className="input w-auto" value={depYear} onChange={e => setDepYear(Number(e.target.value))}>
+                  {[currentYear - 1, currentYear, currentYear + 1].map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-slate-500 font-medium">الشهر</label>
+                <select className="input w-auto" value={depMonth} onChange={e => setDepMonth(Number(e.target.value))}>
+                  {MONTHS.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+                </select>
+              </div>
+              <button onClick={() => runMut.mutate()} disabled={runMut.isPending}
+                className="btn-primary gap-2">
+                {runMut.isPending
+                  ? <><RefreshCw size={13} className="animate-spin" /> جارٍ الترحيل…</>
+                  : <><Play size={13} /> تشغيل</>}
+              </button>
+            </div>
+            {depResult && (
+              <div className="flex items-start gap-3 bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3">
+                <CheckCircle size={14} className="text-emerald-600 shrink-0 mt-0.5" />
+                <p className="text-sm text-emerald-800">
+                  {depResult.posted} أصل مُرحَّل · {depResult.skipped} محذوف مسبقاً · إجمالي {formatEGP(depResult.total_charge)} ج.م
+                </p>
+              </div>
+            )}
+            {depError && (
+              <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+                <AlertTriangle size={14} className="text-red-500 shrink-0 mt-0.5" />
+                <p className="text-sm text-red-700">{depError}</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {isLoading ? (
+          <div className="flex items-center justify-center h-40">
+            <Loader2 size={28} className="animate-spin text-brand-400" />
+          </div>
+        ) : (
+          <DataTableV2<FixedAsset>
+            columns={columns}
+            data={assets}
+            rowKey={a => a.id}
+            emptyText="لا توجد أصول ثابتة مسجلة"
+            exportFilename="fixed_assets"
+          />
+        )}
       </div>
 
-      {/* Depreciation run panel */}
-      {showDepPanel && (
-        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <TrendingDown size={15} className="text-[#0F2D5C]" />
-              <h2 className="text-sm font-semibold text-slate-800">تشغيل دورة الإهلاك</h2>
-            </div>
-            <Link to="/gl/depreciation" className="text-xs text-blue-600 hover:underline">جدول مفصّل ←</Link>
-          </div>
-          <div className="flex flex-wrap gap-3 items-end">
-            <div className="space-y-1">
-              <label className="text-xs text-slate-500 font-medium">السنة</label>
-              <select value={depYear} onChange={e => setDepYear(Number(e.target.value))}
-                className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                {[currentYear - 1, currentYear, currentYear + 1].map(y => <option key={y} value={y}>{y}</option>)}
-              </select>
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs text-slate-500 font-medium">الشهر</label>
-              <select value={depMonth} onChange={e => setDepMonth(Number(e.target.value))}
-                className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                {MONTHS.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
-              </select>
-            </div>
-            <button onClick={() => runMut.mutate()} disabled={runMut.isPending}
-              className="flex items-center gap-2 px-4 py-2 bg-[#0F2D5C] text-white rounded-lg text-sm font-medium disabled:opacity-50 hover:bg-[#1a3d6b] transition-colors">
-              {runMut.isPending
-                ? <><RefreshCw size={13} className="animate-spin" /> جارٍ الترحيل…</>
-                : <><Play size={13} /> تشغيل</>}
-            </button>
-          </div>
-          {depResult && (
-            <div className="flex items-start gap-3 bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3">
-              <CheckCircle size={14} className="text-emerald-600 shrink-0 mt-0.5" />
-              <p className="text-sm text-emerald-800">
-                {depResult.posted} أصل مُرحَّل · {depResult.skipped} محذوف مسبقاً · إجمالي {formatEGP(depResult.total_charge)} ج.م
-              </p>
-            </div>
-          )}
-          {depError && (
-            <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-              <AlertTriangle size={14} className="text-red-500 shrink-0 mt-0.5" />
-              <p className="text-sm text-red-700">{depError}</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {isLoading ? (
-        <div className="flex items-center justify-center h-40">
-          <div className="w-6 h-6 border-2 border-[#0F2D5C] border-t-transparent rounded-full animate-spin" />
-        </div>
-      ) : assets.length === 0 ? (
-        <div className="text-center py-16 text-gray-400">لا توجد أصول ثابتة مسجلة</div>
-      ) : (
-        <div className="bg-white rounded-xl border overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="text-right p-3">الكود</th>
-                <th className="text-right p-3">الاسم</th>
-                <th className="text-right p-3">الفئة</th>
-                <th className="text-right p-3">تاريخ الاقتناء</th>
-                <th className="text-right p-3">التكلفة</th>
-                <th className="text-right p-3">العمر (شهر)</th>
-                <th className="text-right p-3">توزيع WIP</th>
-                <th className="p-3"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {assets.map(asset => (
-                <tr key={asset.id} className="border-t hover:bg-gray-50">
-                  <td className="p-3 font-mono text-xs">{asset.asset_code}</td>
-                  <td className="p-3 font-medium">{asset.name}</td>
-                  <td className="p-3">{CATEGORY_LABELS[asset.category] ?? asset.category}</td>
-                  <td className="p-3">{asset.acquisition_date}</td>
-                  <td className="p-3">{formatEGP(asset.cost)}</td>
-                  <td className="p-3">{asset.useful_life_months}</td>
-                  <td className="p-3">
-                    {asset.crop_cycle_id ? (
-                      <span className="px-1.5 py-0.5 rounded text-xs bg-emerald-100 text-emerald-700">دورة #{asset.crop_cycle_id}</span>
-                    ) : asset.depreciation_allocation_method ? (
-                      <span className="px-1.5 py-0.5 rounded text-xs bg-blue-100 text-blue-700">
-                        {ALLOC_METHOD_LABELS[asset.depreciation_allocation_method] ?? asset.depreciation_allocation_method}
-                      </span>
-                    ) : (
-                      <span className="text-xs text-gray-400">غير محدد</span>
-                    )}
-                  </td>
-                  <td className="p-3">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => setWipAsset(asset)}
-                        title="إعدادات توزيع الإهلاك على WIP"
-                        className="flex items-center gap-1 text-xs text-amber-600 hover:underline">
-                        <Settings2 className="w-3 h-3" />
-                        WIP
-                      </button>
-                      <button onClick={() => setScheduleAsset(asset)}
-                        className="flex items-center gap-1 text-xs text-[#0F2D5C] hover:underline">
-                        <ChevronRight className="w-3 h-3" />
-                        الجدول
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {showAdd && <AddAssetForm onClose={() => setShowAdd(false)} />}
-      {scheduleAsset && <ScheduleDrawer asset={scheduleAsset} onClose={() => setScheduleAsset(null)} />}
-      {wipAsset && <WipAllocationDrawer asset={wipAsset} onClose={() => setWipAsset(null)} />}
+      <AddAssetModal open={showAdd} onClose={() => setShowAdd(false)} />
+      <WipAllocationModal asset={wipAsset} onClose={() => setWipAsset(null)} />
+      <ScheduleModal asset={scheduleAsset} onClose={() => setScheduleAsset(null)} />
     </div>
   )
 }

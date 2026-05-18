@@ -9,6 +9,7 @@ import type { HarvestRecord } from '../../api/fields'
 import { configApi } from '../../api/client'
 import type { Season } from '../../types'
 import Modal from '../../components/ui/Modal'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 function fmt(n: number | null | undefined, dec = 1) {
   if (n === null || n === undefined) return '—'
@@ -375,7 +376,18 @@ export default function HarvestPage() {
   const totalProfit  = totalRevenue - totalCost
 
   return (
-    <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto" dir="rtl">
+    <div className="flex flex-col h-full" dir="rtl">
+      <CommandBar
+        title="سجلات الحصاد"
+        subtitle="تتبع ناتج الحصاد والتكاليف والربحية لكل قطعة"
+        actions={[{
+          label: 'سجل حصاد جديد',
+          icon: <Plus size={15} />,
+          variant: 'primary',
+          onClick: () => setShowAdd(true),
+        }]}
+      />
+      <div className="flex-1 overflow-y-auto p-5 space-y-5 max-w-7xl mx-auto w-full">
 
       {/* Repost success toast */}
       {repostSuccess !== null && (
@@ -390,23 +402,6 @@ export default function HarvestPage() {
           {(repostMut.error as Error)?.message?.replace(/^Error:\s*/i, '') ?? 'فشل إعادة الترحيل'}
         </div>
       )}
-
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-            <Wheat size={24} className="text-amber-500" />
-            سجلات الحصاد
-          </h1>
-          <p className="text-sm text-gray-500 mt-0.5">تتبع ناتج الحصاد والتكاليف والربحية لكل قطعة</p>
-        </div>
-        <button
-          onClick={() => setShowAdd(true)}
-          className="flex items-center gap-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-        >
-          <Plus size={16} /> سجل حصاد جديد
-        </button>
-      </div>
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -622,6 +617,7 @@ export default function HarvestPage() {
           />
         </Modal>
       )}
+      </div>{/* end scroll container */}
     </div>
   )
 }

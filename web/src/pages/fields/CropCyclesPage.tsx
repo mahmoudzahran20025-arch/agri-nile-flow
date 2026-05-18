@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Sprout, Plus, ChevronRight, AlertTriangle, CheckCircle, XCircle, Clock, Leaf } from 'lucide-react'
+import { Plus, ChevronRight, AlertTriangle, CheckCircle, XCircle, Clock, Leaf } from 'lucide-react'
 import { cropCyclesApi, configApi, fieldsApi } from '../../api/client'
 import type { CropCycle, CropType, CycleStatus, CreateCropCycleInput } from '../../api/client'
 import Modal from '../../components/ui/Modal'
@@ -10,6 +10,7 @@ import { useToast } from '../../contexts/ToastContext'
 import { usePermission } from '../../hooks/usePermission'
 import { useNewShortcut } from '../../hooks/useNewShortcut'
 import { useNavigate } from 'react-router-dom'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 const CROP_TYPE_LABELS: Record<CropType, string> = {
   annual:     'سنوي',
@@ -121,30 +122,19 @@ export default function CropCyclesPage() {
   const longCycles    = activeCycles.filter(c => c.crop_type !== 'annual').length
 
   return (
-    <div className="flex flex-col h-full bg-[#f8fafc]">
-      {/* Header */}
-      <div className="px-6 py-5 bg-white border-b border-slate-200 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-emerald-50 flex items-center justify-center">
-            <Sprout size={18} className="text-emerald-600" />
-          </div>
-          <div>
-            <h1 className="text-[18px] font-bold text-[#0F2D5C]">دورات المحاصيل</h1>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              تراكم تكاليف WIP — تتبع كل محصول من الزراعة حتى التسوية
-            </p>
-          </div>
-        </div>
-        {canWrite('crop_cycles') && (
-          <button
-            onClick={() => { setOpen(true); setForm(EMPTY_FORM); setErr('') }}
-            className="btn-primary flex items-center gap-2 text-[13px]"
-          >
-            <Plus size={14} /> دورة جديدة
-          </button>
-        )}
-      </div>
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="دورات المحاصيل"
+        subtitle="تراكم تكاليف WIP — تتبع كل محصول من الزراعة حتى التسوية"
+        actions={canWrite('crop_cycles') ? [{
+          label: 'دورة جديدة',
+          icon: <Plus size={15} />,
+          variant: 'primary',
+          onClick: () => { setOpen(true); setForm(EMPTY_FORM); setErr('') },
+        }] : []}
+      />
 
+      <div className="flex-1 overflow-y-auto">
       {/* KPI strip */}
       <div className="px-6 pt-4 pb-0 grid grid-cols-3 gap-3 shrink-0">
         {[
@@ -352,6 +342,7 @@ export default function CropCyclesPage() {
           </div>
         </form>
       </Modal>
+      </div>{/* end scroll container */}
     </div>
   )
 }

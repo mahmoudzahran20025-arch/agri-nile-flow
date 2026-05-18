@@ -7,6 +7,7 @@ import {
 import { customersApi, type Customer, type CustomerPayment } from '../../api/customers'
 import { api, unwrap } from '../../api/core'
 import { usePermission } from '../../hooks/usePermission'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 const EGP = (n: number) =>
   new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 2 }).format(n)
@@ -446,30 +447,22 @@ export default function CustomersPage() {
   const customers = data?.data ?? []
 
   return (
-    <div className="p-6 max-w-5xl mx-auto" dir="rtl">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-5">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-[#0F2D5C]/10 flex items-center justify-center">
-            <Users size={20} className="text-[#0F2D5C]" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-slate-800">إدارة العملاء</h1>
-            <p className="text-sm text-slate-500">{data?.total ?? 0} عميل</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
-            <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} className="rounded" />
-            عرض الموقوفين
-          </label>
-          {canWrite && (
-            <button onClick={() => setModal('new')} className="flex items-center gap-2 px-4 py-2 bg-[#0F2D5C] text-white rounded-xl text-sm font-medium hover:bg-[#0F2D5C]/90">
-              <Plus size={16} /> عميل جديد
-            </button>
-          )}
-        </div>
-      </div>
+    <div className="flex flex-col h-full" dir="rtl">
+      <CommandBar
+        title="إدارة العملاء"
+        subtitle={`${data?.total ?? 0} عميل مسجل`}
+        actions={canWrite ? [{
+          label: 'عميل جديد',
+          icon: <Plus size={15} />,
+          variant: 'primary',
+          onClick: () => setModal('new'),
+        }] : []}
+      />
+      <div className="flex-1 overflow-y-auto p-5 max-w-5xl mx-auto w-full space-y-5">
+      <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
+        <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} className="rounded" />
+        عرض الموقوفين
+      </label>
 
       {/* AR Aging Panel */}
       <ARAgingPanel />
@@ -618,6 +611,7 @@ export default function CustomersPage() {
           onSaved={handleCollected}
         />
       )}
+      </div>{/* end scroll container */}
     </div>
   )
 }

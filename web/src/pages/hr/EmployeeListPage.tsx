@@ -8,6 +8,7 @@ import {
 import { api, unwrap } from '../../api/client'
 import { hrApi } from '../../api/hr'
 import Modal from '../../components/ui/Modal'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 interface Employee {
   id: number; name: string; national_id?: string; role_title?: string
@@ -145,25 +146,18 @@ export default function EmployeeListPage() {
   }
 
   return (
-    <div className="p-4 md:p-6 space-y-5 max-w-6xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 bg-emerald-100 rounded-xl">
-            <Users size={22} className="text-emerald-700" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">الموارد البشرية</h1>
-            <p className="text-sm text-gray-500">{employees.length} موظف مسجل</p>
-          </div>
-        </div>
-        <button
-          onClick={() => { setForm(EMPTY_FORM); setShowAdd(true) }}
-          className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-emerald-700 shadow-sm transition-colors"
-        >
-          <Plus size={16} /> إضافة موظف
-        </button>
-      </div>
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="الموارد البشرية"
+        subtitle={`${employees.length} موظف مسجل`}
+        actions={[{
+          label: 'إضافة موظف',
+          icon: <Plus size={15} />,
+          variant: 'primary',
+          onClick: () => { setForm(EMPTY_FORM); setShowAdd(true) },
+        }]}
+      />
+      <div className="flex-1 overflow-y-auto p-5 space-y-5 max-w-6xl mx-auto w-full">
 
       {/* KPI strip */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -386,6 +380,7 @@ export default function EmployeeListPage() {
           submitLabel="حفظ التعديلات"
         />
       </Modal>
+      </div>{/* end scroll container */}
     </div>
   )
 }

@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { FileText, Plus, ShoppingCart, TrendingUp, Banknote, CheckCircle2, History } from 'lucide-react'
+import { Plus, ShoppingCart, TrendingUp, Banknote, CheckCircle2, History } from 'lucide-react'
 import { contractsApi, configApi, suppliersApi, fieldsApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
 import { usePermission } from '../../hooks/usePermission'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 type Tab = 'purchase' | 'sales'
 
@@ -147,24 +148,21 @@ export default function ContractsPage() {
   const CROPS = ['قمح','ذرة','أرز','قصب سكر','قطن','بنجر','بصل','طماطم','أخرى']
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <FileText size={24} className="text-brand-600" />
-          <h1 className="text-xl font-bold text-gray-900">العقود</h1>
-        </div>
-        {canWrite('contracts') && (
-          <button
-            className="btn btn-primary"
-            onClick={() => { tab === 'purchase' ? setOP(true) : setOS(true); setErr('') }}
-          >
-            <Plus size={16} /> عقد جديد
-          </button>
-        )}
-      </div>
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="العقود"
+        subtitle={`${(purchases as PurchaseContract[]).length + (sales as SalesContract[]).length} عقد مسجل`}
+        actions={canWrite('contracts') ? [{
+          label: 'عقد جديد',
+          icon: <Plus size={15} />,
+          variant: 'primary',
+          onClick: () => { tab === 'purchase' ? setOP(true) : setOS(true); setErr('') },
+        }] : []}
+      />
+      <div className="flex-1 overflow-y-auto">
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b">
+      <div className="flex gap-1 border-b bg-white px-5 shrink-0">
         <button
           onClick={() => setTab('purchase')}
           className={`flex items-center gap-2 px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
@@ -185,6 +183,7 @@ export default function ContractsPage() {
         </button>
       </div>
 
+      <div className="p-5 space-y-5">
       {/* Purchase Tab */}
       {tab === 'purchase' && (
         <div className="card overflow-hidden p-0">
@@ -572,6 +571,8 @@ export default function ContractsPage() {
           </button>
         </div>
       </Modal>
+      </div>{/* end p-5 */}
+      </div>{/* end scroll container */}
     </div>
   )
 }

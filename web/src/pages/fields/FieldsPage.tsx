@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MapPin, Plus, CheckCircle, XCircle, Navigation, Pencil, TrendingUp } from 'lucide-react'
+import { Plus, CheckCircle, XCircle, Navigation, Pencil, TrendingUp } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { fieldsApi, configApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
+import { CommandBar } from '../../components/ui/CommandBar'
 import { TableSkeleton } from '../../components/ui/Skeleton'
 import { EmptyList } from '../../components/ui/EmptyState'
 import { usePermission } from '../../hooks/usePermission'
@@ -179,19 +180,18 @@ export default function FieldsPage() {
   )
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <MapPin size={24} className="text-brand-600" />
-          <h1 className="text-xl font-bold text-gray-900">قطع الأراضي</h1>
-          <span className="badge badge-blue">{(fields as Field[]).length} قطعة</span>
-        </div>
-        {canWrite('fields') && (
-          <button className="btn btn-primary" onClick={() => { setOpen(true); setForm(EMPTY); setErr('') }}>
-            <Plus size={16} /> إضافة قطعة
-          </button>
-        )}
-      </div>
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="قطع الأراضي"
+        subtitle={`${(fields as Field[]).length} قطعة مسجلة`}
+        actions={canWrite('fields') ? [{
+          label: 'إضافة قطعة',
+          icon: <Plus size={15} />,
+          variant: 'primary',
+          onClick: () => { setOpen(true); setForm(EMPTY); setErr('') },
+        }] : []}
+      />
+      <div className="flex-1 overflow-y-auto p-5 space-y-5">
 
       {/* Search */}
       <input
@@ -504,6 +504,7 @@ export default function FieldsPage() {
           </button>
         </div>
       </Modal>
+      </div>{/* end scroll container */}
     </div>
   )
 }
