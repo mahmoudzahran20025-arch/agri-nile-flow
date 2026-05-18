@@ -93,4 +93,22 @@ export const posApi = {
       }
       order_count: number
     }>(`/pos/sessions/${id}/summary`)),
+
+  getSessionOrders: (sessionId: number) =>
+    unwrap(api.get<PosOrderRow[]>(`/pos/sessions/${sessionId}/orders`)),
+
+  voidSale: (orderId: number) =>
+    unwrap(api.patch<{ voided: boolean; order_id: number }>(`/sales/${orderId}/void`, {})),
+}
+
+export interface PosOrderRow {
+  id:             number
+  order_date:     string
+  subtotal:       number
+  tax_amount:     number
+  total:          number
+  payment_method: string
+  status:         'open' | 'paid' | 'voided'
+  customer_id:    number | null
+  notes:          string | null
 }

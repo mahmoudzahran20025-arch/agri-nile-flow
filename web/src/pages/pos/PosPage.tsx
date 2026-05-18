@@ -13,6 +13,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ShoppingBag, Plus, Minus, Trash2, CheckCircle,
   X, Loader2, DollarSign, CreditCard, FileText, Lock, Printer,
+  History, XCircle,
 } from 'lucide-react'
 import { posApi, type PosSaleResult } from '../../api/pos'
 import { inventoryApi } from '../../api/client'
@@ -54,6 +55,9 @@ export default function PosPage() {
   // Receipt state
   const [lastReceipt, setLastReceipt] = useState<PosSaleResult | null>(null)
   const [cartErr, setCartErr]         = useState<string | null>(null)
+
+  // Right-panel tab: 'cart' | 'history'
+  const [rightTab, setRightTab] = useState<'cart' | 'history'>('cart')
 
   const { data: warehousesData } = useQuery({
     queryKey: ['warehouses-list'],
@@ -122,6 +126,23 @@ export default function PosPage() {
     },
     onError: (err: any) => setCartErr(err.message ?? 'حدث خطأ'),
   })
+
+  const voidMut = useMutation({
+    mutationFn: (orderId: number) => posApi.voidSale(orderId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pos-session-orders', activeSessionId] })
+      qc.invalidateQueries({ queryKey: ['pos-session-summary', activeSessionId] })
+      qc.invalidateQueries({ queryKey: ['warehouse-balances'] })
+    },
+  })
+
+  const sessionOrdersQuery = useQuery({
+    queryKey: ['pos-session-orders', activeSessionId],
+    queryFn:  () => posApi.getSessionOrders(activeSessionId!),
+    enabled:  !!activeSessionId && rightTab === 'history',
+    staleTime: 10_000,
+  })
+  const sessionOrders = (sessionOrdersQuery.data as any) ?? []
 
   function addToCart() {
     const code  = Number(itemCodeInput)
@@ -323,6 +344,21 @@ export default function PosPage() {
               بيع جديد
             </button>
           </div>
+
+          <button
+            onClick={() => {
+              if (confirm(`هل تريد إلغاء الأمر #${lastReceipt.order_id}؟ سيتم عكس الحركات المحاسبية.`)) {
+                voidMut.mutate(lastReceipt.order_id, {
+                  onSuccess: () => setLastReceipt(null),
+                })
+              }
+            }}
+            disabled={voidMut.isPending}
+            className="print:hidden w-full flex items-center justify-center gap-1.5 text-rose-600 hover:text-rose-800 text-sm py-1.5"
+          >
+            {voidMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <XCircle size={13} />}
+            إلغاء هذا البيع
+          </button>
         </div>
       </div>
     )
@@ -431,8 +467,76 @@ export default function PosPage() {
           </div>
         </div>
 
-        {/* Checkout panel */}
-        <div className="w-80 bg-slate-50 border-r border-slate-200 flex flex-col flex-shrink-0 p-4 gap-4">
+        {/* Checkout / History panel */}
+        <div className="w-80 bg-slate-50 border-r border-slate-200 flex flex-col flex-shrink-0">
+          {/* Tab switcher */}
+          <div className="flex border-b border-slate-200">
+            {([['cart', 'الدفع', <DollarSign size={13} />], ['history', 'السجل', <History size={13} />]] as const).map(([t, label, icon]) => (
+              <button
+                key={t}
+                onClick={() => setRightTab(t)}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-semibold border-b-2 transition-colors ${
+                  rightTab === t
+                    ? 'border-[#0F2D5C] text-[#0F2D5C] bg-white'
+                    : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {icon}{label}
+              </button>
+            ))}
+          </div>
+
+          {rightTab === 'history' ? (
+            /* Session orders list */
+            <div className="flex-1 overflow-y-auto p-3">
+              {sessionOrdersQuery.isLoading ? (
+                <div className="space-y-2">
+                  {[1,2,3].map(i => <div key={i} className="h-14 bg-slate-100 rounded animate-pulse" />)}
+                </div>
+              ) : sessionOrders.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-slate-400">
+                  <History size={28} className="mb-2 opacity-30" />
+                  <p className="text-xs">لا توجد مبيعات في هذه الجلسة</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {sessionOrders.map((o: any) => (
+                    <div
+                      key={o.id}
+                      className={`bg-white rounded-xl border p-3 text-xs ${o.status === 'voided' ? 'opacity-50 border-slate-100' : 'border-slate-200'}`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-bold text-slate-700">أمر #{o.id}</span>
+                        {o.status === 'voided' ? (
+                          <span className="px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded text-[10px]">ملغى</span>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              if (confirm(`إلغاء الأمر #${o.id} (${EGP(o.total)})؟`)) {
+                                voidMut.mutate(o.id)
+                              }
+                            }}
+                            disabled={voidMut.isPending && voidMut.variables === o.id}
+                            className="flex items-center gap-1 text-rose-500 hover:text-rose-700 px-1.5 py-0.5 rounded hover:bg-rose-50"
+                          >
+                            {voidMut.isPending && voidMut.variables === o.id
+                              ? <Loader2 size={10} className="animate-spin" />
+                              : <XCircle size={10} />}
+                            إلغاء
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex justify-between text-slate-500">
+                        <span>{o.payment_method === 'cash' ? 'نقدي' : o.payment_method === 'card' ? 'بطاقة' : 'آجل'}</span>
+                        <span className="font-semibold text-slate-700">{EGP(o.total)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+          <div className="flex-1 flex flex-col p-4 gap-4 overflow-y-auto">
           <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-2">
             <div className="flex justify-between text-sm text-slate-600">
               <span>المجموع الفرعي</span><span>{EGP(subtotal)}</span>
@@ -503,6 +607,8 @@ export default function PosPage() {
               <X size={14} /> مسح السلة
             </button>
           </div>
+          </div>
+          )} {/* end rightTab === 'history' ? ... : ... */}
         </div>
       </div>
 

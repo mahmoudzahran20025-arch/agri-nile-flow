@@ -442,4 +442,24 @@ pos.get('/sessions/:id/summary', permissionGuard('inventory', 'read'), async (c)
   return c.json({ success: true, data: { session, totals, order_count: count?.n ?? 0 } })
 })
 
+// ── GET /api/pos/sessions/:id/orders ──────────────────────────────────────────
+pos.get('/sessions/:id/orders', permissionGuard('inventory', 'read'), async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  if (!id) return c.json({ success: false, error: 'معرف الجلسة غير صحيح' }, 400)
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, order_date, subtotal, tax_amount, total,
+            payment_method, status, customer_id, notes
+     FROM sales_orders
+     WHERE session_id = ? AND company_id = ?
+     ORDER BY id DESC`
+  ).bind(id, company_id).all<{
+    id: number; order_date: string; subtotal: number; tax_amount: number; total: number
+    payment_method: string; status: string; customer_id: number | null; notes: string | null
+  }>()
+
+  return c.json({ success: true, data: results })
+})
+
 export default pos
