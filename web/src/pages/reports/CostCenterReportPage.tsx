@@ -1,10 +1,11 @@
 import { Fragment, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  ChevronDown, ChevronUp, BarChart3, Download, MapPin,
+  ChevronDown, ChevronUp, Download, MapPin,
   TrendingDown, BookOpen, GitBranch,
 } from 'lucide-react'
 import { reportsApi, configApi } from '../../api/client'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 function egp(n: number | null | undefined) {
   if (n == null || n === 0) return '٠'
@@ -74,34 +75,33 @@ export default function CostCenterReportPage() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="page-title flex items-center gap-2">
-            <BarChart3 size={22} className="text-blue-600" />
-            تحليل تكاليف مراكز الإنتاج
-          </h1>
-          <p className="text-sm text-slate-500 mt-0.5">
-            تجميع من دفتر الأستاذ العام — المصدر الوحيد للأرقام
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <select
-            value={seasonId ?? ''}
-            onChange={e => setSeasonId(e.target.value ? Number(e.target.value) : undefined)}
-            className="input-field h-9 text-sm"
-          >
-            <option value="">كل المواسم</option>
-            {(seasons as Array<{ id: number; name: string }> ?? []).map(s => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
-          </select>
-          <button onClick={exportCsv} className="btn-secondary gap-2 h-9 text-sm">
-            <Download size={15} />
-            تصدير CSV
-          </button>
-        </div>
+    <div className="flex flex-col h-full" dir="rtl">
+      <CommandBar
+        title="تحليل تكاليف مراكز الإنتاج"
+        subtitle="تجميع من دفتر الأستاذ العام — المصدر الوحيد للأرقام"
+        actions={[
+          {
+            label: 'تصدير CSV',
+            icon: <Download size={14} />,
+            variant: 'secondary',
+            onClick: exportCsv,
+          },
+        ]}
+      />
+      <div className="flex-1 overflow-y-auto p-5">
+      <div className="space-y-6">
+      {/* Season filter */}
+      <div className="flex items-center gap-3">
+        <select
+          value={seasonId ?? ''}
+          onChange={e => setSeasonId(e.target.value ? Number(e.target.value) : undefined)}
+          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+        >
+          <option value="">كل المواسم</option>
+          {(seasons as Array<{ id: number; name: string }> ?? []).map(s => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
       </div>
 
       {/* KPIs */}
@@ -356,6 +356,8 @@ export default function CostCenterReportPage() {
           </table>
         </div>
       </div>
+      </div>{/* space-y-6 */}
+      </div>{/* scroll container */}
     </div>
   )
 }

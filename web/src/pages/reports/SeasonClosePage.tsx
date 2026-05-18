@@ -5,6 +5,7 @@ import {
   Loader2, ChevronDown, Leaf, ClipboardCheck,
 } from 'lucide-react'
 import { configApi } from '../../api/client'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 interface Season { id: number; name: string; status: string; start_date: string; end_date: string }
 interface Check {
@@ -63,7 +64,10 @@ export default function SeasonClosePage() {
 
   if (done) {
     return (
-      <div className="p-6 max-w-lg mx-auto text-center py-20" dir="rtl">
+      <div className="flex flex-col h-full" dir="rtl">
+        <CommandBar title="إغلاق الموسم الزراعي" subtitle="مراجعة وتأكيد إغلاق الموسم بشكل رسمي" />
+        <div className="flex-1 overflow-y-auto p-6">
+        <div className="max-w-lg mx-auto text-center py-20">
         <div className="w-20 h-20 bg-emerald-100 rounded-3xl flex items-center justify-center mx-auto mb-5">
           <Lock size={32} className="text-emerald-600" />
         </div>
@@ -82,23 +86,17 @@ export default function SeasonClosePage() {
         >
           إغلاق موسم آخر
         </button>
+        </div>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="p-4 md:p-6 space-y-6 max-w-3xl mx-auto" dir="rtl">
-
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-slate-700 flex items-center justify-center shadow-sm">
-          <Lock size={20} className="text-white" />
-        </div>
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">إغلاق الموسم الزراعي</h1>
-          <p className="text-sm text-gray-500 mt-0.5">مراجعة وتأكيد إغلاق الموسم بشكل رسمي</p>
-        </div>
-      </div>
+    <div className="flex flex-col h-full" dir="rtl">
+      <CommandBar title="إغلاق الموسم الزراعي" subtitle="مراجعة وتأكيد إغلاق الموسم بشكل رسمي" />
+      <div className="flex-1 overflow-y-auto p-4 md:p-6">
+      <div className="space-y-6 max-w-3xl mx-auto">
 
       {/* Step 1: Choose season */}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
@@ -307,6 +305,8 @@ export default function SeasonClosePage() {
           <p className="text-sm">اختر موسماً من القائمة أعلاه للبدء</p>
         </div>
       )}
+      </div>{/* max-w-3xl */}
+      </div>{/* scroll container */}
     </div>
   )
 }
