@@ -75,6 +75,7 @@ export function useMovementPostingPipeline(): PostingPipelineHook {
           season_id:          draft.dimensions.season_id ?? undefined,
           field_id:           draft.dimensions.field_id ?? undefined,
           work_order_id:      draft.dimensions.work_order_id ?? undefined,
+          crop_cycle_id:      draft.dimensions.crop_cycle_id ?? undefined,
           notes:              draft.header.notes,
           payment_method:     draft.header.payment_method,
           center_code:        draft.dimensions.center_code ?? undefined,

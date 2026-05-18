@@ -216,7 +216,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     item_code: number; quantity: number; unit_price?: number
     supplier_code?: number; document_number?: string; notes?: string
     statement_text?: string; service_type_code?: string
-    season_id?: number; field_id?: number; work_order_id?: number
+    season_id?: number; field_id?: number; work_order_id?: number; crop_cycle_id?: number
     center_code?: number; pack_capacity?: number; pack_count?: number
     payment_method?: 'cash' | 'credit'
     zero_value_reason?: string
@@ -308,14 +308,14 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
   await c.env.DB.batch([
     c.env.DB.prepare(
       `INSERT INTO inventory_movements
-       (company_id, season_id, field_id, work_order_id, supplier_code, item_code, center_code,
+       (company_id, season_id, field_id, work_order_id, crop_cycle_id, supplier_code, item_code, center_code,
         movement_date, warehouse_id, movement_type, document_number, batch_number, expiry_date,
         pack_capacity, pack_count, quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
         notes, statement_text, service_type_code, year, month, created_by_user_id, local_id,
         zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
-      company_id, resolvedSeasonId, resolvedFieldId, b.work_order_id ?? null,
+      company_id, resolvedSeasonId, resolvedFieldId, b.work_order_id ?? null, b.crop_cycle_id ?? null,
       b.supplier_code ?? null, b.item_code, centerCode ?? null,
       movementDate, warehouseId, b.movement_type, b.document_number ?? null,
       b.batch_number ?? null, b.expiry_date ?? null,
@@ -347,6 +347,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
       movement_type: b.movement_type, value: movementValue, date: movementDate,
       item_name: itemRow?.name ?? String(b.item_code), created_by: userId,
       center_code: centerCode, supplier_code: b.supplier_code, work_order_id: b.work_order_id,
+      season_id: resolvedSeasonId, field_id: resolvedFieldId, crop_cycle_id: b.crop_cycle_id ?? null,
       batch_number: b.batch_number, expiry_date: b.expiry_date,
     })
   }
@@ -546,7 +547,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     movement_date?: string; warehouse?: string; warehouse_id?: number; movement_type?: string
     supplier_code?: number; document_number?: string; notes?: string
     statement_text?: string; service_type_code?: string
-    season_id?: number; field_id?: number; work_order_id?: number
+    season_id?: number; field_id?: number; work_order_id?: number; crop_cycle_id?: number
     center_code?: number; payment_method?: 'cash' | 'credit'
   }>()
 
@@ -609,6 +610,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     const seasonId = item.season_id ?? b.season_id
     const fieldId = item.field_id ?? b.field_id
     const woId = item.work_order_id ?? b.work_order_id
+    const cropCycleId = item.crop_cycle_id ?? b.crop_cycle_id ?? null
     const sText = item.statement_text ?? b.statement_text
     const notes = item.notes ?? b.notes
     const sType = item.service_type_code ?? b.service_type_code
@@ -620,14 +622,14 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
 
     const insertRes = await c.env.DB.prepare(
       `INSERT INTO inventory_movements
-       (company_id, season_id, field_id, work_order_id, supplier_code, item_code, center_code,
+       (company_id, season_id, field_id, work_order_id, crop_cycle_id, supplier_code, item_code, center_code,
         movement_date, warehouse_id, movement_type, document_number, batch_number, expiry_date,
         pack_capacity, pack_count, quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
         notes, statement_text, service_type_code, year, month, created_by_user_id, local_id,
         zero_value_reason, zero_value_approved_by_role, posting_mode, gl_posting_status, transaction_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
-      company_id, seasonId ?? null, fieldId ?? null, woId ?? null,
+      company_id, seasonId ?? null, fieldId ?? null, woId ?? null, cropCycleId,
       supplierCode ?? null, item.item_code, centerCode ?? null,
       movementDate, warehouseId, mType, docNum ?? null,
       item.batch_number ?? null, item.expiry_date ?? null,
@@ -653,6 +655,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
         movement_type: mType, value: movementValue, date: movementDate,
         item_name: itemRow?.name ?? String(item.item_code), created_by: userId,
         center_code: centerCode, supplier_code: supplierCode, work_order_id: woId,
+        season_id: seasonId, field_id: fieldId, crop_cycle_id: cropCycleId,
       })
     }
   }

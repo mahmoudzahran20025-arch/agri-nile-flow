@@ -205,7 +205,7 @@ export default function PhysicalCountPage() {
         target_warehouse_id: null,
       },
       dimensions: {
-        season_id: null, field_id: null, work_order_id: null,
+        season_id: null, field_id: null, work_order_id: null, crop_cycle_id: null,
         center_code: null, service_type_code: '', statement_text: '',
       },
       lines: batchLines.map(l => ({

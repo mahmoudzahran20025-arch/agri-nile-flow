@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { configApi, fieldsApi, operationsApi, inventoryApi } from '../../api/client'
+import { cropCyclesApi } from '../../api/crop-cycles'
 import type { MovementDimensions, MovementType } from './types'
 
 // ─── Reference data types ────────────────────────────────────────────────────
@@ -7,8 +8,9 @@ import type { MovementDimensions, MovementType } from './types'
 type SeasonOption      = { id: number; name: string; status: string }
 type CostCenterOption  = { code: number; name: string }
 type FieldOption       = { id: number; name: string }
-type WorkOrderOption   = { id: number; name: string; field_id?: number; season_id?: number; center_code?: number }
+type WorkOrderOption   = { id: number; name: string; field_id?: number; season_id?: number; center_code?: number; crop_cycle_id?: number | null }
 type ServiceTypeOption = { code: string; name_ar: string; service_group: string }
+type CropCycleOption   = { id: number; crop_name: string; field_name: string; status: string }
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -60,6 +62,18 @@ export default function DimensionStrip({ dimensions, movementType, onChange }: P
     staleTime: 300_000,
   })
 
+  // Only load active crop cycles (for ISSUE movements where WIP accumulation is relevant)
+  const { data: cropCycles = [] } = useQuery({
+    queryKey: ['crop-cycles', 'active', dimensions.field_id, dimensions.season_id],
+    queryFn:  () => cropCyclesApi.list({
+      status:    'active',
+      field_id:  dimensions.field_id  ?? undefined,
+      season_id: dimensions.season_id ?? undefined,
+    }) as Promise<CropCycleOption[]>,
+    staleTime: 120_000,
+    enabled: isIssue,
+  })
+
   // ── Work order change — prepare for future autofill ─────────────────────
 
   function handleWorkOrderChange(woId: string) {
@@ -70,10 +84,11 @@ export default function DimensionStrip({ dimensions, movementType, onChange }: P
     const wo = (workOrders as WorkOrderOption[]).find(w => String(w.id) === woId)
     const patch: Partial<MovementDimensions> = { work_order_id: Number(woId) }
 
-    // Future-ready: autofill season, center, field from WO when populated
-    if (wo?.season_id)   patch.season_id   = wo.season_id
-    if (wo?.center_code) patch.center_code = wo.center_code
-    if (wo?.field_id)    patch.field_id    = wo.field_id
+    // Autofill season, center, field, crop_cycle from work order
+    if (wo?.season_id)    patch.season_id    = wo.season_id
+    if (wo?.center_code)  patch.center_code  = wo.center_code
+    if (wo?.field_id)     patch.field_id     = wo.field_id
+    if (wo?.crop_cycle_id != null) patch.crop_cycle_id = wo.crop_cycle_id
 
     onChange(patch)
   }
@@ -85,7 +100,7 @@ export default function DimensionStrip({ dimensions, movementType, onChange }: P
 
   return (
     <div className="bg-slate-50 border-b border-slate-200 px-6 py-3 shrink-0">
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3 items-end">
 
         {/* Season */}
         <div>
@@ -157,6 +172,28 @@ export default function DimensionStrip({ dimensions, movementType, onChange }: P
             ))}
           </select>
         </div>
+
+        {/* Crop Cycle — only meaningful for ISSUE movements */}
+        {isIssue && (
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+              دورة المحصول
+            </label>
+            <select
+              className="input text-sm w-full"
+              value={dimensions.crop_cycle_id ?? ''}
+              onChange={e => onChange({ crop_cycle_id: e.target.value ? Number(e.target.value) : null })}
+              disabled={woSelected && dimensions.crop_cycle_id != null}
+            >
+              <option value="">— بدون دورة —</option>
+              {(cropCycles as CropCycleOption[]).map(cc => (
+                <option key={cc.id} value={cc.id}>
+                  {cc.crop_name} ({cc.field_name})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Service Type */}
         <div>

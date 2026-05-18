@@ -56,6 +56,7 @@ export interface MovementDimensions {
   center_code:       number | null
   field_id:          number | null
   work_order_id:     number | null
+  crop_cycle_id:     number | null
   service_type_code: string
   statement_text:    string
 }
@@ -194,6 +195,7 @@ export function createDefaultDimensions(): MovementDimensions {
     center_code:       null,
     field_id:          null,
     work_order_id:     null,
+    crop_cycle_id:     null,
     service_type_code: '',
     statement_text:    '',
   }
