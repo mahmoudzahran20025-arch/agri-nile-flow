@@ -62,6 +62,8 @@ const SeasonClosePage       = lazy(() => import('./pages/reports/SeasonClosePage
 const SeasonReadinessPage   = lazy(() => import('./pages/reports/SeasonReadinessPage'))
 const BudgetVsActualPage    = lazy(() => import('./pages/reports/BudgetVsActualPage'))
 const SeasonReportsPage     = lazy(() => import('./pages/reports/SeasonReportsPage'))
+const SeasonRollupPage      = lazy(() => import('./pages/reports/SeasonRollupPage'))
+const WorkOrderReconciliationPage = lazy(() => import('./pages/reports/WorkOrderReconciliationPage'))
 
 // ── Lazy chunks: Operations / misc ──────────────────────────────────────────
 const SupplierHubPage          = lazy(() => import('./pages/suppliers/SupplierHubPage'))
@@ -89,10 +91,12 @@ const FixedAssetsPage            = lazy(() => import('./pages/inventory/FixedAss
 const WipBalancesPage            = lazy(() => import('./pages/inventory/WipBalancesPage'))
 const SalesPage                  = lazy(() => import('./pages/sales/SalesPage'))
 const PosPage                    = lazy(() => import('./pages/pos/PosPage'))
+const CustomersPage              = lazy(() => import('./pages/customers/CustomersPage'))
 
 const UsersPage                = lazy(() => import('./pages/users/UsersPage'))
 const ConfigPage               = lazy(() => import('./pages/config/ConfigPage'))
 const BulkImportPage           = lazy(() => import('./pages/config/BulkImportPage'))
+const SettingsPage             = lazy(() => import('./pages/config/SettingsPage'))
 const FieldsPage               = lazy(() => import('./pages/fields/FieldsPage'))
 const SeasonsPage              = lazy(() => import('./pages/fields/SeasonsPage'))
 const HarvestPage              = lazy(() => import('./pages/fields/HarvestPage'))
@@ -213,6 +217,7 @@ export default function App() {
         <Route path="inventory/wip-balances"     element={<WipBalancesPage />} />
         <Route path="sales"                      element={<SalesPage />} />
         <Route path="pos"                        element={<PosPage />} />
+        <Route path="customers"                  element={<CustomersPage />} />
 
         {/* HR Module */}
         <Route path="hr/dashboard"            element={<HrDashboardPage />} />
@@ -300,7 +305,9 @@ export default function App() {
         <Route path="reports/service-type-summary"  element={<ServiceTypeSummaryPage />} />
         <Route path="reports/season-close"       element={<SeasonClosePage />} />
         <Route path="reports/season-readiness"   element={<SeasonReadinessPage />} />
-        <Route path="reports/budget-vs-actual"   element={<BudgetVsActualPage />} />
+        <Route path="reports/budget-vs-actual"        element={<BudgetVsActualPage />} />
+        <Route path="reports/season-rollup"           element={<SeasonRollupPage />} />
+        <Route path="reports/wo-reconciliation"       element={<WorkOrderReconciliationPage />} />
 
         {/* Super Admin */}
         <Route path="admin"                  element={<SuperAdminPage />} />
@@ -321,6 +328,7 @@ export default function App() {
         <Route path="config"             element={<ConfigPage />} />
         <Route path="config/:tab"        element={<ConfigPage />} />
         <Route path="config/bulk-import" element={<BulkImportPage />} />
+        <Route path="settings"           element={<SettingsPage />} />
 
         {/* 404 — explicit not-found page; no silent redirect */}
         <Route path="*" element={<NotFoundPage />} />

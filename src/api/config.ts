@@ -976,4 +976,107 @@ config.post('/suppliers/bulk-import', async (c) => {
   return c.json({ success: true, data: { inserted, updated, failed, total: body.rows.length, results } })
 })
 
+// ── GET /api/config/company-settings ─────────────────────────────────────────
+// Returns company-level settings: VAT config + inventory posting controls.
+config.get('/company-settings', async (c) => {
+  const { company_id } = getUser(c)
+
+  const [company, controls] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT name, address, phone, vat_pct, vat_number, vat_registered FROM companies WHERE id = ?`
+    ).bind(company_id).first<{
+      name: string; address: string | null; phone: string | null
+      vat_pct: number; vat_number: string | null; vat_registered: number
+    }>(),
+    c.env.DB.prepare(
+      `SELECT posting_mode, zero_value_require_reason, zero_value_approval_roles, locked_through_date
+       FROM inventory_posting_controls WHERE company_id = ?`
+    ).bind(company_id).first<{
+      posting_mode: string | null; zero_value_require_reason: number | null
+      zero_value_approval_roles: string | null; locked_through_date: string | null
+    }>(),
+  ])
+
+  return c.json({
+    success: true,
+    data: {
+      company:  company ?? null,
+      controls: controls ?? {
+        posting_mode: 'auto', zero_value_require_reason: 0,
+        zero_value_approval_roles: null, locked_through_date: null,
+      },
+    },
+  })
+})
+
+// ── PATCH /api/config/company-settings ───────────────────────────────────────
+config.patch('/company-settings', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+
+  const b = await c.req.json<{
+    name?:                      string
+    address?:                   string | null
+    phone?:                     string | null
+    vat_pct?:                   number
+    vat_number?:                string | null
+    vat_registered?:            0 | 1
+    posting_mode?:              'auto' | 'manual' | 'batch'
+    zero_value_require_reason?: 0 | 1
+    zero_value_approval_roles?: string | null
+    locked_through_date?:       string | null
+  }>()
+
+  const companySets: string[] = []
+  const companyVals: unknown[] = []
+  if (b.name             !== undefined) { companySets.push('name = ?');           companyVals.push(b.name.trim()) }
+  if ('address'           in b)         { companySets.push('address = ?');         companyVals.push(b.address ?? null) }
+  if ('phone'             in b)         { companySets.push('phone = ?');           companyVals.push(b.phone ?? null) }
+  if (b.vat_pct          !== undefined) { companySets.push('vat_pct = ?');         companyVals.push(b.vat_pct) }
+  if ('vat_number'        in b)         { companySets.push('vat_number = ?');      companyVals.push(b.vat_number ?? null) }
+  if (b.vat_registered   !== undefined) { companySets.push('vat_registered = ?'); companyVals.push(b.vat_registered) }
+
+  if (companySets.length > 0) {
+    companyVals.push(company_id)
+    await c.env.DB.prepare(`UPDATE companies SET ${companySets.join(', ')} WHERE id = ?`).bind(...companyVals).run()
+  }
+
+  const hasControls = b.posting_mode !== undefined || b.zero_value_require_reason !== undefined
+    || 'zero_value_approval_roles' in b || 'locked_through_date' in b
+
+  if (hasControls) {
+    const current = await c.env.DB.prepare(
+      `SELECT posting_mode, zero_value_require_reason, zero_value_approval_roles, locked_through_date
+       FROM inventory_posting_controls WHERE company_id = ?`
+    ).bind(company_id).first<{
+      posting_mode: string; zero_value_require_reason: number
+      zero_value_approval_roles: string | null; locked_through_date: string | null
+    }>()
+
+    const postingMode   = b.posting_mode              ?? current?.posting_mode              ?? 'auto'
+    const requireReason = b.zero_value_require_reason ?? current?.zero_value_require_reason ?? 0
+    const approvalRoles = 'zero_value_approval_roles' in b ? (b.zero_value_approval_roles ?? null) : (current?.zero_value_approval_roles ?? null)
+    const lockedThrough = 'locked_through_date'        in b ? (b.locked_through_date        ?? null) : (current?.locked_through_date        ?? null)
+
+    await c.env.DB.prepare(
+      `INSERT INTO inventory_posting_controls
+         (company_id, posting_mode, zero_value_require_reason, zero_value_approval_roles, locked_through_date, updated_at)
+         VALUES (?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(company_id) DO UPDATE SET
+         posting_mode = excluded.posting_mode,
+         zero_value_require_reason = excluded.zero_value_require_reason,
+         zero_value_approval_roles = excluded.zero_value_approval_roles,
+         locked_through_date = excluded.locked_through_date,
+         updated_at = excluded.updated_at`
+    ).bind(company_id, postingMode, requireReason, approvalRoles, lockedThrough).run()
+  }
+
+  void logAudit(c.env.DB, {
+    user_id: Number(userId), company_id, action: 'UPDATE',
+    table_name: 'companies', record_id: company_id,
+    new_value: b, source: 'settings',
+  })
+
+  return c.json({ success: true })
+})
+
 export default config

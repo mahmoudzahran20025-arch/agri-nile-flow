@@ -111,4 +111,27 @@ export const cropCyclesApi = {
     unwrap<WIPSummary>(
       api.get(`/crop-cycles/${id}/wip-summary`)
     ),
+
+  seasonRollup: (params: { season_id: number }) =>
+    unwrap<{
+      season: { id: number; name: string }
+      summary: { total_cost: number; settled_cost: number; open_wip: number; cycle_count: number }
+      by_cycle: { crop_cycle_id: number; crop_name: string; field_name: string; status: string; total_cost: number; settled_cost: number; open_wip: number }[]
+      by_category: { cost_category: string; total_debit: number; total_credit: number; balance: number }[]
+      by_source: { source_module: string; total_debit: number; total_credit: number; balance: number }[]
+    }>(api.get(`/crop-cycles/season-rollup?season_id=${params.season_id}`)),
+
+  workOrderReconciliation: (id: number) =>
+    unwrap<{
+      crop_cycle: { id: number; crop_name: string; status: string }
+      summary: {
+        total_planned: number; total_actual: number; total_variance: number
+        unattributed_cost: number; work_order_count: number
+      }
+      work_orders: {
+        id: number; title: string; planned_cost: number; actual_cost: number; variance: number
+        lines: { cost_category: string; debit: number; credit: number; balance: number }[]
+      }[]
+      unattributed: { cost_category: string; total_debit: number; total_credit: number; balance: number }[]
+    }>(api.get(`/crop-cycles/${id}/work-order-reconciliation`)),
 }

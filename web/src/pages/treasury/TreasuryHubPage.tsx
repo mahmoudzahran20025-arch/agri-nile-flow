@@ -625,6 +625,40 @@ function POTab() {
     po_item_id: number; item_name: string; qty_ordered: number
     qty_received_so_far: number; qty_to_receive: string; warehouse: string
   }>>([])
+  // Invoice (3-way match) modal state
+  const [showInvoice,   setShowInvoice]  = useState<PurchaseOrder | null>(null)
+  const [invoiceNumber, setInvoiceNumber] = useState('')
+  const [invoiceDate,   setInvoiceDate]   = useState(new Date().toISOString().slice(0, 10))
+  const [invoiceNotes,  setInvoiceNotes]  = useState('')
+
+  const { data: matchData, isLoading: matchLoading } = useQuery({
+    queryKey: ['po-match', showInvoice?.id],
+    queryFn:  () => financeApi.getPOMatch(showInvoice!.id),
+    enabled:  Boolean(showInvoice),
+  })
+
+  const invoiceMut = useMutation({
+    mutationFn: () => financeApi.createInvoice(showInvoice!.id, {
+      invoice_number: invoiceNumber,
+      invoice_date:   invoiceDate,
+      notes:          invoiceNotes || undefined,
+      items: (matchData?.match_rows ?? []).map(r => ({
+        po_item_id:   r.po_item_id,
+        qty_invoiced: r.qty_ordered,
+        unit_price:   r.po_unit_price,
+      })),
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['purchase-orders'] })
+      qc.invalidateQueries({ queryKey: ['purchase-order', expandedId] })
+      setShowInvoice(null)
+      setInvoiceNumber('')
+      setInvoiceNotes('')
+      toast('تم تسجيل الفاتورة وإنشاء قيد الالتزام', 'success')
+    },
+    onError: (err: { message?: string }) => toast(err.message || 'فشل تسجيل الفاتورة', 'error'),
+  })
+
   const [form, setForm] = useState({
     supplier_code: '' as string, supplier_name: '',
     order_date: new Date().toISOString().slice(0, 10), expected_date: '', notes: '',
@@ -786,6 +820,7 @@ function POTab() {
                   onToggle={() => setExpandedId(expandedId === po.id ? null : po.id)}
                   onStatus={(status) => statusMut.mutate({ id: po.id, status })}
                   onReceive={() => openReceive(po)}
+                  onInvoice={() => { setShowInvoice(po); setInvoiceDate(new Date().toISOString().slice(0, 10)) }}
                   statusPending={statusMut.isPending}
                 />
               ))}
@@ -960,6 +995,109 @@ function POTab() {
         </Modal>
       )}
 
+      {/* Invoice Modal (3-way match) */}
+      {showInvoice && (
+        <Modal open onClose={() => setShowInvoice(null)} title={`فاتورة مورد — ${showInvoice.po_number}`}>
+          <div className="space-y-4 p-1">
+            {matchLoading ? (
+              <div className="flex justify-center py-8"><Loader2 className="animate-spin text-slate-400" size={24} /></div>
+            ) : (
+              <>
+                {/* Match preview */}
+                {matchData?.match_rows && matchData.match_rows.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500 mb-2">بنود الطلب (3-way match)</p>
+                    <div className="rounded-xl border border-slate-200 overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50">
+                          <tr>
+                            <th className="text-right px-3 py-2 text-slate-400 font-medium">الصنف</th>
+                            <th className="text-center px-3 py-2 text-slate-400 font-medium">مطلوب</th>
+                            <th className="text-center px-3 py-2 text-slate-400 font-medium">مستلم</th>
+                            <th className="text-left px-3 py-2 text-slate-400 font-medium">سعر الوحدة</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {matchData.match_rows.map(row => (
+                            <tr key={row.po_item_id} className="border-t border-slate-50">
+                              <td className="px-3 py-2 font-medium text-slate-700">{row.item_name}</td>
+                              <td className="px-3 py-2 text-center text-slate-600">{row.qty_ordered}</td>
+                              <td className="px-3 py-2 text-center">
+                                <span className={row.qty_received > 0 ? 'text-emerald-600 font-semibold' : 'text-amber-500'}>
+                                  {row.qty_received}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-left font-mono text-slate-700">{fmtNum(row.po_unit_price)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-2">
+                      إجمالي الفاتورة: <span className="font-bold text-slate-700">
+                        {egp(matchData.match_rows.reduce((s, r) => s + r.qty_ordered * r.po_unit_price, 0))}
+                      </span>
+                    </p>
+                  </div>
+                )}
+
+                {/* Existing invoices */}
+                {matchData?.invoices && matchData.invoices.length > 0 && (
+                  <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs">
+                    <p className="font-semibold text-amber-700 mb-1">فواتير مسجلة مسبقاً:</p>
+                    {matchData.invoices.map(inv => (
+                      <p key={inv.id} className="text-amber-600"># {inv.number} — {inv.date} — {egp(inv.total)}</p>
+                    ))}
+                  </div>
+                )}
+
+                {/* Invoice form */}
+                <div className="flex gap-3 flex-wrap">
+                  <div className="flex-1 min-w-[160px]">
+                    <label className="text-xs text-gray-500 mb-0.5 block font-medium">رقم الفاتورة *</label>
+                    <input
+                      className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-brand-500"
+                      value={invoiceNumber}
+                      onChange={e => setInvoiceNumber(e.target.value)}
+                      placeholder="INV-001"
+                      dir="ltr"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500 mb-0.5 block font-medium">تاريخ الفاتورة</label>
+                    <input type="date"
+                      className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-brand-500"
+                      value={invoiceDate}
+                      onChange={e => setInvoiceDate(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 mb-0.5 block font-medium">ملاحظات</label>
+                  <input
+                    className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-brand-500"
+                    value={invoiceNotes}
+                    onChange={e => setInvoiceNotes(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
+
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={() => invoiceMut.mutate()}
+                disabled={!invoiceNumber.trim() || matchLoading || invoiceMut.isPending}
+                className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg py-2 text-sm font-medium flex items-center justify-center gap-2"
+              >
+                {invoiceMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <Package size={14} />}
+                تسجيل الفاتورة
+              </button>
+              <button onClick={() => setShowInvoice(null)} className="px-4 border border-gray-300 rounded-lg text-sm text-gray-600 hover:bg-gray-50">إلغاء</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
     </div>
   )
 }
@@ -967,7 +1105,7 @@ function POTab() {
 // ── PO Row ─────────────────────────────────────────────────────
 function PORow({
   po, expanded, detail, detailLoading,
-  onToggle, onStatus, onReceive, statusPending,
+  onToggle, onStatus, onReceive, onInvoice, statusPending,
 }: {
   po: PurchaseOrder
   expanded: boolean
@@ -976,11 +1114,13 @@ function PORow({
   onToggle: () => void
   onStatus: (status: string) => void
   onReceive: () => void
+  onInvoice: () => void
   statusPending: boolean
 }) {
   const s = PO_STATUS[po.status] ?? { label: po.status, color: 'bg-gray-100 text-gray-500', icon: null }
   const canSend    = po.status === 'draft'
   const canReceive = ['sent', 'partial'].includes(po.status)
+  const canInvoice = ['partial', 'received'].includes(po.status)
   const canCancel  = ['draft', 'sent'].includes(po.status)
 
   return (
@@ -1051,6 +1191,12 @@ function PORow({
                   <button onClick={onReceive}
                     className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg px-3 py-1.5 transition-colors">
                     <Truck size={12} /> تسجيل استلام
+                  </button>
+                )}
+                {canInvoice && (
+                  <button onClick={onInvoice}
+                    className="flex items-center gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg px-3 py-1.5 transition-colors">
+                    <Package size={12} /> تسجيل فاتورة
                   </button>
                 )}
                 {canCancel && (

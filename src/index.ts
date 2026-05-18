@@ -35,6 +35,7 @@ import wipRoutes                 from './api/wip'
 import salesRoutes               from './api/sales'
 import posRoutes                 from './api/pos'
 import pricingRoutes             from './api/pricing'
+import customersRoutes           from './api/customers'
 import { processAllPendingOutbox } from './lib/process_outbox'
 import { runHealthForAllCompanies } from './lib/daily_finance_health'
 import { getTodayIsoDate } from './lib/utils/date'
@@ -98,6 +99,7 @@ app.route('/api/wip',                  wipRoutes)
 app.route('/api/sales',                salesRoutes)
 app.route('/api/pos',                  posRoutes)
 app.route('/api/pricing',              pricingRoutes)
+app.route('/api/customers',            customersRoutes)
 
 // ─── Health Check ─────────────────────────────────────────────
 app.get('/api/health', (c) => c.json({ status: 'ok', ts: new Date().toISOString() }))
