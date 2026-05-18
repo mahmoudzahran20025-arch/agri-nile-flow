@@ -85,6 +85,24 @@ invoices.post('/purchase-orders/:id/invoices', financeOnly, async (c) => {
   ).bind(poId, company_id).first<{ supplier_code: number | null }>()
   if (!po) return c.json({ success: false, error: 'طلب الشراء غير موجود' }, 404)
 
+  // 3-way match gate: require at least one GRN before invoicing (if flag is on)
+  const matchCtrl = await c.env.DB.prepare(
+    'SELECT strict_po_matching FROM inventory_posting_controls WHERE company_id = ? LIMIT 1'
+  ).bind(company_id).first<{ strict_po_matching: number }>()
+
+  if (matchCtrl?.strict_po_matching) {
+    const grnRow = await c.env.DB.prepare(
+      `SELECT 1 FROM inventory_movements
+       WHERE company_id = ? AND po_id = ? AND movement_type = 'GRN' LIMIT 1`
+    ).bind(company_id, poId).first()
+    if (!grnRow) {
+      return c.json({
+        success: false,
+        error: 'THREE_WAY_MATCH: لا يمكن إنشاء فاتورة — يجب تسجيل استلام بضاعة (GRN) لهذا الأمر أولاً',
+      }, 422)
+    }
+  }
+
   const totalAmount = b.items.reduce((s, i) => s + i.qty_invoiced * i.unit_price, 0)
 
   try {

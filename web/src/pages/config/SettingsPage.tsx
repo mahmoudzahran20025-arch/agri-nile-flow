@@ -19,6 +19,7 @@ interface CompanySettings {
     zero_value_approval_roles: string | null
     locked_through_date:       string | null
     allow_negative_stock:      number | null
+    strict_po_matching:        number | null
   }
 }
 
@@ -28,7 +29,7 @@ const patchSettings = (body: Partial<{
   vat_pct: number; vat_number: string | null; vat_registered: 0 | 1
   posting_mode: string; zero_value_require_reason: 0 | 1
   zero_value_approval_roles: string | null; locked_through_date: string | null
-  allow_negative_stock: 0 | 1
+  allow_negative_stock: 0 | 1; strict_po_matching: 0 | 1
 }>) => unwrap(api.patch<{ success: boolean }>('/config/company-settings', body))
 
 type Tab = 'company' | 'vat' | 'inventory' | 'lock' | 'health'
@@ -70,6 +71,7 @@ export default function SettingsPage() {
     zero_value_require_reason: false,
     zero_value_approval_roles: '',
     allow_negative_stock: false,
+    strict_po_matching: false,
   })
   // Lock date
   const [lockForm, setLock] = useState({ locked_through_date: '' })
@@ -87,6 +89,7 @@ export default function SettingsPage() {
       zero_value_require_reason: ctrl.zero_value_require_reason === 1,
       zero_value_approval_roles: ctrl.zero_value_approval_roles ?? '',
       allow_negative_stock:      ctrl.allow_negative_stock === 1,
+      strict_po_matching:        ctrl.strict_po_matching === 1,
     })
     setLock({ locked_through_date: ctrl.locked_through_date ?? '' })
   }, [data])
@@ -121,6 +124,7 @@ export default function SettingsPage() {
       zero_value_require_reason: invForm.zero_value_require_reason ? 1 : 0,
       zero_value_approval_roles: invForm.zero_value_approval_roles.trim() || null,
       allow_negative_stock:      invForm.allow_negative_stock ? 1 : 0,
+      strict_po_matching:        invForm.strict_po_matching ? 1 : 0,
       locked_through_date:       lockForm.locked_through_date || null,
     })
   }
@@ -347,6 +351,25 @@ export default function SettingsPage() {
                 <p className="text-xs text-slate-400">
                   عند التفعيل يمكن بيع كميات تتجاوز الرصيد المتاح.
                   {invForm.allow_negative_stock && <span className="text-red-500 font-medium"> تحذير: قد يؤدي إلى تباين في التقارير المالية.</span>}
+                </p>
+              </div>
+            </div>
+
+            <div className={`flex items-start gap-3 p-4 rounded-xl border ${invForm.strict_po_matching ? 'bg-blue-50 border-blue-200' : 'bg-slate-50 border-slate-200'}`}>
+              <input
+                id="strict_po_matching"
+                type="checkbox"
+                checked={invForm.strict_po_matching}
+                onChange={e => setInv(p => ({ ...p, strict_po_matching: e.target.checked }))}
+                className="rounded mt-0.5"
+              />
+              <div>
+                <label htmlFor="strict_po_matching" className={`text-sm font-medium cursor-pointer block mb-0.5 ${invForm.strict_po_matching ? 'text-blue-700' : 'text-slate-700'}`}>
+                  المطابقة الثلاثية (3-Way Match)
+                </label>
+                <p className="text-xs text-slate-400">
+                  يمنع إنشاء فاتورة مورد لأمر شراء حتى يُسجَّل استلام البضاعة (GRN) أولاً.
+                  {invForm.strict_po_matching && <span className="text-blue-600 font-medium"> مفعّل: الفواتير مقيدة باستلام البضاعة.</span>}
                 </p>
               </div>
             </div>
