@@ -125,8 +125,10 @@ export async function readInventoryBalance(
 
   const expectedVersion = snap?.version ?? 0
 
-  // Heal the snapshot (fire-and-forget — caller already has correct values)
-  await db.prepare(
+  // Heal the snapshot (fire-and-forget — caller already has correct values).
+  // CAS on version: if another writer already healed this slot concurrently,
+  // changes === 0 is expected and benign — log at warn level for observability.
+  const healResult = await db.prepare(
     `INSERT INTO inventory_balances
        (company_id, item_code, warehouse_id, balance_qty, balance_value, version, last_movement_id, last_updated, is_stale)
      VALUES (?, ?, ?, ?, ?, 1, ?, datetime('now'), 0)
@@ -139,6 +141,10 @@ export async function readInventoryBalance(
        is_stale         = 0
      WHERE inventory_balances.version = ?`
   ).bind(companyId, itemCode, warehouseId, balQty, balVal, lastId, expectedVersion).run()
+
+  if (healResult.meta.changes === 0) {
+    console.warn(`[inv_balance] stale-heal CAS miss — company=${companyId} item=${itemCode} wh=${warehouseId} expectedVer=${expectedVersion} (concurrent write already healed)`)
+  }
 
   return { balance_qty: balQty, balance_value: balVal, version: expectedVersion + 1 }
 }

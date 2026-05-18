@@ -1,5 +1,38 @@
 import { api, unwrap, unwrapPaginated, paginatedUrl } from './core'
 import { normalizeMovementPayload } from '../schema/normalizeMovementPayload'
+import type { CanonicalMovementType } from '../schema/movementSchema'
+
+/** Input accepted by createBatch — total_value is derived to unit_price by the normalizer */
+export interface BatchMovementInput {
+  movement_date?:       string
+  warehouse_id?:        number
+  /** @deprecated use warehouse_id — accepted but triggers deprecation header */
+  warehouse?:           string
+  movement_type:        CanonicalMovementType
+  supplier_code?:       number
+  document_number?:     number
+  payment_method?:      'cash' | 'credit'
+  target_warehouse_id?: number
+  season_id?:           number
+  field_id?:            number
+  work_order_id?:       number
+  center_code?:         number
+  crop_cycle_id?:       number
+  service_type_code?:   string
+  statement_text?:      string
+  notes?:               string
+  items: Array<{
+    item_code:      number
+    quantity:       number
+    /** per-unit price — provide either unit_price OR total_value */
+    unit_price?:    number
+    /** total line value — normalizer derives unit_price = total_value / quantity */
+    total_value?:   number
+    pack_count?:    number
+    pack_capacity?: number
+    notes?:         string
+  }>
+}
 
 export const inventoryApi = {
   warehouses:      () => unwrap(api.get<string[]>('/inventory/warehouses')),
@@ -20,7 +53,7 @@ export const inventoryApi = {
     field_id?: number; season_id?: number; work_order_id?: number
   }) => unwrapPaginated<unknown>(api.get(paginatedUrl('/inventory/movements', p))),
 
-  createBatch: (body: any) => {
+  createBatch: (body: BatchMovementInput) => {
     // Normalization enforces Canonical Schema ownership
     const normalized = normalizeMovementPayload(body)
     return api.post('/inventory/movements/batch', normalized)

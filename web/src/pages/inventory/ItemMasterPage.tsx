@@ -333,6 +333,17 @@ function AccountingEditModal({
         {/* Item type & behavioral flags */}
         <div className="border-t border-slate-100 pt-4">
           <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">نوع الصنف والسلوك</p>
+          {/* Category behavioral notice */}
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 leading-relaxed">
+            <p className="font-semibold mb-1">تأثير نوع الصنف على سلوك النظام</p>
+            <ul className="list-disc list-inside space-y-0.5 text-amber-700 text-xs">
+              <li><strong>مخزوني:</strong> تُنشأ حركات مخزنية كاملة وتُحدَّث أرصدة المخزن عند كل عملية.</li>
+              <li><strong>خدمة:</strong> لا حركات مخزنية — يُستخدم في فواتير الخدمات فقط.</li>
+              <li><strong>غير مخزوني:</strong> تُسجَّل الحركات للمتابعة دون تأثير على الرصيد.</li>
+            </ul>
+            <p className="mt-1.5 text-xs text-amber-600">تغيير نوع الصنف بعد وجود حركات يؤثر على الترحيل المحاسبي — تأكد قبل التعديل.</p>
+          </div>
+
           <div className="grid grid-cols-3 gap-4">
             <div>
               <label className="label">نوع الصنف</label>
