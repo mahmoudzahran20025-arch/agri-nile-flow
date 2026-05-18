@@ -143,6 +143,9 @@ export const inventoryApi = {
     cogs_account_override?:   string | null
     name?:                    string
     unit?:                    string
+    base_unit?:               string | null
+    package_type?:            string | null
+    package_capacity?:        number | null
   }) => api.patch(`/inventory/items-master/${code}`, body),
 
   postingHealth: () => unwrap(api.get<{

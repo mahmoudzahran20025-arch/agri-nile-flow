@@ -312,6 +312,9 @@ governance.patch('/items-master/:code', permissionGuard('inventory', 'create'), 
     cogs_account_override?:   string | null
     name?:                    string
     unit?:                    string
+    base_unit?:               string | null
+    package_type?:            string | null
+    package_capacity?:        number | null
   }>()
 
   const VALID_COSTING = ['moving_average', 'standard', 'fifo']
@@ -332,6 +335,9 @@ governance.patch('/items-master/:code', permissionGuard('inventory', 'create'), 
   if ('cogs_account_override'   in b) { sets.push('cogs_account_override = ?');   binds.push(b.cogs_account_override ?? null) }
   if ('name'                    in b) { sets.push('name = ?');                    binds.push(b.name) }
   if ('unit'                    in b) { sets.push('unit = ?');                    binds.push(b.unit) }
+  if ('base_unit'               in b) { sets.push('base_unit = ?');               binds.push(b.base_unit ?? null) }
+  if ('package_type'            in b) { sets.push('package_type = ?');            binds.push(b.package_type ?? null) }
+  if ('package_capacity'        in b) { sets.push('package_capacity = ?');        binds.push(b.package_capacity ?? null) }
 
   if (sets.length === 0) return c.json({ success: false, error: 'لا توجد حقول للتحديث' }, 400)
 

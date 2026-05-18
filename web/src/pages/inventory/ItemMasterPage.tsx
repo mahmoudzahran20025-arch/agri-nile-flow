@@ -32,6 +32,9 @@ interface ItemMaster {
   code:                    number
   name:                    string
   unit:                    string | null
+  base_unit:               string | null
+  package_type:            string | null
+  package_capacity:        number | null
   category_id:             number | null
   prod_posting_group_code: string | null
   inv_posting_group_code:  string | null
@@ -105,6 +108,9 @@ interface EditForm {
   costing_method:          'moving_average' | 'standard' | 'fifo' | ''
   track_lots:              boolean
   cogs_account_override:   string
+  base_unit:               string
+  package_type:            string
+  package_capacity:        string
 }
 
 function AccountingEditModal({
@@ -128,6 +134,9 @@ function AccountingEditModal({
     costing_method:          (item.costing_method as EditForm['costing_method']) ?? 'moving_average',
     track_lots:              !!item.track_lots,
     cogs_account_override:   item.cogs_account_override ?? '',
+    base_unit:               item.base_unit ?? '',
+    package_type:            item.package_type ?? '',
+    package_capacity:        item.package_capacity != null ? String(item.package_capacity) : '',
   })
   const [err, setErr] = useState('')
 
@@ -153,6 +162,9 @@ function AccountingEditModal({
       costing_method:          form.costing_method    || null,
       track_lots:              form.track_lots,
       cogs_account_override:   form.cogs_account_override.trim() || null,
+      base_unit:               form.base_unit.trim()        || null,
+      package_type:            form.package_type.trim()     || null,
+      package_capacity:        form.package_capacity        ? Number(form.package_capacity) : null,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['inventory', 'items-master'] })
@@ -238,10 +250,13 @@ function AccountingEditModal({
             <select className="input" value={form.costing_method}
               onChange={e => set('costing_method', e.target.value as EditForm['costing_method'])}>
               <option value="moving_average">متوسط متحرك (Moving Average)</option>
-              <option value="standard">تكلفة معيارية (Standard)</option>
-              <option value="fifo">FIFO — أول داخل أول خارج</option>
+              <option value="standard">تكلفة معيارية — غير مفعّلة حالياً</option>
+              <option value="fifo">FIFO — غير مفعّل حالياً</option>
             </select>
-            <p className="text-xs text-slate-400 mt-1">تُستخدم عند احتساب تكلفة الصرف</p>
+            <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
+              <span>⚠</span>
+              النظام يحسب دائماً بالمتوسط المتحرك بصرف النظر عن الاختيار
+            </p>
           </div>
           <div className="flex flex-col justify-center">
             <label className="label">تتبع الدُفعات (Lot Tracking)</label>
@@ -257,6 +272,40 @@ function AccountingEditModal({
               </span>
             </label>
           </div>
+        </div>
+
+        {/* Unit & Packaging */}
+        <div className="border-t border-slate-100 pt-4">
+          <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">الوحدة والتغليف</p>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <label className="label">الوحدة الأساسية</label>
+              <input type="text" className="input" placeholder="مثال: كجم، لتر، قرص"
+                value={form.base_unit} onChange={e => set('base_unit', e.target.value)} />
+              <p className="text-xs text-slate-400 mt-1">وحدة الحركة الأساسية</p>
+            </div>
+            <div>
+              <label className="label">نوع العبوة</label>
+              <input type="text" className="input" placeholder="مثال: كيس، برميل، صندوق"
+                value={form.package_type} onChange={e => set('package_type', e.target.value)} />
+              <p className="text-xs text-slate-400 mt-1">اسم وحدة التغليف</p>
+            </div>
+            <div>
+              <label className="label">سعة العبوة</label>
+              <input type="number" className="input" min="0" step="0.001" placeholder="0"
+                value={form.package_capacity} onChange={e => set('package_capacity', e.target.value)} />
+              <p className="text-xs text-slate-400 mt-1">
+                {form.package_capacity && form.base_unit
+                  ? `${form.package_capacity} ${form.base_unit} / عبوة`
+                  : 'وحدات أساسية لكل عبوة'}
+              </p>
+            </div>
+          </div>
+          {form.package_capacity && Number(form.package_capacity) > 0 && (
+            <p className="text-xs text-emerald-700 bg-emerald-50 rounded-lg px-3 py-2 mt-2">
+              عند الإدخال: عدد العبوات × {form.package_capacity} {form.base_unit || 'وحدة'} = الكمية الإجمالية (محسوبة تلقائياً)
+            </p>
+          )}
         </div>
 
         {/* COGS account override */}

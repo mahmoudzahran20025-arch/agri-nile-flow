@@ -11,6 +11,9 @@ interface CreateBody {
   code:                    string
   name:                    string
   unit:                    string
+  base_unit:               string
+  package_type:            string
+  package_capacity:        string
   category_id:             string
   prod_posting_group_code: string
   inv_posting_group_code:  string
@@ -19,8 +22,8 @@ interface CreateBody {
 }
 
 const EMPTY: CreateBody = {
-  code: '', name: '', unit: '', category_id: '',
-  prod_posting_group_code: '', inv_posting_group_code: '',
+  code: '', name: '', unit: '', base_unit: '', package_type: '', package_capacity: '',
+  category_id: '', prod_posting_group_code: '', inv_posting_group_code: '',
   reorder_threshold: '', track_lots: false,
 }
 
@@ -55,6 +58,9 @@ export default function ItemCreatePage() {
       code:                    Number(form.code),
       name:                    form.name.trim(),
       unit:                    form.unit.trim() || undefined,
+      base_unit:               form.base_unit.trim() || undefined,
+      package_type:            form.package_type.trim() || undefined,
+      package_capacity:        form.package_capacity ? Number(form.package_capacity) : undefined,
       category_id:             form.category_id ? Number(form.category_id) : undefined,
       prod_posting_group_code: form.prod_posting_group_code || undefined,
       inv_posting_group_code:  form.inv_posting_group_code  || undefined,
@@ -210,6 +216,38 @@ export default function ItemCreatePage() {
                 تتبع الدفعات (Lot Tracking)
               </label>
             </div>
+          </section>
+
+          {/* Packaging */}
+          <section className="card p-5 space-y-4">
+            <div>
+              <h3 className="font-semibold text-slate-700">الوحدة والتغليف</h3>
+              <p className="text-xs text-slate-500 mt-0.5">اترك فارغاً إن لم يكن الصنف مُعبّأً</p>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label className="label">الوحدة الأساسية</label>
+                <input type="text" className="input" placeholder="مثال: كجم، لتر"
+                  value={form.base_unit} onChange={e => set('base_unit', e.target.value)} />
+                <p className="text-xs text-slate-400 mt-1">وحدة الحركة الأساسية</p>
+              </div>
+              <div>
+                <label className="label">نوع العبوة</label>
+                <input type="text" className="input" placeholder="مثال: كيس، برميل"
+                  value={form.package_type} onChange={e => set('package_type', e.target.value)} />
+              </div>
+              <div>
+                <label className="label">سعة العبوة</label>
+                <input type="number" className="input" min="0" step="0.001" placeholder="0"
+                  value={form.package_capacity} onChange={e => set('package_capacity', e.target.value)} />
+                <p className="text-xs text-slate-400 mt-1">وحدات أساسية / عبوة</p>
+              </div>
+            </div>
+            {form.package_capacity && Number(form.package_capacity) > 0 && (
+              <p className="text-xs text-emerald-700 bg-emerald-50 rounded-lg px-3 py-2">
+                عند الإدخال: عدد العبوات × {form.package_capacity} {form.base_unit || 'وحدة'} = الكمية الإجمالية
+              </p>
+            )}
           </section>
 
           {/* Posting groups */}
