@@ -8,6 +8,7 @@
 
 import type { D1Database } from '@cloudflare/workers-types'
 import { FinanceCore } from './finance_core'
+import { postCostToWIP } from './wip_engine'
 
 export interface OutboxProcessResult {
   scanned: number
@@ -110,6 +111,33 @@ export async function processInventoryPostingOutbox(
         )
       }
       await db.batch(batchUpdates)
+
+      // WIP cost write — only for ISSUE movements linked to a crop cycle.
+      // Non-blocking: failure does not affect GL or movement status.
+      if (
+        job.event_type === 'inventory_movement' &&
+        payload.movement_type === 'ISSUE' &&
+        payload.crop_cycle_id &&
+        payload.season_id &&
+        payload.value > 0
+      ) {
+        try {
+          await postCostToWIP({
+            db,
+            company_id: companyId,
+            crop_cycle_id: payload.crop_cycle_id,
+            season_id: payload.season_id,
+            transaction_date: payload.date,
+            cost_category: 'materials',
+            debit: payload.value,
+            description: `مواد — ${payload.item_name ?? payload.item_code} (outbox)`,
+            source_module: 'inventory',
+            source_id: job.movement_id,
+          })
+        } catch (wipErr: unknown) {
+          console.error(`[WIP_ENGINE] Outbox movement ${job.movement_id}: ${(wipErr as Error)?.message ?? wipErr}`)
+        }
+      }
 
       posted++
     } catch (err: unknown) {

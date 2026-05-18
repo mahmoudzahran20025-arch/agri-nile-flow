@@ -18,7 +18,6 @@ import {
   upsertInventoryBalance,
   validateZeroValuePolicy,
 } from '../../lib/inventory_posting'
-import { postCostToWIP } from '../../lib/wip_engine'
 
 const issues = new Hono<{ Bindings: Env }>()
 
@@ -147,30 +146,9 @@ issues.post('/issues', permissionGuard('inventory', 'create'), async (c) => {
       company_id, ref_id: movRow!.id, item_code: b.item_code, warehouse_id: warehouseId,
       movement_type: 'ISSUE', value: valueOut, date: issueDate, item_name: itemRow?.name ?? String(b.item_code),
       created_by: userId, center_code: b.center_code, season_id: b.season_id, field_id: b.field_id,
-      batch_number: b.batch_number, expiry_date: b.expiry_date,
+      batch_number: b.batch_number, expiry_date: b.expiry_date, crop_cycle_id: b.crop_cycle_id ?? null,
     })
     await ensureOutboxQueued(c.env.DB, company_id, movRow!.id)
-
-    // ── WIP dual-write: post materials cost if linked to a crop cycle ──
-    if (b.crop_cycle_id && b.season_id) {
-      try {
-        await postCostToWIP({
-          db: c.env.DB, company_id,
-          crop_cycle_id: b.crop_cycle_id,
-          season_id: b.season_id,
-          transaction_date: issueDate,
-          cost_category: 'materials',
-          debit: valueOut,
-          description: `مواد — ${itemRow?.name ?? b.item_code} (${b.qty_out} وحدة)`,
-          source_module: 'inventory', source_id: movRow!.id,
-        })
-      } catch (wipErr: any) {
-        // WIP write failure must NOT roll back the inventory movement or GL outbox.
-        // Log and surface as a warning in the response.
-        console.error(`[WIP_ENGINE] Issue ${movRow!.id}: ${wipErr.message}`)
-        return c.json({ success: true, data: { id: movRow!.id }, wip_warning: wipErr.message }, 201)
-      }
-    }
   }
 
   return c.json({ success: true, data: { id: movRow!.id } }, 201)
@@ -288,27 +266,9 @@ issues.post('/issues/batch', permissionGuard('inventory', 'create'), async (c) =
         company_id, ref_id: movRow.id, item_code: lr.item_code, warehouse_id: warehouseId,
         movement_type: 'ISSUE', value: lr.valueOut, date: issueDate, item_name: itemRow?.name ?? String(lr.item_code),
         created_by: userId, center_code: b.center_code, season_id: b.season_id, field_id: b.field_id,
-        batch_number: lr.batch_number, expiry_date: lr.expiry_date,
+        batch_number: lr.batch_number, expiry_date: lr.expiry_date, crop_cycle_id: b.crop_cycle_id ?? null,
       })
       await ensureOutboxQueued(c.env.DB, company_id, movRow.id)
-
-      // ── WIP dual-write per batch line ──
-      if (b.crop_cycle_id && b.season_id) {
-        try {
-          await postCostToWIP({
-            db: c.env.DB, company_id,
-            crop_cycle_id: b.crop_cycle_id,
-            season_id: b.season_id,
-            transaction_date: issueDate,
-            cost_category: 'materials',
-            debit: lr.valueOut,
-            description: `مواد — ${itemRow?.name ?? lr.item_code} (${lr.qty_out} وحدة)`,
-            source_module: 'inventory', source_id: movRow.id,
-          })
-        } catch (wipErr: any) {
-          console.error(`[WIP_ENGINE] Batch issue line ${movRow.id}: ${wipErr.message}`)
-        }
-      }
     }
   }
   
