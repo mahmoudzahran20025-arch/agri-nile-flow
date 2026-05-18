@@ -32,6 +32,7 @@ import cropCyclesRoutes          from './api/crop-cycles'
 import harvestSettlementsRoutes  from './api/harvest-settlements'
 import costCategoriesRoutes      from './api/cost-categories'
 import wipRoutes                 from './api/wip'
+import salesRoutes               from './api/sales'
 import { processAllPendingOutbox } from './lib/process_outbox'
 import { runHealthForAllCompanies } from './lib/daily_finance_health'
 import { getTodayIsoDate } from './lib/utils/date'
@@ -92,6 +93,7 @@ app.route('/api/crop-cycles',          cropCyclesRoutes)
 app.route('/api/harvest-settlements',  harvestSettlementsRoutes)
 app.route('/api/cost-categories',      costCategoriesRoutes)
 app.route('/api/wip',                  wipRoutes)
+app.route('/api/sales',                salesRoutes)
 
 // ─── Health Check ─────────────────────────────────────────────
 app.get('/api/health', (c) => c.json({ status: 'ok', ts: new Date().toISOString() }))

@@ -87,6 +87,7 @@ const InventoryPostingHealthPage = lazy(() => import('./pages/inventory/Inventor
 const PhysicalCountPage          = lazy(() => import('./pages/inventory/PhysicalCountPage'))
 const FixedAssetsPage            = lazy(() => import('./pages/inventory/FixedAssetsPage'))
 const WipBalancesPage            = lazy(() => import('./pages/inventory/WipBalancesPage'))
+const SalesPage                  = lazy(() => import('./pages/sales/SalesPage'))
 
 const UsersPage                = lazy(() => import('./pages/users/UsersPage'))
 const ConfigPage               = lazy(() => import('./pages/config/ConfigPage'))
@@ -209,6 +210,7 @@ export default function App() {
         <Route path="inventory/physical-count"   element={<PhysicalCountPage />} />
         <Route path="inventory/fixed-assets"     element={<FixedAssetsPage />} />
         <Route path="inventory/wip-balances"     element={<WipBalancesPage />} />
+        <Route path="sales"                      element={<SalesPage />} />
 
         {/* HR Module */}
         <Route path="hr/dashboard"            element={<HrDashboardPage />} />
