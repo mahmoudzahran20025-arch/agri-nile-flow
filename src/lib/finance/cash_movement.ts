@@ -433,8 +433,8 @@ export async function commitCashDrafts(
       }
 
       const existing = await db
-        .prepare('SELECT journal_entry_id FROM cash_transactions WHERE id = ?')
-        .bind(draftId)
+        .prepare('SELECT journal_entry_id FROM cash_transactions WHERE id = ? AND company_id = ?')
+        .bind(draftId, opts.company_id)
         .first<{ journal_entry_id: number | null }>()
 
       if (!existing?.journal_entry_id) {
@@ -456,7 +456,7 @@ export async function commitCashDrafts(
         })
 
         if (jeId) {
-          await db.prepare('UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ?').bind(jeId, draftId).run()
+          await db.prepare('UPDATE cash_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?').bind(jeId, draftId, opts.company_id).run()
         }
       }
 

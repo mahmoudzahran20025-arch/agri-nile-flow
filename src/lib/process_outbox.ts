@@ -82,29 +82,34 @@ export async function processInventoryPostingOutbox(
         throw new Error(`Unsupported event_type: ${job.event_type}`)
       }
 
-      await db.prepare(
-        `UPDATE inventory_posting_outbox
-         SET status = 'done', processed_at = datetime('now'), last_error = NULL, updated_at = datetime('now')
-         WHERE id = ? AND company_id = ?`
-      ).bind(job.id, companyId).run()
-
-      await db.prepare(
-        `UPDATE inventory_movements
-         SET gl_posting_status = 'posted', gl_posted_at = datetime('now'),
-             gl_posting_error = NULL, journal_entry_id = COALESCE(?, journal_entry_id)
-         WHERE id = ? AND company_id = ?`
-      ).bind(jeId, job.movement_id, companyId).run()
-
-      // Also mark the paired transfer movement if present in payload
+      // Batch atomically: outbox done + movement(s) posted in one round-trip.
+      // This eliminates the window where outbox is 'done' but movement stays 'pending'
+      // if the Worker crashes between the two separate UPDATEs.
       const targetMovementId = Number((payload as Record<string, unknown>)?.target_movement_id ?? 0)
-      if (targetMovementId > 0) {
-        await db.prepare(
+      const batchUpdates: D1PreparedStatement[] = [
+        db.prepare(
+          `UPDATE inventory_posting_outbox
+           SET status = 'done', processed_at = datetime('now'), last_error = NULL, updated_at = datetime('now')
+           WHERE id = ? AND company_id = ?`
+        ).bind(job.id, companyId),
+        db.prepare(
           `UPDATE inventory_movements
            SET gl_posting_status = 'posted', gl_posted_at = datetime('now'),
                gl_posting_error = NULL, journal_entry_id = COALESCE(?, journal_entry_id)
            WHERE id = ? AND company_id = ?`
-        ).bind(jeId, targetMovementId, companyId).run()
+        ).bind(jeId, job.movement_id, companyId),
+      ]
+      if (targetMovementId > 0) {
+        batchUpdates.push(
+          db.prepare(
+            `UPDATE inventory_movements
+             SET gl_posting_status = 'posted', gl_posted_at = datetime('now'),
+                 gl_posting_error = NULL, journal_entry_id = COALESCE(?, journal_entry_id)
+             WHERE id = ? AND company_id = ?`
+          ).bind(jeId, targetMovementId, companyId)
+        )
       }
+      await db.batch(batchUpdates)
 
       posted++
     } catch (err: unknown) {

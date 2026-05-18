@@ -240,7 +240,7 @@ invoices.post('/:code/transactions', financeOnly, async (c) => {
       }
 
       if (glId) {
-        await c.env.DB.prepare('UPDATE supplier_transactions SET journal_entry_id = ? WHERE id = ?').bind(glId, newId).run()
+        await c.env.DB.prepare('UPDATE supplier_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?').bind(glId, newId, company_id).run()
       }
     } catch (e: any) {
       await logFinancialWorkflowFailure(c.env.DB, {
@@ -300,7 +300,7 @@ invoices.patch('/transactions/:id/post', financeOnly, async (c) => {
       })
     }
     if (glId) {
-      await c.env.DB.prepare('UPDATE supplier_transactions SET journal_entry_id = ? WHERE id = ?').bind(glId, id).run()
+      await c.env.DB.prepare('UPDATE supplier_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?').bind(glId, id, company_id).run()
     }
   } catch (e: any) {
     return c.json({ success: true, data: { id }, warning: `تم الترحيل لكن فشل القيد المحاسبي: ${e.message}` })

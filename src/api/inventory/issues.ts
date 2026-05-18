@@ -290,6 +290,7 @@ issues.post('/issues/batch', permissionGuard('inventory', 'create'), async (c) =
         created_by: userId, center_code: b.center_code, season_id: b.season_id, field_id: b.field_id,
         batch_number: lr.batch_number, expiry_date: lr.expiry_date,
       })
+      await ensureOutboxQueued(c.env.DB, company_id, movRow.id)
 
       // ── WIP dual-write per batch line ──
       if (b.crop_cycle_id && b.season_id) {
