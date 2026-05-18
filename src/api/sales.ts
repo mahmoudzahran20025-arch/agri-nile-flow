@@ -594,6 +594,11 @@ sales.post('/returns', permissionGuard('inventory', 'create'), async (c) => {
   if (!order) return c.json({ success: false, error: 'أمر البيع الأصلي غير موجود' }, 404)
   if (order.status === 'voided') return c.json({ success: false, error: 'لا يمكن إرجاع أمر ملغى' }, 422)
 
+  // GL orphan guard: flag it if the original order was never GL-posted
+  const glOrphanWarning = order.journal_entry_id == null
+    ? 'GL_ORPHAN: أمر البيع الأصلي لم يُرحَّل محاسبياً — قيد عكس المرتجع سيُنشأ بدون قيد أصلي مطابق'
+    : null
+
   const origItems = await c.env.DB.prepare(
     'SELECT item_code, quantity FROM sales_order_items WHERE order_id = ? AND company_id = ?'
   ).bind(body.original_order_id, company_id).all<{ item_code: number; quantity: number }>()
@@ -710,7 +715,17 @@ sales.post('/returns', permissionGuard('inventory', 'create'), async (c) => {
     // Non-blocking
   }
 
-  return c.json({ success: true, data: { return_id: returnId, order_id: order.id, total, refund_method: refundMethod, gl_entry_id: glEntryId } }, 201)
+  return c.json({
+    success: true,
+    data: {
+      return_id:          returnId,
+      order_id:           order.id,
+      total,
+      refund_method:      refundMethod,
+      gl_entry_id:        glEntryId,
+      gl_orphan_warning:  glOrphanWarning,
+    },
+  }, 201)
 })
 
 // ── GET /api/sales/:id ─────────────────────────────────────────────────────────

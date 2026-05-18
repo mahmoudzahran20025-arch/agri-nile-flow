@@ -194,5 +194,5 @@ export const salesApi = {
   },
 
   createReturn: (body: CreateReturnBody) =>
-    unwrap(api.post<{ return_id: number; order_id: number; total: number; refund_method: string; gl_entry_id: number | null }>('/sales/returns', body)),
+    unwrap(api.post<{ return_id: number; order_id: number; total: number; refund_method: string; gl_entry_id: number | null; gl_orphan_warning: string | null }>('/sales/returns', body)),
 }

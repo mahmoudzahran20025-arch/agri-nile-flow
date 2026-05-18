@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ShoppingCart, Plus, X, CheckCircle, XCircle, Loader2, RotateCcw } from 'lucide-react'
+import { ShoppingCart, Plus, X, CheckCircle, XCircle, Loader2, RotateCcw, AlertTriangle } from 'lucide-react'
 import { salesApi, type CreateSaleBody, type SaleOrder, type SaleOrderItem, type CreateReturnBody } from '../../api/sales'
 import { inventoryApi } from '../../api/client'
 import { usePermission } from '../../hooks/usePermission'
@@ -63,6 +63,7 @@ function ReturnModal({ order, onClose }: { order: SaleOrder; onClose: () => void
   const [refundMethod, setRefundMethod] = useState<RefundMethod>('cash')
   const [reason, setReason] = useState('')
   const [err, setErr] = useState<string | null>(null)
+  const [glWarning, setGlWarning] = useState<string | null>(null)
   const [initialized, setInitialized] = useState(false)
 
   if (detail && !initialized) {
@@ -79,10 +80,14 @@ function ReturnModal({ order, onClose }: { order: SaleOrder; onClose: () => void
 
   const returnMut = useMutation({
     mutationFn: (body: CreateReturnBody) => salesApi.createReturn(body),
-    onSuccess: () => {
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['sales'] })
       qc.invalidateQueries({ queryKey: ['sales-returns'] })
-      onClose()
+      if (data?.gl_orphan_warning) {
+        setGlWarning(data.gl_orphan_warning)
+      } else {
+        onClose()
+      }
     },
     onError: (e: any) => setErr(e.message ?? 'حدث خطأ'),
   })
@@ -184,23 +189,35 @@ function ReturnModal({ order, onClose }: { order: SaleOrder; onClose: () => void
                   {err}
                 </div>
               )}
+
+              {glWarning && (
+                <div className="bg-amber-50 border border-amber-300 rounded-lg px-4 py-3 flex items-start gap-2">
+                  <AlertTriangle size={15} className="text-amber-500 mt-0.5 shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-amber-800">تحذير: قيد محاسبي بدون أصل</p>
+                    <p className="text-xs text-amber-700 mt-0.5">أمر البيع الأصلي لم يُرحَّل محاسبياً — تم تسجيل المرتجع لكن قيد العكس ليس له قيد أصلي مطابق. راجع قسم المحاسبة.</p>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
 
         <div className="px-6 py-4 border-t border-slate-200 flex justify-end gap-3">
           <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800">
-            إلغاء
+            {glWarning ? 'إغلاق (مع العلم بالتحذير)' : 'إلغاء'}
           </button>
-          <button
-            onClick={handleSubmit}
-            disabled={returnMut.isPending || isLoading}
-            className="flex items-center gap-2 bg-amber-600 text-white text-sm font-medium px-5 py-2 rounded-lg hover:bg-amber-700 disabled:opacity-60 transition-colors"
-          >
-            {returnMut.isPending && <Loader2 size={14} className="animate-spin" />}
-            <RotateCcw size={14} />
-            تسجيل المرتجع
-          </button>
+          {!glWarning && (
+            <button
+              onClick={handleSubmit}
+              disabled={returnMut.isPending || isLoading}
+              className="flex items-center gap-2 bg-amber-600 text-white text-sm font-medium px-5 py-2 rounded-lg hover:bg-amber-700 disabled:opacity-60 transition-colors"
+            >
+              {returnMut.isPending && <Loader2 size={14} className="animate-spin" />}
+              <RotateCcw size={14} />
+              تسجيل المرتجع
+            </button>
+          )}
         </div>
       </div>
     </div>
