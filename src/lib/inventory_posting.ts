@@ -177,4 +177,15 @@ export async function upsertInventoryBalance(
   if (result.meta.changes === 0) {
     throw new Error('INVENTORY_BALANCE_CONFLICT')
   }
+
+  // Update materialized catalog_status based on aggregated balance across all warehouses.
+  // 'in_stock' if any warehouse has positive qty; 'moved_zero_balance' if movements exist but all zero.
+  const totalBal = await db.prepare(
+    `SELECT SUM(balance_qty) AS total FROM inventory_balances WHERE company_id = ? AND item_code = ?`
+  ).bind(companyId, itemCode).first<{ total: number | null }>()
+
+  const newStatus = (totalBal?.total ?? 0) > 0 ? 'in_stock' : 'moved_zero_balance'
+  await db.prepare(
+    `UPDATE items SET catalog_status = ? WHERE company_id = ? AND code = ?`
+  ).bind(newStatus, companyId, itemCode).run()
 }

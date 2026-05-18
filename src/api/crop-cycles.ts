@@ -259,6 +259,19 @@ cropCycles.get('/:id/wip-summary', async (c) => {
     season_id: number; season_name: string; total_debit: number; total_credit: number; balance: number
   }>()
 
+  const { results: bySource } = await c.env.DB.prepare(`
+    SELECT source_module,
+           SUM(debit)  AS total_debit,
+           SUM(credit) AS total_credit,
+           SUM(debit)  - SUM(credit) AS balance
+    FROM wip_ledger
+    WHERE company_id = ? AND crop_cycle_id = ?
+    GROUP BY source_module
+    ORDER BY balance DESC
+  `).bind(company_id, id).all<{
+    source_module: string; total_debit: number; total_credit: number; balance: number
+  }>()
+
   const totalWip = byCategory.reduce((s, r) => s + r.balance, 0)
 
   return c.json({
@@ -270,6 +283,7 @@ cropCycles.get('/:id/wip-summary', async (c) => {
       total_wip:     Math.round(totalWip * 100) / 100,
       by_category:   byCategory,
       by_season:     bySeason,
+      by_source:     bySource,
     },
   })
 })

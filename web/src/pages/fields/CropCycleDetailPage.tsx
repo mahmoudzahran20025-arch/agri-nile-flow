@@ -481,6 +481,75 @@ export default function CropCycleDetailPage() {
                 </table>
               </div>
 
+              {/* Category progress bars */}
+              {wipSummary.total_wip > 0 && (
+                <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+                  <h3 className="text-sm font-semibold text-slate-700">التوزيع النسبي للتكاليف</h3>
+                  {wipSummary.by_category.filter(r => r.balance > 0).map(r => {
+                    const pct = Math.max(0, Math.min(100, (r.balance / wipSummary.total_wip) * 100))
+                    const label = catLabelMap[r.cost_category?.toLowerCase() ?? '']
+                      ?? CATEGORY_LABELS_FALLBACK[r.cost_category as WIPCategory]
+                      ?? r.cost_category
+                    return (
+                      <div key={r.cost_category}>
+                        <div className="flex justify-between text-xs mb-1">
+                          <span className="font-medium text-slate-600">{label}</span>
+                          <span className="text-slate-500">{fmt(r.balance)} ج.م <span className="text-slate-400">({pct.toFixed(1)}%)</span></span>
+                        </div>
+                        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-[#0F2D5C] rounded-full transition-all"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* By source module */}
+              {wipSummary.by_source && wipSummary.by_source.length > 0 && (
+                <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-100">
+                    <h3 className="text-sm font-semibold text-slate-700">مصدر التكاليف</h3>
+                  </div>
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50">
+                      <tr>
+                        <th className="px-4 py-2 text-right text-xs text-slate-500">المصدر</th>
+                        <th className="px-4 py-2 text-left text-xs text-slate-500">مدين</th>
+                        <th className="px-4 py-2 text-left text-xs text-slate-500">دائن</th>
+                        <th className="px-4 py-2 text-left text-xs text-slate-500">الرصيد</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {wipSummary.by_source.map(r => {
+                        const SOURCE_LABELS: Record<string, string> = {
+                          inventory_movement: 'حركات المخزون (مواد)',
+                          operations_labor:   'عمليات — عمالة',
+                          operations_equipment: 'عمليات — معدات',
+                          supplier_invoice:   'فواتير موردين',
+                          manual_wip:         'إدخال يدوي',
+                          depreciation:       'إهلاك',
+                          season_carry_forward: 'ترحيل موسمي',
+                        }
+                        return (
+                          <tr key={r.source_module} className="hover:bg-slate-50">
+                            <td className="px-4 py-2.5 font-medium text-slate-700">
+                              {SOURCE_LABELS[r.source_module] ?? r.source_module}
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-mono text-emerald-700">{fmt(r.total_debit)}</td>
+                            <td className="px-4 py-2.5 text-right font-mono text-red-600">{fmt(r.total_credit)}</td>
+                            <td className="px-4 py-2.5 text-right font-mono font-semibold text-slate-800">{fmt(r.balance)}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
               {/* By season */}
               {wipSummary.by_season.length > 1 && (
                 <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">

@@ -193,63 +193,32 @@ governance.get('/items-master', permissionGuard('inventory', 'read'), async (c) 
   }
 
   if (catalogStatus !== 'all') {
-    conditions.push(`CASE
-      WHEN COALESCE(ms.balance_qty, 0) > 0 THEN 'in_stock'
-      WHEN COALESCE(ms.movement_count, 0) > 0 THEN 'moved_zero_balance'
-      ELSE 'catalog_only'
-    END = ?`)
+    conditions.push(`i.catalog_status = ?`)
     binds.push(catalogStatus)
   }
 
   const where = conditions.join(' AND ')
 
+  // Use inventory_balances snapshot (indexed by item) instead of scanning inventory_movements.
+  // catalog_status is materialized on items and updated by upsertInventoryBalance.
   const countRow = await c.env.DB.prepare(
-    `WITH movement_stats AS (
-       SELECT
-         company_id,
-         item_code,
-         COUNT(*) AS movement_count,
-         SUM(COALESCE(qty_in, 0)) AS total_in,
-         SUM(COALESCE(qty_out, 0)) AS total_out,
-         SUM(COALESCE(qty_in, 0) - COALESCE(qty_out, 0)) AS balance_qty,
-         SUM(COALESCE(value_in, 0) - COALESCE(value_out, 0)) AS balance_value
-       FROM inventory_movements
-       WHERE item_code IS NOT NULL
-       GROUP BY company_id, item_code
-     )
-     SELECT COUNT(*) AS total
+    `SELECT COUNT(*) AS total
      FROM items i
-     LEFT JOIN movement_stats ms
-       ON ms.company_id = i.company_id
-      AND ms.item_code = i.code
+     LEFT JOIN (
+       SELECT company_id, item_code,
+              SUM(balance_qty) AS balance_qty,
+              SUM(balance_value) AS balance_value,
+              COUNT(*) AS warehouse_count
+       FROM inventory_balances
+       GROUP BY company_id, item_code
+     ) bs ON bs.company_id = i.company_id AND bs.item_code = i.code
      WHERE ${where}`
   ).bind(...binds).first<{ total: number }>()
 
   const total = countRow?.total ?? 0
 
   const { results } = await c.env.DB.prepare(
-    `WITH movement_stats AS (
-       SELECT
-         company_id,
-         item_code,
-         COUNT(*) AS movement_count,
-         SUM(COALESCE(qty_in, 0)) AS total_in,
-         SUM(COALESCE(qty_out, 0)) AS total_out,
-         SUM(COALESCE(qty_in, 0) - COALESCE(qty_out, 0)) AS balance_qty,
-         SUM(COALESCE(value_in, 0) - COALESCE(value_out, 0)) AS balance_value
-       FROM inventory_movements
-       WHERE item_code IS NOT NULL
-       GROUP BY company_id, item_code
-     ), warehouse_stats AS (
-       SELECT company_id, item_code, COUNT(*) AS warehouse_count
-       FROM (
-         SELECT DISTINCT company_id, item_code, warehouse_id
-         FROM inventory_movements
-         WHERE item_code IS NOT NULL AND warehouse_id IS NOT NULL
-       )
-       GROUP BY company_id, item_code
-     )
-     SELECT
+    `SELECT
        i.code,
        i.name,
        i.unit,
@@ -269,25 +238,24 @@ governance.get('/items-master', permissionGuard('inventory', 'read'), async (c) 
        i.expiry_tracking,
        i.wip_cost_category,
        ic.name AS category_name,
-       COALESCE(ms.balance_qty, 0) AS total_qty,
-       COALESCE(ms.balance_value, 0) AS total_value,
-       COALESCE(ws.warehouse_count, 0) AS warehouse_count,
-       CASE
-         WHEN COALESCE(ms.balance_qty, 0) > 0 THEN 'in_stock'
-         WHEN COALESCE(ms.movement_count, 0) > 0 THEN 'moved_zero_balance'
-         ELSE 'catalog_only'
-       END AS catalog_status,
-       COALESCE(ms.movement_count, 0) AS movement_count
+       COALESCE(bs.balance_qty, 0) AS total_qty,
+       COALESCE(bs.balance_value, 0) AS total_value,
+       COALESCE(bs.warehouse_count, 0) AS warehouse_count,
+       i.catalog_status,
+       COALESCE(bs.movement_count, 0) AS movement_count
      FROM items i
      LEFT JOIN item_categories ic
        ON ic.company_id = i.company_id
       AND ic.id = i.category_id
-     LEFT JOIN movement_stats ms
-       ON ms.company_id = i.company_id
-      AND ms.item_code = i.code
-     LEFT JOIN warehouse_stats ws
-       ON ws.company_id = i.company_id
-      AND ws.item_code = i.code
+     LEFT JOIN (
+       SELECT company_id, item_code,
+              SUM(balance_qty) AS balance_qty,
+              SUM(balance_value) AS balance_value,
+              COUNT(*) AS warehouse_count,
+              COUNT(*) AS movement_count
+       FROM inventory_balances
+       GROUP BY company_id, item_code
+     ) bs ON bs.company_id = i.company_id AND bs.item_code = i.code
      WHERE ${where}
      ORDER BY i.name
      LIMIT ? OFFSET ?`

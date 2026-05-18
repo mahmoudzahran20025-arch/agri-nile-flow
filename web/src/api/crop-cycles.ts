@@ -57,6 +57,7 @@ export interface WIPSummary {
   total_wip:     number
   by_category:   { cost_category: WIPCategory; total_debit: number; total_credit: number; balance: number }[]
   by_season:     { season_id: number; season_name: string; total_debit: number; total_credit: number; balance: number }[]
+  by_source?:    { source_module: string; total_debit: number; total_credit: number; balance: number }[]
 }
 
 export interface CreateCropCycleInput {
