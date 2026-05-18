@@ -57,6 +57,9 @@ transfers.post('/movements/transfer-batch', permissionGuard('inventory', 'create
     notes?:         string
     season_id?:     number
     center_code?:   number
+    field_id?:      number
+    work_order_id?: number
+    crop_cycle_id?: number
     items: Array<{
       item_code:  number
       quantity:   number
@@ -114,14 +117,17 @@ transfers.post('/movements/transfer-batch', permissionGuard('inventory', 'create
 
     const [item, srcBal, dstBal] = await Promise.all([
       c.env.DB.prepare(
-        'SELECT name, prod_posting_group_code FROM items WHERE code = ? AND company_id = ?'
-      ).bind(line.item_code, company_id).first<{ name: string; prod_posting_group_code: string | null }>(),
+        'SELECT name, prod_posting_group_code, item_type FROM items WHERE code = ? AND company_id = ?'
+      ).bind(line.item_code, company_id).first<{ name: string; prod_posting_group_code: string | null; item_type: string | null }>(),
       readInventoryBalance(c.env.DB, company_id, line.item_code, srcWh.id),
       readInventoryBalance(c.env.DB, company_id, line.item_code, dstWh.id),
     ])
 
     if (!item) {
       return c.json({ success: false, error: `الصنف #${line.item_code} غير موجود` }, 422)
+    }
+    if (item.item_type === 'service') {
+      return c.json({ success: false, error: `أصناف الخدمة لا تُحوَّل بين المخازن: #${line.item_code}`, code: 'SERVICE_ITEM_NO_STOCK' }, 422)
     }
     if (srcBal.balance_qty < line.quantity) {
       return c.json({
@@ -164,14 +170,15 @@ transfers.post('/movements/transfer-batch', permissionGuard('inventory', 'create
     // Insert TRANSFER_OUT
     await c.env.DB.prepare(
       `INSERT INTO inventory_movements
-       (company_id, season_id, item_code, center_code,
+       (company_id, season_id, field_id, work_order_id, crop_cycle_id, item_code, center_code,
         movement_date, warehouse_id, movement_type,
         quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
         notes, year, month, created_by_user_id, local_id,
         posting_mode, gl_posting_status, transaction_id)
-       VALUES (?,?,?,?,?,?,?,?,?,0,?,?,0,?,?,?,?,?,?,?,?,?)`
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,0,?,?,?,?,?,?,?,?,?)`
     ).bind(
-      company_id, b.season_id ?? null, line.item_code, b.center_code ?? null,
+      company_id, b.season_id ?? null, b.field_id ?? null, b.work_order_id ?? null, b.crop_cycle_id ?? null,
+      line.item_code, b.center_code ?? null,
       movementDate, srcWh.id, 'TRANSFER_OUT',
       line.quantity, line.unitPrice, line.quantity,
       newSrcQty, transferValue, newSrcVal,
@@ -188,14 +195,15 @@ transfers.post('/movements/transfer-batch', permissionGuard('inventory', 'create
     // Insert TRANSFER_IN
     await c.env.DB.prepare(
       `INSERT INTO inventory_movements
-       (company_id, season_id, item_code, center_code,
+       (company_id, season_id, field_id, work_order_id, crop_cycle_id, item_code, center_code,
         movement_date, warehouse_id, movement_type,
         quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
         notes, year, month, created_by_user_id, local_id,
         posting_mode, gl_posting_status, transaction_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,0,?,?,?,?,?,?,?,?)`
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,0,?,?,?,?,?,?,?,?,?)`
     ).bind(
-      company_id, b.season_id ?? null, line.item_code, b.center_code ?? null,
+      company_id, b.season_id ?? null, b.field_id ?? null, b.work_order_id ?? null, b.crop_cycle_id ?? null,
+      line.item_code, b.center_code ?? null,
       movementDate, dstWh.id, 'TRANSFER_IN',
       line.quantity, line.unitPrice, line.quantity,
       newDstQty, transferValue, newDstVal,
