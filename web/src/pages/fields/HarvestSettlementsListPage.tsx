@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { RotateCcw, Filter, ExternalLink } from 'lucide-react'
+import { RotateCcw, Filter, ExternalLink, Plus } from 'lucide-react'
 import { harvestSettlementsApi } from '../../api/harvest-settlements'
 import { useToast } from '../../contexts/ToastContext'
 import { TableSkeleton } from '../../components/ui/Skeleton'
 import { useAppStore } from '../../store/appStore'
+import { CommandBar } from '../../components/ui/CommandBar'
+import Modal from '../../components/ui/Modal'
 
 function fmt(n: number) {
   return n.toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -20,6 +22,7 @@ const STATUS_OPTIONS = [
 
 export default function HarvestSettlementsListPage() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const { toast } = useToast()
   const { role } = useAppStore()
   const canWrite = role === 'super_admin' || role === 'company_admin' || role === 'accountant'
@@ -46,16 +49,18 @@ export default function HarvestSettlementsListPage() {
   })
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-bold text-slate-800">تسويات الحصاد</h1>
-        <Link
-          to="/fields/harvest-settlement"
-          className="flex items-center gap-2 px-4 py-2 text-sm bg-[#0F2D5C] text-white rounded-lg hover:bg-[#1a3f7a] transition-colors"
-        >
-          تسوية جديدة
-        </Link>
-      </div>
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="تسويات الحصاد"
+        subtitle={`${settlements?.length ?? 0} تسوية مسجلة`}
+        actions={canWrite ? [{
+          label: 'تسوية جديدة',
+          icon: <Plus size={15} />,
+          variant: 'primary',
+          onClick: () => navigate('/fields/harvest-settlement'),
+        }] : []}
+      />
+      <div className="flex-1 overflow-y-auto p-5 space-y-5 max-w-6xl mx-auto w-full">
 
       {/* Filters */}
       <div className="flex items-center gap-3">
@@ -162,42 +167,36 @@ export default function HarvestSettlementsListPage() {
         </div>
       )}
 
-      {/* Reverse modal */}
-      {reverseId !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md mx-4 space-y-4">
-            <h2 className="text-lg font-bold text-slate-800">عكس تسوية الحصاد</h2>
-            <p className="text-sm text-slate-500">
-              سيتم عكس القيود المحاسبية وإعادة رصيد WIP إلى الدورة. ستعود الدورة إلى حالة "نشطة".
-            </p>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">سبب العكس — اختياري</label>
-              <textarea
-                value={reverseReason}
-                onChange={e => setReverseReason(e.target.value)}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F2D5C] resize-none"
-                rows={2}
-                placeholder="سبب عكس التسوية..."
-              />
-            </div>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => { setReverseId(null); setReverseReason('') }}
-                className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
-              >
-                إلغاء
-              </button>
-              <button
-                onClick={() => reverseMut.mutate(reverseId)}
-                disabled={reverseMut.isPending}
-                className="px-4 py-2 text-sm bg-amber-600 text-white rounded-lg font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors"
-              >
-                {reverseMut.isPending ? 'جاري العكس...' : 'تأكيد العكس'}
-              </button>
-            </div>
-          </div>
+      </div>{/* end scroll container */}
+
+      <Modal open={reverseId !== null} onClose={() => { setReverseId(null); setReverseReason('') }} title="عكس تسوية الحصاد" size="sm">
+        <p className="text-sm text-slate-500 mb-4">
+          سيتم عكس القيود المحاسبية وإعادة رصيد WIP إلى الدورة. ستعود الدورة إلى حالة "نشطة".
+        </p>
+        <div>
+          <label className="label">سبب العكس — اختياري</label>
+          <textarea
+            value={reverseReason}
+            onChange={e => setReverseReason(e.target.value)}
+            className="input resize-none"
+            rows={2}
+            placeholder="سبب عكس التسوية..."
+          />
         </div>
-      )}
+        <div className="flex gap-3 justify-end mt-4">
+          <button className="btn-secondary" onClick={() => { setReverseId(null); setReverseReason('') }}>
+            إلغاء
+          </button>
+          <button
+            onClick={() => reverseMut.mutate(reverseId!)}
+            disabled={reverseMut.isPending}
+            className="flex items-center gap-2 px-4 py-2 text-sm bg-amber-600 text-white rounded-lg font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors"
+          >
+            <RotateCcw size={13} />
+            {reverseMut.isPending ? 'جاري العكس...' : 'تأكيد العكس'}
+          </button>
+        </div>
+      </Modal>
     </div>
   )
 }

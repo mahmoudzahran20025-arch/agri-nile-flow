@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { operationsApi, fieldsApi, configApi, type WOTemplate, type WOTemplateTask, type WOTemplateEquipment } from '../../api/client'
 import Modal from '../../components/ui/Modal'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 // ── Operation type config ─────────────────────────────────────
 // OP_TYPES are loaded from the database via GET /config/operation_types
@@ -67,28 +68,18 @@ export default function WorkOrderTemplatesPage() {
   const totalTasks = templates.reduce((s, t) => s + (t.task_count ?? 0), 0)
 
   return (
-    <div className="p-4 md:p-6 space-y-6 max-w-6xl mx-auto" dir="rtl">
-
-      {/* ── Header ─────────────────────────────────────────── */}
-      <div className="flex items-start justify-between flex-wrap gap-4">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center shadow-sm">
-              <Layers size={20} className="text-white" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">نماذج أوامر العمل</h1>
-              <p className="text-sm text-gray-500 mt-0.5">قوالب جاهزة لإنشاء أوامر عمل بضغطة واحدة</p>
-            </div>
-          </div>
-        </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2.5 rounded-xl transition-colors shadow-sm"
-        >
-          <Plus size={16} /> نموذج جديد
-        </button>
-      </div>
+    <div className="flex flex-col h-full" dir="rtl">
+      <CommandBar
+        title="نماذج أوامر العمل"
+        subtitle="قوالب جاهزة لإنشاء أوامر عمل بضغطة واحدة"
+        actions={[{
+          label: 'نموذج جديد',
+          icon: <Plus size={15} />,
+          variant: 'primary',
+          onClick: () => setShowCreate(true),
+        }]}
+      />
+      <div className="flex-1 overflow-y-auto p-5 space-y-5 max-w-6xl mx-auto w-full">
 
       {/* ── Stats ──────────────────────────────────────────── */}
       <div className="grid grid-cols-3 gap-3">
@@ -243,6 +234,7 @@ export default function WorkOrderTemplatesPage() {
           </div>
         </div>
       )}
+      </div>{/* end scroll container */}
     </div>
   )
 }

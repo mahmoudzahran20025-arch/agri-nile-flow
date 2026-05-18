@@ -8,6 +8,7 @@ import {
 import { inventoryApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 import { useMovementPostingPipeline } from '../../hooks/workspace/useMovementPostingPipeline'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -259,17 +260,12 @@ export default function PhysicalCountPage() {
   // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="max-w-4xl mx-auto p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-brand-100 flex items-center justify-center">
-          <ClipboardList size={20} className="text-brand-600" />
-        </div>
-        <div>
-          <h1 className="text-xl font-bold text-slate-800">جرد المخزون</h1>
-          <p className="text-sm text-slate-500">أدخل الكميات الفعلية — النظام يحسب الفروقات ويرحلها تلقائياً</p>
-        </div>
-      </div>
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="جرد المخزون"
+        subtitle="أدخل الكميات الفعلية — النظام يحسب الفروقات ويرحلها تلقائياً"
+      />
+      <div className="flex-1 overflow-y-auto p-5 space-y-5 max-w-4xl mx-auto w-full">
 
       <StepBar current={step} />
 
@@ -573,6 +569,7 @@ export default function PhysicalCountPage() {
           )}
         </div>
       )}
+      </div>{/* end scroll container */}
     </div>
   )
 }
