@@ -64,18 +64,19 @@ hs.get('/:id', async (c) => {
 hs.post('/', async (c) => {
   const { company_id, sub: user_id } = getUser(c)
   const b = await c.req.json<{
-    crop_cycle_id:    number
-    settlement_date?: string
-    disposition:      'stored' | 'sold'
-    qty_tons?:        number
+    crop_cycle_id:     number
+    settlement_date?:  string
+    disposition:       'stored' | 'sold'
+    settlement_mode?:  'inventory' | 'direct_sale'
+    qty_tons?:         number
     // stored
-    inventory_value?: number
-    warehouse_id?:    number
-    item_code?:       number
+    inventory_value?:  number
+    warehouse_id?:     number
+    item_code?:        number
     // sold
-    revenue?:         number
-    buyer_name?:      string
-    notes?:           string
+    revenue?:          number
+    buyer_name?:       string
+    notes?:            string
   }>()
 
   if (!b.crop_cycle_id || !b.disposition) {
@@ -83,6 +84,9 @@ hs.post('/', async (c) => {
   }
   if (!['stored', 'sold'].includes(b.disposition)) {
     return c.json({ success: false, error: 'التصرف يجب أن يكون stored أو sold' }, 400)
+  }
+  if (b.settlement_mode && !['inventory', 'direct_sale'].includes(b.settlement_mode)) {
+    return c.json({ success: false, error: 'settlement_mode يجب أن يكون inventory أو direct_sale' }, 400)
   }
 
   // Fetch cycle — must be active
@@ -114,14 +118,14 @@ hs.post('/', async (c) => {
 
   const { meta } = await c.env.DB.prepare(`
     INSERT INTO harvest_settlements
-      (company_id, crop_cycle_id, disposition, total_wip_cost,
+      (company_id, crop_cycle_id, disposition, settlement_mode, total_wip_cost,
        qty_tons, cost_per_ton,
        inventory_value, warehouse_id, item_code,
        revenue, buyer_name,
        settlement_date, status, notes, created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).bind(
-    company_id, b.crop_cycle_id, b.disposition, wipBalance,
+    company_id, b.crop_cycle_id, b.disposition, b.settlement_mode ?? 'inventory', wipBalance,
     qtyTons, costPerTon,
     b.inventory_value ?? null, b.warehouse_id ?? null, b.item_code ?? null,
     b.revenue ?? null, b.buyer_name ?? null,
@@ -144,15 +148,16 @@ hs.patch('/:id', async (c) => {
   const { company_id } = getUser(c)
   const id = Number(c.req.param('id'))
   const b = await c.req.json<{
-    settlement_date?: string
-    disposition?:     'stored' | 'sold'
-    qty_tons?:        number
-    inventory_value?: number
-    warehouse_id?:    number
-    item_code?:       number
-    revenue?:         number
-    buyer_name?:      string
-    notes?:           string
+    settlement_date?:  string
+    disposition?:      'stored' | 'sold'
+    settlement_mode?:  'inventory' | 'direct_sale'
+    qty_tons?:         number
+    inventory_value?:  number
+    warehouse_id?:     number
+    item_code?:        number
+    revenue?:          number
+    buyer_name?:       string
+    notes?:            string
   }>()
 
   const existing = await c.env.DB.prepare(
@@ -166,9 +171,10 @@ hs.patch('/:id', async (c) => {
   const sets: string[]    = []
   const params: unknown[] = []
 
-  if (b.settlement_date !== undefined) { sets.push('settlement_date = ?'); params.push(b.settlement_date) }
-  if (b.disposition     !== undefined) { sets.push('disposition = ?');     params.push(b.disposition) }
-  if (b.qty_tons        !== undefined) { sets.push('qty_tons = ?');        params.push(b.qty_tons) }
+  if (b.settlement_date !== undefined) { sets.push('settlement_date = ?');  params.push(b.settlement_date) }
+  if (b.disposition     !== undefined) { sets.push('disposition = ?');      params.push(b.disposition) }
+  if (b.settlement_mode !== undefined) { sets.push('settlement_mode = ?'); params.push(b.settlement_mode) }
+  if (b.qty_tons        !== undefined) { sets.push('qty_tons = ?');         params.push(b.qty_tons) }
   if (b.inventory_value !== undefined) { sets.push('inventory_value = ?'); params.push(b.inventory_value) }
   if (b.warehouse_id    !== undefined) { sets.push('warehouse_id = ?');    params.push(b.warehouse_id) }
   if (b.item_code       !== undefined) { sets.push('item_code = ?');       params.push(b.item_code) }

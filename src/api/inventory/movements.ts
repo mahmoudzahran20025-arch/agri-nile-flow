@@ -242,14 +242,20 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     return c.json({ success: false, error: 'نوع حركة غير مدعوم' }, 400)
   }
 
-  // Block inventory movements for non-inventory items (service / non_stock)
   const itemTypeRow = await c.env.DB.prepare(
-    'SELECT item_type FROM items WHERE code = ? AND company_id = ?'
-  ).bind(b.item_code, company_id).first<{ item_type: string | null }>()
+    'SELECT item_type, is_purchasable, is_sellable FROM items WHERE code = ? AND company_id = ?'
+  ).bind(b.item_code, company_id).first<{ item_type: string | null; is_purchasable: number; is_sellable: number }>()
   if (!itemTypeRow) return c.json({ success: false, error: 'الصنف غير موجود' }, 404)
   if (itemTypeRow.item_type === 'service') {
     return c.json({ success: false, error: 'أصناف الخدمة لا تُسجَّل في حركات المخزون', code: 'SERVICE_ITEM_NO_STOCK' }, 422)
   }
+  if ((b.movement_type === 'GRN' || b.movement_type === 'RETURN_SUPPLIER') && !itemTypeRow.is_purchasable) {
+    return c.json({ success: false, error: 'هذا الصنف غير قابل للشراء', code: 'ITEM_NOT_PURCHASABLE' }, 422)
+  }
+  if (b.movement_type === 'RETURN_CUSTOMER' && !itemTypeRow.is_sellable) {
+    return c.json({ success: false, error: 'هذا الصنف غير قابل للبيع', code: 'ITEM_NOT_SELLABLE' }, 422)
+  }
+  const isNonStock = itemTypeRow.item_type === 'non_stock'
 
   let movementDate: string = normalizeIsoDate(b.movement_date)
   if (isFutureIsoDate(movementDate)) {
@@ -296,8 +302,11 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
     service_type_code: b.service_type_code,
   })
 
-  const prev = await readInventoryBalance(c.env.DB, company_id, b.item_code, warehouseId)
-  if (!isInbound && b.quantity > prev.balance_qty) {
+  // non_stock: no perpetual balance — use unit_price from request (or 0), no balance check
+  const prev = isNonStock
+    ? { balance_qty: 0, balance_value: 0, version: 0 }
+    : await readInventoryBalance(c.env.DB, company_id, b.item_code, warehouseId)
+  if (!isNonStock && !isInbound && b.quantity > prev.balance_qty) {
     return c.json({ success: false, error: `رصيد غير كافٍ: ${prev.balance_qty}`, code: 'INSUFFICIENT_STOCK' }, 409)
   }
 
@@ -314,7 +323,8 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
   const ym = yearMonthParts(movementDate)
   const transactionId = Math.floor(Date.now() / 1000) * 1000 + Math.floor(Math.random() * 1000)
 
-  await c.env.DB.batch([
+  // non_stock: INSERT only (no balance propagation UPDATE needed)
+  const batchStmts: D1PreparedStatement[] = [
     c.env.DB.prepare(
       `INSERT INTO inventory_movements
        (company_id, season_id, field_id, work_order_id, crop_cycle_id, supplier_code, item_code, center_code,
@@ -329,7 +339,8 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
       movementDate, warehouseId, b.movement_type, b.document_number ?? null,
       b.batch_number ?? null, b.expiry_date ?? null,
       b.pack_capacity ?? null, b.pack_count ?? null, b.quantity, unitPrice,
-      qtyIn, qtyOut, prev.balance_qty + qtyIn - qtyOut, valueIn, valueOut, prev.balance_value + valueIn - valueOut,
+      qtyIn, qtyOut, isNonStock ? 0 : prev.balance_qty + qtyIn - qtyOut,
+      valueIn, valueOut, isNonStock ? 0 : prev.balance_value + valueIn - valueOut,
       b.notes ?? null, statementText, serviceTypeCode, ym.year, ym.month, userId, localId,
       movementValue === 0 ? b.zero_value_reason : null,
       movementValue === 0 ? role : null,
@@ -337,17 +348,26 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
       movementValue === 0 ? 'exempt_zero_value' : 'pending',
       transactionId,
     ),
-    c.env.DB.prepare(
-      `UPDATE inventory_movements
-       SET balance_qty = balance_qty + ?, balance_value = balance_value + ?
-       WHERE company_id = ? AND item_code = ? AND warehouse_id = ?
-         AND (movement_date > ? OR (movement_date = ? AND id > (SELECT id FROM inventory_movements WHERE local_id = ? AND company_id = ?)))`
-    ).bind(qtyIn - qtyOut, valueIn - valueOut, company_id, b.item_code, warehouseId, movementDate, movementDate, localId, company_id)
-  ])
+  ]
+
+  if (!isNonStock) {
+    batchStmts.push(
+      c.env.DB.prepare(
+        `UPDATE inventory_movements
+         SET balance_qty = balance_qty + ?, balance_value = balance_value + ?
+         WHERE company_id = ? AND item_code = ? AND warehouse_id = ?
+           AND (movement_date > ? OR (movement_date = ? AND id > (SELECT id FROM inventory_movements WHERE local_id = ? AND company_id = ?)))`
+      ).bind(qtyIn - qtyOut, valueIn - valueOut, company_id, b.item_code, warehouseId, movementDate, movementDate, localId, company_id)
+    )
+  }
+
+  await c.env.DB.batch(batchStmts)
 
   const movRow = await c.env.DB.prepare('SELECT id FROM inventory_movements WHERE local_id = ? AND company_id = ?').bind(localId, company_id).first<{id:number}>()
   const movId = movRow!.id
-  await upsertInventoryBalance(c.env.DB, company_id, b.item_code, warehouseId, prev.balance_qty + qtyIn - qtyOut, prev.balance_value + valueIn - valueOut, movId, prev.version)
+  if (!isNonStock) {
+    await upsertInventoryBalance(c.env.DB, company_id, b.item_code, warehouseId, prev.balance_qty + qtyIn - qtyOut, prev.balance_value + valueIn - valueOut, movId, prev.version)
+  }
 
   if (movementValue > 0) {
     const itemRow = await c.env.DB.prepare('SELECT name FROM items WHERE code = ? AND company_id = ?').bind(b.item_code, company_id).first<{name:string}>()
@@ -584,14 +604,20 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
 
     assertPackagingInvariant(item.quantity, item.pack_count, item.pack_capacity, item.item_code)
 
-    // Block service items from inventory movements
     const itemTypeCheck = await c.env.DB.prepare(
-      'SELECT item_type FROM items WHERE code = ? AND company_id = ?'
-    ).bind(item.item_code, company_id).first<{ item_type: string | null }>()
+      'SELECT item_type, is_purchasable, is_sellable FROM items WHERE code = ? AND company_id = ?'
+    ).bind(item.item_code, company_id).first<{ item_type: string | null; is_purchasable: number; is_sellable: number }>()
     if (!itemTypeCheck) throw new Error(`ITEM_NOT_FOUND:${item.item_code}`)
     if (itemTypeCheck.item_type === 'service') {
       throw new Error(`SERVICE_ITEM_NO_STOCK:${item.item_code}`)
     }
+    if ((mType === 'GRN' || mType === 'RETURN_SUPPLIER') && !itemTypeCheck.is_purchasable) {
+      throw new Error(`ITEM_NOT_PURCHASABLE:${item.item_code}`)
+    }
+    if (mType === 'RETURN_CUSTOMER' && !itemTypeCheck.is_sellable) {
+      throw new Error(`ITEM_NOT_SELLABLE:${item.item_code}`)
+    }
+    const batchItemIsNonStock = itemTypeCheck.item_type === 'non_stock'
 
     const movementDate = normalizeIsoDate(mDate)
     if (isFutureIsoDate(movementDate)) throw new Error(`FUTURE_DATE_NOT_ALLOWED:${item.item_code}`)
@@ -606,8 +632,10 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     const periodId = await getOpenPeriod(c.env.DB, company_id, movementDate)
     if (!periodId) throw new Error(`PERIOD_CLOSED:${movementDate}`)
 
-    const prev = await readInventoryBalance(c.env.DB, company_id, item.item_code, warehouseId)
-    if (!isInbound && item.quantity > prev.balance_qty) {
+    const prev = batchItemIsNonStock
+      ? { balance_qty: 0, balance_value: 0, version: 0 }
+      : await readInventoryBalance(c.env.DB, company_id, item.item_code, warehouseId)
+    if (!batchItemIsNonStock && !isInbound && item.quantity > prev.balance_qty) {
       throw new Error(`INSUFFICIENT_STOCK:${item.item_code} (Available: ${prev.balance_qty})`)
     }
 
@@ -655,7 +683,10 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
       movementDate, warehouseId, mType, docNum ?? null,
       item.batch_number ?? null, item.expiry_date ?? null,
       item.pack_capacity ?? null, item.pack_count ?? null, item.quantity, unitPrice,
-      qtyIn, qtyOut, prev.balance_qty + qtyIn - qtyOut, valueIn, valueOut, prev.balance_value + valueIn - valueOut,
+      qtyIn, qtyOut,
+      batchItemIsNonStock ? 0 : prev.balance_qty + qtyIn - qtyOut,
+      valueIn, valueOut,
+      batchItemIsNonStock ? 0 : prev.balance_value + valueIn - valueOut,
       notes ?? null, statementText, serviceTypeCode, ym.year, ym.month, userId, localId,
       movementValue === 0 ? (item.zero_value_reason ?? b.notes) : null,
       movementValue === 0 ? role : null,
@@ -667,7 +698,9 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     const movId = Number(insertRes.meta.last_row_id)
     results.push(movId)
 
-    await upsertInventoryBalance(c.env.DB, company_id, item.item_code, warehouseId, prev.balance_qty + qtyIn - qtyOut, prev.balance_value + valueIn - valueOut, movId, prev.version)
+    if (!batchItemIsNonStock) {
+      await upsertInventoryBalance(c.env.DB, company_id, item.item_code, warehouseId, prev.balance_qty + qtyIn - qtyOut, prev.balance_value + valueIn - valueOut, movId, prev.version)
+    }
 
     if (movementValue > 0) {
       const itemRow = await c.env.DB.prepare('SELECT name FROM items WHERE code = ? AND company_id = ?').bind(item.item_code, company_id).first<{name:string}>()

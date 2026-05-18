@@ -402,6 +402,9 @@ operations.patch('/orders/:id/status', async (c) => {
 
         // ── WIP dual-write: non-blocking side-effect after GL is committed ──
         // GL already posted above; WIP errors must never roll back the status transition.
+        if (!order?.crop_cycle_id) {
+          console.warn(`WIP_SKIP: work_order=${id} transitioned to COSTED without crop_cycle_id — costs not written to WIP ledger`)
+        }
         if (order?.crop_cycle_id && order.season_id) {
           const glId = typeof entryId === 'number' ? entryId : null
           if (laborCost > 0) {

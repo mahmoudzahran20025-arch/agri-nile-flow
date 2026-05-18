@@ -83,6 +83,19 @@ adjustments.put('/adjustments/:id/lines', permissionGuard('inventory', 'create')
     'DELETE FROM inventory_adjustment_lines WHERE adjustment_id = ?'
   ).bind(adj.id).run()
 
+  // Validate item types — service and non_stock items have no perpetual balance
+  const itemCodes = b.lines.map((l) => Number(l.item_code))
+  const placeholders = itemCodes.map(() => '?').join(',')
+  const { results: itemTypes } = await c.env.DB.prepare(
+    `SELECT code, item_type FROM items WHERE code IN (${placeholders}) AND company_id = ?`
+  ).bind(...itemCodes, company_id).all<{ code: number; item_type: string | null }>()
+  const typeMap = new Map(itemTypes.map(r => [r.code, r.item_type]))
+  for (const code of itemCodes) {
+    const t = typeMap.get(code) ?? 'inventory'
+    if (t === 'service') return c.json({ success: false, error: `الصنف #${code} نوع خدمة ولا يدخل في الجرد`, code: 'SERVICE_ITEM_NO_STOCK' }, 422)
+    if (t === 'non_stock') return c.json({ success: false, error: `الصنف #${code} غير مخزني ولا يدخل في الجرد`, code: 'NON_STOCK_ITEM_NO_ADJUSTMENT' }, 422)
+  }
+
   const lineStmts = b.lines.map((l) => {
     const theoreticalQty = Number(l.theoretical_qty ?? 0)
     const countedQty = Number(l.counted_qty ?? 0)
@@ -158,6 +171,12 @@ adjustments.post('/adjustments/:id/post', permissionGuard('inventory', 'create')
 
   for (const l of lines) {
     if (l.difference === 0) continue
+
+    // Skip non-inventory items (guards already applied at line-save time, but re-check defensively)
+    const lineItemType = await c.env.DB.prepare(
+      'SELECT item_type FROM items WHERE code = ? AND company_id = ?'
+    ).bind(l.item_code, company_id).first<{ item_type: string | null }>()
+    if (lineItemType?.item_type === 'service' || lineItemType?.item_type === 'non_stock') continue
 
     const movementType = l.difference > 0 ? 'ADJUSTMENT_PROFIT' : 'ADJUSTMENT_LOSS'
     const absQty = Math.abs(l.difference)
