@@ -267,14 +267,15 @@ async function allocateDepreciationToWIP(
   let shares: CycleShare[] = []
 
   if (resolvedMethod === 'machine_hours') {
-    // Sum hours logged in work_orders or wip_ledger allocation_share for this asset
+    // Sum actual hours logged in work_order_equipment for this fixed asset, grouped by crop cycle
+    // (work_orders carry crop_cycle_id; join through to sum hours per cycle)
     const { results: hours } = await db.prepare(`
-      SELECT wl.crop_cycle_id AS id, SUM(wl.allocation_share) AS total_hours
-      FROM wip_ledger wl
-      WHERE wl.company_id = ? AND wl.source_id = ? AND wl.source_module = 'assets'
-        AND wl.allocation_method = 'machine_hours'
-        AND wl.crop_cycle_id IN (${cycles.map(() => '?').join(',')})
-      GROUP BY wl.crop_cycle_id
+      SELECT wo.crop_cycle_id AS id, SUM(woe.hours_worked) AS total_hours
+      FROM work_order_equipment woe
+      JOIN work_orders wo ON wo.id = woe.work_order_id AND wo.company_id = woe.company_id
+      WHERE woe.company_id = ? AND woe.fixed_asset_id = ?
+        AND wo.crop_cycle_id IN (${cycles.map(() => '?').join(',')})
+      GROUP BY wo.crop_cycle_id
     `).bind(company_id, asset_id, ...cycles.map(c => c.id)).all<{ id: number; total_hours: number }>()
 
     const hourMap = Object.fromEntries(hours.map(h => [h.id, h.total_hours]))

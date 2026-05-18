@@ -815,11 +815,15 @@ config.post('/items/bulk-import', async (c) => {
       code:              number
       name:             string
       unit?:            string
+      base_unit?:       string
       reorder_threshold?: number
       category_id?:     number
       standard_cost?:   number
       package_type?:    string
       package_capacity?: number
+      item_type?:       string
+      is_sellable?:     number
+      is_purchasable?:  number
     }>
   }>()
 
@@ -845,18 +849,40 @@ config.post('/items/bulk-import', async (c) => {
         'SELECT code FROM items WHERE code = ? AND company_id = ?'
       ).bind(code, company_id).first()
 
+      const VALID_ITEM_TYPES = ['inventory', 'service', 'non_stock']
+      const itemType = row.item_type && VALID_ITEM_TYPES.includes(row.item_type)
+        ? row.item_type : 'inventory'
+
       await c.env.DB.prepare(
-        `INSERT OR REPLACE INTO items
-         (code, company_id, name, unit, reorder_threshold, category_id, standard_cost, package_type, package_capacity, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?, datetime('now'))`
+        `INSERT INTO items
+         (code, company_id, name, unit, base_unit, reorder_threshold, category_id, standard_cost,
+          package_type, package_capacity, item_type, is_sellable, is_purchasable, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'))
+         ON CONFLICT(code, company_id) DO UPDATE SET
+           name             = excluded.name,
+           unit             = COALESCE(excluded.unit, unit),
+           base_unit        = COALESCE(excluded.base_unit, base_unit),
+           reorder_threshold = excluded.reorder_threshold,
+           category_id      = excluded.category_id,
+           standard_cost    = excluded.standard_cost,
+           package_type     = COALESCE(excluded.package_type, package_type),
+           package_capacity = COALESCE(excluded.package_capacity, package_capacity),
+           item_type        = excluded.item_type,
+           is_sellable      = excluded.is_sellable,
+           is_purchasable   = excluded.is_purchasable,
+           updated_at       = datetime('now')`
       ).bind(
         code, company_id, row.name.trim(),
         row.unit?.trim() || null,
+        row.base_unit?.trim() || null,
         row.reorder_threshold ?? 0,
         row.category_id ?? null,
         row.standard_cost ?? null,
         row.package_type?.trim() || null,
         row.package_capacity ?? null,
+        itemType,
+        row.is_sellable ?? 1,
+        row.is_purchasable ?? 1,
       ).run()
 
       if (existing) updated++; else inserted++
