@@ -93,7 +93,8 @@ const SeasonsPage              = lazy(() => import('./pages/fields/SeasonsPage')
 const HarvestPage              = lazy(() => import('./pages/fields/HarvestPage'))
 const CropCyclesPage           = lazy(() => import('./pages/fields/CropCyclesPage'))
 const CropCycleDetailPage      = lazy(() => import('./pages/fields/CropCycleDetailPage'))
-const HarvestSettlementPage    = lazy(() => import('./pages/fields/HarvestSettlementPage'))
+const HarvestSettlementPage      = lazy(() => import('./pages/fields/HarvestSettlementPage'))
+const HarvestSettlementsListPage = lazy(() => import('./pages/fields/HarvestSettlementsListPage'))
 const WorkOrdersPage           = lazy(() => import('./pages/operations/WorkOrdersPage'))
 const WorkOrderTemplatesPage   = lazy(() => import('./pages/operations/WorkOrderTemplatesPage'))
 const ContractsPage            = lazy(() => import('./pages/contracts/ContractsPage'))
@@ -218,7 +219,8 @@ export default function App() {
         <Route path="fields/harvest"            element={<HarvestPage />} />
         <Route path="fields/crop-cycles"        element={<CropCyclesPage />} />
         <Route path="fields/crop-cycles/:id"    element={<CropCycleDetailPage />} />
-        <Route path="fields/harvest-settlement" element={<HarvestSettlementPage />} />
+        <Route path="fields/harvest-settlement"  element={<HarvestSettlementPage />} />
+        <Route path="fields/harvest-settlements" element={<HarvestSettlementsListPage />} />
         <Route path="operations" element={<WorkOrdersPage />} />
         <Route path="operations/templates" element={<WorkOrderTemplatesPage />} />
         <Route path="contracts"  element={<ContractsPage />} />

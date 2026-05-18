@@ -75,4 +75,9 @@ export const harvestSettlementsApi = {
 
   post: (id: number) =>
     unwrap<{ id: number; status: string }>(api.post(`/harvest-settlements/${id}/post`, {})),
+
+  reverse: (id: number, body?: { reason?: string; reversal_date?: string }) =>
+    unwrap<{ id: number; status: string; crop_cycle_id: number }>(
+      api.post(`/harvest-settlements/${id}/reverse`, body ?? {})
+    ),
 }

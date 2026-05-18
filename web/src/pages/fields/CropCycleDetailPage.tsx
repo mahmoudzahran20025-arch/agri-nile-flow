@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, AlertTriangle, TrendingUp, Layers, Calendar, Wheat } from 'lucide-react'
+import { ArrowRight, AlertTriangle, TrendingUp, Layers, Calendar, Wheat, CheckCircle, RotateCcw, Plus } from 'lucide-react'
 import { cropCyclesApi, type WIPCategory, type CycleStatus } from '../../api/crop-cycles'
 import { costCategoriesApi } from '../../api/cost-categories'
+import { harvestSettlementsApi } from '../../api/harvest-settlements'
 import { useToast } from '../../contexts/ToastContext'
 import { TableSkeleton } from '../../components/ui/Skeleton'
 import { useAppStore } from '../../store/appStore'
@@ -45,7 +46,22 @@ export default function CropCycleDetailPage() {
 
   const [statusModal, setStatusModal] = useState<'abandoned' | 'written_off' | null>(null)
   const [statusNotes, setStatusNotes] = useState('')
-  const [activeTab, setActiveTab] = useState<'ledger' | 'summary'>('ledger')
+  const [activeTab, setActiveTab] = useState<'ledger' | 'summary' | 'settlements'>('ledger')
+  const [showNewSettlement, setShowNewSettlement] = useState(false)
+  const [newSettlementForm, setNewSettlementForm] = useState<{
+    disposition: 'stored' | 'sold'
+    settlement_date: string
+    qty_tons: string
+    inventory_value: string
+    revenue: string
+    buyer_name: string
+    notes: string
+  }>({
+    disposition: 'stored', settlement_date: '', qty_tons: '',
+    inventory_value: '', revenue: '', buyer_name: '', notes: '',
+  })
+  const [reverseSettlementId, setReverseSettlementId] = useState<number | null>(null)
+  const [reverseReason, setReverseReason] = useState('')
 
   const { data: cycle, isLoading } = useQuery({
     queryKey: ['crop-cycle', cycleId],
@@ -56,6 +72,12 @@ export default function CropCycleDetailPage() {
     queryKey: ['crop-cycle-wip', cycleId],
     queryFn: () => cropCyclesApi.wipSummary(cycleId),
     enabled: activeTab === 'summary',
+  })
+
+  const { data: settlements, isLoading: settlementsLoading } = useQuery({
+    queryKey: ['harvest-settlements', cycleId],
+    queryFn: () => harvestSettlementsApi.list({ crop_cycle_id: cycleId }),
+    enabled: activeTab === 'settlements',
   })
 
   const { data: costCats } = useQuery({
@@ -101,6 +123,45 @@ export default function CropCycleDetailPage() {
       toast(`تم شطب الدورة${wipMsg}`, 'success')
       setStatusModal(null)
       setStatusNotes('')
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  })
+
+  const createSettlementMut = useMutation({
+    mutationFn: async () => {
+      const f = newSettlementForm
+      const draft = await harvestSettlementsApi.create({
+        crop_cycle_id:    cycleId,
+        disposition:      f.disposition,
+        settlement_date:  f.settlement_date || undefined,
+        qty_tons:         f.qty_tons ? Number(f.qty_tons) : undefined,
+        inventory_value:  f.inventory_value ? Number(f.inventory_value) : undefined,
+        revenue:          f.revenue ? Number(f.revenue) : undefined,
+        buyer_name:       f.buyer_name || undefined,
+        notes:            f.notes || undefined,
+      })
+      return harvestSettlementsApi.post(draft.id)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['harvest-settlements', cycleId] })
+      qc.invalidateQueries({ queryKey: ['crop-cycle', cycleId] })
+      qc.invalidateQueries({ queryKey: ['crop-cycles'] })
+      toast('تم ترحيل تسوية الحصاد بنجاح', 'success')
+      setShowNewSettlement(false)
+      setNewSettlementForm({ disposition: 'stored', settlement_date: '', qty_tons: '', inventory_value: '', revenue: '', buyer_name: '', notes: '' })
+    },
+    onError: (e: Error) => toast(e.message, 'error'),
+  })
+
+  const reverseSettlementMut = useMutation({
+    mutationFn: (id: number) => harvestSettlementsApi.reverse(id, { reason: reverseReason || undefined }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['harvest-settlements', cycleId] })
+      qc.invalidateQueries({ queryKey: ['crop-cycle', cycleId] })
+      qc.invalidateQueries({ queryKey: ['crop-cycles'] })
+      toast('تم عكس التسوية بنجاح', 'success')
+      setReverseSettlementId(null)
+      setReverseReason('')
     },
     onError: (e: Error) => toast(e.message, 'error'),
   })
@@ -239,7 +300,7 @@ export default function CropCycleDetailPage() {
 
       {/* Tabs */}
       <div className="flex border-b border-slate-200">
-        {(['ledger', 'summary'] as const).map(tab => (
+        {(['ledger', 'summary', 'settlements'] as const).map(tab => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -249,7 +310,7 @@ export default function CropCycleDetailPage() {
                 : 'border-transparent text-slate-500 hover:text-slate-700'
             }`}
           >
-            {tab === 'ledger' ? 'دفتر WIP' : 'ملخص التكاليف'}
+            {tab === 'ledger' ? 'دفتر WIP' : tab === 'summary' ? 'ملخص التكاليف' : 'تسويات الحصاد'}
           </button>
         ))}
       </div>
@@ -415,6 +476,215 @@ export default function CropCycleDetailPage() {
               )}
             </>
           )}
+        </div>
+      )}
+
+      {/* Settlements tab */}
+      {activeTab === 'settlements' && (
+        <div className="space-y-4">
+          {/* Action bar */}
+          {canWrite && cycle.status === 'active' && (
+            <div className="flex justify-end">
+              <button
+                onClick={() => setShowNewSettlement(true)}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-[#0F2D5C] text-white rounded-lg hover:bg-[#1a3f7a] transition-colors"
+              >
+                <Plus size={14} />
+                تسوية جديدة
+              </button>
+            </div>
+          )}
+
+          {settlementsLoading ? (
+            <TableSkeleton rows={4} cols={5} />
+          ) : !settlements || settlements.length === 0 ? (
+            <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
+              <CheckCircle size={36} className="mx-auto mb-3 text-slate-300" />
+              <p className="text-slate-500 font-medium">لا توجد تسويات حصاد بعد</p>
+              <p className="text-xs text-slate-400 mt-1">
+                {cycle.status === 'active'
+                  ? 'أضف تسوية لتحويل رصيد WIP إلى مخزون أو إيراد'
+                  : 'لا يمكن إضافة تسوية — الدورة ليست نشطة'}
+              </p>
+            </div>
+          ) : (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 border-b border-slate-200">
+                  <tr>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500">التاريخ</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500">التصرف</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500">تكلفة WIP</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500">الكميات</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500">الحالة</th>
+                    <th className="px-4 py-3" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {settlements.map(s => (
+                    <tr key={s.id} className="hover:bg-slate-50">
+                      <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{s.settlement_date}</td>
+                      <td className="px-4 py-3 text-slate-700">
+                        {s.disposition === 'stored' ? 'نقل إلى مخزون' : 'بيع مباشر'}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono text-slate-700">{fmt(s.total_wip_cost)}</td>
+                      <td className="px-4 py-3 text-right font-mono text-xs text-slate-500">
+                        {s.qty_tons != null ? `${s.qty_tons} طن` : '—'}
+                        {s.cost_per_ton != null && ` · ${fmt(s.cost_per_ton)} ج.م/طن`}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                          s.status === 'posted'   ? 'bg-emerald-100 text-emerald-700' :
+                          s.status === 'reversed' ? 'bg-slate-100 text-slate-500' :
+                                                    'bg-amber-100 text-amber-700'
+                        }`}>
+                          {s.status === 'posted' ? 'مُرحَّل' : s.status === 'reversed' ? 'معكوس' : 'مسودة'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-left">
+                        {canWrite && s.status === 'posted' && (
+                          <button
+                            onClick={() => setReverseSettlementId(s.id)}
+                            className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-800 transition-colors"
+                          >
+                            <RotateCcw size={12} />
+                            عكس
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* New settlement modal */}
+      {showNewSettlement && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md mx-4 space-y-4">
+            <h2 className="text-lg font-bold text-slate-800">تسوية حصاد جديدة</h2>
+            <p className="text-xs text-slate-500">رصيد WIP الحالي: <span className="font-semibold text-slate-700">{fmt(cycle.wip_balance)} ج.م</span></p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">نوع التصرف</label>
+                <select
+                  value={newSettlementForm.disposition}
+                  onChange={e => setNewSettlementForm(f => ({ ...f, disposition: e.target.value as 'stored' | 'sold' }))}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F2D5C]"
+                >
+                  <option value="stored">نقل إلى مخزون</option>
+                  <option value="sold">بيع مباشر</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">تاريخ التسوية</label>
+                <input type="date" value={newSettlementForm.settlement_date}
+                  onChange={e => setNewSettlementForm(f => ({ ...f, settlement_date: e.target.value }))}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F2D5C]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">الكمية (طن) — اختياري</label>
+                <input type="number" min="0" step="0.01" value={newSettlementForm.qty_tons}
+                  onChange={e => setNewSettlementForm(f => ({ ...f, qty_tons: e.target.value }))}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F2D5C]"
+                  placeholder="0.00"
+                />
+              </div>
+              {newSettlementForm.disposition === 'stored' ? (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">قيمة المخزون (ج.م)</label>
+                  <input type="number" min="0" step="0.01" value={newSettlementForm.inventory_value}
+                    onChange={e => setNewSettlementForm(f => ({ ...f, inventory_value: e.target.value }))}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F2D5C]"
+                    placeholder={fmt(cycle.wip_balance)}
+                  />
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">الإيراد (ج.م)</label>
+                    <input type="number" min="0" step="0.01" value={newSettlementForm.revenue}
+                      onChange={e => setNewSettlementForm(f => ({ ...f, revenue: e.target.value }))}
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F2D5C]"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">اسم المشتري — اختياري</label>
+                    <input type="text" value={newSettlementForm.buyer_name}
+                      onChange={e => setNewSettlementForm(f => ({ ...f, buyer_name: e.target.value }))}
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F2D5C]"
+                    />
+                  </div>
+                </>
+              )}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">ملاحظات — اختياري</label>
+                <textarea value={newSettlementForm.notes}
+                  onChange={e => setNewSettlementForm(f => ({ ...f, notes: e.target.value }))}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F2D5C] resize-none"
+                  rows={2}
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 justify-end pt-2">
+              <button
+                onClick={() => setShowNewSettlement(false)}
+                className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={() => createSettlementMut.mutate()}
+                disabled={createSettlementMut.isPending}
+                className="px-4 py-2 text-sm bg-[#0F2D5C] text-white rounded-lg font-medium hover:bg-[#1a3f7a] disabled:opacity-50 transition-colors"
+              >
+                {createSettlementMut.isPending ? 'جاري الترحيل...' : 'إنشاء وترحيل'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reverse settlement modal */}
+      {reverseSettlementId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md mx-4 space-y-4">
+            <h2 className="text-lg font-bold text-slate-800">عكس تسوية الحصاد</h2>
+            <p className="text-sm text-slate-500">
+              سيتم عكس القيود المحاسبية وإعادة رصيد WIP إلى الدورة. ستعود الدورة إلى حالة "نشطة".
+            </p>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">سبب العكس — اختياري</label>
+              <textarea value={reverseReason}
+                onChange={e => setReverseReason(e.target.value)}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0F2D5C] resize-none"
+                rows={2}
+                placeholder="سبب عكس التسوية..."
+              />
+            </div>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => { setReverseSettlementId(null); setReverseReason('') }}
+                className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={() => reverseSettlementMut.mutate(reverseSettlementId)}
+                disabled={reverseSettlementMut.isPending}
+                className="px-4 py-2 text-sm bg-amber-600 text-white rounded-lg font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors"
+              >
+                {reverseSettlementMut.isPending ? 'جاري العكس...' : 'تأكيد العكس'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

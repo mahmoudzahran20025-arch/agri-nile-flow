@@ -269,4 +269,109 @@ hs.post('/:id/post', async (c) => {
   }
 })
 
+// ── POST /api/harvest-settlements/:id/reverse — reverse a posted settlement ───
+hs.post('/:id/reverse', async (c) => {
+  const { company_id, sub: user_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const b: { reason?: string; reversal_date?: string } = await c.req.json<{ reason?: string; reversal_date?: string }>().catch(() => ({}))
+
+  const settlement = await c.env.DB.prepare(`
+    SELECT hs.*, cc.season_id, cc.crop_name, cc.status AS cycle_status,
+           cc.field_id, cc.center_code
+    FROM harvest_settlements hs
+    JOIN crop_cycles cc ON cc.id = hs.crop_cycle_id AND cc.company_id = hs.company_id
+    WHERE hs.id = ? AND hs.company_id = ?
+  `).bind(id, company_id).first<{
+    id: number; crop_cycle_id: number; season_id: number
+    disposition: 'stored' | 'sold'; settlement_mode: 'inventory' | 'direct_sale' | null
+    total_wip_cost: number; inventory_value: number | null; revenue: number | null
+    settlement_date: string; status: string; crop_name: string
+    cycle_status: string; field_id: number | null; center_code: number | null
+    wip_gl_entry_id: number | null; inventory_gl_entry_id: number | null
+    cogs_gl_entry_id: number | null; revenue_gl_entry_id: number | null
+  }>()
+
+  if (!settlement) return c.json({ success: false, error: 'التسوية غير موجودة' }, 404)
+  if (settlement.status !== 'posted') {
+    return c.json({ success: false, error: `التسوية في حالة "${settlement.status}" — يجب أن تكون مُرحَّلة للعكس` }, 422)
+  }
+
+  const reversalDate = b.reversal_date ?? getTodayIsoDate()
+  const cycleDesc    = settlement.crop_name ?? `دورة #${settlement.crop_cycle_id}`
+  try {
+    // Reverse each GL entry that was created by postHarvestSettlement.
+    // We use postManualReversal to flip DR↔CR on every original line.
+    const { postManualReversal } = await import('../lib/finance/index')
+
+    const reverseEntry = async (originalId: number | null, desc: string) => {
+      if (!originalId) return
+      const { results: origLines } = await c.env.DB.prepare(
+        `SELECT account_code, debit, credit, description, center_code, season_id, field_id
+         FROM journal_entry_lines WHERE journal_entry_id = ?`
+      ).bind(originalId).all<{
+        account_code: string; debit: number; credit: number; description: string | null
+        center_code: number | null; season_id: number | null; field_id: number | null
+      }>()
+      if (!origLines.length) return
+      await postManualReversal(c.env.DB, {
+        company_id,
+        original_entry_id: originalId,
+        ref_id: settlement.id,
+        date: reversalDate,
+        description: `عكس تسوية حصاد: ${cycleDesc} — ${desc}`,
+        created_by: user_id,
+        lines: origLines.map(l => ({
+          account_code: l.account_code,
+          debit:        l.credit,  // flip
+          credit:       l.debit,   // flip
+          description:  l.description ?? undefined,
+          center_code:  l.center_code ?? undefined,
+          season_id:    l.season_id ?? undefined,
+          field_id:     l.field_id ?? undefined,
+        })),
+      })
+    }
+
+    await reverseEntry(settlement.inventory_gl_entry_id, 'عكس نقل مخزون')
+    await reverseEntry(settlement.cogs_gl_entry_id,      'عكس تكلفة بضاعة')
+    await reverseEntry(settlement.revenue_gl_entry_id,   'عكس إيراد')
+
+    // Restore WIP: re-debit the WIP ledger by the original wipCost amount
+    const { postCostToWIP } = await import('../lib/finance_core')
+    await postCostToWIP({
+      db: c.env.DB, company_id,
+      crop_cycle_id:    settlement.crop_cycle_id,
+      season_id:        settlement.season_id,
+      cost_category:    'other',
+      debit:            settlement.total_wip_cost,
+      transaction_date: reversalDate,
+      description:      `استعادة WIP — عكس تسوية حصاد: ${cycleDesc}${b.reason ? ' — ' + b.reason : ''}`,
+      source_module:    'harvest',
+      source_id:        settlement.id,
+    })
+
+    // Flip settlement + crop cycle back to active
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        `UPDATE harvest_settlements SET status = 'reversed', updated_at = datetime('now') WHERE id = ? AND company_id = ?`
+      ).bind(id, company_id),
+      c.env.DB.prepare(
+        `UPDATE crop_cycles SET status = 'active', actual_harvest_date = NULL, updated_at = datetime('now')
+         WHERE id = ? AND company_id = ?`
+      ).bind(settlement.crop_cycle_id, company_id),
+    ])
+
+    await logAudit(c.env.DB, {
+      user_id, company_id,
+      action: 'UPDATE', table_name: 'harvest_settlements', record_id: id,
+      new_value: { status: 'reversed', reversal_date: reversalDate, reason: b.reason },
+    })
+
+    return c.json({ success: true, data: { id, status: 'reversed', crop_cycle_id: settlement.crop_cycle_id } })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return c.json({ success: false, error: `فشل عكس التسوية: ${msg}` }, 400)
+  }
+})
+
 export default hs

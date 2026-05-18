@@ -1,9 +1,11 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { assetsApi, type FixedAsset } from '../../api/assets'
 import { configApi, fieldsApi } from '../../api/client'
+import { glApi } from '../../api/client'
 import { cropCyclesApi } from '../../api/crop-cycles'
-import { ChevronRight, Play, PlusCircle, Settings2 } from 'lucide-react'
+import { ChevronRight, Play, PlusCircle, Settings2, TrendingDown, CheckCircle, AlertTriangle, RefreshCw } from 'lucide-react'
 
 const CATEGORY_LABELS: Record<string, string> = {
   equipment:        'معدات',
@@ -293,9 +295,24 @@ export default function FixedAssetsPage() {
     queryFn: assetsApi.list,
   })
 
+  const currentYear  = new Date().getFullYear()
+  const currentMonth = new Date().getMonth() + 1
+  const [depYear,  setDepYear]  = useState(currentYear)
+  const [depMonth, setDepMonth] = useState(currentMonth)
+  const [depResult, setDepResult] = useState<{ posted: number; skipped: number; total_charge: number } | null>(null)
+  const [depError,  setDepError]  = useState<string | null>(null)
+  const [showDepPanel, setShowDepPanel] = useState(false)
+
+  const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
+
   const runMut = useMutation({
-    mutationFn: assetsApi.runDepreciation,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['assets'] }),
+    mutationFn: () => glApi.runDepreciation(depYear, depMonth),
+    onSuccess: (res) => {
+      setDepResult({ posted: res.posted, skipped: res.skipped, total_charge: res.total_charge })
+      setDepError(null)
+      qc.invalidateQueries({ queryKey: ['assets'] })
+    },
+    onError: (e: Error) => { setDepError(e.message); setDepResult(null) },
   })
 
   const assets = data ?? []
@@ -311,10 +328,10 @@ export default function FixedAssetsPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => runMut.mutate()} disabled={runMut.isPending}
-            className="flex items-center gap-2 px-4 py-2 border border-[#0F2D5C] text-[#0F2D5C] rounded-lg text-sm hover:bg-[#0F2D5C]/5 disabled:opacity-50">
-            <Play className="w-4 h-4" />
-            {runMut.isPending ? 'جاري الترحيل...' : 'ترحيل إهلاك الشهر'}
+          <button onClick={() => setShowDepPanel(v => !v)}
+            className="flex items-center gap-2 px-4 py-2 border border-[#0F2D5C] text-[#0F2D5C] rounded-lg text-sm hover:bg-[#0F2D5C]/5">
+            <TrendingDown className="w-4 h-4" />
+            تشغيل الإهلاك
           </button>
           <button onClick={() => setShowAdd(true)}
             className="flex items-center gap-2 px-4 py-2 bg-[#0F2D5C] text-white rounded-lg text-sm">
@@ -324,10 +341,52 @@ export default function FixedAssetsPage() {
         </div>
       </div>
 
-      {runMut.data && (
-        <div className={`p-3 rounded-lg text-sm ${runMut.data.errors?.length ? 'bg-yellow-50 border border-yellow-200' : 'bg-green-50 border border-green-200'}`}>
-          تم ترحيل {runMut.data.posted} أصل · تخطي {runMut.data.skipped}
-          {runMut.data.errors?.length > 0 && <span className="text-red-600"> · {runMut.data.errors.length} خطأ</span>}
+      {/* Depreciation run panel */}
+      {showDepPanel && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <TrendingDown size={15} className="text-[#0F2D5C]" />
+              <h2 className="text-sm font-semibold text-slate-800">تشغيل دورة الإهلاك</h2>
+            </div>
+            <Link to="/gl/depreciation" className="text-xs text-blue-600 hover:underline">جدول مفصّل ←</Link>
+          </div>
+          <div className="flex flex-wrap gap-3 items-end">
+            <div className="space-y-1">
+              <label className="text-xs text-slate-500 font-medium">السنة</label>
+              <select value={depYear} onChange={e => setDepYear(Number(e.target.value))}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                {[currentYear - 1, currentYear, currentYear + 1].map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-slate-500 font-medium">الشهر</label>
+              <select value={depMonth} onChange={e => setDepMonth(Number(e.target.value))}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                {MONTHS.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+              </select>
+            </div>
+            <button onClick={() => runMut.mutate()} disabled={runMut.isPending}
+              className="flex items-center gap-2 px-4 py-2 bg-[#0F2D5C] text-white rounded-lg text-sm font-medium disabled:opacity-50 hover:bg-[#1a3d6b] transition-colors">
+              {runMut.isPending
+                ? <><RefreshCw size={13} className="animate-spin" /> جارٍ الترحيل…</>
+                : <><Play size={13} /> تشغيل</>}
+            </button>
+          </div>
+          {depResult && (
+            <div className="flex items-start gap-3 bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3">
+              <CheckCircle size={14} className="text-emerald-600 shrink-0 mt-0.5" />
+              <p className="text-sm text-emerald-800">
+                {depResult.posted} أصل مُرحَّل · {depResult.skipped} محذوف مسبقاً · إجمالي {formatEGP(depResult.total_charge)} ج.م
+              </p>
+            </div>
+          )}
+          {depError && (
+            <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+              <AlertTriangle size={14} className="text-red-500 shrink-0 mt-0.5" />
+              <p className="text-sm text-red-700">{depError}</p>
+            </div>
+          )}
         </div>
       )}
 
