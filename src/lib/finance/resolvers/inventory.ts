@@ -132,7 +132,7 @@ export async function resolveInventoryMovement(
         season_id:          opts.season_id,
         transaction_date:   opts.date,
         cost_category:      'materials',
-        cost_category_code: 'MATERIALS',
+        cost_category_code: 'materials',
         debit:              totalValue,
         description:        `مواد: ${opts.item_name}`,
         source_module:      'inventory',

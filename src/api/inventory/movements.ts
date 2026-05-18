@@ -559,7 +559,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
   const results: number[] = []
   const controls = await getInventoryPostingControls(c.env.DB, company_id)
 
-  for (const item of items) {
+  for (const [idx, item] of items.entries()) {
     // Resolve fields: use item-specific value OR fallback to header value
     const mDate = item.movement_date ?? b.movement_date
     const mType = item.movement_type ?? b.movement_type
@@ -594,7 +594,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     const movementValue = item.quantity * unitPrice
     validateZeroValuePolicy(controls, role, movementValue, item.zero_value_reason ?? b.notes)
 
-    const localId = `inv_batch_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`
+    const localId = `inv_batch_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 9)}`
     const ym = yearMonthParts(movementDate)
     const transactionId = Math.floor(Date.now() / 1000) * 1000 + Math.floor(Math.random() * 1000)
 

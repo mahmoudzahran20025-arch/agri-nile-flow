@@ -105,7 +105,7 @@ interface EditForm {
   inv_posting_group_code:  string
   standard_cost:           string
   reorder_threshold:       string
-  costing_method:          'moving_average' | 'standard' | 'fifo' | ''
+  costing_method:          'moving_average' | ''
   track_lots:              boolean
   cogs_account_override:   string
   base_unit:               string
@@ -117,7 +117,7 @@ function AccountingEditModal({
   item, onClose,
 }: {
   item: ItemMaster & {
-    costing_method?:        'moving_average' | 'standard' | 'fifo' | null
+    costing_method?:        'moving_average' | null
     track_lots?:            number | null
     cogs_account_override?: string | null
   }
@@ -250,13 +250,7 @@ function AccountingEditModal({
             <select className="input" value={form.costing_method}
               onChange={e => set('costing_method', e.target.value as EditForm['costing_method'])}>
               <option value="moving_average">متوسط متحرك (Moving Average)</option>
-              <option value="standard">تكلفة معيارية — غير مفعّلة حالياً</option>
-              <option value="fifo">FIFO — غير مفعّل حالياً</option>
             </select>
-            <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
-              <span>⚠</span>
-              النظام يحسب دائماً بالمتوسط المتحرك بصرف النظر عن الاختيار
-            </p>
           </div>
           <div className="flex flex-col justify-center">
             <label className="label">تتبع الدُفعات (Lot Tracking)</label>

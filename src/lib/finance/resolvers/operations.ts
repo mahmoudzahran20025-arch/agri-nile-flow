@@ -81,7 +81,7 @@ export async function resolveWorkOrderLabor(
         season_id:          opts.season_id,
         transaction_date:   opts.date,
         cost_category:      'labor',
-        cost_category_code: 'LABOR',
+        cost_category_code: 'labor',
         debit:              opts.amount,
         description:        `عمالة: ${opts.description}`,
         source_module:      'operations',

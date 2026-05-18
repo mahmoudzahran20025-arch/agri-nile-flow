@@ -258,6 +258,7 @@ governance.get('/items-master', permissionGuard('inventory', 'read'), async (c) 
        i.package_capacity,
        i.category_id,
        i.prod_posting_group_code,
+       i.inv_posting_group_code,
        i.standard_cost,
        i.reorder_threshold,
        ic.name AS category_name,

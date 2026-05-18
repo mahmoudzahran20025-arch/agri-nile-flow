@@ -190,6 +190,7 @@ export default function ItemCreatePage() {
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
                 </select>
+                <p className="text-xs text-slate-400 mt-1">للتجميع والتصفية فقط — لا تؤثر على الترحيل المحاسبي</p>
               </div>
 
               <div>
