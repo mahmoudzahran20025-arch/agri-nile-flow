@@ -989,11 +989,13 @@ config.get('/company-settings', async (c) => {
       vat_pct: number; vat_number: string | null; vat_registered: number
     }>(),
     c.env.DB.prepare(
-      `SELECT posting_mode, zero_value_require_reason, zero_value_approval_roles, locked_through_date
+      `SELECT posting_mode, zero_value_require_reason, zero_value_approval_roles,
+              locked_through_date, allow_negative_stock
        FROM inventory_posting_controls WHERE company_id = ?`
     ).bind(company_id).first<{
       posting_mode: string | null; zero_value_require_reason: number | null
       zero_value_approval_roles: string | null; locked_through_date: string | null
+      allow_negative_stock: number | null
     }>(),
   ])
 
@@ -1004,6 +1006,7 @@ config.get('/company-settings', async (c) => {
       controls: controls ?? {
         posting_mode: 'auto', zero_value_require_reason: 0,
         zero_value_approval_roles: null, locked_through_date: null,
+        allow_negative_stock: 0,
       },
     },
   })
@@ -1024,6 +1027,7 @@ config.patch('/company-settings', async (c) => {
     zero_value_require_reason?: 0 | 1
     zero_value_approval_roles?: string | null
     locked_through_date?:       string | null
+    allow_negative_stock?:      0 | 1
   }>()
 
   const companySets: string[] = []
@@ -1042,32 +1046,38 @@ config.patch('/company-settings', async (c) => {
 
   const hasControls = b.posting_mode !== undefined || b.zero_value_require_reason !== undefined
     || 'zero_value_approval_roles' in b || 'locked_through_date' in b
+    || b.allow_negative_stock !== undefined
 
   if (hasControls) {
     const current = await c.env.DB.prepare(
-      `SELECT posting_mode, zero_value_require_reason, zero_value_approval_roles, locked_through_date
+      `SELECT posting_mode, zero_value_require_reason, zero_value_approval_roles,
+              locked_through_date, allow_negative_stock
        FROM inventory_posting_controls WHERE company_id = ?`
     ).bind(company_id).first<{
       posting_mode: string; zero_value_require_reason: number
       zero_value_approval_roles: string | null; locked_through_date: string | null
+      allow_negative_stock: number
     }>()
 
-    const postingMode   = b.posting_mode              ?? current?.posting_mode              ?? 'auto'
-    const requireReason = b.zero_value_require_reason ?? current?.zero_value_require_reason ?? 0
-    const approvalRoles = 'zero_value_approval_roles' in b ? (b.zero_value_approval_roles ?? null) : (current?.zero_value_approval_roles ?? null)
-    const lockedThrough = 'locked_through_date'        in b ? (b.locked_through_date        ?? null) : (current?.locked_through_date        ?? null)
+    const postingMode       = b.posting_mode              ?? current?.posting_mode              ?? 'auto'
+    const requireReason     = b.zero_value_require_reason ?? current?.zero_value_require_reason ?? 0
+    const approvalRoles     = 'zero_value_approval_roles' in b ? (b.zero_value_approval_roles ?? null) : (current?.zero_value_approval_roles ?? null)
+    const lockedThrough     = 'locked_through_date'        in b ? (b.locked_through_date        ?? null) : (current?.locked_through_date        ?? null)
+    const allowNegativeStock = b.allow_negative_stock      ?? current?.allow_negative_stock      ?? 0
 
     await c.env.DB.prepare(
       `INSERT INTO inventory_posting_controls
-         (company_id, posting_mode, zero_value_require_reason, zero_value_approval_roles, locked_through_date, updated_at)
-         VALUES (?, ?, ?, ?, ?, datetime('now'))
+         (company_id, posting_mode, zero_value_require_reason, zero_value_approval_roles,
+          locked_through_date, allow_negative_stock, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
        ON CONFLICT(company_id) DO UPDATE SET
          posting_mode = excluded.posting_mode,
          zero_value_require_reason = excluded.zero_value_require_reason,
          zero_value_approval_roles = excluded.zero_value_approval_roles,
          locked_through_date = excluded.locked_through_date,
+         allow_negative_stock = excluded.allow_negative_stock,
          updated_at = excluded.updated_at`
-    ).bind(company_id, postingMode, requireReason, approvalRoles, lockedThrough).run()
+    ).bind(company_id, postingMode, requireReason, approvalRoles, lockedThrough, allowNegativeStock).run()
   }
 
   void logAudit(c.env.DB, {

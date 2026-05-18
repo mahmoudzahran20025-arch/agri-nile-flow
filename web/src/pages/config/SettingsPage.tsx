@@ -18,6 +18,7 @@ interface CompanySettings {
     zero_value_require_reason: number | null
     zero_value_approval_roles: string | null
     locked_through_date:       string | null
+    allow_negative_stock:      number | null
   }
 }
 
@@ -27,6 +28,7 @@ const patchSettings = (body: Partial<{
   vat_pct: number; vat_number: string | null; vat_registered: 0 | 1
   posting_mode: string; zero_value_require_reason: 0 | 1
   zero_value_approval_roles: string | null; locked_through_date: string | null
+  allow_negative_stock: 0 | 1
 }>) => unwrap(api.patch<{ success: boolean }>('/config/company-settings', body))
 
 type Tab = 'company' | 'vat' | 'inventory' | 'lock' | 'health'
@@ -67,6 +69,7 @@ export default function SettingsPage() {
     posting_mode: 'auto',
     zero_value_require_reason: false,
     zero_value_approval_roles: '',
+    allow_negative_stock: false,
   })
   // Lock date
   const [lockForm, setLock] = useState({ locked_through_date: '' })
@@ -83,6 +86,7 @@ export default function SettingsPage() {
       posting_mode:              ctrl.posting_mode              ?? 'auto',
       zero_value_require_reason: ctrl.zero_value_require_reason === 1,
       zero_value_approval_roles: ctrl.zero_value_approval_roles ?? '',
+      allow_negative_stock:      ctrl.allow_negative_stock === 1,
     })
     setLock({ locked_through_date: ctrl.locked_through_date ?? '' })
   }, [data])
@@ -116,6 +120,7 @@ export default function SettingsPage() {
       posting_mode:              invForm.posting_mode as 'auto' | 'manual' | 'batch',
       zero_value_require_reason: invForm.zero_value_require_reason ? 1 : 0,
       zero_value_approval_roles: invForm.zero_value_approval_roles.trim() || null,
+      allow_negative_stock:      invForm.allow_negative_stock ? 1 : 0,
       locked_through_date:       lockForm.locked_through_date || null,
     })
   }
@@ -325,6 +330,25 @@ export default function SettingsPage() {
                 dir="ltr"
               />
               <p className="text-xs text-slate-400 mt-1.5">مفصول بفاصلة — اتركه فارغاً لتطبيقه على الجميع</p>
+            </div>
+
+            <div className={`flex items-start gap-3 p-4 rounded-xl border ${invForm.allow_negative_stock ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+              <input
+                id="allow_negative_stock"
+                type="checkbox"
+                checked={invForm.allow_negative_stock}
+                onChange={e => setInv(p => ({ ...p, allow_negative_stock: e.target.checked }))}
+                className="rounded mt-0.5"
+              />
+              <div>
+                <label htmlFor="allow_negative_stock" className={`text-sm font-medium cursor-pointer block mb-0.5 ${invForm.allow_negative_stock ? 'text-red-700' : 'text-slate-700'}`}>
+                  السماح بالمخزون السالب
+                </label>
+                <p className="text-xs text-slate-400">
+                  عند التفعيل يمكن بيع كميات تتجاوز الرصيد المتاح.
+                  {invForm.allow_negative_stock && <span className="text-red-500 font-medium"> تحذير: قد يؤدي إلى تباين في التقارير المالية.</span>}
+                </p>
+              </div>
             </div>
           </div>
         )}
