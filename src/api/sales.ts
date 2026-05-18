@@ -28,6 +28,7 @@ import { getUser, permissionGuard } from '../middleware/auth'
 import { normalizeIsoDate, isFutureIsoDate } from '../lib/utils/date'
 import { resolveSalesRevenue as buildSalesRevenueBlueprint, resolveControlAccount } from '../lib/posting_engine'
 import { postFromBusinessEvent } from '../lib/finance'
+import { getCompanyConfig } from '../lib/company_config'
 
 const sales = new Hono<{ Bindings: Env }>()
 
@@ -71,11 +72,8 @@ sales.post('/', permissionGuard('inventory', 'create'), async (c) => {
   ).bind(b.warehouse_id, company_id).first<{ id: number; name: string }>()
   if (!warehouse) return c.json({ success: false, error: 'المخزن غير موجود أو غير نشط' }, 422)
 
-  // Fetch company VAT settings
-  const company = await c.env.DB.prepare(
-    'SELECT vat_pct, vat_number, vat_registered FROM companies WHERE id = ?'
-  ).bind(company_id).first<{ vat_pct: number; vat_number: string | null; vat_registered: number }>()
-  const vatPct = company?.vat_pct ?? 0
+  const companyCfg = await getCompanyConfig(c.env.DB, company_id)
+  const vatPct = companyCfg.vat_pct
 
   // Resolve customer — default to WALKIN
   let customerId: number
@@ -307,7 +305,7 @@ sales.post('/', permissionGuard('inventory', 'create'), async (c) => {
       subtotal,
       tax_amount:     taxAmount,
       vat_pct:        vatPct,
-      vat_number:     company?.vat_number ?? null,
+      vat_number:     companyCfg.vat_number,
       movement_ids:   movementIds,
       gl_entry_id:    glEntryId,
     },

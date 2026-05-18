@@ -23,6 +23,7 @@ import { getUser, permissionGuard } from '../middleware/auth'
 import { normalizeIsoDate } from '../lib/utils/date'
 import { resolveSalesRevenue as buildSalesRevenueBlueprint, resolveControlAccount } from '../lib/posting_engine'
 import { postFromBusinessEvent } from '../lib/finance'
+import { getCompanyConfig } from '../lib/company_config'
 
 const pos = new Hono<{ Bindings: Env }>()
 
@@ -178,11 +179,8 @@ pos.post('/sales', permissionGuard('inventory', 'create'), async (c) => {
 
   const saleDate = normalizeIsoDate(new Date().toISOString().slice(0, 10))
 
-  // Fetch company VAT settings for tax calculation
-  const company = await c.env.DB.prepare(
-    'SELECT vat_pct, vat_number FROM companies WHERE id = ?'
-  ).bind(company_id).first<{ vat_pct: number; vat_number: string | null }>()
-  const vatPct = company?.vat_pct ?? 0
+  const companyCfg = await getCompanyConfig(c.env.DB, company_id)
+  const vatPct = companyCfg.vat_pct
 
   // Validate items and resolve prices
   const resolvedLines: Array<{
@@ -400,7 +398,7 @@ pos.post('/sales', permissionGuard('inventory', 'create'), async (c) => {
         subtotal,
         tax:       taxAmount,
         vat_pct:   vatPct,
-        vat_number: company?.vat_number ?? null,
+        vat_number: companyCfg.vat_number,
         total,
         tendered,
         change,

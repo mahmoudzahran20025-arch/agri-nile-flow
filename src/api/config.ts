@@ -3,6 +3,7 @@ import type { Env } from '../types'
 import { authMiddleware, getUser } from '../middleware/auth'
 import { FinanceCore } from '../lib/finance_core'
 import { logAudit } from '../lib/audit'
+import { getCompanyConfig, patchCompanyConfig } from '../lib/company_config'
 
 const config = new Hono<{ Bindings: Env }>()
 config.use('*', authMiddleware)
@@ -977,17 +978,11 @@ config.post('/suppliers/bulk-import', async (c) => {
 })
 
 // ── GET /api/config/company-settings ─────────────────────────────────────────
-// Returns company-level settings: VAT config + inventory posting controls.
 config.get('/company-settings', async (c) => {
   const { company_id } = getUser(c)
 
-  const [company, controls] = await Promise.all([
-    c.env.DB.prepare(
-      `SELECT name, address, phone, vat_pct, vat_number, vat_registered FROM companies WHERE id = ?`
-    ).bind(company_id).first<{
-      name: string; address: string | null; phone: string | null
-      vat_pct: number; vat_number: string | null; vat_registered: number
-    }>(),
+  const [cfg, controls] = await Promise.all([
+    getCompanyConfig(c.env.DB, company_id),
     c.env.DB.prepare(
       `SELECT posting_mode, zero_value_require_reason, zero_value_approval_roles,
               locked_through_date, allow_negative_stock, strict_po_matching
@@ -1002,7 +997,20 @@ config.get('/company-settings', async (c) => {
   return c.json({
     success: true,
     data: {
-      company:  company ?? null,
+      company: {
+        name:            cfg.name,
+        address:         cfg.address,
+        phone:           cfg.phone,
+        vat_pct:         cfg.vat_pct,
+        vat_number:      cfg.vat_number,
+        vat_registered:  cfg.vat_registered ? 1 : 0,
+        costing_method:  cfg.costing_method,
+        base_currency:   cfg.base_currency,
+        ar_locale:       cfg.ar_locale,
+        fiscal_year_start_month: cfg.fiscal_year_start_month,
+        approval_threshold_egp:  cfg.approval_threshold_egp,
+        enabled_modules:         cfg.enabled_modules,
+      },
       controls: controls ?? {
         posting_mode: 'auto', zero_value_require_reason: 0,
         zero_value_approval_roles: null, locked_through_date: null,
@@ -1017,12 +1025,21 @@ config.patch('/company-settings', async (c) => {
   const { company_id, sub: userId } = getUser(c)
 
   const b = await c.req.json<{
+    // Identity fields (direct company columns)
     name?:                      string
     address?:                   string | null
     phone?:                     string | null
+    // Config fields (routed through patchCompanyConfig)
     vat_pct?:                   number
     vat_number?:                string | null
     vat_registered?:            0 | 1
+    costing_method?:            'ACTUAL' | 'STANDARD' | 'MOVING_AVERAGE'
+    base_currency?:             string
+    fiscal_year_start_month?:   number
+    ar_locale?:                 string
+    approval_threshold_egp?:    number | null
+    enabled_modules?:           string[] | null
+    // Inventory controls (separate table — unchanged)
     posting_mode?:              'auto' | 'manual' | 'batch'
     zero_value_require_reason?: 0 | 1
     zero_value_approval_roles?: string | null
@@ -1031,19 +1048,29 @@ config.patch('/company-settings', async (c) => {
     strict_po_matching?:        0 | 1
   }>()
 
-  const companySets: string[] = []
-  const companyVals: unknown[] = []
-  if (b.name             !== undefined) { companySets.push('name = ?');           companyVals.push(b.name.trim()) }
-  if ('address'           in b)         { companySets.push('address = ?');         companyVals.push(b.address ?? null) }
-  if ('phone'             in b)         { companySets.push('phone = ?');           companyVals.push(b.phone ?? null) }
-  if (b.vat_pct          !== undefined) { companySets.push('vat_pct = ?');         companyVals.push(b.vat_pct) }
-  if ('vat_number'        in b)         { companySets.push('vat_number = ?');      companyVals.push(b.vat_number ?? null) }
-  if (b.vat_registered   !== undefined) { companySets.push('vat_registered = ?'); companyVals.push(b.vat_registered) }
-
-  if (companySets.length > 0) {
-    companyVals.push(company_id)
-    await c.env.DB.prepare(`UPDATE companies SET ${companySets.join(', ')} WHERE id = ?`).bind(...companyVals).run()
+  // Identity fields go directly to companies table
+  const identitySets: string[] = []
+  const identityVals: unknown[] = []
+  if (b.name    !== undefined) { identitySets.push('name = ?');    identityVals.push(b.name.trim()) }
+  if ('address'  in b)         { identitySets.push('address = ?'); identityVals.push(b.address ?? null) }
+  if ('phone'    in b)         { identitySets.push('phone = ?');   identityVals.push(b.phone ?? null) }
+  if (identitySets.length > 0) {
+    identityVals.push(company_id)
+    await c.env.DB.prepare(`UPDATE companies SET ${identitySets.join(', ')} WHERE id = ?`).bind(...identityVals).run()
   }
+
+  // Config fields go through the service
+  await patchCompanyConfig(c.env.DB, company_id, {
+    ...(b.vat_pct                !== undefined && { vat_pct: b.vat_pct }),
+    ...('vat_number'              in b          && { vat_number: b.vat_number }),
+    ...(b.vat_registered         !== undefined && { vat_registered: b.vat_registered === 1 }),
+    ...(b.costing_method         !== undefined && { costing_method: b.costing_method }),
+    ...(b.base_currency          !== undefined && { base_currency: b.base_currency }),
+    ...(b.fiscal_year_start_month !== undefined && { fiscal_year_start_month: b.fiscal_year_start_month }),
+    ...(b.ar_locale              !== undefined && { ar_locale: b.ar_locale }),
+    ...('approval_threshold_egp'  in b          && { approval_threshold_egp: b.approval_threshold_egp }),
+    ...('enabled_modules'         in b          && { enabled_modules: b.enabled_modules }),
+  })
 
   const hasControls = b.posting_mode !== undefined || b.zero_value_require_reason !== undefined
     || 'zero_value_approval_roles' in b || 'locked_through_date' in b
