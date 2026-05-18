@@ -291,6 +291,15 @@ async function allocateDepreciationToWIP(
 
   if (!shares.length) {
     // area_ratio (default fallback)
+    // P3-L1: warn when cycles missing area_feddan fall back to weight=1
+    const missingArea = cycles.filter(c => !c.area_feddan || c.area_feddan <= 0)
+    if (missingArea.length > 0) {
+      console.warn(
+        `[depreciation] area_ratio fallback: ${missingArea.length} cycle(s) missing area_feddan ` +
+        `(ids: ${missingArea.map(c => c.id).join(',')}) — using weight=1 per cycle. ` +
+        `Set crop_cycles.area_feddan for accurate cost allocation.`
+      )
+    }
     const totalArea = cycles.reduce((s, c) => s + (c.area_feddan ?? 1), 0)
     if (totalArea <= 0) return 0
     shares = cycles.map(c => ({

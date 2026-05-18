@@ -403,12 +403,27 @@ fields.get('/harvest/cost-estimate', async (c) => {
 
   if (!field) return c.json({ success: false, error: 'القطعة غير موجودة' }, 404)
 
+  // P3-L3: Land rent auto-split across concurrent crop cycles on this field in the season.
+  // If multiple cycles share the field, each cycle bears its proportional share.
+  // Here we count active cycles to determine the requesting cycle's fraction.
+  const cycleCountRow = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n, SUM(COALESCE(area_feddan, 0)) AS total_area
+     FROM crop_cycles
+     WHERE company_id = ? AND field_id = ? AND season_id = ? AND status NOT IN ('settled','abandoned','written_off')`
+  ).bind(company_id, field_id, season_id).first<{ n: number; total_area: number }>()
+
+  const activeCycles      = cycleCountRow?.n ?? 1
+  const totalCycleArea    = cycleCountRow?.total_area ?? 0
+  const grossLandRent     = (field.rent_per_feddan ?? 0) * (field.area_feddan ?? 0)
+  // Split: if cycles have area data, pro-rate; otherwise split equally
+  const landRentShareFrac = activeCycles <= 1 ? 1 : (totalCycleArea > 0 ? 1 / activeCycles : 1 / activeCycles)
+  const land_rent         = Math.round(grossLandRent * landRentShareFrac * 100) / 100
+
   const materials_cost  = materialsRow?.total  ?? 0
   const labor_cost      = laborRow?.total      ?? 0
   const equipment_cost  = equipmentRow?.total  ?? 0
   const cash_cost       = cashRow?.total       ?? 0
   const payroll_cost    = payrollRow?.total    ?? 0
-  const land_rent       = (field.rent_per_feddan ?? 0) * (field.area_feddan ?? 0)
   const total_cost      = materials_cost + labor_cost + equipment_cost + cash_cost + payroll_cost + land_rent
 
   return c.json({
@@ -425,6 +440,8 @@ fields.get('/harvest/cost-estimate', async (c) => {
       cash_cost,
       payroll_cost,
       land_rent,
+      land_rent_gross:   grossLandRent,
+      land_rent_cycles:  activeCycles,
       total_cost,
     }
   })

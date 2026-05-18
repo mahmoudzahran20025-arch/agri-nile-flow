@@ -49,6 +49,90 @@ cropCycles.get('/', async (c) => {
   return c.json({ success: true, data: results })
 })
 
+// ── GET /api/crop-cycles/season-rollup ───────────────────────────────────────
+// P3-M4: Season cost rollup report — aggregate WIP costs per season.
+// IMPORTANT: registered before /:id to prevent Hono matching 'season-rollup' as id.
+cropCycles.get('/season-rollup', async (c) => {
+  const { company_id } = getUser(c)
+  const seasonId = c.req.query('season_id') ? Number(c.req.query('season_id')) : null
+
+  if (!seasonId) return c.json({ success: false, error: 'season_id مطلوب' }, 400)
+
+  const season = await c.env.DB.prepare(
+    'SELECT id, name, status FROM seasons WHERE id = ? AND company_id = ?'
+  ).bind(seasonId, company_id).first<{ id: number; name: string; status: string }>()
+  if (!season) return c.json({ success: false, error: 'الموسم غير موجود' }, 404)
+
+  const [totals, byCycle, byCategory, bySource] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT
+         COALESCE(SUM(debit),  0) AS total_cost,
+         COALESCE(SUM(credit), 0) AS settled_cost,
+         COALESCE(SUM(debit) - SUM(credit), 0) AS open_wip,
+         COUNT(DISTINCT crop_cycle_id) AS cycle_count
+       FROM wip_ledger
+       WHERE company_id = ? AND season_id = ?`
+    ).bind(company_id, seasonId).first<{ total_cost: number; settled_cost: number; open_wip: number; cycle_count: number }>(),
+
+    c.env.DB.prepare(
+      `SELECT wl.crop_cycle_id,
+              cc.crop_type   AS crop_type,
+              f.name         AS field_name,
+              cc.status      AS cycle_status,
+              SUM(wl.debit)  AS total_cost,
+              SUM(wl.credit) AS settled_cost,
+              SUM(wl.debit) - SUM(wl.credit) AS open_wip
+       FROM wip_ledger wl
+       JOIN crop_cycles cc ON cc.id = wl.crop_cycle_id AND cc.company_id = wl.company_id
+       JOIN fields f ON f.id = cc.field_id AND f.company_id = cc.company_id
+       WHERE wl.company_id = ? AND wl.season_id = ?
+       GROUP BY wl.crop_cycle_id
+       ORDER BY open_wip DESC`
+    ).bind(company_id, seasonId).all<{
+      crop_cycle_id: number; crop_type: string | null; field_name: string
+      cycle_status: string; total_cost: number; settled_cost: number; open_wip: number
+    }>(),
+
+    c.env.DB.prepare(
+      `SELECT cost_category,
+              SUM(debit)  AS total_cost,
+              SUM(credit) AS settled_cost,
+              SUM(debit) - SUM(credit) AS open_wip
+       FROM wip_ledger
+       WHERE company_id = ? AND season_id = ?
+       GROUP BY cost_category
+       ORDER BY total_cost DESC`
+    ).bind(company_id, seasonId).all<{ cost_category: string | null; total_cost: number; settled_cost: number; open_wip: number }>(),
+
+    c.env.DB.prepare(
+      `SELECT source_module,
+              SUM(debit)  AS total_cost,
+              SUM(credit) AS settled_cost,
+              SUM(debit) - SUM(credit) AS open_wip
+       FROM wip_ledger
+       WHERE company_id = ? AND season_id = ?
+       GROUP BY source_module
+       ORDER BY total_cost DESC`
+    ).bind(company_id, seasonId).all<{ source_module: string; total_cost: number; settled_cost: number; open_wip: number }>(),
+  ])
+
+  return c.json({
+    success: true,
+    data: {
+      season,
+      summary: {
+        total_cost:   totals?.total_cost    ?? 0,
+        settled_cost: totals?.settled_cost  ?? 0,
+        open_wip:     totals?.open_wip      ?? 0,
+        cycle_count:  totals?.cycle_count   ?? 0,
+      },
+      by_cycle:    byCycle.results,
+      by_category: byCategory.results,
+      by_source:   bySource.results,
+    },
+  })
+})
+
 // ── GET /api/crop-cycles/:id ─────────────────────────────────────────────────
 cropCycles.get('/:id', async (c) => {
   const { company_id } = getUser(c)
@@ -352,6 +436,107 @@ cropCycles.post('/:id/abandon', async (c) => {
     const status = msg.startsWith('ABANDONMENT:') ? 422 : 500
     return c.json({ success: false, error: msg }, status)
   }
+})
+
+// ── GET /api/crop-cycles/:id/work-order-reconciliation ───────────────────────
+// P3-M3: Work order cost reconciliation — compares planned cost (from work_orders
+// table if available) versus actual cost posted to wip_ledger for that work order.
+// Returns line-level detail so users can identify cost overruns by category.
+cropCycles.get('/:id/work-order-reconciliation', async (c) => {
+  const { company_id } = getUser(c)
+  const cycleId = Number(c.req.param('id'))
+  if (!cycleId) return c.json({ success: false, error: 'معرف دورة المحصول غير صحيح' }, 400)
+
+  const cycle = await c.env.DB.prepare(
+    'SELECT id, crop_type, status FROM crop_cycles WHERE id = ? AND company_id = ?'
+  ).bind(cycleId, company_id).first<{ id: number; crop_type: string | null; status: string }>()
+  if (!cycle) return c.json({ success: false, error: 'دورة المحصول غير موجودة' }, 404)
+
+  // WIP actual cost grouped by work_order_id and cost_category
+  const actual = await c.env.DB.prepare(
+    `SELECT wl.work_order_id,
+            wl.cost_category,
+            wl.source_module,
+            SUM(wl.debit)  AS actual_cost,
+            SUM(wl.credit) AS settled_cost,
+            SUM(wl.debit)  - SUM(wl.credit) AS open_wip,
+            COUNT(*)       AS entry_count
+     FROM wip_ledger wl
+     WHERE wl.company_id = ? AND wl.crop_cycle_id = ? AND wl.work_order_id IS NOT NULL
+     GROUP BY wl.work_order_id, wl.cost_category, wl.source_module
+     ORDER BY wl.work_order_id, actual_cost DESC`
+  ).bind(company_id, cycleId).all<{
+    work_order_id: number; cost_category: string | null; source_module: string
+    actual_cost: number; settled_cost: number; open_wip: number; entry_count: number
+  }>()
+
+  // Work orders planned cost (if table has planned_cost column; graceful fallback)
+  const planned = await c.env.DB.prepare(
+    `SELECT wo.id AS work_order_id, wo.title, wo.status,
+            wo.planned_cost, wo.actual_cost AS wo_actual_cost,
+            wo.start_date, wo.end_date
+     FROM work_orders wo
+     WHERE wo.company_id = ? AND wo.crop_cycle_id = ?
+     ORDER BY wo.id`
+  ).bind(company_id, cycleId).all<{
+    work_order_id: number; title: string; status: string
+    planned_cost: number | null; wo_actual_cost: number | null
+    start_date: string | null; end_date: string | null
+  }>()
+
+  // Build reconciliation: join planned work orders with WIP actuals
+  const wipByWoId = new Map<number, typeof actual.results>()
+  for (const row of actual.results) {
+    const arr = wipByWoId.get(row.work_order_id) ?? []
+    arr.push(row)
+    wipByWoId.set(row.work_order_id, arr)
+  }
+
+  const reconciled = planned.results.map(wo => {
+    const lines = wipByWoId.get(wo.work_order_id) ?? []
+    const actualTotal = lines.reduce((s, r) => s + r.actual_cost, 0)
+    return {
+      ...wo,
+      actual_wip_total: actualTotal,
+      variance:         actualTotal - (wo.planned_cost ?? 0),
+      lines,
+    }
+  })
+
+  // Also include WIP entries with no linked work order (unattributed costs)
+  const unattributed = await c.env.DB.prepare(
+    `SELECT cost_category, source_module,
+            SUM(debit)  AS actual_cost,
+            SUM(credit) AS settled_cost,
+            COUNT(*)    AS entry_count
+     FROM wip_ledger
+     WHERE company_id = ? AND crop_cycle_id = ? AND work_order_id IS NULL
+     GROUP BY cost_category, source_module
+     ORDER BY actual_cost DESC`
+  ).bind(company_id, cycleId).all<{
+    cost_category: string | null; source_module: string
+    actual_cost: number; settled_cost: number; entry_count: number
+  }>()
+
+  const totalPlanned    = reconciled.reduce((s, r) => s + (r.planned_cost ?? 0), 0)
+  const totalActual     = reconciled.reduce((s, r) => s + r.actual_wip_total, 0)
+  const totalUnattributed = unattributed.results.reduce((s, r) => s + r.actual_cost, 0)
+
+  return c.json({
+    success: true,
+    data: {
+      crop_cycle: cycle,
+      summary: {
+        total_planned:       totalPlanned,
+        total_actual:        totalActual + totalUnattributed,
+        total_variance:      totalActual - totalPlanned,
+        unattributed_cost:   totalUnattributed,
+        work_order_count:    reconciled.length,
+      },
+      work_orders:   reconciled,
+      unattributed:  unattributed.results,
+    },
+  })
 })
 
 export default cropCycles
