@@ -4,9 +4,20 @@ import { inventoryApi } from '../../../api/client'
 import { Loader2 } from 'lucide-react'
 
 interface ItemOption {
-  code: number
-  name: string
-  unit: string | null
+  code:             number
+  name:             string
+  unit:             string | null
+  base_unit:        string | null
+  package_type:     string | null
+  package_capacity: number | null
+}
+
+export interface ItemExtra {
+  name:             string
+  unit:             string | null
+  base_unit:        string | null
+  package_type:     string | null
+  package_capacity: number | null
 }
 
 interface SpreadsheetLookupCellProps {
@@ -17,7 +28,7 @@ interface SpreadsheetLookupCellProps {
   isActive?: boolean
   isEditing?: boolean
   error?: string
-  onChange: (rowId: string, field: string, value: number | null, extra?: { name: string; unit: string | null }) => void
+  onChange: (rowId: string, field: string, value: number | null, extra?: ItemExtra) => void
   onBeginEdit: (rowId: string, field: string) => void
   onCommitEdit: () => void
   onCancelEdit: () => void
@@ -85,10 +96,16 @@ const SpreadsheetLookupCell = memo(function SpreadsheetLookupCell({
   const commitSelection = useCallback((option: ItemOption | null) => {
     if (option) {
       setLocalText(option.name)
-      onChange(rowId, field, option.code, { name: option.name, unit: option.unit })
+      onChange(rowId, field, option.code, {
+        name:             option.name,
+        unit:             option.unit,
+        base_unit:        option.base_unit,
+        package_type:     option.package_type,
+        package_capacity: option.package_capacity,
+      })
     } else {
       if (!localText.trim()) {
-        onChange(rowId, field, null, { name: '', unit: null })
+        onChange(rowId, field, null, { name: '', unit: null, base_unit: null, package_type: null, package_capacity: null })
       } else {
         setLocalText(displayValue)
       }

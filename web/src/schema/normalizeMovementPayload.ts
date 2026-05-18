@@ -48,13 +48,35 @@ export function normalizeMovementPayload(raw: any): WorkspaceMovementPayload {
     if (isNaN(quantity) || quantity <= 0) {
       throw new PayloadNormalizationError(`Item at index ${index} has invalid quantity: ${item.quantity}`);
     }
+
+    const packCount    = item.pack_count    ? Number(item.pack_count)    : undefined;
+    const packCapacity = item.pack_capacity ? Number(item.pack_capacity) : undefined;
+
+    // Client-side pre-flight: packaging invariant mirror of the backend guard.
+    // Catches the error before the network round-trip with a clear user message.
+    if (packCount != null && packCapacity != null && packCapacity > 0) {
+      const expected = packCount * packCapacity;
+      if (Math.abs(quantity - expected) > 0.001) {
+        throw new PayloadNormalizationError(
+          `الصنف رقم ${item.item_code}: الكمية (${quantity}) لا تساوي عدد العبوات (${packCount}) × سعة العبوة (${packCapacity}) = ${expected}`
+        );
+      }
+    }
+
+    // Derive unit_price from total_value / quantity if total_value was entered.
+    // This is the preferred path: user enters total value, we compute per-unit cost.
+    let unitPrice: number | undefined = item.unit_price ? Number(item.unit_price) : undefined;
+    if (item.total_value && Number(item.total_value) > 0 && quantity > 0) {
+      unitPrice = Number(item.total_value) / quantity;
+    }
+
     return {
-      item_code: Number(item.item_code),
-      quantity: quantity,
-      unit_price: item.unit_price ? Number(item.unit_price) : undefined,
-      notes: item.notes || undefined,
-      pack_count: item.pack_count ? Number(item.pack_count) : undefined,
-      pack_capacity: item.pack_capacity ? Number(item.pack_capacity) : undefined,
+      item_code:    Number(item.item_code),
+      quantity,
+      unit_price:   unitPrice,
+      notes:        item.notes       || undefined,
+      pack_count:   packCount,
+      pack_capacity: packCapacity,
     };
   });
 

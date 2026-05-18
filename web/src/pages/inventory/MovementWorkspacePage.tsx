@@ -477,8 +477,8 @@ export default function MovementWorkspacePage() {
             warehouse={header.warehouse_id}
             onAddLine={() => dispatch({ type: 'ADD_ROW' })}
             onRemoveLine={(key) => dispatch({ type: 'REMOVE_ROW', rowId: key })}
-            onUpdateLine={(rowId, field, value) =>
-              dispatch({ type: 'UPDATE_CELL', rowId, field: field as any, value })
+            onUpdateLine={(rowId, field, value, extra) =>
+              dispatch({ type: 'UPDATE_CELL', rowId, field: field as any, value, extra })
             }
             onApplyPaste={(startRowId, rows) =>
               dispatch({ type: 'APPLY_EXCEL_PASTE', startRowId, rows })

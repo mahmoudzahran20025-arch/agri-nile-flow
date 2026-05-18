@@ -89,23 +89,23 @@ export async function enqueueInventoryPostingOutbox(
  * into inventory_movements), falls back to a full SUM from the ledger and
  * heals the snapshot before returning — so the next caller pays cache cost.
  *
- * Returns { balance_qty, balance_value } always (zero if no rows).
+ * Returns { balance_qty, balance_value, version } always (zero if no rows).
  */
 export async function readInventoryBalance(
   db: D1Database,
   companyId: number,
   itemCode: number,
   warehouseId: number,
-): Promise<{ balance_qty: number; balance_value: number }> {
+): Promise<{ balance_qty: number; balance_value: number; version: number }> {
   const snap = await db.prepare(
-    `SELECT balance_qty, balance_value, is_stale
+    `SELECT balance_qty, balance_value, version, is_stale
      FROM inventory_balances
      WHERE company_id = ? AND item_code = ? AND warehouse_id = ?`
   ).bind(companyId, itemCode, warehouseId)
-    .first<{ balance_qty: number; balance_value: number; is_stale: number }>()
+    .first<{ balance_qty: number; balance_value: number; version: number; is_stale: number }>()
 
   if (snap && !snap.is_stale) {
-    return { balance_qty: snap.balance_qty, balance_value: snap.balance_value }
+    return { balance_qty: snap.balance_qty, balance_value: snap.balance_value, version: snap.version }
   }
 
   // Stale or missing — recompute from ledger
@@ -123,6 +123,8 @@ export async function readInventoryBalance(
   const balVal = ledger?.balance_value ?? 0
   const lastId = ledger?.last_movement_id ?? null
 
+  const expectedVersion = snap?.version ?? 0
+
   // Heal the snapshot (fire-and-forget — caller already has correct values)
   await db.prepare(
     `INSERT INTO inventory_balances
@@ -134,10 +136,11 @@ export async function readInventoryBalance(
        version          = inventory_balances.version + 1,
        last_movement_id = excluded.last_movement_id,
        last_updated     = excluded.last_updated,
-       is_stale         = 0`
-  ).bind(companyId, itemCode, warehouseId, balQty, balVal, lastId).run()
+       is_stale         = 0
+     WHERE inventory_balances.version = ?`
+  ).bind(companyId, itemCode, warehouseId, balQty, balVal, lastId, expectedVersion).run()
 
-  return { balance_qty: balQty, balance_value: balVal }
+  return { balance_qty: balQty, balance_value: balVal, version: expectedVersion + 1 }
 }
 
 /**
@@ -155,8 +158,9 @@ export async function upsertInventoryBalance(
   balQty: number,
   balVal: number,
   movementId: number,
+  expectedVersion: number,
 ): Promise<void> {
-  await db.prepare(
+  const result = await db.prepare(
     `INSERT INTO inventory_balances
        (company_id, item_code, warehouse_id, balance_qty, balance_value, version, last_movement_id, last_updated, is_stale)
      VALUES (?, ?, ?, ?, ?, 1, ?, datetime('now'), 0)
@@ -166,6 +170,11 @@ export async function upsertInventoryBalance(
        version          = inventory_balances.version + 1,
        last_movement_id = excluded.last_movement_id,
        last_updated     = excluded.last_updated,
-       is_stale         = 0`
-  ).bind(companyId, itemCode, warehouseId, balQty, balVal, movementId).run()
+       is_stale         = 0
+     WHERE inventory_balances.version = ?`
+  ).bind(companyId, itemCode, warehouseId, balQty, balVal, movementId, expectedVersion).run()
+
+  if (result.meta.changes === 0) {
+    throw new Error('INVENTORY_BALANCE_CONFLICT')
+  }
 }

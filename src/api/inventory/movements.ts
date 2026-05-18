@@ -17,6 +17,30 @@ import { logFinancialWorkflowFailure } from '../../lib/finance/workflow_policy'
 
 const movements = new Hono<{ Bindings: Env }>()
 
+/**
+ * Packaging invariant: if both pack_count and pack_capacity are provided,
+ * quantity MUST equal pack_count × pack_capacity (±0.001 tolerance for float rounding).
+ *
+ * This is the single choke point that prevents valuation corruption from bag/kg confusion.
+ * Example: 10 bags × 50 KG/bag → quantity must be 500 KG, not 10.
+ */
+function assertPackagingInvariant(
+  quantity: number,
+  pack_count: number | null | undefined,
+  pack_capacity: number | null | undefined,
+  itemCode: number | string,
+): void {
+  if (pack_count != null && pack_capacity != null && pack_capacity > 0) {
+    const expected = pack_count * pack_capacity
+    if (Math.abs(quantity - expected) > 0.001) {
+      throw new Error(
+        `PACKAGING_MISMATCH:${itemCode}:` +
+        `quantity=${quantity} must equal pack_count(${pack_count}) × pack_capacity(${pack_capacity})=${expected}`
+      )
+    }
+  }
+}
+
 const SUPPORTED_MOVEMENT_TYPES = new Set([
   'GRN', 'ISSUE',
   'TRANSFER_IN', 'TRANSFER_OUT',
@@ -201,6 +225,12 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
 
   if (!b.movement_date || (!b.warehouse && !b.warehouse_id) || !b.movement_type || !b.item_code || !b.quantity) {
     return c.json({ success: false, error: 'بيانات الحركة ناقصة' }, 400)
+  }
+
+  try {
+    assertPackagingInvariant(b.quantity, b.pack_count, b.pack_capacity, b.item_code)
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message, code: 'PACKAGING_MISMATCH' }, 422)
   }
 
   const wh = await resolveWarehouse(c.env.DB, company_id, b.warehouse_id, b.warehouse)
@@ -538,6 +568,8 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     if (!mDate || (!whId && !whName) || !mType || !item.item_code || !item.quantity) {
       throw new Error(`MISSING_FIELDS_FOR_ITEM:${item.item_code}`)
     }
+
+    assertPackagingInvariant(item.quantity, item.pack_count, item.pack_capacity, item.item_code)
 
     const movementDate = normalizeIsoDate(mDate)
     if (isFutureIsoDate(movementDate)) throw new Error(`FUTURE_DATE_NOT_ALLOWED:${item.item_code}`)

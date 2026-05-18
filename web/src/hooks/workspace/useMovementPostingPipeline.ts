@@ -84,6 +84,7 @@ export function useMovementPostingPipeline(): PostingPipelineHook {
             item_code:     l.item_code!,
             quantity:      l.quantity!,
             unit_price:    l.unit_price ?? undefined,
+            total_value:   l.total_value ?? undefined,
             notes:         l.notes || undefined,
             pack_count:    l.pack_count ?? undefined,
             pack_capacity: l.package_capacity ?? undefined,

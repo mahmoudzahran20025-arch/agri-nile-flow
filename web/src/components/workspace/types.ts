@@ -65,9 +65,18 @@ export interface LineItem {
   item_code:        number | null
   item_name:        string
   item_unit:        string
-  pack_count:       number | null
+  // Packaging — populated from item master on item selection
+  package_type:     string | null
   package_capacity: number | null
+  pack_count:       number | null
+  // quantity is the canonical base-unit value posted to the GL.
+  // When _qty_derived=true it is auto-computed from pack_count × package_capacity
+  // and the field is locked read-only in the UI.
   quantity:         number | null
+  _qty_derived:     boolean
+  // total_value is the primary user-facing entry when packaging mode is active.
+  // unit_price is computed from total_value / quantity before submission.
+  total_value:      number | null
   unit_price:       number | null
   notes:            string
   // Runtime enrichment (not persisted)
@@ -151,9 +160,12 @@ export function createEmptyLine(): LineItem {
     item_code:        null,
     item_name:        '',
     item_unit:        '',
-    pack_count:       null,
+    package_type:     null,
     package_capacity: null,
+    pack_count:       null,
     quantity:         null,
+    _qty_derived:     false,
+    total_value:      null,
     unit_price:       null,
     notes:            '',
     _available:       null,
@@ -220,6 +232,8 @@ export function serializeDraft(draft: MovementDraft): string {
       _stockLoading: false,
       _error:        null,
       _warning:      null,
+      // _qty_derived is recomputed on load from pack_count × package_capacity
+      _qty_derived:  false,
     })),
   }
   return JSON.stringify(cleaned)

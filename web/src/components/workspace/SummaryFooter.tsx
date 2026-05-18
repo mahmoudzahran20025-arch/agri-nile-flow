@@ -10,7 +10,11 @@ interface Props {
 export default function SummaryFooter({ lines, movementType, dirty }: Props) {
   const filled   = lines.filter(l => l.item_code !== null)
   const totalQty = filled.reduce((s, l) => s + (l.quantity ?? 0), 0)
-  const totalVal = filled.reduce((s, l) => s + (l.quantity ?? 0) * (l.unit_price ?? 0), 0)
+  // Prefer total_value if set directly; fall back to qty × unit_price
+  const totalVal = filled.reduce((s, l) => {
+    if (l.total_value != null) return s + l.total_value
+    return s + (l.quantity ?? 0) * (l.unit_price ?? 0)
+  }, 0)
   const errors   = lines.filter(l => l._error).length
   const warnings = lines.filter(l => l._warning).length
   const isIn     = isInboundType(movementType)
