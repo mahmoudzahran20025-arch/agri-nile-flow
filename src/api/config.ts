@@ -149,7 +149,7 @@ config.get('/items', async (c) => {
 })
 
 config.post('/items', async (c) => {
-  const { company_id } = getUser(c)
+  const { company_id, sub: userId } = getUser(c)
   const b = await c.req.json<{
     code: number; name: string; unit?: string; warehouse?: string;
     reorder_threshold?: number; category_id?: number; track_lots?: number
@@ -157,6 +157,7 @@ config.post('/items', async (c) => {
     base_unit?: string; package_type?: string; package_capacity?: number
     item_type?: 'inventory' | 'service' | 'non_stock'
     is_sellable?: number; is_purchasable?: number
+    min_selling_price?: number
   }>()
 
   if (!b.code || !b.name) return c.json({ success: false, error: 'الكود والاسم مطلوبان' }, 400)
@@ -179,14 +180,16 @@ config.post('/items', async (c) => {
      (code, company_id, name, unit, warehouse, reorder_threshold, category_id, track_lots,
       prod_posting_group_code, inv_posting_group_code,
       base_unit, package_type, package_capacity,
-      item_type, is_sellable, is_purchasable)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      item_type, is_sellable, is_purchasable,
+      min_selling_price, created_by_user_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(
     b.code, company_id, b.name, b.unit ?? null, b.warehouse ?? null,
     b.reorder_threshold ?? 0, b.category_id ?? null, b.track_lots ?? 0,
     b.prod_posting_group_code ?? null, b.inv_posting_group_code ?? null,
     b.base_unit ?? null, b.package_type ?? null, b.package_capacity ?? null,
-    b.item_type ?? 'inventory', b.is_sellable ?? 1, b.is_purchasable ?? 1
+    b.item_type ?? 'inventory', b.is_sellable ?? 1, b.is_purchasable ?? 1,
+    b.min_selling_price ?? null, userId,
   ).run()
 
   return c.json({ success: true, data: null }, 201)

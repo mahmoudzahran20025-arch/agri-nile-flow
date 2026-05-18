@@ -234,6 +234,7 @@ governance.get('/items-master', permissionGuard('inventory', 'read'), async (c) 
        i.is_sellable,
        i.is_purchasable,
        i.list_price,
+       i.min_selling_price,
        i.barcode,
        i.expiry_tracking,
        i.wip_cost_category,
@@ -295,6 +296,7 @@ governance.patch('/items-master/:code', permissionGuard('inventory', 'create'), 
     is_sellable?:             boolean | null
     is_purchasable?:          boolean | null
     list_price?:              number | null
+    min_selling_price?:       number | null
     barcode?:                 string | null
     expiry_tracking?:         boolean | null
     wip_cost_category?:       string | null
@@ -329,6 +331,7 @@ governance.patch('/items-master/:code', permissionGuard('inventory', 'create'), 
   if ('is_sellable'             in b) { sets.push('is_sellable = ?');             binds.push(b.is_sellable ? 1 : 0) }
   if ('is_purchasable'          in b) { sets.push('is_purchasable = ?');          binds.push(b.is_purchasable ? 1 : 0) }
   if ('list_price'              in b) { sets.push('list_price = ?');              binds.push(b.list_price ?? null) }
+  if ('min_selling_price'       in b) { sets.push('min_selling_price = ?');       binds.push(b.min_selling_price ?? null) }
   if ('barcode'                 in b) { sets.push('barcode = ?');                 binds.push(b.barcode?.trim() || null) }
   if ('expiry_tracking'         in b) { sets.push('expiry_tracking = ?');         binds.push(b.expiry_tracking ? 1 : 0) }
   if ('wip_cost_category'       in b) { sets.push('wip_cost_category = ?');       binds.push(b.wip_cost_category ?? null) }

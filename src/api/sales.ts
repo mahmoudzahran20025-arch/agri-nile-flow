@@ -97,14 +97,22 @@ sales.post('/', permissionGuard('inventory', 'create'), async (c) => {
     }
 
     const item = await c.env.DB.prepare(
-      'SELECT item_type, is_sellable FROM items WHERE code = ? AND company_id = ?'
-    ).bind(line.item_code, company_id).first<{ item_type: string; is_sellable: number }>()
+      'SELECT item_type, is_sellable, min_selling_price FROM items WHERE code = ? AND company_id = ?'
+    ).bind(line.item_code, company_id).first<{ item_type: string; is_sellable: number; min_selling_price: number | null }>()
     if (!item) return c.json({ success: false, error: `الصنف ${line.item_code} غير موجود` }, 404)
     if (item.item_type === 'service') {
       return c.json({ success: false, error: `الصنف ${line.item_code} خدمة — لا يمكن بيعه بحركة مخزنية`, code: 'SERVICE_ITEM_NO_STOCK' }, 422)
     }
     if (!item.is_sellable) {
       return c.json({ success: false, error: `الصنف ${line.item_code} غير قابل للبيع`, code: 'ITEM_NOT_SELLABLE' }, 422)
+    }
+    const effectivePrice = line.unit_price * (1 - discountPct / 100)
+    if (item.min_selling_price != null && effectivePrice < item.min_selling_price) {
+      return c.json({
+        success: false,
+        error: `سعر البيع الفعلي للصنف ${line.item_code} (${effectivePrice.toFixed(2)}) أقل من الحد الأدنى المسموح (${item.min_selling_price})`,
+        code: 'BELOW_MIN_SELLING_PRICE',
+      }, 422)
     }
   }
 

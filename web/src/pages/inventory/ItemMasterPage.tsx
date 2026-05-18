@@ -44,6 +44,7 @@ interface ItemMaster {
   is_sellable:             number | null
   is_purchasable:          number | null
   list_price:              number | null
+  min_selling_price:       number | null
   barcode:                 string | null
   expiry_tracking:         number | null
   wip_cost_category:       string | null
@@ -122,6 +123,7 @@ interface EditForm {
   is_sellable:             boolean
   is_purchasable:          boolean
   list_price:              string
+  min_selling_price:       string
   barcode:                 string
   expiry_tracking:         boolean
   wip_cost_category:       string
@@ -155,6 +157,7 @@ function AccountingEditModal({
     is_sellable:             item.is_sellable !== 0,
     is_purchasable:          item.is_purchasable !== 0,
     list_price:              item.list_price != null ? String(item.list_price) : '',
+    min_selling_price:       item.min_selling_price != null ? String(item.min_selling_price) : '',
     barcode:                 item.barcode ?? '',
     expiry_tracking:         !!item.expiry_tracking,
     wip_cost_category:       item.wip_cost_category ?? '',
@@ -190,6 +193,7 @@ function AccountingEditModal({
       is_sellable:             form.is_sellable,
       is_purchasable:          form.is_purchasable,
       list_price:              form.list_price ? Number(form.list_price) : null,
+      min_selling_price:       form.min_selling_price ? Number(form.min_selling_price) : null,
       barcode:                 form.barcode.trim() || null,
       expiry_tracking:         form.expiry_tracking,
       wip_cost_category:       form.wip_cost_category || null,
@@ -373,12 +377,18 @@ function AccountingEditModal({
         {/* POS + Expiry fields */}
         <div className="border-t border-slate-100 pt-4">
           <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">نقطة البيع والتتبع</p>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <div>
               <label className="label">سعر الإدراج (ج.م / وحدة)</label>
               <input type="number" className="input" min="0" step="0.01" placeholder="0.00"
                 value={form.list_price} onChange={e => set('list_price', e.target.value)} />
               <p className="text-xs text-slate-400 mt-1">سعر البيع الأساسي — مطلوب لنقطة البيع</p>
+            </div>
+            <div>
+              <label className="label">الحد الأدنى للبيع (ج.م)</label>
+              <input type="number" className="input" min="0" step="0.01" placeholder="بدون حد"
+                value={form.min_selling_price} onChange={e => set('min_selling_price', e.target.value)} />
+              <p className="text-xs text-slate-400 mt-1">يمنع البيع بسعر أقل منه — لحماية الهامش</p>
             </div>
             <div>
               <label className="label">الباركود</label>

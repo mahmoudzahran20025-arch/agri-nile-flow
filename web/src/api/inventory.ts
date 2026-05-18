@@ -133,6 +133,7 @@ export const inventoryApi = {
       is_sellable:             number | null
       is_purchasable:          number | null
       list_price:              number | null
+      min_selling_price:       number | null
       barcode:                 string | null
       expiry_tracking:         number | null
       wip_cost_category:       string | null
@@ -168,7 +169,7 @@ export const inventoryApi = {
         standard_cost: number | null; reorder_threshold: number | null
         item_type: 'inventory' | 'service' | 'non_stock' | null
         is_sellable: number | null; is_purchasable: number | null
-        list_price: number | null; barcode: string | null; expiry_tracking: number | null; wip_cost_category: string | null
+        list_price: number | null; min_selling_price: number | null; barcode: string | null; expiry_tracking: number | null; wip_cost_category: string | null
         category_name: string | null; total_qty: number; total_value: number; warehouse_count: number
         catalog_status: string; movement_count: number
       }>
@@ -193,6 +194,7 @@ export const inventoryApi = {
     is_sellable?:             boolean | null
     is_purchasable?:          boolean | null
     list_price?:              number | null
+    min_selling_price?:       number | null
     barcode?:                 string | null
     expiry_tracking?:         boolean | null
     wip_cost_category?:       string | null
