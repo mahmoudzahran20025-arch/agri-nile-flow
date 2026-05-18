@@ -22,9 +22,12 @@ export async function resolveInventoryMovement(
     item_code: number
     warehouse_id: number
     movement_type: string
-    quantity: number      // Quantity in the transaction unit
-    unit?: string         // Unit in the transaction
-    unit_price: number    // Price per transaction unit
+    // Either (quantity + unit_price) or value must be provided.
+    // The outbox enqueues `value` (pre-computed total); direct callers use quantity + unit_price.
+    quantity?: number
+    unit?: string
+    unit_price?: number
+    value?: number
     date: string
     item_name: string
     created_by?: number
@@ -36,7 +39,6 @@ export async function resolveInventoryMovement(
     work_order_id?: number
     batch_number?: string
     expiry_date?: string
-    // When set and movement_type is an ISSUE type, cost is also posted to wip_ledger.
     crop_cycle_id?: number | null
   },
 ): Promise<number | null> {
@@ -48,12 +50,15 @@ export async function resolveInventoryMovement(
   if (!itemRow) throw new Error(`ITEM_NOT_FOUND: ${opts.item_code}`)
 
   // UOM Engine: Resolve factor
-  const factor = (opts.unit && itemRow.unit) 
+  const factor = (opts.unit && itemRow.unit)
     ? await resolveUnitFactor(db, opts.company_id, opts.unit, itemRow.unit, opts.item_code)
     : 1
 
-  const baseQty = opts.quantity * factor
-  const totalValue = Math.round(opts.quantity * opts.unit_price * 100) / 100
+  const baseQty = (opts.quantity ?? 0) * factor
+  // Accept pre-computed value (outbox path) or compute from quantity × unit_price (direct call path).
+  const totalValue = opts.value != null
+    ? Math.round(opts.value * 100) / 100
+    : Math.round((opts.quantity ?? 0) * (opts.unit_price ?? 0) * 100) / 100
 
   // Resolve IPG from warehouse
   const warehouseRow = await db.prepare(
