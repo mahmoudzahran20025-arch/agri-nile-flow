@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -57,6 +57,27 @@ const navSections: { title: string; items: NavItem[] }[] = [
     ],
   },
   {
+    // Primary operational entry point — warehouse operations
+    title: 'Inventory Operations',
+    items: [
+      { label: 'New Movement',      path: '/inventory/workspace/create', icon: <Box           size={18} /> },
+      { label: 'All Movements',     path: '/inventory/movements',        icon: <ClipboardList size={18} /> },
+      { label: 'Physical Count',    path: '/inventory/physical-count',   icon: <FileCheck     size={18} /> },
+      { label: 'Warehouse Balances',path: '/inventory',                  icon: <Warehouse     size={18} /> },
+      { label: 'Transactions',      path: '/inventory/transactions',     icon: <FileText      size={18} /> },
+      { label: 'Posting Health',    path: '/inventory/posting-health',   icon: <ShieldCheck   size={18} /> },
+    ],
+  },
+  {
+    title: 'Inventory Analytics',
+    items: [
+      { label: 'WIP Balances',      path: '/inventory/wip-balances',    icon: <GitBranch  size={18} /> },
+      { label: 'Fixed Assets',      path: '/inventory/fixed-assets',    icon: <TrendingUp size={18} /> },
+      { label: 'تكلفة الحقول',       path: '/inventory/cost-by-field',   icon: <Sprout     size={18} /> },
+      { label: 'Items',             path: '/inventory/items',           icon: <FileCheck  size={18} /> },
+    ],
+  },
+  {
     title: 'Finance',
     items: [
       { label: 'Finance Center',  path: '/gl',                 icon: <BarChart3      size={18} /> },
@@ -72,71 +93,56 @@ const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: 'Reports',
     items: [
-      { label: 'Financial Statements', path: '/gl/statements',          icon: <FileText  size={18} /> },
-      { label: 'Season Reports',       path: '/reports/season',         icon: <Sprout    size={18} /> },
-      { label: 'Cost Centers',         path: '/reports/cost-centers',   icon: <BarChart3 size={18} /> },
-      { label: 'Suppliers Balance',    path: '/reports/suppliers-balance', icon: <Users      size={18} /> },
+      { label: 'Financial Statements', path: '/gl/statements',               icon: <FileText  size={18} /> },
+      { label: 'Season Reports',       path: '/reports/season',              icon: <Sprout    size={18} /> },
+      { label: 'Cost Centers',         path: '/reports/cost-centers',        icon: <BarChart3 size={18} /> },
+      { label: 'Suppliers Balance',    path: '/reports/suppliers-balance',   icon: <Users     size={18} /> },
       { label: 'Cost per Feddan',      path: '/reports/cost-per-feddan',     icon: <TrendingUp size={18} /> },
-      { label: 'Supplier AP Summary',  path: '/reports/supplier-ap-summary',   icon: <Clock      size={18} /> },
-      { label: 'Service Type Costs',   path: '/reports/service-type-summary',  icon: <BarChart3  size={18} /> },
+      { label: 'Supplier AP Summary',  path: '/reports/supplier-ap-summary', icon: <Clock     size={18} /> },
+      { label: 'Service Type Costs',   path: '/reports/service-type-summary',icon: <BarChart3 size={18} /> },
     ],
   },
   {
     title: 'Suppliers & AP',
     items: [
-      { label: 'Suppliers Hub',     path: '/suppliers',              icon: <Users         size={18} /> },
-      { label: 'Procurement',       path: '/suppliers/procurement',  icon: <ShoppingCart  size={18} /> },
-      { label: 'AP Aging',          path: '/suppliers/aging',        icon: <Clock         size={18} /> },
-      { label: 'Cash & Banks',    path: '/treasury',      icon: <Wallet        size={18} /> },
-      { label: 'Bank Reconcile',  path: '/treasury/bank', icon: <ArrowLeftRight size={18} /> },
-      { label: 'Equipment',       path: '/suppliers?tab=equipment', icon: <Tractor size={18} /> },
+      { label: 'Suppliers Hub',   path: '/suppliers',              icon: <Users         size={18} /> },
+      { label: 'Procurement',     path: '/suppliers/procurement',  icon: <ShoppingCart  size={18} /> },
+      { label: 'AP Aging',        path: '/suppliers/aging',        icon: <Clock         size={18} /> },
+      { label: 'Cash & Banks',    path: '/treasury',               icon: <Wallet        size={18} /> },
+      { label: 'Bank Reconcile',  path: '/treasury/bank',          icon: <ArrowLeftRight size={18} /> },
+      { label: 'Equipment',       path: '/suppliers?tab=equipment',icon: <Tractor       size={18} /> },
     ],
   },
   {
-    title: 'Inventory',
+    title: 'Agricultural Ops',
     items: [
-      { label: 'Movements',        path: '/inventory/movements',     icon: <Box       size={18} /> },
-      { label: 'Transactions',      path: '/inventory/transactions',  icon: <FileText  size={18} /> },
-      { label: 'صحة الترحيل',       path: '/inventory/posting-health', icon: <ShieldCheck size={18} /> },
-      { label: 'Warehouse Balances', path: '/inventory',               icon: <Warehouse size={18} /> },
-        { label: 'Physical Count',     path: '/inventory/physical-count', icon: <ClipboardList size={18} /> },
-      { label: 'Fixed Assets',      path: '/inventory/fixed-assets',   icon: <TrendingUp    size={18} /> },
-      { label: 'WIP Balances',      path: '/inventory/wip-balances',   icon: <GitBranch     size={18} /> },
-      { label: 'Items',             path: '/inventory/items',          icon: <FileCheck     size={18} /> },
-      { label: 'تكلفة الحقول',      path: '/inventory/cost-by-field',  icon: <Sprout        size={18} /> },
-    ],
-  },
-  {
-    title: 'Operations',
-    items: [
-      { label: 'Seasons & Fields', path: '/seasons',                   icon: <Sprout        size={18} /> },
-      { label: 'Crop Cycles',      path: '/fields/crop-cycles',        icon: <GitBranch     size={18} /> },
-      { label: 'Harvest Settlement', path: '/fields/harvest-settlement',  icon: <Sprout        size={18} /> },
-      { label: 'Settlements',       path: '/fields/harvest-settlements', icon: <Sprout        size={18} /> },
-      { label: 'Work Orders',      path: '/operations',                icon: <ClipboardList size={18} /> },
-      { label: 'HR & Payroll',     path: '/hr',                        icon: <Users         size={18} /> },
-      { label: 'Calendar',         path: '/calendar',                  icon: <CalendarDays  size={18} /> },
-      { label: 'Documents',        path: '/documents',                 icon: <FileText      size={18} /> },
+      { label: 'Seasons & Fields',   path: '/seasons',                    icon: <Sprout        size={18} /> },
+      { label: 'Crop Cycles',        path: '/fields/crop-cycles',         icon: <GitBranch     size={18} /> },
+      { label: 'Settlements',        path: '/fields/harvest-settlements', icon: <FileCheck     size={18} /> },
+      { label: 'Work Orders',        path: '/operations',                 icon: <ClipboardList size={18} /> },
+      { label: 'HR & Payroll',       path: '/hr',                         icon: <Users         size={18} /> },
+      { label: 'Calendar',           path: '/calendar',                   icon: <CalendarDays  size={18} /> },
+      { label: 'Documents',          path: '/documents',                  icon: <FileText      size={18} /> },
     ],
   },
   {
     title: 'GL Setup',
     items: [
-      { label: 'Chart of Accounts', icon: <BookOpen    size={18} />, path: '/gl/accounts' },
-      { label: 'Posting Groups',    icon: <Sliders     size={18} />, path: '/gl/posting-groups' },
-      { label: 'Posting Rules',     icon: <FileText    size={18} />, path: '/gl/posting-rules' },
+      { label: 'Chart of Accounts', icon: <BookOpen      size={18} />, path: '/gl/accounts' },
+      { label: 'Posting Groups',    icon: <Sliders       size={18} />, path: '/gl/posting-groups' },
+      { label: 'Posting Rules',     icon: <FileText      size={18} />, path: '/gl/posting-rules' },
       { label: 'Posting Tables',    icon: <ClipboardList size={18} />, path: '/gl/posting-setup' },
-      { label: 'GL Settings',       icon: <Settings    size={18} />, path: '/gl/settings' },
+      { label: 'GL Settings',       icon: <Settings      size={18} />, path: '/gl/settings' },
     ],
   },
   {
     title: 'System',
     items: [
-      { label: 'Audit Center', path: '/audit',               icon: <GitBranch size={18} /> },
-      { label: 'Config',       path: '/config',              icon: <Sliders   size={18} /> },
-      { label: 'Bulk Import',  path: '/config/bulk-import',  icon: <Upload    size={18} /> },
-      { label: 'Admin',        path: '/admin',               icon: <Settings  size={18} /> },
-      { label: 'Users',        path: '/users',  icon: <UserCog   size={18} /> },
+      { label: 'Audit Center', path: '/audit',              icon: <GitBranch size={18} /> },
+      { label: 'Config',       path: '/config',             icon: <Sliders   size={18} /> },
+      { label: 'Bulk Import',  path: '/config/bulk-import', icon: <Upload    size={18} /> },
+      { label: 'Admin',        path: '/admin',              icon: <Settings  size={18} /> },
+      { label: 'Users',        path: '/users',              icon: <UserCog   size={18} /> },
     ],
   },
 ];
@@ -236,7 +242,7 @@ const SidebarContent = ({ onNavClick }: { onNavClick?: () => void }) => {
       {/* Navigation */}
       <div className="flex-1 overflow-y-auto py-6 px-3 custom-scrollbar" onClick={onNavClick}>
         {navSections.map((section, idx) => {
-          const items = section.title === 'Suppliers & AP'
+          const items: NavItem[] = section.title === 'Suppliers & AP'
             ? [
                 {
                   label: 'Pending Approvals',

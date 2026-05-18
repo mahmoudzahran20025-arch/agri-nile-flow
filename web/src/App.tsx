@@ -1,14 +1,16 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import { useEffect, Suspense, lazy } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAppStore, useIsAuth } from './store/appStore'
 import { configApi, authApi } from './api/client'
 import { AppShell } from './components/shell/AppShell'
+import { registerUnauthorizedHandler } from './api/core'
 
 // ── Always-eager (critical path) ───────────────────────────────────────────
 import LoginPage     from './pages/LoginPage'
 import DebugPage     from './pages/DebugPage'
 import DashboardPage from './pages/DashboardPage'
+import NotFoundPage  from './pages/NotFoundPage'
 
 // ── Lazy chunks: GL / Finance ───────────────────────────────────────────────
 // ── Lazy chunks: GL / Finance (core) ────────────────────────────────────────
@@ -80,6 +82,7 @@ const ItemCardPage             = lazy(() => import('./pages/inventory/ItemCardPa
 const CostByFieldPage          = lazy(() => import('./pages/inventory/CostByFieldPage'))
 const ItemCategoriesPage       = lazy(() => import('./pages/inventory/ItemCategoriesPage'))
 const ItemMasterPage           = lazy(() => import('./pages/inventory/ItemMasterPage'))
+const ItemCreatePage           = lazy(() => import('./pages/inventory/ItemCreatePage'))
 const InventoryPostingHealthPage = lazy(() => import('./pages/inventory/InventoryPostingHealthPage'))
 const PhysicalCountPage          = lazy(() => import('./pages/inventory/PhysicalCountPage'))
 const FixedAssetsPage            = lazy(() => import('./pages/inventory/FixedAssetsPage'))
@@ -127,6 +130,15 @@ export default function App() {
   const isDebugEnabled = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
   const setSeasons     = useAppStore(s => s.setSeasons)
   const setPermissions = useAppStore(s => s.setPermissions)
+  const logout         = useAppStore(s => s.logout)
+  const navigate       = useNavigate()
+
+  useEffect(() => {
+    registerUnauthorizedHandler(() => {
+      logout()
+      navigate('/login', { replace: true })
+    })
+  }, [logout, navigate])
 
   // Load seasons when authenticated
   const { data: seasons } = useQuery({
@@ -184,6 +196,7 @@ export default function App() {
         {/* Inventory */}
         <Route path="inventory"                  element={<WarehouseBalancesPage />} />
         <Route path="inventory/items"            element={<ItemMasterPage />} />
+        <Route path="inventory/items/new"        element={<ItemCreatePage />} />
         <Route path="inventory/categories"       element={<ItemCategoriesPage />} />
         <Route path="inventory/setup"            element={<WarehousesPage />} />
         <Route path="inventory/workspace/create"    element={<MovementWorkspacePage />} />
@@ -305,8 +318,8 @@ export default function App() {
         <Route path="config/:tab"        element={<ConfigPage />} />
         <Route path="config/bulk-import" element={<BulkImportPage />} />
 
-        {/* Catch-all */}
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        {/* 404 — explicit not-found page; no silent redirect */}
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
     </Suspense>

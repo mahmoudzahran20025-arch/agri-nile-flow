@@ -8,6 +8,12 @@ export const BASE_URL =
   (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_API_URL as string | undefined) ||
   `${window.location.origin}/api`
 
+// Registered by App.tsx so core.ts doesn't import the store (avoids circular deps)
+let _onUnauthorized: (() => void) | null = null
+export function registerUnauthorizedHandler(fn: () => void) {
+  _onUnauthorized = fn
+}
+
 function getToken(): string | null {
   return localStorage.getItem('agro_token')
 }
@@ -24,7 +30,14 @@ export async function request<T>(
     ...options.headers,
   }
 
-  const res  = await fetch(url, { ...options, headers })
+  const res = await fetch(url, { ...options, headers })
+
+  if (res.status === 401 && _onUnauthorized) {
+    _onUnauthorized()
+    // Return a synthetic failure so callers don't throw on missing .json()
+    return { success: false, error: 'Session expired. Please log in again.' } as ApiResult<T>
+  }
+
   const json = await res.json() as ApiResult<T>
   return json
 }
