@@ -176,6 +176,12 @@ pos.post('/sales', permissionGuard('inventory', 'create'), async (c) => {
 
   const saleDate = normalizeIsoDate(new Date().toISOString().slice(0, 10))
 
+  // Fetch company VAT settings for tax calculation
+  const company = await c.env.DB.prepare(
+    'SELECT vat_pct, vat_number FROM companies WHERE id = ?'
+  ).bind(company_id).first<{ vat_pct: number; vat_number: string | null }>()
+  const vatPct = company?.vat_pct ?? 0
+
   // Validate items and resolve prices
   const resolvedLines: Array<{
     item_code:    number
@@ -185,6 +191,7 @@ pos.post('/sales', permissionGuard('inventory', 'create'), async (c) => {
     unit_price:   number
     discount_pct: number
     line_total:   number
+    vat_amount:   number
   }> = []
 
   for (const line of b.items) {
@@ -193,10 +200,10 @@ pos.post('/sales', permissionGuard('inventory', 'create'), async (c) => {
     }
 
     const item = await c.env.DB.prepare(
-      'SELECT code, name, unit, item_type, is_sellable, list_price FROM items WHERE code = ? AND company_id = ?'
+      'SELECT code, name, unit, item_type, is_sellable, list_price, vat_exempt FROM items WHERE code = ? AND company_id = ?'
     ).bind(line.item_code, company_id).first<{
       code: number; name: string; unit: string | null
-      item_type: string; is_sellable: number; list_price: number | null
+      item_type: string; is_sellable: number; list_price: number | null; vat_exempt: number
     }>()
 
     if (!item) return c.json({ success: false, error: `الصنف ${line.item_code} غير موجود` }, 404)
@@ -207,9 +214,10 @@ pos.post('/sales', permissionGuard('inventory', 'create'), async (c) => {
       return c.json({ success: false, error: `الصنف ${line.item_code} غير قابل للبيع`, code: 'ITEM_NOT_SELLABLE' }, 422)
     }
 
-    const unitPrice = line.unit_price ?? item.list_price ?? 0
+    const unitPrice   = line.unit_price ?? item.list_price ?? 0
     const discountPct = line.discount_pct ?? 0
-    const lineTotal = Math.round(line.quantity * unitPrice * (1 - discountPct / 100) * 100) / 100
+    const lineTotal   = Math.round(line.quantity * unitPrice * (1 - discountPct / 100) * 100) / 100
+    const vatAmount   = item.vat_exempt ? 0 : Math.round(lineTotal * (vatPct / 100) * 100) / 100
 
     resolvedLines.push({
       item_code:    item.code,
@@ -219,12 +227,13 @@ pos.post('/sales', permissionGuard('inventory', 'create'), async (c) => {
       unit_price:   unitPrice,
       discount_pct: discountPct,
       line_total:   lineTotal,
+      vat_amount:   vatAmount,
     })
   }
 
   const subtotal    = Math.round(resolvedLines.reduce((s, l) => s + l.line_total, 0) * 100) / 100
-  const taxAmount   = 0
-  const total       = subtotal + taxAmount
+  const taxAmount   = Math.round(resolvedLines.reduce((s, l) => s + l.vat_amount, 0) * 100) / 100
+  const total       = Math.round((subtotal + taxAmount) * 100) / 100
   const tendered    = b.tendered ?? (paymentMethod === 'cash' ? total : null)
   const change      = tendered != null ? Math.round((tendered - total) * 100) / 100 : null
 
@@ -341,9 +350,12 @@ pos.post('/sales', permissionGuard('inventory', 'create'), async (c) => {
           unit_price: l.unit_price,
           discount:   l.discount_pct,
           total:      l.line_total,
+          vat_amount: l.vat_amount,
         })),
         subtotal,
-        tax:      taxAmount,
+        tax:       taxAmount,
+        vat_pct:   vatPct,
+        vat_number: company?.vat_number ?? null,
         total,
         tendered,
         change,

@@ -12,7 +12,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ShoppingBag, Plus, Minus, Trash2, CheckCircle,
-  X, Loader2, DollarSign, CreditCard, FileText, Lock,
+  X, Loader2, DollarSign, CreditCard, FileText, Lock, Printer,
 } from 'lucide-react'
 import { posApi, type PosSaleResult } from '../../api/pos'
 import { inventoryApi } from '../../api/client'
@@ -236,15 +236,27 @@ export default function PosPage() {
   // ── Render: receipt modal ─────────────────────────────────────────────────────
   if (lastReceipt) {
     const r = lastReceipt.receipt
+    const receiptDate = new Date().toLocaleString('ar-EG')
     return (
-      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6" dir="rtl">
-        <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 space-y-4">
-          <div className="flex items-center justify-between">
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6 print:bg-white print:p-0 print:block" dir="rtl">
+        {/* print:contents ensures only receipt-inner is rendered on print */}
+        <style>{`@media print { body * { visibility: hidden } #pos-receipt, #pos-receipt * { visibility: visible } #pos-receipt { position: absolute; inset: 0; padding: 16px; } }`}</style>
+
+        <div id="pos-receipt" className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 space-y-4 print:shadow-none print:rounded-none print:max-w-full">
+          {/* Screen-only header with close icon */}
+          <div className="flex items-center justify-between print:hidden">
             <div className="flex items-center gap-2">
               <CheckCircle size={22} className="text-emerald-600" />
               <span className="font-bold text-slate-800">تم البيع</span>
             </div>
             <span className="text-xs text-slate-500">أمر #{lastReceipt.order_id}</span>
+          </div>
+
+          {/* Print header */}
+          <div className="hidden print:block text-center pb-2 border-b border-dashed border-slate-300">
+            <p className="font-bold text-lg">فاتورة بيع</p>
+            <p className="text-xs text-slate-500">رقم الأمر: #{lastReceipt.order_id}</p>
+            <p className="text-xs text-slate-500">{receiptDate}</p>
           </div>
 
           <div className="border-t border-dashed border-slate-200 pt-3 space-y-1">
@@ -257,7 +269,22 @@ export default function PosPage() {
           </div>
 
           <div className="border-t border-slate-200 pt-3 space-y-1 text-sm">
-            <div className="flex justify-between font-bold text-base">
+            <div className="flex justify-between text-slate-600">
+              <span>المجموع قبل الضريبة</span>
+              <span>{EGP(r.subtotal)}</span>
+            </div>
+            {(r.tax ?? 0) > 0 && (
+              <div className="flex justify-between text-slate-600">
+                <span>ضريبة القيمة المضافة {r.vat_pct ? `(${r.vat_pct}%)` : ''}</span>
+                <span>{EGP(r.tax)}</span>
+              </div>
+            )}
+            {r.vat_number && (
+              <div className="text-xs text-slate-400 print:block hidden">
+                رقم تسجيل ضريبي: {r.vat_number}
+              </div>
+            )}
+            <div className="flex justify-between font-bold text-base border-t border-slate-100 pt-1">
               <span>الإجمالي</span>
               <span>{EGP(r.total)}</span>
             </div>
@@ -277,12 +304,25 @@ export default function PosPage() {
             )}
           </div>
 
-          <button
-            onClick={() => setLastReceipt(null)}
-            className="w-full bg-[#0F2D5C] text-white font-semibold py-3 rounded-xl hover:bg-[#1a3f7a]"
-          >
-            بيع جديد
-          </button>
+          {/* Print footer */}
+          <div className="hidden print:block text-center pt-2 border-t border-dashed border-slate-300 text-xs text-slate-400">
+            شكراً لتعاملكم معنا
+          </div>
+
+          <div className="flex gap-3 print:hidden">
+            <button
+              onClick={() => window.print()}
+              className="flex-1 border border-slate-300 text-slate-700 font-semibold py-3 rounded-xl hover:bg-slate-50 flex items-center justify-center gap-2"
+            >
+              <Printer size={16} /> طباعة
+            </button>
+            <button
+              onClick={() => setLastReceipt(null)}
+              className="flex-1 bg-[#0F2D5C] text-white font-semibold py-3 rounded-xl hover:bg-[#1a3f7a]"
+            >
+              بيع جديد
+            </button>
+          </div>
         </div>
       </div>
     )

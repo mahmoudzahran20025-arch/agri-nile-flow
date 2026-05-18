@@ -67,6 +67,12 @@ sales.post('/', permissionGuard('inventory', 'create'), async (c) => {
   ).bind(b.warehouse_id, company_id).first<{ id: number; name: string }>()
   if (!warehouse) return c.json({ success: false, error: 'المخزن غير موجود أو غير نشط' }, 422)
 
+  // Fetch company VAT settings
+  const company = await c.env.DB.prepare(
+    'SELECT vat_pct, vat_number, vat_registered FROM companies WHERE id = ?'
+  ).bind(company_id).first<{ vat_pct: number; vat_number: string | null; vat_registered: number }>()
+  const vatPct = company?.vat_pct ?? 0
+
   // Resolve customer — default to WALKIN
   let customerId: number
   if (b.customer_id) {
@@ -83,7 +89,12 @@ sales.post('/', permissionGuard('inventory', 'create'), async (c) => {
     customerId = walkin.id
   }
 
-  // Validate all items upfront
+  // Validate all items upfront and collect details for totals calculation
+  type ValidatedLine = typeof b.items[number] & {
+    discount_pct: number; line_total: number; vat_amount: number; vat_exempt: number
+  }
+  const validatedLines: ValidatedLine[] = []
+
   for (const line of b.items) {
     if (!line.item_code || !line.quantity || line.quantity <= 0) {
       return c.json({ success: false, error: `item_code وquantity مطلوبان ويجب أن تكون الكمية أكبر من صفر` }, 400)
@@ -97,8 +108,8 @@ sales.post('/', permissionGuard('inventory', 'create'), async (c) => {
     }
 
     const item = await c.env.DB.prepare(
-      'SELECT item_type, is_sellable, min_selling_price FROM items WHERE code = ? AND company_id = ?'
-    ).bind(line.item_code, company_id).first<{ item_type: string; is_sellable: number; min_selling_price: number | null }>()
+      'SELECT item_type, is_sellable, min_selling_price, vat_exempt FROM items WHERE code = ? AND company_id = ?'
+    ).bind(line.item_code, company_id).first<{ item_type: string; is_sellable: number; min_selling_price: number | null; vat_exempt: number }>()
     if (!item) return c.json({ success: false, error: `الصنف ${line.item_code} غير موجود` }, 404)
     if (item.item_type === 'service') {
       return c.json({ success: false, error: `الصنف ${line.item_code} خدمة — لا يمكن بيعه بحركة مخزنية`, code: 'SERVICE_ITEM_NO_STOCK' }, 422)
@@ -114,20 +125,23 @@ sales.post('/', permissionGuard('inventory', 'create'), async (c) => {
         code: 'BELOW_MIN_SELLING_PRICE',
       }, 422)
     }
+
+    const lineTotal  = Math.round(line.quantity * effectivePrice * 100) / 100
+    const vatAmount  = item.vat_exempt ? 0 : Math.round(lineTotal * (vatPct / 100) * 100) / 100
+    validatedLines.push({ ...line, discount_pct: discountPct, line_total: lineTotal, vat_amount: vatAmount, vat_exempt: item.vat_exempt })
   }
 
   // Calculate totals
   let subtotal = 0
-  const lineData = b.items.map((line) => {
-    const discountPct = line.discount_pct ?? 0
-    const lineTotal = Math.round(line.quantity * line.unit_price * (1 - discountPct / 100) * 100) / 100
-    subtotal += lineTotal
-    return { ...line, discount_pct: discountPct, line_total: lineTotal }
+  let taxAmount = 0
+  const lineData = validatedLines.map((line) => {
+    subtotal  += line.line_total
+    taxAmount += line.vat_amount
+    return line
   })
-  subtotal = Math.round(subtotal * 100) / 100
-  // Tax not yet implemented — reserved for later phase
-  const taxAmount = 0
-  const total = subtotal + taxAmount
+  subtotal  = Math.round(subtotal  * 100) / 100
+  taxAmount = Math.round(taxAmount * 100) / 100
+  const total = Math.round((subtotal + taxAmount) * 100) / 100
 
   // Create sales_order header
   const orderInsert = await c.env.DB.prepare(
@@ -238,7 +252,9 @@ sales.post('/', permissionGuard('inventory', 'create'), async (c) => {
       order_id:    orderId,
       total,
       subtotal,
-      tax_amount:  taxAmount,
+      tax_amount:   taxAmount,
+      vat_pct:      vatPct,
+      vat_number:   company?.vat_number ?? null,
       movement_ids: movementIds,
     },
   }, 201)

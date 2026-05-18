@@ -22,17 +22,20 @@ export interface PosReceiptLine {
   unit_price: number
   discount:   number
   total:      number
+  vat_amount?: number
 }
 
 export interface PosReceipt {
-  date:       string
-  cashier:    number
-  lines:      PosReceiptLine[]
-  subtotal:   number
-  tax:        number
-  total:      number
-  tendered:   number | null
-  change:     number | null
+  date:        string
+  cashier:     number
+  lines:       PosReceiptLine[]
+  subtotal:    number
+  tax:         number
+  vat_pct?:    number
+  vat_number?: string | null
+  total:       number
+  tendered:    number | null
+  change:      number | null
 }
 
 export interface PosSaleResult {
