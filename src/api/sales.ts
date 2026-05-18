@@ -24,6 +24,8 @@ import { Hono } from 'hono'
 import type { Env } from '../types'
 import { getUser, permissionGuard } from '../middleware/auth'
 import { normalizeIsoDate, isFutureIsoDate } from '../lib/utils/date'
+import { resolveSalesRevenue as buildSalesRevenueBlueprint, resolveControlAccount } from '../lib/posting_engine'
+import { postFromBusinessEvent } from '../lib/finance'
 
 const sales = new Hono<{ Bindings: Env }>()
 
@@ -246,16 +248,66 @@ sales.post('/', permissionGuard('inventory', 'create'), async (c) => {
     ).bind(total, customerId, company_id).run()
   }
 
+  // ── Revenue GL entry (DR Cash/AR  CR Sales) ─────────────────────────────────
+  // Non-blocking: a posting failure is logged in business_events as 'failed'
+  // and can be retried via the batch posting center. It must not void the sale.
+  let glEntryId: number | null = null
+  try {
+    const receivableKey = paymentMethod === 'credit' ? 'receivable_default' : 'cash_default'
+    const receivableAcc = await resolveControlAccount(c.env.DB, company_id, receivableKey)
+    if (receivableAcc) {
+      // BPG/PPG null → resolved to default posting setup (sales_account = 41010001)
+      const blueprint = await buildSalesRevenueBlueprint(
+        c.env.DB, company_id,
+        null, null,
+        receivableAcc,
+        total,
+        `بيع — أمر رقم ${orderId}`,
+      )
+      if (!blueprint.isBlocked && blueprint.lines.length) {
+        glEntryId = await postFromBusinessEvent(c.env.DB, {
+          company_id,
+          event_type:    'sales_order_revenue',
+          source_module: 'sales',
+          source_id:     orderId,
+          event_date:    saleDate,
+          description:   `إيراد مبيعات — أمر رقم ${orderId}`,
+          created_by:    userId,
+          payload: { order_id: orderId, total, payment_method: paymentMethod, customer_id: customerId },
+          trace:   blueprint.trace ?? null,
+          lines:   blueprint.lines.map(l => ({
+            account_code:     l.account_code!,
+            debit:            l.debit ?? 0,
+            credit:           l.credit ?? 0,
+            description:      l.description ?? `بيع — أمر رقم ${orderId}`,
+            rule_slot:        l.rule_slot,
+            source_ledger:    'cash' as const,
+            source_record_id: orderId,
+          })),
+          onJournalEntryPosted: async (entryId) => {
+            await c.env.DB.prepare(
+              'UPDATE sales_orders SET journal_entry_id = ? WHERE id = ? AND company_id = ?'
+            ).bind(entryId, orderId, company_id).run()
+          },
+        })
+      }
+    }
+  } catch {
+    // Posting failure is silently swallowed here; the business_events row
+    // records the failure for retry via batch posting center.
+  }
+
   return c.json({
     success: true,
     data: {
-      order_id:    orderId,
+      order_id:       orderId,
       total,
       subtotal,
-      tax_amount:   taxAmount,
-      vat_pct:      vatPct,
-      vat_number:   company?.vat_number ?? null,
-      movement_ids: movementIds,
+      tax_amount:     taxAmount,
+      vat_pct:        vatPct,
+      vat_number:     company?.vat_number ?? null,
+      movement_ids:   movementIds,
+      gl_entry_id:    glEntryId,
     },
   }, 201)
 })
@@ -413,8 +465,8 @@ sales.patch('/:id/void', permissionGuard('inventory', 'update'), async (c) => {
   if (!id) return c.json({ success: false, error: 'معرف أمر البيع غير صحيح' }, 400)
 
   const order = await c.env.DB.prepare(
-    'SELECT id, status, total, customer_id, payment_method FROM sales_orders WHERE id = ? AND company_id = ?'
-  ).bind(id, company_id).first<{ id: number; status: string; total: number; customer_id: number; payment_method: string }>()
+    'SELECT id, status, total, customer_id, payment_method, order_date, journal_entry_id FROM sales_orders WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ id: number; status: string; total: number; customer_id: number; payment_method: string; order_date: string; journal_entry_id: number | null }>()
 
   if (!order) return c.json({ success: false, error: 'أمر البيع غير موجود' }, 404)
   if (order.status === 'voided') return c.json({ success: false, error: 'أمر البيع ملغى مسبقاً' }, 422)
@@ -461,6 +513,44 @@ sales.patch('/:id/void', permissionGuard('inventory', 'update'), async (c) => {
   await c.env.DB.prepare(
     "UPDATE sales_orders SET status = 'voided' WHERE id = ? AND company_id = ?"
   ).bind(id, company_id).run()
+
+  // ── Reverse revenue GL entry if one was posted ────────────────────────────
+  if (order.journal_entry_id) {
+    try {
+      const receivableKey = order.payment_method === 'credit' ? 'receivable_default' : 'cash_default'
+      const receivableAcc = await resolveControlAccount(c.env.DB, company_id, receivableKey)
+      if (receivableAcc) {
+        const blueprint = await buildSalesRevenueBlueprint(
+          c.env.DB, company_id, null, null, receivableAcc, order.total,
+          `إلغاء أمر بيع رقم ${id}`,
+        )
+        if (!blueprint.isBlocked && blueprint.lines.length) {
+          await postFromBusinessEvent(c.env.DB, {
+            company_id,
+            event_type:    'sales_order_void',
+            source_module: 'sales',
+            source_id:     id,
+            event_date:    order.order_date,
+            description:   `عكس إيراد — إلغاء أمر رقم ${id}`,
+            created_by:    userId,
+            payload:       { voided_order_id: id, original_gl_entry: order.journal_entry_id },
+            trace:         blueprint.trace ?? null,
+            lines:         blueprint.lines.map(l => ({
+              account_code:     l.account_code!,
+              debit:            l.credit ?? 0,   // swap DR/CR for reversal
+              credit:           l.debit  ?? 0,
+              description:      l.description ?? `إلغاء — أمر رقم ${id}`,
+              rule_slot:        l.rule_slot,
+              source_ledger:    'cash' as const,
+              source_record_id: id,
+            })),
+          })
+        }
+      }
+    } catch {
+      // Non-blocking — void proceeds even if GL reversal fails
+    }
+  }
 
   return c.json({ success: true, data: { voided: true, order_id: id } })
 })

@@ -21,6 +21,8 @@ import { Hono } from 'hono'
 import type { Env } from '../types'
 import { getUser, permissionGuard } from '../middleware/auth'
 import { normalizeIsoDate } from '../lib/utils/date'
+import { resolveSalesRevenue as buildSalesRevenueBlueprint, resolveControlAccount } from '../lib/posting_engine'
+import { postFromBusinessEvent } from '../lib/finance'
 
 const pos = new Hono<{ Bindings: Env }>()
 
@@ -327,6 +329,48 @@ pos.post('/sales', permissionGuard('inventory', 'create'), async (c) => {
     ).bind(total, customerId, company_id).run()
   }
 
+  // ── Revenue GL entry ─────────────────────────────────────────────────────────
+  let glEntryId: number | null = null
+  try {
+    const receivableKey = paymentMethod === 'credit' ? 'receivable_default' : 'cash_default'
+    const receivableAcc = await resolveControlAccount(c.env.DB, company_id, receivableKey)
+    if (receivableAcc) {
+      const blueprint = await buildSalesRevenueBlueprint(
+        c.env.DB, company_id, null, null, receivableAcc, total,
+        `بيع POS — أمر رقم ${orderId}`,
+      )
+      if (!blueprint.isBlocked && blueprint.lines.length) {
+        glEntryId = await postFromBusinessEvent(c.env.DB, {
+          company_id,
+          event_type:    'sales_order_revenue',
+          source_module: 'sales',
+          source_id:     orderId,
+          event_date:    saleDate,
+          description:   `إيراد POS — أمر رقم ${orderId}`,
+          created_by:    userId,
+          payload: { order_id: orderId, total, payment_method: paymentMethod, session_id: session.id },
+          trace:   blueprint.trace ?? null,
+          lines:   blueprint.lines.map(l => ({
+            account_code:     l.account_code!,
+            debit:            l.debit ?? 0,
+            credit:           l.credit ?? 0,
+            description:      l.description ?? `بيع POS — أمر رقم ${orderId}`,
+            rule_slot:        l.rule_slot,
+            source_ledger:    'cash' as const,
+            source_record_id: orderId,
+          })),
+          onJournalEntryPosted: async (entryId) => {
+            await c.env.DB.prepare(
+              'UPDATE sales_orders SET journal_entry_id = ? WHERE id = ? AND company_id = ?'
+            ).bind(entryId, orderId, company_id).run()
+          },
+        })
+      }
+    }
+  } catch {
+    // Non-blocking
+  }
+
   return c.json({
     success: true,
     data: {
@@ -339,6 +383,7 @@ pos.post('/sales', permissionGuard('inventory', 'create'), async (c) => {
       change,
       payment_method: paymentMethod,
       movement_ids:  movementIds,
+      gl_entry_id:   glEntryId,
       receipt: {
         date:     saleDate,
         cashier:  userId,
