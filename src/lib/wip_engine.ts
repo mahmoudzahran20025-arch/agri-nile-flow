@@ -67,10 +67,20 @@ export async function postCostToWIP(opts: PostCostToWIPOpts): Promise<WIPPostRes
 
   // Compute running balance from last row for this crop cycle
   const lastRow = await db.prepare(
-    `SELECT running_balance FROM wip_ledger
+    `SELECT running_balance, transaction_date FROM wip_ledger
      WHERE company_id = ? AND crop_cycle_id = ?
      ORDER BY id DESC LIMIT 1`
-  ).bind(company_id, crop_cycle_id).first<{ running_balance: number }>()
+  ).bind(company_id, crop_cycle_id).first<{ running_balance: number; transaction_date: string }>()
+
+  // Reject backdating: running_balance is append-only ordered by insertion.
+  // A date earlier than the latest row would silently corrupt the chronological sequence.
+  if (lastRow && opts.transaction_date < lastRow.transaction_date) {
+    throw new Error(
+      `WIP_ENGINE: Backdated entry rejected for crop_cycle_id=${crop_cycle_id}. ` +
+      `New date ${opts.transaction_date} is before latest entry date ${lastRow.transaction_date}. ` +
+      `Use a compensating reversal instead.`
+    )
+  }
 
   const prevBalance    = lastRow?.running_balance ?? 0
   const runningBalance = Math.round((prevBalance + debit - credit) * 100) / 100

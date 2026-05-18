@@ -40,6 +40,9 @@ interface ItemMaster {
   inv_posting_group_code:  string | null
   standard_cost:           number | null
   reorder_threshold:       number | null
+  item_type:               'inventory' | 'service' | 'non_stock' | null
+  is_sellable:             number | null
+  is_purchasable:          number | null
   category_name:           string | null
   total_qty:               number
   total_value:             number
@@ -111,6 +114,9 @@ interface EditForm {
   base_unit:               string
   package_type:            string
   package_capacity:        string
+  item_type:               'inventory' | 'service' | 'non_stock'
+  is_sellable:             boolean
+  is_purchasable:          boolean
 }
 
 function AccountingEditModal({
@@ -137,6 +143,9 @@ function AccountingEditModal({
     base_unit:               item.base_unit ?? '',
     package_type:            item.package_type ?? '',
     package_capacity:        item.package_capacity != null ? String(item.package_capacity) : '',
+    item_type:               (item.item_type ?? 'inventory') as EditForm['item_type'],
+    is_sellable:             item.is_sellable !== 0,
+    is_purchasable:          item.is_purchasable !== 0,
   })
   const [err, setErr] = useState('')
 
@@ -165,6 +174,9 @@ function AccountingEditModal({
       base_unit:               form.base_unit.trim()        || null,
       package_type:            form.package_type.trim()     || null,
       package_capacity:        form.package_capacity        ? Number(form.package_capacity) : null,
+      item_type:               form.item_type,
+      is_sellable:             form.is_sellable,
+      is_purchasable:          form.is_purchasable,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['inventory', 'items-master'] })
@@ -300,6 +312,35 @@ function AccountingEditModal({
               عند الإدخال: عدد العبوات × {form.package_capacity} {form.base_unit || 'وحدة'} = الكمية الإجمالية (محسوبة تلقائياً)
             </p>
           )}
+        </div>
+
+        {/* Item type & behavioral flags */}
+        <div className="border-t border-slate-100 pt-4">
+          <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">نوع الصنف والسلوك</p>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <label className="label">نوع الصنف</label>
+              <select className="input" value={form.item_type}
+                onChange={e => set('item_type', e.target.value as EditForm['item_type'])}>
+                <option value="inventory">مخزوني (Inventory)</option>
+                <option value="service">خدمة (Service)</option>
+                <option value="non_stock">غير مخزوني (Non-Stock)</option>
+              </select>
+              <p className="text-xs text-slate-400 mt-1">يحدد آلية تتبع الحركة والترحيل</p>
+            </div>
+            <div className="flex flex-col justify-center gap-3 pt-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" className="rounded" checked={form.is_sellable}
+                  onChange={e => set('is_sellable', e.target.checked)} />
+                <span className="text-sm">قابل للبيع</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" className="rounded" checked={form.is_purchasable}
+                  onChange={e => set('is_purchasable', e.target.checked)} />
+                <span className="text-sm">قابل للشراء</span>
+              </label>
+            </div>
+          </div>
         </div>
 
         {/* COGS account override */}

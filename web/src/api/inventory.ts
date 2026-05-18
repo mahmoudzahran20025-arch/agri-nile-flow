@@ -96,6 +96,9 @@ export const inventoryApi = {
       inv_posting_group_code:  string | null
       standard_cost:           number | null
       reorder_threshold:       number | null
+      item_type:               'inventory' | 'service' | 'non_stock' | null
+      is_sellable:             number | null
+      is_purchasable:          number | null
       category_name:           string | null
       total_qty:               number
       total_value:             number
@@ -126,6 +129,8 @@ export const inventoryApi = {
         category_id: number | null
         prod_posting_group_code: string | null; inv_posting_group_code: string | null
         standard_cost: number | null; reorder_threshold: number | null
+        item_type: 'inventory' | 'service' | 'non_stock' | null
+        is_sellable: number | null; is_purchasable: number | null
         category_name: string | null; total_qty: number; total_value: number; warehouse_count: number
         catalog_status: string; movement_count: number
       }>
@@ -138,7 +143,7 @@ export const inventoryApi = {
     inv_posting_group_code?:  string | null
     standard_cost?:           number | null
     reorder_threshold?:       number | null
-    costing_method?:          'moving_average' | 'standard' | 'fifo' | null
+    costing_method?:          'moving_average' | null
     track_lots?:              boolean | null
     cogs_account_override?:   string | null
     name?:                    string
@@ -146,6 +151,9 @@ export const inventoryApi = {
     base_unit?:               string | null
     package_type?:            string | null
     package_capacity?:        number | null
+    item_type?:               'inventory' | 'service' | 'non_stock' | null
+    is_sellable?:             boolean | null
+    is_purchasable?:          boolean | null
   }) => api.patch(`/inventory/items-master/${code}`, body),
 
   postingHealth: () => unwrap(api.get<{

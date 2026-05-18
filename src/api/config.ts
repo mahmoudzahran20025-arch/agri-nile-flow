@@ -150,13 +150,21 @@ config.get('/items', async (c) => {
 
 config.post('/items', async (c) => {
   const { company_id } = getUser(c)
-  const b = await c.req.json<{ 
-    code: number; name: string; unit?: string; warehouse?: string; 
+  const b = await c.req.json<{
+    code: number; name: string; unit?: string; warehouse?: string;
     reorder_threshold?: number; category_id?: number; track_lots?: number
     prod_posting_group_code?: string; inv_posting_group_code?: string
+    base_unit?: string; package_type?: string; package_capacity?: number
+    item_type?: 'inventory' | 'service' | 'non_stock'
+    is_sellable?: number; is_purchasable?: number
   }>()
 
   if (!b.code || !b.name) return c.json({ success: false, error: 'الكود والاسم مطلوبان' }, 400)
+
+  const VALID_ITEM_TYPES = ['inventory', 'service', 'non_stock']
+  if (b.item_type && !VALID_ITEM_TYPES.includes(b.item_type)) {
+    return c.json({ success: false, error: 'نوع الصنف غير صالح' }, 400)
+  }
 
   const existing = await c.env.DB.prepare(
     'SELECT code FROM items WHERE code = ? AND company_id = ?'
@@ -168,12 +176,17 @@ config.post('/items', async (c) => {
 
   await c.env.DB.prepare(
     `INSERT INTO items
-     (code, company_id, name, unit, warehouse, reorder_threshold, category_id, track_lots, prod_posting_group_code, inv_posting_group_code)
-     VALUES (?,?,?,?,?,?,?,?,?,?)`
+     (code, company_id, name, unit, warehouse, reorder_threshold, category_id, track_lots,
+      prod_posting_group_code, inv_posting_group_code,
+      base_unit, package_type, package_capacity,
+      item_type, is_sellable, is_purchasable)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(
     b.code, company_id, b.name, b.unit ?? null, b.warehouse ?? null,
     b.reorder_threshold ?? 0, b.category_id ?? null, b.track_lots ?? 0,
-    b.prod_posting_group_code ?? null, b.inv_posting_group_code ?? null
+    b.prod_posting_group_code ?? null, b.inv_posting_group_code ?? null,
+    b.base_unit ?? null, b.package_type ?? null, b.package_capacity ?? null,
+    b.item_type ?? 'inventory', b.is_sellable ?? 1, b.is_purchasable ?? 1
   ).run()
 
   return c.json({ success: true, data: null }, 201)

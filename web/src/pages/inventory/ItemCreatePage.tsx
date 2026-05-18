@@ -19,12 +19,16 @@ interface CreateBody {
   inv_posting_group_code:  string
   reorder_threshold:       string
   track_lots:              boolean
+  item_type:               'inventory' | 'service' | 'non_stock'
+  is_sellable:             boolean
+  is_purchasable:          boolean
 }
 
 const EMPTY: CreateBody = {
   code: '', name: '', unit: '', base_unit: '', package_type: '', package_capacity: '',
   category_id: '', prod_posting_group_code: '', inv_posting_group_code: '',
   reorder_threshold: '', track_lots: false,
+  item_type: 'inventory', is_sellable: true, is_purchasable: true,
 }
 
 export default function ItemCreatePage() {
@@ -66,6 +70,9 @@ export default function ItemCreatePage() {
       inv_posting_group_code:  form.inv_posting_group_code  || undefined,
       reorder_threshold:       form.reorder_threshold ? Number(form.reorder_threshold) : undefined,
       track_lots:              form.track_lots ? 1 : 0,
+      item_type:               form.item_type,
+      is_sellable:             form.is_sellable ? 1 : 0,
+      is_purchasable:          form.is_purchasable ? 1 : 0,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['inventory', 'items-master'] })
@@ -202,6 +209,31 @@ export default function ItemCreatePage() {
                   value={form.reorder_threshold}
                   onChange={e => set('reorder_threshold', e.target.value)}
                 />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">نوع الصنف</label>
+                <select className="input" value={form.item_type}
+                  onChange={e => set('item_type', e.target.value as CreateBody['item_type'])}>
+                  <option value="inventory">مخزوني (Inventory)</option>
+                  <option value="service">خدمة (Service)</option>
+                  <option value="non_stock">غير مخزوني (Non-Stock)</option>
+                </select>
+                <p className="text-xs text-slate-400 mt-1">يحدد آلية تتبع الحركة والترحيل</p>
+              </div>
+              <div className="flex flex-col justify-center gap-3 pt-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" className="rounded" checked={form.is_sellable}
+                    onChange={e => set('is_sellable', e.target.checked)} />
+                  <span className="text-sm">قابل للبيع</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" className="rounded" checked={form.is_purchasable}
+                    onChange={e => set('is_purchasable', e.target.checked)} />
+                  <span className="text-sm">قابل للشراء</span>
+                </label>
               </div>
             </div>
 
