@@ -2,10 +2,11 @@
  * PostingSetupHealthPage — Dashboard showing posting setup coverage and readiness.
  */
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { glApi } from '../../api/gl'
 import { useToast } from '../../contexts/ToastContext'
 import GlTransactionFlowReference from '../../components/gl/GlTransactionFlowReference'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 function StatCard({ label, value, sub, color = 'slate' }: { label: string; value: number | string; sub?: string; color?: 'green' | 'amber' | 'red' | 'slate' | 'blue' }) {
   const ring = {
@@ -36,6 +37,7 @@ function StatCard({ label, value, sub, color = 'slate' }: { label: string; value
 
 
 export default function PostingSetupHealthPage() {
+  const navigate = useNavigate()
   const qc = useQueryClient()
   const { toast } = useToast()
   const { data, isLoading, error, refetch } = useQuery({
@@ -91,16 +93,17 @@ export default function PostingSetupHealthPage() {
   const { groups, setup, entities, issues, warnings, is_ready } = data
 
   return (
-    <div className="animate-fade-in space-y-6">
-      <div className="page-header">
-        <h1 className="page-title">صحة إعداد الترحيل</h1>
-        <p className="text-slate-500 text-sm mt-1">
-          مراقبة تغطية مجموعات الترحيل وجاهزية النظام للترحيل التلقائي
-        </p>
-        <div className="mt-3">
-          <Link to="/gl/setup-wizard" className="btn-secondary text-sm">فتح معالج الإعداد</Link>
-        </div>
-      </div>
+    <div className="flex flex-col h-full animate-fade-in">
+      <CommandBar
+        title="صحة إعداد الترحيل"
+        subtitle="مراقبة تغطية مجموعات الترحيل وجاهزية النظام للترحيل التلقائي"
+        actions={[{
+          label: 'فتح معالج الإعداد',
+          variant: 'secondary',
+          onClick: () => navigate('/gl/setup-wizard'),
+        }]}
+      />
+      <div className="flex-1 overflow-y-auto p-5 space-y-6">
 
       {/* Overall Status Banner */}
       <div className={`rounded-xl p-5 flex items-center gap-4 ${
@@ -306,6 +309,7 @@ export default function PostingSetupHealthPage() {
 
       {/* Transaction Flow Reference */}
       <GlTransactionFlowReference />
+      </div>{/* end scroll container */}
     </div>
   )
 }

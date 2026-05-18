@@ -237,15 +237,14 @@ export default function SupplierListPage() {
 
   return (
     <div className="space-y-5">
-      <div className="page-header">
-        <h1 className="page-title">الموردين والعملاء</h1>
-        {canWrite('suppliers') && (
+      {canWrite('suppliers') && (
+        <div className="flex justify-end">
           <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
             <Plus size={16} />
             إضافة مورد
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {error && (
         <div className="card bg-red-50 border border-red-200 p-4">

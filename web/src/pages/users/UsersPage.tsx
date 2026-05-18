@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { UserPlus, ToggleLeft, ToggleRight, Shield } from 'lucide-react'
+import { UserPlus, ToggleLeft, ToggleRight } from 'lucide-react'
 import { usersApi } from '../../api/client'
 import Modal from '../../components/ui/Modal'
 import { usePermission } from '../../hooks/usePermission'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 interface DbUser {
   id:         number
@@ -137,25 +138,19 @@ export default function UsersPage() {
   }
 
   return (
-    <div className="space-y-5">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title flex items-center gap-2">
-            <Shield size={22} className="text-slate-400" />
-            إدارة المستخدمين
-          </h1>
-          <p className="text-sm text-slate-400 mt-0.5">
-            {users?.length ?? 0} مستخدم مسجل في هذه الشركة
-          </p>
-        </div>
-        {canWrite('users') && (
-          <button className="btn-primary gap-2" onClick={() => setAddOpen(true)}>
-            <UserPlus size={16} />
-            دعوة مستخدم
-          </button>
-        )}
-      </div>
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="إدارة المستخدمين"
+        subtitle={`${users?.length ?? 0} مستخدم مسجل في هذه الشركة`}
+        actions={canWrite('users') ? [{
+          label: 'دعوة مستخدم',
+          icon: <UserPlus size={15} />,
+          variant: 'primary',
+          onClick: () => setAddOpen(true),
+        }] : []}
+      />
 
+      <div className="flex-1 overflow-y-auto p-5 space-y-5">
       <div className="card overflow-hidden">
         {isLoading ? (
           <div className="p-16 text-center text-slate-400">جاري التحميل...</div>
@@ -224,6 +219,7 @@ export default function UsersPage() {
       </div>
 
       <AddUserModal open={addOpen} onClose={() => setAddOpen(false)} />
+      </div>{/* end scroll container */}
     </div>
   )
 }

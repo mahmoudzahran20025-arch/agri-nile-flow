@@ -4,6 +4,7 @@ import AuditLogPage            from './AuditLogPage'
 import ErrorLogPage            from './ErrorLogPage'
 import IntegrityPage           from './IntegrityPage'
 import OperationalEventsPage   from './OperationalEventsPage'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 type Tab = 'log' | 'errors' | 'integrity' | 'operational'
 
@@ -21,20 +22,14 @@ export default function AuditCenterPage() {
   const setTab = (t: Tab) => setParams({ tab: t }, { replace: true })
 
   return (
-    <div className="space-y-5 animate-fade-in">
-      {/* Header */}
-      <div className="page-header">
-        <div className="flex items-center gap-3">
-          <Shield size={22} className="text-slate-500" />
-          <div>
-            <h1 className="page-title">مركز التدقيق والمراجعة</h1>
-            <p className="text-sm text-slate-500">سجل التغييرات · سجل الأخطاء · سلامة البيانات</p>
-          </div>
-        </div>
-      </div>
+    <div className="flex flex-col h-full animate-fade-in">
+      <CommandBar
+        title="مركز التدقيق والمراجعة"
+        subtitle="سجل التغييرات · سجل الأخطاء · سلامة البيانات"
+      />
 
       {/* Tab bar */}
-      <div className="flex items-end gap-1 border-b border-slate-200">
+      <div className="flex items-end gap-1 border-b border-slate-200 px-5 bg-white shrink-0">
         {TABS.map(t => (
           <button
             key={t.id}
@@ -52,8 +47,8 @@ export default function AuditCenterPage() {
         ))}
       </div>
 
-      {/* Content — suppress inner page headers */}
-      <div className="[&_.page-header]:hidden [&_.page-title]:hidden">
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-5">
         {tab === 'log'         && <AuditLogPage />}
         {tab === 'operational' && <OperationalEventsPage />}
         {tab === 'errors'      && <ErrorLogPage />}

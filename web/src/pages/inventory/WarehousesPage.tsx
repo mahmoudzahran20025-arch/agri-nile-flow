@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Building2, MapPin, CheckCircle2, ShieldCheck } from 'lucide-react'
+import { Plus, MapPin, CheckCircle2, ShieldCheck } from 'lucide-react'
 import { inventoryApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 import Modal from '../../components/ui/Modal'
 import { glApi } from '../../api/gl'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 export default function WarehousesPage() {
   const qc = useQueryClient()
@@ -38,20 +39,19 @@ export default function WarehousesPage() {
   const warehouses = (data as any)?.entities || []
 
   return (
-    <div className="space-y-5 animate-fade-in">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title flex items-center gap-2">
-            <Building2 size={24} className="text-indigo-600" />
-            إعدادات المخازن والمواقع
-          </h1>
-          <p className="text-xs text-slate-400 mt-1">إدارة الكيانات التخزينية المادية والافتراضية</p>
-        </div>
-        <button className="btn-primary gap-2" onClick={() => setOpen(true)}>
-          <Plus size={16} /> إضافة مخزن
-        </button>
-      </div>
+    <div className="flex flex-col h-full animate-fade-in">
+      <CommandBar
+        title="إعدادات المخازن والمواقع"
+        subtitle="إدارة الكيانات التخزينية المادية والافتراضية"
+        actions={[{
+          label: 'إضافة مخزن',
+          icon: <Plus size={15} />,
+          variant: 'primary',
+          onClick: () => setOpen(true),
+        }]}
+      />
 
+      <div className="flex-1 overflow-y-auto p-5 space-y-5">
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {isLoading && <div className="card animate-pulse h-32 bg-slate-100" />}
         {warehouses.map((w: any) => (
@@ -124,6 +124,7 @@ export default function WarehousesPage() {
           </div>
         </div>
       </Modal>
+      </div>{/* end scroll container */}
     </div>
   )
 }

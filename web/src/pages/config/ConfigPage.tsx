@@ -2,12 +2,13 @@ import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Settings, Calendar, Package, MapPin, BookOpen,
+  Calendar, Package, MapPin, BookOpen,
   Tag, Plus, ChevronDown, Lock, LockOpen, AlertTriangle, Info
 } from 'lucide-react'
 import { configApi, glApi, authApi } from '../../api/client'
 import { usePermission } from '../../hooks/usePermission'
 import Modal from '../../components/ui/Modal'
+import { CommandBar } from '../../components/ui/CommandBar'
 import AddSeasonModal       from '../../components/forms/AddSeasonModal'
 import AddItemModal         from '../../components/forms/AddItemModal'
 import AddMasterRecordModal from '../../components/forms/AddMasterRecordModal'
@@ -640,22 +641,29 @@ export default function ConfigPage() {
     enabled:  tab === 'expense_types',
   })
 
+  const tabActionMap: Record<string, { label: string; onClick: () => void }> = {
+    seasons:       { label: 'موسم جديد',    onClick: () => setSeasonModal(true) },
+    items:         { label: 'صنف جديد',     onClick: () => setItemModal(true) },
+    cost_centers:  { label: 'مركز تكلفة',   onClick: () => setCcModal(true) },
+    accounts:      { label: 'حساب جديد',    onClick: () => setAcctModal(true) },
+    expense_types: { label: 'نوع مصروف',    onClick: () => setExpModal(true) },
+  }
+  const tabAction = tabActionMap[tab]
+
   return (
-    <div className="space-y-5">
-      <div className="page-header">
-        <h1 className="page-title flex items-center gap-2">
-          <Settings size={22} className="text-slate-400" />
-          الإعدادات
-        </h1>
-        {canWrite('config') && tab === 'seasons'       && <button className="btn-primary gap-2" onClick={() => setSeasonModal(true)}><Plus size={15}/>موسم جديد</button>}
-        {canWrite('config') && tab === 'items'         && <button className="btn-primary gap-2" onClick={() => setItemModal(true)}><Plus size={15}/>صنف جديد</button>}
-        {canWrite('config') && tab === 'cost_centers'  && <button className="btn-primary gap-2" onClick={() => setCcModal(true)}><Plus size={15}/>مركز تكلفة</button>}
-        {canWrite('config') && tab === 'accounts'      && <button className="btn-primary gap-2" onClick={() => setAcctModal(true)}><Plus size={15}/>حساب جديد</button>}
-        {canWrite('config') && tab === 'expense_types' && <button className="btn-primary gap-2" onClick={() => setExpModal(true)}><Plus size={15}/>نوع مصروف</button>}
-      </div>
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="الإعدادات"
+        actions={canWrite('config') && tabAction ? [{
+          label: tabAction.label,
+          icon: <Plus size={15} />,
+          variant: 'primary',
+          onClick: tabAction.onClick,
+        }] : []}
+      />
 
       {/* Tab bar */}
-      <div className="flex flex-wrap gap-1 bg-slate-100 rounded-xl p-1 w-fit">
+      <div className="flex flex-wrap gap-1 bg-slate-100 rounded-xl p-1 w-fit mx-5 my-4 shrink-0">
         {TABS.map(t => (
           <button
             key={t.id}
@@ -668,6 +676,8 @@ export default function ConfigPage() {
           </button>
         ))}
       </div>
+
+      <div className="flex-1 overflow-y-auto px-5 pb-5 space-y-5">
 
       {/* Seasons */}
       {tab === 'seasons' && (
@@ -829,6 +839,8 @@ export default function ConfigPage() {
       {tab === 'roles' && (
         <RolesTab />
       )}
+
+      </div>{/* end scroll container */}
 
       {/* Modals */}
       <AddSeasonModal open={seasonModal} onClose={() => setSeasonModal(false)} />

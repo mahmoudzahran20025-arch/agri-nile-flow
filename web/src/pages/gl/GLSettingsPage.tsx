@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Settings, CalendarDays, Link2, AlertTriangle, CheckCircle2, Pencil, Trash2, X, Save } from 'lucide-react'
+import { CalendarDays, Link2, AlertTriangle, CheckCircle2, Pencil, Trash2, X, Save } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import PeriodsPage from './PeriodsPage'
 import { glApi } from '../../api/client'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 type Tab = 'periods' | 'control-accounts'
 
@@ -260,20 +261,14 @@ export default function GLSettingsPage() {
   const setTab = (t: Tab) => setParams({ tab: t }, { replace: true })
 
   return (
-    <div className="space-y-5 animate-fade-in">
-      {/* Header */}
-      <div className="page-header">
-        <div className="flex items-center gap-3">
-          <Settings size={22} className="text-slate-500" />
-          <div>
-            <h1 className="page-title">إعدادات المحاسبة</h1>
-            <p className="text-sm text-slate-500">الفترات المالية · حسابات التحكم</p>
-          </div>
-        </div>
-      </div>
+    <div className="flex flex-col h-full animate-fade-in">
+      <CommandBar
+        title="إعدادات المحاسبة"
+        subtitle="الفترات المالية · حسابات التحكم"
+      />
 
       {/* Tab bar */}
-      <div className="flex items-end gap-1 border-b border-slate-200">
+      <div className="flex items-end gap-1 border-b border-slate-200 px-5 bg-white shrink-0">
         {TABS.map(t => (
           <button
             key={t.id}
@@ -292,12 +287,8 @@ export default function GLSettingsPage() {
       </div>
 
       {/* Tab content */}
-      <div>
-        {tab === 'periods' && (
-          <div className="[&_.page-header]:hidden [&_.page-title]:hidden">
-            <PeriodsPage />
-          </div>
-        )}
+      <div className="flex-1 overflow-y-auto p-5">
+        {tab === 'periods' && <PeriodsPage />}
         {tab === 'control-accounts' && <ControlAccountsTab />}
       </div>
     </div>

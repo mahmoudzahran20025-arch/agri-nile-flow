@@ -12,6 +12,7 @@ import { reportsApi } from '../../api/client'
 import { assetsApi } from '../../api/assets'
 import type { DepreciationScheduleRow } from '../../api/assets'
 import { useToast } from '../../contexts/ToastContext'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 // ── Depreciation Schedule sub-panel ──────────────────────────
 function DepreciationPanel({ assetId, cost }: { assetId: number; cost: number }) {
@@ -440,23 +441,15 @@ export default function SupplierHubPage() {
 
   const setTab = (t: Tab) => setParams({ tab: t }, { replace: true })
 
-  const active = TABS.find(t => t.id === tab)!
-
   return (
-    <div className="space-y-5 animate-fade-in">
-      {/* Header */}
-      <div className="page-header">
-        <div className="flex items-center gap-3">
-          <span className={active.color}>{active.icon}</span>
-          <div>
-            <h1 className="page-title">الموردين والذمم الدائنة</h1>
-            <p className="text-sm text-slate-500">قائمة الموردين · تحليل الأعمار · أرصدة ملخصة · المعدات والميكنة</p>
-          </div>
-        </div>
-      </div>
+    <div className="flex flex-col h-full animate-fade-in">
+      <CommandBar
+        title="الموردين والذمم الدائنة"
+        subtitle="قائمة الموردين · تحليل الأعمار · أرصدة ملخصة · المعدات والميكنة"
+      />
 
       {/* Tab bar */}
-      <div className="flex items-end gap-1 border-b border-slate-200">
+      <div className="flex items-end gap-1 border-b border-slate-200 px-5 bg-white shrink-0">
         {TABS.map(t => (
           <button
             key={t.id}
@@ -474,8 +467,8 @@ export default function SupplierHubPage() {
         ))}
       </div>
 
-      {/* Content — suppress inner page headers */}
-      <div className="[&_.page-header]:hidden [&_.page-title]:hidden">
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-5">
         {tab === 'list'      && <SupplierListPage />}
         {tab === 'aging'     && <APAgingPage />}
         {tab === 'balance'   && <SuppliersBalancePage />}
