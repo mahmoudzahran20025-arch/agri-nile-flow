@@ -12,6 +12,7 @@ import Modal from '../../components/ui/Modal'
 import SidePanel from '../../components/ui/SidePanel'
 import { usePermission } from '../../hooks/usePermission'
 import DataTableV2, { type ColumnV2 } from '../../components/ui/DataTableV2'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 // ── Types ────────────────────────────────────────────────────
 interface WorkOrder {
@@ -572,19 +573,20 @@ export default function WorkOrdersPage() {
   }, {})
 
   return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div className="page-header">
-        <div className="flex items-center gap-3">
-          <h1 className="page-title">أوامر العمل الزراعية</h1>
-          <span className="badge badge-blue">{orders.length} أمر</span>
-        </div>
-        {canWrite('operations') && (
-          <button className="btn-primary gap-2" onClick={() => { setOpenNew(true); setErr('') }}>
-            <Plus size={16} /> أمر عمل جديد
-          </button>
-        )}
-      </div>
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="أوامر العمل الزراعية"
+        subtitle={`${orders.length} أمر مسجل`}
+        actions={canWrite('operations') ? [
+          {
+            label: 'أمر عمل جديد',
+            icon: <Plus size={15} />,
+            variant: 'primary',
+            onClick: () => { setOpenNew(true); setErr('') },
+          },
+        ] : []}
+      />
+      <div className="flex-1 overflow-y-auto p-5 space-y-5">
 
       {/* Status filter pills */}
       <div className="flex flex-wrap items-center gap-2">
@@ -798,6 +800,7 @@ export default function WorkOrdersPage() {
           </div>
         )}
       </SidePanel>
+      </div>{/* end flex-1 scroll container */}
 
       {/* ── Confirm Costed Modal ──────────────────────────── */}
       <Modal open={confirmCosted} title="إغلاق وتسعير أمر العمل" onClose={() => setConfirmCosted(false)} size="sm">

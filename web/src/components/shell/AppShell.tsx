@@ -111,7 +111,6 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { label: 'AP Aging',        path: '/suppliers/aging',        icon: <Clock         size={18} /> },
       { label: 'Cash & Banks',    path: '/treasury',               icon: <Wallet        size={18} /> },
       { label: 'Bank Reconcile',  path: '/treasury/bank',          icon: <ArrowLeftRight size={18} /> },
-      { label: 'Equipment',       path: '/suppliers?tab=equipment',icon: <Tractor       size={18} /> },
     ],
   },
   {
@@ -124,6 +123,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { label: 'تحليلات المبيعات',  path: '/sales/analytics',            icon: <BarChart3     size={18} /> },
       { label: 'نقطة البيع (POS)',   path: '/pos',                        icon: <ShoppingBag   size={18} /> },
       { label: 'العملاء',            path: '/customers',                  icon: <Users         size={18} /> },
+      { label: 'Equipment',          path: '/suppliers?tab=equipment',    icon: <Tractor       size={18} /> },
       { label: 'Work Orders',        path: '/operations',                 icon: <ClipboardList size={18} /> },
       { label: 'HR & Payroll',       path: '/hr',                         icon: <Users         size={18} /> },
       { label: 'Calendar',           path: '/calendar',                   icon: <CalendarDays  size={18} /> },
