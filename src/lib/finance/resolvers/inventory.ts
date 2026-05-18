@@ -9,7 +9,7 @@ import { normalizeIsoDate, yearMonthParts } from '../../utils/date'
 import { readInventoryBalance, upsertInventoryBalance, enqueueInventoryPostingOutbox } from '../../inventory_posting'
 import { resolveSupplierPayableAccount } from './supplier_payable_account'
 import { resolveUnitFactor } from '../../finance_core'
-import { postCostToWIP } from '../../wip_engine'
+import { postCostToWIP, type WIPCostCategory } from '../../wip_engine'
 
 // Movement types that represent materials consumed on a crop cycle (field issue).
 const ISSUE_MOVEMENT_TYPES = new Set(['ISSUE', 'issue', 'field_issue', 'consume', 'CONSUME'])
@@ -44,8 +44,8 @@ export async function resolveInventoryMovement(
 ): Promise<number | null> {
   // Resolve base unit and posting groups
   const itemRow = await db.prepare(
-    'SELECT unit, prod_posting_group_code, inv_posting_group_code FROM items WHERE company_id = ? AND code = ? LIMIT 1'
-  ).bind(opts.company_id, opts.item_code).first<{ unit: string | null; prod_posting_group_code: string | null; inv_posting_group_code: string | null }>()
+    'SELECT unit, prod_posting_group_code, inv_posting_group_code, wip_cost_category FROM items WHERE company_id = ? AND code = ? LIMIT 1'
+  ).bind(opts.company_id, opts.item_code).first<{ unit: string | null; prod_posting_group_code: string | null; inv_posting_group_code: string | null; wip_cost_category: string | null }>()
 
   if (!itemRow) throw new Error(`ITEM_NOT_FOUND: ${opts.item_code}`)
 
@@ -127,8 +127,10 @@ export async function resolveInventoryMovement(
     },
   })
 
-  // WIP side-effect: field issue tied to a crop cycle → accumulate material cost.
+  // WIP side-effect: field issue tied to a crop cycle → accumulate cost.
+  // Category defaults to 'materials'; item.wip_cost_category overrides for fuel, equipment parts, etc.
   if (opts.crop_cycle_id && ISSUE_MOVEMENT_TYPES.has(opts.movement_type) && opts.season_id) {
+    const wipCategory = (itemRow?.wip_cost_category ?? 'materials') as WIPCostCategory
     try {
       await postCostToWIP({
         db,
@@ -136,10 +138,10 @@ export async function resolveInventoryMovement(
         crop_cycle_id:      opts.crop_cycle_id,
         season_id:          opts.season_id,
         transaction_date:   opts.date,
-        cost_category:      'materials',
-        cost_category_code: 'materials',
+        cost_category:      wipCategory,
+        cost_category_code: wipCategory,
         debit:              totalValue,
-        description:        `مواد: ${opts.item_name}`,
+        description:        `${wipCategory === 'materials' ? 'مواد' : wipCategory}: ${opts.item_name}`,
         source_module:      'inventory',
         source_id:          refId,
         journal_entry_id:   entryId,

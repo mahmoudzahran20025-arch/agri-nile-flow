@@ -5,6 +5,7 @@ import { ArrowRight, AlertTriangle, TrendingUp, Layers, Calendar, Wheat, CheckCi
 import { cropCyclesApi, type WIPCategory, type CycleStatus } from '../../api/crop-cycles'
 import { costCategoriesApi } from '../../api/cost-categories'
 import { harvestSettlementsApi } from '../../api/harvest-settlements'
+import { wipApi } from '../../api/wip'
 import { useToast } from '../../contexts/ToastContext'
 import { TableSkeleton } from '../../components/ui/Skeleton'
 import { useAppStore } from '../../store/appStore'
@@ -62,6 +63,11 @@ export default function CropCycleDetailPage() {
   })
   const [reverseSettlementId, setReverseSettlementId] = useState<number | null>(null)
   const [reverseReason, setReverseReason] = useState('')
+  const [showManualWIP, setShowManualWIP] = useState(false)
+  const [manualWIPForm, setManualWIPForm] = useState({
+    cost_category_code: '', amount: '', description: '', transaction_date: '',
+  })
+  const [manualWIPErr, setManualWIPErr] = useState('')
 
   const { data: cycle, isLoading } = useQuery({
     queryKey: ['crop-cycle', cycleId],
@@ -125,6 +131,25 @@ export default function CropCycleDetailPage() {
       setStatusNotes('')
     },
     onError: (e: Error) => toast(e.message, 'error'),
+  })
+
+  const manualWIPMut = useMutation({
+    mutationFn: () => wipApi.postManualEntry({
+      crop_cycle_id:      cycleId,
+      cost_category_code: manualWIPForm.cost_category_code,
+      amount:             Number(manualWIPForm.amount),
+      description:        manualWIPForm.description,
+      transaction_date:   manualWIPForm.transaction_date,
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['crop-cycle-wip', cycleId] })
+      qc.invalidateQueries({ queryKey: ['crop-cycle', cycleId] })
+      toast('تم ترحيل التكلفة اليدوية بنجاح', 'success')
+      setShowManualWIP(false)
+      setManualWIPForm({ cost_category_code: '', amount: '', description: '', transaction_date: '' })
+      setManualWIPErr('')
+    },
+    onError: (e: Error) => { setManualWIPErr(e.message) },
   })
 
   const createSettlementMut = useMutation({
@@ -390,6 +415,16 @@ export default function CropCycleDetailPage() {
       {/* Summary tab */}
       {activeTab === 'summary' && (
         <div className="space-y-4">
+          {canWrite && cycle?.status === 'active' && (
+            <div className="flex justify-end">
+              <button
+                className="btn btn-secondary flex items-center gap-2 text-sm"
+                onClick={() => setShowManualWIP(true)}>
+                <Plus size={14} />
+                إضافة تكلفة يدوية
+              </button>
+            </div>
+          )}
           {wipLoading ? (
             <TableSkeleton rows={6} cols={4} />
           ) : !wipSummary ? null : (
@@ -747,6 +782,61 @@ export default function CropCycleDetailPage() {
                 {(abandonMut.isPending || writeOffMut.isPending)
                   ? 'جاري...'
                   : statusModal === 'abandoned' ? 'تأكيد الترك' : 'تأكيد الشطب'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Manual WIP Entry Modal */}
+      {showManualWIP && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
+            <h3 className="text-base font-semibold text-slate-800">إضافة تكلفة يدوية إلى WIP</h3>
+
+            <div>
+              <label className="label">الفئة التكليفية</label>
+              <select className="input" value={manualWIPForm.cost_category_code}
+                onChange={e => setManualWIPForm(f => ({ ...f, cost_category_code: e.target.value }))}>
+                <option value="">-- اختر الفئة --</option>
+                {(costCats ?? []).map(c => (
+                  <option key={c.code} value={c.code}>{c.name_ar}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">المبلغ (ج.م)</label>
+                <input type="number" className="input" min="0.01" step="0.01" placeholder="0.00"
+                  value={manualWIPForm.amount}
+                  onChange={e => setManualWIPForm(f => ({ ...f, amount: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">التاريخ</label>
+                <input type="date" className="input"
+                  value={manualWIPForm.transaction_date}
+                  onChange={e => setManualWIPForm(f => ({ ...f, transaction_date: e.target.value }))} />
+              </div>
+            </div>
+
+            <div>
+              <label className="label">الوصف</label>
+              <input type="text" className="input" placeholder="وصف التكلفة..."
+                value={manualWIPForm.description}
+                onChange={e => setManualWIPForm(f => ({ ...f, description: e.target.value }))} />
+            </div>
+
+            {manualWIPErr && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{manualWIPErr}</p>}
+
+            <div className="flex gap-3 pt-2">
+              <button className="btn btn-secondary flex-1"
+                onClick={() => { setShowManualWIP(false); setManualWIPErr('') }}>إلغاء</button>
+              <button
+                className="btn btn-primary flex-1"
+                disabled={manualWIPMut.isPending || !manualWIPForm.cost_category_code || !manualWIPForm.amount || !manualWIPForm.transaction_date || !manualWIPForm.description}
+                onClick={() => manualWIPMut.mutate()}>
+                {manualWIPMut.isPending ? 'جاري الترحيل...' : 'ترحيل التكلفة'}
               </button>
             </div>
           </div>

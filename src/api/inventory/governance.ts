@@ -267,6 +267,7 @@ governance.get('/items-master', permissionGuard('inventory', 'read'), async (c) 
        i.list_price,
        i.barcode,
        i.expiry_tracking,
+       i.wip_cost_category,
        ic.name AS category_name,
        COALESCE(ms.balance_qty, 0) AS total_qty,
        COALESCE(ms.balance_value, 0) AS total_value,
@@ -328,6 +329,7 @@ governance.patch('/items-master/:code', permissionGuard('inventory', 'create'), 
     list_price?:              number | null
     barcode?:                 string | null
     expiry_tracking?:         boolean | null
+    wip_cost_category?:       string | null
   }>()
 
   const VALID_COSTING = ['moving_average', 'standard', 'fifo']
@@ -361,6 +363,7 @@ governance.patch('/items-master/:code', permissionGuard('inventory', 'create'), 
   if ('list_price'              in b) { sets.push('list_price = ?');              binds.push(b.list_price ?? null) }
   if ('barcode'                 in b) { sets.push('barcode = ?');                 binds.push(b.barcode?.trim() || null) }
   if ('expiry_tracking'         in b) { sets.push('expiry_tracking = ?');         binds.push(b.expiry_tracking ? 1 : 0) }
+  if ('wip_cost_category'       in b) { sets.push('wip_cost_category = ?');       binds.push(b.wip_cost_category ?? null) }
 
   if (sets.length === 0) return c.json({ success: false, error: 'لا توجد حقول للتحديث' }, 400)
 

@@ -46,6 +46,7 @@ interface ItemMaster {
   list_price:              number | null
   barcode:                 string | null
   expiry_tracking:         number | null
+  wip_cost_category:       string | null
   category_name:           string | null
   total_qty:               number
   total_value:             number
@@ -123,6 +124,7 @@ interface EditForm {
   list_price:              string
   barcode:                 string
   expiry_tracking:         boolean
+  wip_cost_category:       string
 }
 
 function AccountingEditModal({
@@ -155,6 +157,7 @@ function AccountingEditModal({
     list_price:              item.list_price != null ? String(item.list_price) : '',
     barcode:                 item.barcode ?? '',
     expiry_tracking:         !!item.expiry_tracking,
+    wip_cost_category:       item.wip_cost_category ?? '',
   })
   const [err, setErr] = useState('')
 
@@ -189,6 +192,7 @@ function AccountingEditModal({
       list_price:              form.list_price ? Number(form.list_price) : null,
       barcode:                 form.barcode.trim() || null,
       expiry_tracking:         form.expiry_tracking,
+      wip_cost_category:       form.wip_cost_category || null,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['inventory', 'items-master'] })
@@ -385,6 +389,20 @@ function AccountingEditModal({
                 <p className="text-xs text-slate-400">عند التفعيل: الحركات الواردة (GRN) تتطلب تاريخ انتهاء الصلاحية</p>
               </div>
             </label>
+          </div>
+          <div className="mt-3">
+            <label className="label">فئة تكلفة WIP (تجاوز)</label>
+            <select className="input" value={form.wip_cost_category}
+              onChange={e => set('wip_cost_category', e.target.value)}>
+              <option value="">افتراضي (مواد)</option>
+              <option value="materials">مواد (materials)</option>
+              <option value="fuel">وقود (fuel)</option>
+              <option value="equipment">معدات (equipment)</option>
+              <option value="contractor">مقاولون (contractor)</option>
+              <option value="overhead">مصاريف عامة (overhead)</option>
+              <option value="other">أخرى (other)</option>
+            </select>
+            <p className="text-xs text-slate-400 mt-1">يحدد الفئة التكليفية عند ترحيل هذا الصنف إلى WIP دورة المحصول</p>
           </div>
         </div>
 

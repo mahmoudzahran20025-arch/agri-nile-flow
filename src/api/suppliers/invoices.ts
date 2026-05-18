@@ -16,6 +16,7 @@ import {
   updateSupplierRunningBalance,
 } from './shared'
 import { enforceSupplierTxnDimensions } from '../../lib/dimension_validator'
+import { postCostToWIP } from '../../lib/wip_engine'
 
 const invoices = new Hono<{ Bindings: Env }>()
 invoices.use('*', authMiddleware)
@@ -131,7 +132,7 @@ invoices.post('/:code/transactions', financeOnly, async (c) => {
     field_id?: number;
     statement_text?: string; notes_internal?: string; service_type_code?: string
     financial_account_id?: number; equipment_usage_mode?: 'owned' | 'rental'
-    work_order_id?: number; status?: 'draft' | 'posted'
+    work_order_id?: number; crop_cycle_id?: number; status?: 'draft' | 'posted'
   }>()
 
   if (!b.transaction_date || !b.entry_type || b.amount == null) {
@@ -242,6 +243,39 @@ invoices.post('/:code/transactions', financeOnly, async (c) => {
       if (glId) {
         await c.env.DB.prepare('UPDATE supplier_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?').bind(glId, newId, company_id).run()
       }
+
+      // WIP side-effect: service/contractor invoices linked to a crop cycle
+      // Route cost to wip_ledger for agricultural service procurement cost tracking.
+      if (b.entry_type === 'د') {
+        const cropCycleId = b.crop_cycle_id ?? (b.work_order_id
+          ? (await c.env.DB.prepare('SELECT crop_cycle_id FROM work_orders WHERE id = ? AND company_id = ?')
+              .bind(b.work_order_id, company_id).first<{ crop_cycle_id: number | null }>())?.crop_cycle_id
+          : null)
+        if (cropCycleId) {
+          const cycle = await c.env.DB.prepare(
+            'SELECT season_id, status FROM crop_cycles WHERE id = ? AND company_id = ?'
+          ).bind(cropCycleId, company_id).first<{ season_id: number; status: string }>()
+          if (cycle?.status === 'active') {
+            try {
+              await postCostToWIP({
+                db: c.env.DB, company_id,
+                crop_cycle_id: cropCycleId,
+                season_id: cycle.season_id,
+                transaction_date: transactionDate,
+                cost_category: 'contractor',
+                cost_category_code: 'contractor',
+                debit: b.amount,
+                description: b.notes || `خدمات مورد #${newId}`,
+                source_module: 'supplier_invoice',
+                source_id: newId,
+                journal_entry_id: glId,
+              })
+            } catch (wipErr) {
+              console.error(`WIP_SUPPLIER_INVOICE failed txn=${newId}:`, (wipErr as Error).message)
+            }
+          }
+        }
+      }
     } catch (e: any) {
       await logFinancialWorkflowFailure(c.env.DB, {
         company_id, user_id: userId, module: 'suppliers', stage: 'gl_posting',
@@ -301,6 +335,38 @@ invoices.patch('/transactions/:id/post', financeOnly, async (c) => {
     }
     if (glId) {
       await c.env.DB.prepare('UPDATE supplier_transactions SET journal_entry_id = ? WHERE id = ? AND company_id = ?').bind(glId, id, company_id).run()
+    }
+
+    // WIP side-effect for service invoices linked to a crop cycle
+    if (tx.entry_type === 'د') {
+      const cropCycleId = tx.crop_cycle_id ?? (tx.work_order_id
+        ? (await c.env.DB.prepare('SELECT crop_cycle_id FROM work_orders WHERE id = ? AND company_id = ?')
+            .bind(tx.work_order_id, company_id).first<{ crop_cycle_id: number | null }>())?.crop_cycle_id
+        : null)
+      if (cropCycleId) {
+        const cycle = await c.env.DB.prepare(
+          'SELECT season_id, status FROM crop_cycles WHERE id = ? AND company_id = ?'
+        ).bind(cropCycleId, company_id).first<{ season_id: number; status: string }>()
+        if (cycle?.status === 'active') {
+          try {
+            await postCostToWIP({
+              db: c.env.DB, company_id,
+              crop_cycle_id: cropCycleId,
+              season_id: cycle.season_id,
+              transaction_date: tx.transaction_date,
+              cost_category: 'contractor',
+              cost_category_code: 'contractor',
+              debit: tx.amount,
+              description: tx.notes || `خدمات مورد #${id}`,
+              source_module: 'supplier_invoice',
+              source_id: id,
+              journal_entry_id: glId,
+            })
+          } catch (wipErr) {
+            console.error(`WIP_SUPPLIER_INVOICE failed txn=${id}:`, (wipErr as Error).message)
+          }
+        }
+      }
     }
   } catch (e: any) {
     return c.json({ success: true, data: { id }, warning: `تم الترحيل لكن فشل القيد المحاسبي: ${e.message}` })
