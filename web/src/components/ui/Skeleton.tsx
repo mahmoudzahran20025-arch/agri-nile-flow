@@ -65,7 +65,7 @@ export function FormSkeleton({ fields = 4 }: { fields?: number }) {
 // ─── Page Header Skeleton ─────────────────────────────────────
 export function PageHeaderSkeleton() {
   return (
-    <div className="page-header">
+    <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200/60 bg-white shrink-0">
       <div>
         <Bone className="h-6 w-48 mb-2" />
         <Bone className="h-3 w-24" />

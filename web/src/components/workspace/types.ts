@@ -10,6 +10,8 @@ export type MovementType =
   | 'ADJUSTMENT_LOSS'
   | 'TRANSFER_OUT'
   | 'TRANSFER_IN'
+  | 'PRODUCTION_INPUT'
+  | 'PRODUCTION_OUTPUT'
 
 export type DraftStatus =
   | 'draft'
@@ -135,18 +137,20 @@ export interface MovementTypeMeta {
 }
 
 export const MOVEMENT_TYPES: MovementTypeMeta[] = [
-  { value: 'GRN',               label: 'استلام بضاعة',  sub: 'وارد من مورد',   icon: '↓', isIn: true  },
-  { value: 'RETURN_CUSTOMER',   label: 'مرتجع عميل',   sub: 'مردود للمخزن',  icon: '↩', isIn: true  },
-  { value: 'ADJUSTMENT_PROFIT', label: 'تسوية زيادة',  sub: 'فائض جردي',     icon: '+', isIn: true  },
-  { value: 'ISSUE',             label: 'صرف مخزون',     sub: 'خروج من المخزن', icon: '↑', isIn: false },
-  { value: 'RETURN_SUPPLIER',   label: 'مرتجع مورد',   sub: 'إرجاع للمورد',  icon: '↪', isIn: false },
-  { value: 'ADJUSTMENT_LOSS',   label: 'تسوية نقص',     sub: 'عجز جردي',      icon: '−', isIn: false },
-  { value: 'TRANSFER_OUT',      label: 'تحويل منصرف',  sub: 'صرف لمخزن آخر',  icon: '↗', isIn: false },
-  { value: 'TRANSFER_IN',       label: 'تحويل وارد',    sub: 'وارد من مخزن آخر',icon: '↘', isIn: true  },
+  { value: 'GRN',               label: 'استلام بضاعة',    sub: 'وارد من مورد',      icon: '↓', isIn: true  },
+  { value: 'RETURN_CUSTOMER',   label: 'مرتجع عميل',     sub: 'مردود للمخزن',     icon: '↩', isIn: true  },
+  { value: 'ADJUSTMENT_PROFIT', label: 'تسوية زيادة',    sub: 'فائض جردي',        icon: '+', isIn: true  },
+  { value: 'PRODUCTION_OUTPUT', label: 'إنتاج وارد',      sub: 'ناتج خط الإنتاج',  icon: '⚙', isIn: true  },
+  { value: 'ISSUE',             label: 'صرف مخزون',       sub: 'خروج من المخزن',   icon: '↑', isIn: false },
+  { value: 'RETURN_SUPPLIER',   label: 'مرتجع مورد',     sub: 'إرجاع للمورد',     icon: '↪', isIn: false },
+  { value: 'ADJUSTMENT_LOSS',   label: 'تسوية نقص',       sub: 'عجز جردي',         icon: '−', isIn: false },
+  { value: 'TRANSFER_OUT',      label: 'تحويل منصرف',    sub: 'صرف لمخزن آخر',    icon: '↗', isIn: false },
+  { value: 'TRANSFER_IN',       label: 'تحويل وارد',      sub: 'وارد من مخزن آخر', icon: '↘', isIn: true  },
+  { value: 'PRODUCTION_INPUT',  label: 'مدخلات الإنتاج', sub: 'مواد تدخل خط الإنتاج', icon: '🔧', isIn: false },
 ]
 
 export function isInboundType(t: MovementType): boolean {
-  return ['GRN', 'RETURN_CUSTOMER', 'ADJUSTMENT_PROFIT', 'TRANSFER_IN'].includes(t)
+  return ['GRN', 'RETURN_CUSTOMER', 'ADJUSTMENT_PROFIT', 'TRANSFER_IN', 'PRODUCTION_OUTPUT'].includes(t)
 }
 
 export function isSupplierType(t: MovementType): boolean {

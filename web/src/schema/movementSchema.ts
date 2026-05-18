@@ -1,12 +1,14 @@
-export type CanonicalMovementType = 
-  | 'GRN' 
-  | 'ISSUE' 
-  | 'RETURN_SUPPLIER' 
-  | 'RETURN_CUSTOMER' 
-  | 'ADJUSTMENT_PROFIT' 
+export type CanonicalMovementType =
+  | 'GRN'
+  | 'ISSUE'
+  | 'RETURN_SUPPLIER'
+  | 'RETURN_CUSTOMER'
+  | 'ADJUSTMENT_PROFIT'
   | 'ADJUSTMENT_LOSS'
   | 'TRANSFER_OUT'
-  | 'TRANSFER_IN';
+  | 'TRANSFER_IN'
+  | 'PRODUCTION_INPUT'
+  | 'PRODUCTION_OUTPUT';
 
 export interface MovementLinePayload {
   item_code: number;

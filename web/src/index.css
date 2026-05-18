@@ -87,14 +87,6 @@
   .badge-blue   { @apply badge bg-sky-50 text-sky-700 border border-sky-100; }
   .badge-slate  { @apply badge bg-slate-100 text-slate-600 border border-slate-200; }
 
-  /* Gen-2 page header pattern — used across legacy pages until migrated to CommandBar */
-  .page-header {
-    @apply flex items-center justify-between mb-5 pb-4 border-b border-slate-200/60;
-  }
-
-  .page-title {
-    @apply text-xl font-bold text-slate-800 leading-tight;
-  }
 
   /* Animated Sidebar Link */
   .nav-link {
