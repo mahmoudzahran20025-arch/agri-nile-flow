@@ -365,10 +365,13 @@ operations.patch('/orders/:id/status', async (c) => {
         'SELECT SUM(quantity * unit_cost) AS total_cost FROM work_tasks WHERE work_order_id = ?'
       ).bind(id).first<{ total_cost: number }>()
 
+      // Sum only rental equipment with no journal_entry_id (owned rows excluded — P3-C4:
+      // owned asset cost comes from monthly depreciation, not from manual rate×hours)
       const eqRow = await c.env.DB.prepare(
         `SELECT SUM(total_cost) AS total_cost
          FROM work_order_equipment
-         WHERE work_order_id = ? AND company_id = ? AND journal_entry_id IS NULL`
+         WHERE work_order_id = ? AND company_id = ? AND journal_entry_id IS NULL
+           AND equipment_usage_mode = 'rental'`
       ).bind(id, company_id).first<{ total_cost: number }>()
 
       const laborCost        = tasks?.total_cost ?? 0
@@ -426,21 +429,38 @@ operations.patch('/orders/:id/status', async (c) => {
             }
           }
           if (equipmentUnposted > 0) {
-            try {
-              await postCostToWIP({
-                db: c.env.DB, company_id,
-                crop_cycle_id: order.crop_cycle_id,
-                season_id: order.season_id,
-                transaction_date: costingDate,
-                cost_category: 'equipment',
-                cost_category_code: 'equipment',
-                debit: equipmentUnposted,
-                description: `معدات — أمر عمل #${id}`,
-                source_module: 'operations', source_id: id,
-                journal_entry_id: glId,
-              })
-            } catch (wipErr) {
-              console.error(`WIP_EQUIPMENT_FAILED work_order=${id}:`, (wipErr as Error).message)
+            // Exclude rental equipment rows already written to wip_ledger at insert time
+            // (source_module='operations_equipment'). Sum only the remainder to avoid double-count.
+            const alreadyWrittenRow = await c.env.DB.prepare(
+              `SELECT COALESCE(SUM(wl.debit), 0) AS already_written
+               FROM wip_ledger wl
+               WHERE wl.company_id = ? AND wl.crop_cycle_id = ?
+                 AND wl.source_module = 'operations_equipment'
+                 AND wl.source_id IN (
+                   SELECT id FROM work_order_equipment
+                   WHERE work_order_id = ? AND company_id = ? AND equipment_usage_mode = 'rental'
+                 )`
+            ).bind(company_id, order.crop_cycle_id, id, company_id).first<{ already_written: number }>()
+            const remainingEquipmentWIP = Math.max(0,
+              Math.round(((equipmentUnposted) - (alreadyWrittenRow?.already_written ?? 0)) * 100) / 100
+            )
+            if (remainingEquipmentWIP > 0) {
+              try {
+                await postCostToWIP({
+                  db: c.env.DB, company_id,
+                  crop_cycle_id: order.crop_cycle_id,
+                  season_id: order.season_id,
+                  transaction_date: costingDate,
+                  cost_category: 'equipment',
+                  cost_category_code: 'equipment',
+                  debit: remainingEquipmentWIP,
+                  description: `معدات (إيجار) — أمر عمل #${id}`,
+                  source_module: 'operations', source_id: id,
+                  journal_entry_id: glId,
+                })
+              } catch (wipErr) {
+                console.error(`WIP_EQUIPMENT_FAILED work_order=${id}:`, (wipErr as Error).message)
+              }
             }
           }
         }
@@ -512,7 +532,7 @@ operations.post('/orders/:id/equipment', async (c) => {
   const orderId = Number(c.req.param('id'))
 
   const order = await c.env.DB.prepare(
-    `SELECT status, center_code, season_id, field_id
+    `SELECT status, center_code, season_id, field_id, crop_cycle_id
      FROM work_orders
      WHERE id = ? AND company_id = ?`
   ).bind(orderId, company_id).first<{
@@ -520,6 +540,7 @@ operations.post('/orders/:id/equipment', async (c) => {
     center_code: number | null
     season_id: number | null
     field_id: number | null
+    crop_cycle_id: number | null
   }>()
   if (!order) return c.json({ success: false, error: 'أمر العمل غير موجود' }, 404)
   if (['costed', 'cancelled'].includes(order.status)) {
@@ -654,7 +675,29 @@ operations.post('/orders/:id/equipment', async (c) => {
     throw e
   }
   // GL posting deferred to WO→COSTED transition — never posted per equipment row.
-  // The COSTED handler sums all work_order_equipment.total_cost in one journal entry.
+  // WIP write: rental equipment is costed at actual rate×hours and written immediately.
+  // Owned equipment is excluded — depreciation allocation writes WIP for owned assets,
+  // writing here would double-count with the monthly depreciation run (P3-C4).
+  if (usageMode === 'rental' && equipmentCost > 0 && order.crop_cycle_id && order.season_id) {
+    try {
+      await postCostToWIP({
+        db: c.env.DB, company_id,
+        crop_cycle_id: order.crop_cycle_id,
+        season_id: order.season_id,
+        transaction_date: b.task_date,
+        cost_category: 'equipment',
+        cost_category_code: 'equipment',
+        debit: equipmentCost,
+        description: `معدات (إيجار) — ${b.equipment_name.trim()} (${b.hours_worked} ساعة)`,
+        source_module: 'operations_equipment',
+        source_id: equipmentId,
+      })
+    } catch (wipErr) {
+      // WIP failure must NOT roll back the equipment row — GL posts at COSTED transition.
+      console.error(`WIP_EQUIPMENT_INSERT work_order=${orderId} equipment=${equipmentId}:`, (wipErr as Error).message)
+    }
+  }
+
   return c.json({ success: true, data: { id: equipmentId, operation_id: operationId } }, 201)
 })
 
