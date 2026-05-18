@@ -240,6 +240,8 @@ transfers.post('/movements/transfer-batch', permissionGuard('inventory', 'create
         date:               movementDate,
         created_by:         userId,
         center_code:        b.center_code,
+        season_id:          b.season_id,
+        field_id:           b.field_id,
       })
     }
 
