@@ -174,7 +174,8 @@ operations.post('/orders', async (c) => {
   const { company_id, sub: userId } = getUser(c)
   const b = await c.req.json<{
     name: string; operation_type: string; planned_date: string
-    season_id?: number; field_id?: number; center_code?: number; area_feddan?: number; notes?: string
+    season_id?: number; field_id?: number; crop_cycle_id?: number
+    center_code?: number; area_feddan?: number; notes?: string
   }>()
   if (!b.name || !b.operation_type || !b.planned_date) {
     return c.json({ success: false, error: 'الاسم والنوع والتاريخ مطلوبة' }, 400)
@@ -207,10 +208,20 @@ operations.post('/orders', async (c) => {
     }
   }
 
+  if (b.crop_cycle_id != null) {
+    const cycle = await c.env.DB.prepare(
+      "SELECT id FROM crop_cycles WHERE id = ? AND company_id = ? AND status = 'active'"
+    ).bind(b.crop_cycle_id, company_id).first<{ id: number }>()
+    if (!cycle) {
+      return c.json({ success: false, error: 'دورة المحصول غير موجودة أو غير نشطة' }, 422)
+    }
+  }
+
   const result = await c.env.DB.prepare(
-    `INSERT INTO work_orders (company_id, season_id, field_id, center_code, name, operation_type,
-     planned_date, area_feddan, notes, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)`
-  ).bind(company_id, b.season_id ?? null, b.field_id ?? null, resolvedCenterCode, b.name, b.operation_type,
+    `INSERT INTO work_orders (company_id, season_id, field_id, crop_cycle_id, center_code, name, operation_type,
+     planned_date, area_feddan, notes, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(company_id, b.season_id ?? null, b.field_id ?? null, b.crop_cycle_id ?? null,
+     resolvedCenterCode, b.name, b.operation_type,
      b.planned_date, b.area_feddan ?? null, b.notes ?? null, userId).run()
 
   void logAudit(c.env.DB, {
@@ -220,6 +231,52 @@ operations.post('/orders', async (c) => {
   })
 
   return c.json({ success: true, data: { id: result.meta.last_row_id } }, 201)
+})
+
+// PATCH /api/operations/orders/:id — update work order fields before costing
+operations.patch('/orders/:id', async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const b = await c.req.json<{
+    crop_cycle_id?: number | null
+    notes?: string
+    area_feddan?: number
+  }>()
+
+  const order = await c.env.DB.prepare(
+    'SELECT id, status FROM work_orders WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ id: number; status: string }>()
+  if (!order) return c.json({ success: false, error: 'أمر العمل غير موجود' }, 404)
+  if (order.status === 'costed' || order.status === 'cancelled') {
+    return c.json({ success: false, error: 'لا يمكن تعديل أمر عمل مُكلَّف أو ملغى' }, 422)
+  }
+
+  if (b.crop_cycle_id != null) {
+    const cycle = await c.env.DB.prepare(
+      "SELECT id FROM crop_cycles WHERE id = ? AND company_id = ? AND status = 'active'"
+    ).bind(b.crop_cycle_id, company_id).first<{ id: number }>()
+    if (!cycle) return c.json({ success: false, error: 'دورة المحصول غير موجودة أو غير نشطة' }, 422)
+  }
+
+  const sets: string[]    = []
+  const params: unknown[] = []
+  if (b.crop_cycle_id !== undefined) { sets.push('crop_cycle_id = ?'); params.push(b.crop_cycle_id ?? null) }
+  if (b.notes         !== undefined) { sets.push('notes = ?');         params.push(b.notes) }
+  if (b.area_feddan   !== undefined) { sets.push('area_feddan = ?');   params.push(b.area_feddan) }
+
+  if (!sets.length) return c.json({ success: false, error: 'لا توجد حقول للتحديث' }, 400)
+
+  params.push(id, company_id)
+  await c.env.DB.prepare(
+    `UPDATE work_orders SET ${sets.join(', ')} WHERE id = ? AND company_id = ?`
+  ).bind(...params).run()
+
+  void logAudit(c.env.DB, {
+    user_id: userId, company_id, action: 'UPDATE',
+    table_name: 'work_orders', record_id: id, new_value: b,
+  })
+
+  return c.json({ success: true })
 })
 
 // PATCH /api/operations/orders/:id/status  — lifecycle transition

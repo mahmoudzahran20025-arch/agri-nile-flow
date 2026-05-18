@@ -320,7 +320,7 @@ invoices.delete('/transactions/:id', financeOnly, async (c) => {
   if (!tx) return c.json({ success: false, error: 'القيد غير موجود' }, 404)
   if (tx.status === 'posted') return c.json({ success: false, error: 'لا يمكن حذف قيد مرحل' }, 400)
 
-  await c.env.DB.prepare('DELETE FROM supplier_transactions WHERE id = ?').bind(id).run()
+  await c.env.DB.prepare('DELETE FROM supplier_transactions WHERE id = ? AND company_id = ?').bind(id, company_id).run()
   return c.json({ success: true })
 })
 

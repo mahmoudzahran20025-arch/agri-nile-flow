@@ -546,9 +546,10 @@ async function postHarvestSettlement(
   // Resolve settlement_mode: default to 'inventory' for backwards compatibility.
   const settlementMode = opts.settlement_mode ?? 'inventory'
 
-  const inventoryAcc   = await requireControlAccount(db, company_id, ['inventory'],         'Settlement inventory account')
-  const cogsAcc        = await requireControlAccount(db, company_id, ['agricultural_cogs', 'harvest_cogs', 'cogs'], 'Settlement COGS account')
-  const revenueAcc     = await requireControlAccount(db, company_id, ['harvest_revenue', 'revenue_default'], 'Settlement revenue account')
+  const inventoryAcc   = await requireControlAccount(db, company_id, ['inventory'],                                    'Settlement inventory account')
+  const cogsAcc        = await requireControlAccount(db, company_id, ['agricultural_cogs', 'harvest_cogs', 'cogs'],    'Settlement COGS account')
+  const revenueAcc     = await requireControlAccount(db, company_id, ['harvest_revenue', 'revenue_default'],           'Settlement revenue account')
+  const cashAcc        = await requireControlAccount(db, company_id, ['cash', 'accounts_receivable', 'cash_default'],  'Settlement cash/AR account for direct sale')
 
   const wipCost    = Math.round(opts.total_wip_cost * 100) / 100
   const invValue   = Math.round((opts.inventory_value ?? wipCost) * 100) / 100
@@ -621,7 +622,7 @@ async function postHarvestSettlement(
         created_by: user_id,
         payload: { settlement_id, revenue, buyer: opts.buyer_name },
         lines: [
-          { account_code: '14010101', debit: revenue, credit: 0,       description: `حصيلة بيع: ${cycleDesc}`, rule_slot: 'cash',            source_ledger: 'harvest' as const, source_record_id: settlement_id, ...dims },
+          { account_code: cashAcc,    debit: revenue, credit: 0,       description: `حصيلة بيع: ${cycleDesc}`, rule_slot: 'cash',            source_ledger: 'harvest' as const, source_record_id: settlement_id, ...dims },
           { account_code: revenueAcc, debit: 0,       credit: revenue,  description: `إيراد مبيعات محاصيل`,     rule_slot: 'harvest_revenue', source_ledger: 'harvest' as const, source_record_id: settlement_id, ...dims },
         ],
       })
@@ -797,7 +798,13 @@ async function postCycleAbandonment(
   }
 
   const wipBalance = Math.round(cycle.wip_balance * 100) / 100
-  const lossAccount = cycle.abandonment_policy === 'extraordinary_loss' ? '61060002' : '61060001'
+  const lossAccount = await requireControlAccount(
+    db, company_id,
+    cycle.abandonment_policy === 'extraordinary_loss'
+      ? ['agricultural_loss_extraordinary', 'agricultural_loss_abandonment', 'agricultural_loss']
+      : ['agricultural_loss_operating',     'agricultural_loss_abandonment', 'agricultural_loss'],
+    'Abandonment loss account',
+  )
   const wipAcc = await requireControlAccount(db, company_id, ['wip_asset'], 'WIP asset account for abandonment')
   const cycleDesc = `${cycle.crop_name}${cycle.field_name ? ' — ' + cycle.field_name : ''}`
 

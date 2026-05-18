@@ -78,13 +78,10 @@ adjustments.put('/adjustments/:id/lines', permissionGuard('inventory', 'create')
   if (!adj) return c.json({ success: false, error: 'التسوية غير موجودة' }, 404)
   if (adj.status !== 'draft') return c.json({ success: false, error: 'لا يمكن تعديل بنود تسوية مرحّلة' }, 400)
 
+  // adj already validated to belong to this company above; use it to scope the DELETE
   await c.env.DB.prepare(
-    `DELETE FROM inventory_adjustment_lines
-     WHERE adjustment_id = ?
-       AND adjustment_id IN (
-         SELECT id FROM inventory_adjustments WHERE id = ? AND company_id = ?
-       )`
-  ).bind(id, id, company_id).run()
+    'DELETE FROM inventory_adjustment_lines WHERE adjustment_id = ?'
+  ).bind(adj.id).run()
 
   const lineStmts = b.lines.map((l) => {
     const theoreticalQty = Number(l.theoretical_qty ?? 0)

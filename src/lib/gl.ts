@@ -105,6 +105,15 @@ export async function postAutoEntry(db: D1Database, opts: PostEntryOpts): Promis
   try {
     let entryId: number | null = null
 
+    // Re-check period is still open right before INSERT to close the race window
+    // between getOpenPeriod() above and the actual write.
+    const periodStillOpen = await db.prepare(
+      'SELECT is_closed FROM financial_periods WHERE id = ? AND company_id = ?'
+    ).bind(periodId, opts.company_id).first<{ is_closed: number }>()
+    if (!periodStillOpen || periodStillOpen.is_closed) {
+      throw new Error(`GL_CLOSED_PERIOD: Period ${periodId} was closed before the entry could be written.`)
+    }
+
     // Stage 1: Persist header as draft. It is promoted to posted only after
     // line persistence + invariant checks pass.
     const entry = await db

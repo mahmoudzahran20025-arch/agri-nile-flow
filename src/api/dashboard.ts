@@ -114,9 +114,9 @@ dashboard.get('/inventory-alerts', async (c) => {
 
   const { results } = await c.env.DB.prepare(
     `SELECT i.code, i.name, i.unit, i.reorder_threshold,
-            COALESCE(SUM(im.qty_in) - SUM(im.qty_out), 0) AS balance_qty
+            COALESCE(SUM(ib.balance_qty), 0) AS balance_qty
      FROM items i
-     LEFT JOIN inventory_movements im ON im.item_code = i.code AND im.company_id = i.company_id
+     LEFT JOIN inventory_balances ib ON ib.item_code = i.code AND ib.company_id = i.company_id
      WHERE i.company_id = ? AND i.is_active = 1
      GROUP BY i.code
      HAVING balance_qty <= i.reorder_threshold AND i.reorder_threshold > 0

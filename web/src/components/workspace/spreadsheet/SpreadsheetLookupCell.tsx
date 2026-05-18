@@ -41,23 +41,32 @@ const SpreadsheetLookupCell = memo(function SpreadsheetLookupCell({
   registerCell,
 }: SpreadsheetLookupCellProps) {
   const [localText, setLocalText] = useState(displayValue)
-  
+  const [highlightedIndex, setHighlightedIndex] = useState(0)
+
   const isComposingRef = useRef(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
-  // Use the concurrency-safe async lookup
   const { search, clear, results, loading } = useAsyncLookup<ItemOption>({
     queryFn: async (q) => {
-      // In a real app, this hits the API. For now, hitting inventoryApi items.
-      // (Assuming configApi.items is available, or an endpoint exists)
-      // Hardcoding a mock filter for the architecture demonstration, or calling API.
       const res = await inventoryApi.itemsMaster({ search: q, size: 50 })
       const items = (res as any)?.data ?? []
       return (items as ItemOption[]).filter(i => i.name.includes(q) || String(i.code).includes(q)).slice(0, 50)
     },
     debounceMs: 250
   })
+
+  // Reset highlight when results change
+  useEffect(() => {
+    setHighlightedIndex(0)
+  }, [results])
+
+  // Scroll highlighted item into view
+  useEffect(() => {
+    if (!dropdownRef.current) return
+    const item = dropdownRef.current.children[highlightedIndex] as HTMLElement | undefined
+    item?.scrollIntoView({ block: 'nearest' })
+  }, [highlightedIndex])
 
   // Register cell
   useEffect(() => {
@@ -78,11 +87,9 @@ const SpreadsheetLookupCell = memo(function SpreadsheetLookupCell({
       setLocalText(option.name)
       onChange(rowId, field, option.code, { name: option.name, unit: option.unit })
     } else {
-      // If they blanked it out
       if (!localText.trim()) {
         onChange(rowId, field, null, { name: '', unit: null })
       } else {
-        // If they typed junk, revert to last known good value
         setLocalText(displayValue)
       }
     }
@@ -123,7 +130,7 @@ const SpreadsheetLookupCell = memo(function SpreadsheetLookupCell({
         default:
           if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
             onBeginEdit(rowId, field)
-            setLocalText('') // Start fresh search
+            setLocalText('')
           }
       }
     } else {
@@ -134,38 +141,41 @@ const SpreadsheetLookupCell = memo(function SpreadsheetLookupCell({
           clear()
           onCancelEdit()
           return
+
         case 'ArrowDown':
-          // Phase 2 addition: navigate dropdown instead of cell if dropdown is open
+          e.preventDefault()
           if (results.length > 0) {
-            e.preventDefault()
-            // Dropdown focus logic goes here
+            setHighlightedIndex(i => Math.min(i + 1, results.length - 1))
           } else {
-            e.preventDefault()
             commitSelection(null)
             onNavigate(1, 0)
           }
           return
+
         case 'ArrowUp':
-          if (results.length === 0) {
-            e.preventDefault()
+          e.preventDefault()
+          if (results.length > 0) {
+            setHighlightedIndex(i => Math.max(i - 1, 0))
+          } else {
             commitSelection(null)
             onNavigate(-1, 0)
           }
           return
+
         case 'Enter':
           e.preventDefault()
-          // If they hit enter, and there's 1 exact match or highlighted item
           if (results.length > 0) {
-            commitSelection(results[0]) // Select first for now
+            commitSelection(results[highlightedIndex] ?? results[0])
           } else {
             commitSelection(null)
           }
           if (!e.shiftKey) onNavigate(1, 0)
           return
+
         case 'Tab':
           e.preventDefault()
           if (results.length > 0) {
-            commitSelection(results[0])
+            commitSelection(results[highlightedIndex] ?? results[0])
           } else {
             commitSelection(null)
           }
@@ -183,7 +193,7 @@ const SpreadsheetLookupCell = memo(function SpreadsheetLookupCell({
   }
 
   return (
-    <div 
+    <div
       className={`relative w-full h-full flex items-center border ${
         isActive ? 'border-brand-500 ring-1 ring-brand-500 z-20' : 'border-transparent'
       } ${error ? 'bg-red-50' : 'bg-transparent'}`}
@@ -202,7 +212,6 @@ const SpreadsheetLookupCell = memo(function SpreadsheetLookupCell({
         onChange={handleInputChange}
         onKeyDown={handleKeyDown}
         onBlur={() => {
-          // Small timeout to allow dropdown click
           setTimeout(() => {
             if (isEditing) commitSelection(null)
           }, 150)
@@ -224,18 +233,22 @@ const SpreadsheetLookupCell = memo(function SpreadsheetLookupCell({
         <div className="absolute top-0 right-0 w-2 h-2 bg-red-500 rounded-bl-sm" title={error} />
       )}
 
-      {/* Local Dropdown - Renders over adjacent cells via absolute positioning */}
       {isEditing && results.length > 0 && (
-        <div 
+        <div
           ref={dropdownRef}
           className="absolute top-full right-0 w-64 max-h-48 overflow-y-auto bg-white border border-slate-200 shadow-xl z-50 rounded-b-md"
         >
           {results.map((item, idx) => (
             <div
               key={item.code}
-              className={`px-3 py-2 text-sm cursor-pointer hover:bg-slate-50 flex items-center justify-between ${idx === 0 ? 'bg-brand-50' : ''}`}
+              className={`px-3 py-2 text-sm cursor-pointer flex items-center justify-between transition-colors ${
+                idx === highlightedIndex
+                  ? 'bg-brand-100 text-brand-800'
+                  : 'hover:bg-slate-50'
+              }`}
+              onMouseEnter={() => setHighlightedIndex(idx)}
               onMouseDown={(e) => {
-                e.preventDefault() // Prevent blur
+                e.preventDefault()
                 commitSelection(item)
                 onNavigate(1, 0)
               }}

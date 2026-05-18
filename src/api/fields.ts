@@ -324,6 +324,21 @@ fields.delete('/harvest/:id', async (c) => {
     'SELECT field_id, crop_name, harvest_date FROM harvest_records WHERE id = ? AND company_id = ?'
   ).bind(id, company_id).first<{ field_id: number; crop_name: string; harvest_date: string }>()
 
+  if (!existing) return c.json({ success: false, error: 'سجل الحصاد غير موجود' }, 404)
+
+  // Reverse any GL entries posted for this harvest before deleting the record.
+  // journal_entry_lines cascade-deletes when the parent journal_entries row is removed.
+  const { results: glEntries } = await c.env.DB.prepare(
+    `SELECT DISTINCT je.id FROM journal_entries je
+     JOIN journal_entry_lines jel ON jel.entry_id = je.id
+     WHERE je.company_id = ? AND jel.source_ledger = 'harvest' AND jel.source_record_id = ?`
+  ).bind(company_id, id).all<{ id: number }>()
+
+  for (const entry of glEntries) {
+    await c.env.DB.prepare('DELETE FROM journal_entries WHERE id = ? AND company_id = ?')
+      .bind(entry.id, company_id).run()
+  }
+
   await c.env.DB.prepare('DELETE FROM harvest_records WHERE id = ? AND company_id = ?').bind(id, company_id).run()
 
   void logAudit(c.env.DB, {

@@ -152,16 +152,28 @@ config.post('/items', async (c) => {
   const { company_id } = getUser(c)
   const b = await c.req.json<{ 
     code: number; name: string; unit?: string; warehouse?: string; 
-    reorder_threshold?: number; category_id?: number; track_lots?: number 
+    reorder_threshold?: number; category_id?: number; track_lots?: number
+    prod_posting_group_code?: string; inv_posting_group_code?: string
   }>()
 
   if (!b.code || !b.name) return c.json({ success: false, error: 'الكود والاسم مطلوبان' }, 400)
 
+  const existing = await c.env.DB.prepare(
+    'SELECT code FROM items WHERE code = ? AND company_id = ?'
+  ).bind(b.code, company_id).first()
+
+  if (existing) {
+    return c.json({ success: false, error: `الكود ${b.code} مستخدم مسبقاً` }, 409)
+  }
+
   await c.env.DB.prepare(
-    'INSERT OR IGNORE INTO items (code, company_id, name, unit, warehouse, reorder_threshold, category_id, track_lots) VALUES (?,?,?,?,?,?,?,?)'
+    `INSERT INTO items
+     (code, company_id, name, unit, warehouse, reorder_threshold, category_id, track_lots, prod_posting_group_code, inv_posting_group_code)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`
   ).bind(
-    b.code, company_id, b.name, b.unit ?? null, b.warehouse ?? null, 
-    b.reorder_threshold ?? 0, b.category_id ?? null, b.track_lots ?? 0
+    b.code, company_id, b.name, b.unit ?? null, b.warehouse ?? null,
+    b.reorder_threshold ?? 0, b.category_id ?? null, b.track_lots ?? 0,
+    b.prod_posting_group_code ?? null, b.inv_posting_group_code ?? null
   ).run()
 
   return c.json({ success: true, data: null }, 201)
@@ -172,17 +184,22 @@ config.patch('/items/:code', async (c) => {
   const code = Number(c.req.param('code'))
   const b = await c.req.json<{ 
     name?: string; unit?: string; warehouse?: string; 
-    reorder_threshold?: number; category_id?: number; track_lots?: number 
+    reorder_threshold?: number; category_id?: number; track_lots?: number
+    prod_posting_group_code?: string | null; inv_posting_group_code?: string | null
+    is_active?: number
   }>()
 
-  const sets = []
-  const binds = []
-  if (b.name) { sets.push('name = ?'); binds.push(b.name) }
+  const sets: string[] = []
+  const binds: unknown[] = []
+  if (b.name !== undefined) { sets.push('name = ?'); binds.push(b.name) }
   if (b.unit !== undefined) { sets.push('unit = ?'); binds.push(b.unit) }
   if (b.warehouse !== undefined) { sets.push('warehouse = ?'); binds.push(b.warehouse) }
   if (b.reorder_threshold !== undefined) { sets.push('reorder_threshold = ?'); binds.push(b.reorder_threshold) }
-  if (b.category_id !== undefined) { sets.push('category_id = ?'); binds.push(b.category_id) }
+  if (b.category_id !== undefined) { sets.push('category_id = ?'); binds.push(b.category_id ?? null) }
   if (b.track_lots !== undefined) { sets.push('track_lots = ?'); binds.push(b.track_lots) }
+  if (b.prod_posting_group_code !== undefined) { sets.push('prod_posting_group_code = ?'); binds.push(b.prod_posting_group_code ?? null) }
+  if (b.inv_posting_group_code !== undefined) { sets.push('inv_posting_group_code = ?'); binds.push(b.inv_posting_group_code ?? null) }
+  if (b.is_active !== undefined) { sets.push('is_active = ?'); binds.push(b.is_active) }
 
   if (sets.length === 0) return c.json({ success: false, error: 'لا توجد بيانات للتحديث' }, 400)
 

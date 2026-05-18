@@ -102,12 +102,19 @@ interface EditForm {
   inv_posting_group_code:  string
   standard_cost:           string
   reorder_threshold:       string
+  costing_method:          'moving_average' | 'standard' | 'fifo' | ''
+  track_lots:              boolean
+  cogs_account_override:   string
 }
 
 function AccountingEditModal({
   item, onClose,
 }: {
-  item: ItemMaster
+  item: ItemMaster & {
+    costing_method?:        'moving_average' | 'standard' | 'fifo' | null
+    track_lots?:            number | null
+    cogs_account_override?: string | null
+  }
   onClose: () => void
 }) {
   const qc  = useQueryClient()
@@ -118,10 +125,12 @@ function AccountingEditModal({
     inv_posting_group_code:  item.inv_posting_group_code  ?? '',
     standard_cost:           item.standard_cost != null ? String(item.standard_cost) : '',
     reorder_threshold:       item.reorder_threshold != null ? String(item.reorder_threshold) : '',
+    costing_method:          (item.costing_method as EditForm['costing_method']) ?? 'moving_average',
+    track_lots:              !!item.track_lots,
+    cogs_account_override:   item.cogs_account_override ?? '',
   })
   const [err, setErr] = useState('')
 
-  // Load posting groups for dropdowns
   const { data: ppgList = [] } = useQuery({
     queryKey: ['posting-groups', 'product'],
     queryFn:  () => glApi.postingGroups('product'),
@@ -139,8 +148,11 @@ function AccountingEditModal({
     mutationFn: () => inventoryApi.updateItemMaster(item.code, {
       prod_posting_group_code: form.prod_posting_group_code || null,
       inv_posting_group_code:  form.inv_posting_group_code  || null,
-      standard_cost:           form.standard_cost  ? Number(form.standard_cost)  : null,
+      standard_cost:           form.standard_cost     ? Number(form.standard_cost)     : null,
       reorder_threshold:       form.reorder_threshold ? Number(form.reorder_threshold) : null,
+      costing_method:          form.costing_method    || null,
+      track_lots:              form.track_lots,
+      cogs_account_override:   form.cogs_account_override.trim() || null,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['inventory', 'items-master'] })
@@ -150,7 +162,7 @@ function AccountingEditModal({
     onError: (e: Error) => setErr(e.message || 'خطأ في الحفظ'),
   })
 
-  const set = (k: keyof EditForm, v: string) => setForm(f => ({ ...f, [k]: v }))
+  const set = <K extends keyof EditForm>(k: K, v: EditForm[K]) => setForm(f => ({ ...f, [k]: v }))
 
   return (
     <Modal open title={`إعداد محاسبي: ${item.name}`} onClose={onClose} size="md">
@@ -163,8 +175,8 @@ function AccountingEditModal({
           <span className="ml-auto text-slate-500">كود: {item.code}</span>
         </div>
 
+        {/* Posting groups */}
         <div className="grid grid-cols-2 gap-4">
-          {/* PPG */}
           <div>
             <label className="label flex items-center gap-1.5">
               مجموعة ترحيل المنتج (PPG)
@@ -185,7 +197,6 @@ function AccountingEditModal({
             <p className="text-xs text-slate-400 mt-1">يحدد حسابات المبيعات والمشتريات</p>
           </div>
 
-          {/* IPG */}
           <div>
             <label className="label">مجموعة ترحيل المخزون (IPG)</label>
             {ipgOptions.length > 0 ? (
@@ -204,22 +215,63 @@ function AccountingEditModal({
           </div>
         </div>
 
+        {/* Cost + reorder */}
         <div className="grid grid-cols-2 gap-4">
-          {/* Standard cost */}
           <div>
             <label className="label">التكلفة المعيارية (ج.م / وحدة)</label>
             <input type="number" className="input" min="0" step="0.01" placeholder="0.00"
               value={form.standard_cost} onChange={e => set('standard_cost', e.target.value)} />
             <p className="text-xs text-slate-400 mt-1">للتقارير والمقارنة مع الفعلي</p>
           </div>
-
-          {/* Reorder threshold */}
           <div>
             <label className="label">حد إعادة الطلب</label>
             <input type="number" className="input" min="0" step="0.001" placeholder="0"
               value={form.reorder_threshold} onChange={e => set('reorder_threshold', e.target.value)} />
             <p className="text-xs text-slate-400 mt-1">تنبيه عند الوصول لهذا الرصيد</p>
           </div>
+        </div>
+
+        {/* Costing method + track lots */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="label">طريقة التكلفة</label>
+            <select className="input" value={form.costing_method}
+              onChange={e => set('costing_method', e.target.value as EditForm['costing_method'])}>
+              <option value="moving_average">متوسط متحرك (Moving Average)</option>
+              <option value="standard">تكلفة معيارية (Standard)</option>
+              <option value="fifo">FIFO — أول داخل أول خارج</option>
+            </select>
+            <p className="text-xs text-slate-400 mt-1">تُستخدم عند احتساب تكلفة الصرف</p>
+          </div>
+          <div className="flex flex-col justify-center">
+            <label className="label">تتبع الدُفعات (Lot Tracking)</label>
+            <label className="flex items-center gap-3 cursor-pointer mt-1 p-3 rounded-xl border border-slate-200 hover:bg-slate-50 transition-colors">
+              <input
+                type="checkbox"
+                checked={form.track_lots}
+                onChange={e => set('track_lots', e.target.checked)}
+                className="w-4 h-4 rounded accent-brand-600"
+              />
+              <span className="text-sm text-slate-700 font-medium">
+                {form.track_lots ? 'مفعّل — يتطلب رقم دفعة' : 'معطّل'}
+              </span>
+            </label>
+          </div>
+        </div>
+
+        {/* COGS account override */}
+        <div>
+          <label className="label">حساب تكلفة البضاعة المباعة (تجاوز)</label>
+          <input
+            type="text"
+            className="input font-mono"
+            placeholder="مثال: 45010002 — اتركه فارغاً للاستخدام الافتراضي"
+            value={form.cogs_account_override}
+            onChange={e => set('cogs_account_override', e.target.value)}
+          />
+          <p className="text-xs text-slate-400 mt-1">
+            يتجاوز حساب COGS الافتراضي لهذا الصنف تحديداً. يُستخدم لأصناف ذات معالجة محاسبية خاصة.
+          </p>
         </div>
 
         {err && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{err}</p>}

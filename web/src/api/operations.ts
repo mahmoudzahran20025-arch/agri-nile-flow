@@ -26,6 +26,8 @@ export const operationsApi = {
 
   getOrder:    (id: number) => unwrap(api.get(`/operations/orders/${id}`)),
   createOrder: (body: unknown) => api.post('/operations/orders', body),
+  updateOrder: (id: number, body: { crop_cycle_id?: number | null; notes?: string; area_feddan?: number }) =>
+    unwrap(api.patch<null>(`/operations/orders/${id}`, body)),
   updateStatus:(id: number, status: string, actual_date?: string) =>
     api.patch(`/operations/orders/${id}/status`, { status, actual_date }),
   addTask:     (orderId: number, body: unknown) =>

@@ -178,6 +178,20 @@ hs.patch('/:id', async (c) => {
 
   if (!sets.length) return c.json({ success: false, error: 'لا توجد حقول للتحديث' }, 400)
 
+  if (b.warehouse_id !== undefined && b.warehouse_id !== null) {
+    const wh = await c.env.DB.prepare(
+      'SELECT id FROM warehouses WHERE id = ? AND company_id = ?'
+    ).bind(b.warehouse_id, company_id).first<{ id: number }>()
+    if (!wh) return c.json({ success: false, error: 'المستودع غير موجود أو لا ينتمي لهذه الشركة' }, 422)
+  }
+
+  if (b.item_code !== undefined && b.item_code !== null) {
+    const item = await c.env.DB.prepare(
+      'SELECT code FROM items WHERE code = ? AND company_id = ?'
+    ).bind(b.item_code, company_id).first<{ code: number }>()
+    if (!item) return c.json({ success: false, error: 'الصنف غير موجود أو لا ينتمي لهذه الشركة' }, 422)
+  }
+
   params.push(id, company_id)
   await c.env.DB.prepare(
     `UPDATE harvest_settlements SET ${sets.join(', ')} WHERE id = ? AND company_id = ?`
