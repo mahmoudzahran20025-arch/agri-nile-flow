@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ShoppingCart, Plus, X, CheckCircle, XCircle, Loader2 } from 'lucide-react'
-import { salesApi, type CreateSaleBody, type SaleOrder } from '../../api/sales'
+import { ShoppingCart, Plus, X, CheckCircle, XCircle, Loader2, RotateCcw } from 'lucide-react'
+import { salesApi, type CreateSaleBody, type SaleOrder, type SaleOrderItem, type CreateReturnBody } from '../../api/sales'
 import { inventoryApi } from '../../api/client'
 import { usePermission } from '../../hooks/usePermission'
 
@@ -40,12 +40,180 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
+type RefundMethod = 'cash' | 'card' | 'store_credit' | 'credit_adjustment'
+
+interface ReturnLineForm {
+  item_code: number
+  item_name: string | null
+  unit: string | null
+  original_qty: number
+  unit_price: number
+  return_qty: string
+}
+
+function ReturnModal({ order, onClose }: { order: SaleOrder; onClose: () => void }) {
+  const qc = useQueryClient()
+
+  const { data: detail, isLoading } = useQuery({
+    queryKey: ['sale-detail', order.id],
+    queryFn: () => salesApi.getSale(order.id),
+  })
+
+  const [lines, setLines] = useState<ReturnLineForm[]>([])
+  const [refundMethod, setRefundMethod] = useState<RefundMethod>('cash')
+  const [reason, setReason] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  const [initialized, setInitialized] = useState(false)
+
+  if (detail && !initialized) {
+    setLines(detail.items.map((it: SaleOrderItem) => ({
+      item_code:    it.item_code,
+      item_name:    it.item_name,
+      unit:         it.unit,
+      original_qty: it.quantity,
+      unit_price:   it.unit_price,
+      return_qty:   '',
+    })))
+    setInitialized(true)
+  }
+
+  const returnMut = useMutation({
+    mutationFn: (body: CreateReturnBody) => salesApi.createReturn(body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sales'] })
+      qc.invalidateQueries({ queryKey: ['sales-returns'] })
+      onClose()
+    },
+    onError: (e: any) => setErr(e.message ?? 'حدث خطأ'),
+  })
+
+  function handleSubmit() {
+    setErr(null)
+    const items = lines
+      .filter(l => l.return_qty !== '' && Number(l.return_qty) > 0)
+      .map(l => {
+        const qty = Number(l.return_qty)
+        if (qty > l.original_qty) {
+          throw Object.assign(new Error(`الكمية المرتجعة تتجاوز الكمية الأصلية للصنف ${l.item_code}`), {})
+        }
+        return { item_code: l.item_code, quantity: qty, unit_price: l.unit_price }
+      })
+
+    if (!items.length) { setErr('أدخل كمية مرتجعة لصنف واحد على الأقل'); return }
+
+    returnMut.mutate({
+      original_order_id: order.id,
+      items,
+      refund_method: refundMethod,
+      reason: reason.trim() || undefined,
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-start justify-center pt-10 px-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+          <div>
+            <h2 className="text-lg font-bold text-slate-800">مرتجع مبيعات</h2>
+            <p className="text-xs text-slate-500 mt-0.5">أمر #{order.id} — {EGP(order.total)}</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X size={20} /></button>
+        </div>
+
+        <div className="px-6 py-4 space-y-4">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 size={20} className="animate-spin text-slate-400" />
+            </div>
+          ) : (
+            <>
+              <div>
+                <p className="text-xs font-semibold text-slate-600 mb-2">الأصناف — أدخل الكمية المرتجعة</p>
+                <div className="space-y-2">
+                  {lines.map((l, idx) => (
+                    <div key={l.item_code} className="grid grid-cols-[2fr_1fr_1fr] gap-2 items-center">
+                      <div className="text-sm text-slate-700">
+                        <span className="font-medium">{l.item_name ?? `#${l.item_code}`}</span>
+                        {l.unit && <span className="text-slate-400 text-xs mr-1">({l.unit})</span>}
+                        <span className="block text-xs text-slate-400">الكمية الأصلية: {l.original_qty}</span>
+                      </div>
+                      <div className="text-xs text-slate-500 text-center">{EGP(l.unit_price)}</div>
+                      <input
+                        type="number"
+                        min="0"
+                        max={l.original_qty}
+                        step="any"
+                        placeholder="0"
+                        value={l.return_qty}
+                        onChange={e => setLines(ls => ls.map((x, i) => i === idx ? { ...x, return_qty: e.target.value } : x))}
+                        className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm text-center focus:ring-2 focus:ring-[#0F2D5C]/20 focus:border-[#0F2D5C]"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 mb-1 block">طريقة الاسترداد</label>
+                  <select
+                    value={refundMethod}
+                    onChange={e => setRefundMethod(e.target.value as RefundMethod)}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#0F2D5C]/20 focus:border-[#0F2D5C]"
+                  >
+                    <option value="cash">نقدي</option>
+                    <option value="card">بطاقة</option>
+                    <option value="store_credit">رصيد مخزن</option>
+                    <option value="credit_adjustment">تسوية ذمم</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 mb-1 block">السبب</label>
+                  <input
+                    type="text"
+                    value={reason}
+                    onChange={e => setReason(e.target.value)}
+                    placeholder="اختياري"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#0F2D5C]/20 focus:border-[#0F2D5C]"
+                  />
+                </div>
+              </div>
+
+              {err && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-700 text-sm rounded-lg px-4 py-2">
+                  {err}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="px-6 py-4 border-t border-slate-200 flex justify-end gap-3">
+          <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800">
+            إلغاء
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={returnMut.isPending || isLoading}
+            className="flex items-center gap-2 bg-amber-600 text-white text-sm font-medium px-5 py-2 rounded-lg hover:bg-amber-700 disabled:opacity-60 transition-colors"
+          >
+            {returnMut.isPending && <Loader2 size={14} className="animate-spin" />}
+            <RotateCcw size={14} />
+            تسجيل المرتجع
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function SalesPage() {
   const qc = useQueryClient()
   const { canWrite: _canWrite } = usePermission()
   const canWrite = _canWrite('inventory')
 
   const [showNew, setShowNew] = useState(false)
+  const [returnOrder, setReturnOrder] = useState<SaleOrder | null>(null)
   const [form, setForm] = useState<{
     sale_date: string
     warehouse_id: string
@@ -189,12 +357,20 @@ export default function SalesPage() {
                   {canWrite && (
                     <td className="px-4 py-3">
                       {o.status !== 'voided' && (
-                        <button
-                          onClick={() => { if (confirm('هل تريد إلغاء هذا الأمر؟')) voidMut.mutate(o.id) }}
-                          className="text-xs text-rose-600 hover:text-rose-800 font-medium"
-                        >
-                          إلغاء
-                        </button>
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={() => setReturnOrder(o)}
+                            className="text-xs text-amber-600 hover:text-amber-800 font-medium flex items-center gap-1"
+                          >
+                            <RotateCcw size={11} /> مرتجع
+                          </button>
+                          <button
+                            onClick={() => { if (confirm('هل تريد إلغاء هذا الأمر؟')) voidMut.mutate(o.id) }}
+                            className="text-xs text-rose-600 hover:text-rose-800 font-medium"
+                          >
+                            إلغاء
+                          </button>
+                        </div>
                       )}
                     </td>
                   )}
@@ -204,6 +380,11 @@ export default function SalesPage() {
           </table>
         )}
       </div>
+
+      {/* Return modal */}
+      {returnOrder && (
+        <ReturnModal order={returnOrder} onClose={() => setReturnOrder(null)} />
+      )}
 
       {/* New sale modal */}
       {showNew && (

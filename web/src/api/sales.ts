@@ -79,6 +79,29 @@ export interface DailySummary {
   by_hour:      DailyHourBreakdown[]
 }
 
+export interface SalesReturnRow {
+  id:                number
+  original_order_id: number
+  return_date:       string
+  subtotal:          number
+  total:             number
+  refund_method:     'cash' | 'card' | 'store_credit' | 'credit_adjustment'
+  reason:            string | null
+  journal_entry_id:  number | null
+  created_at:        string
+  customer_name:     string | null
+  customer_code:     string | null
+}
+
+export interface CreateReturnBody {
+  original_order_id: number
+  items: Array<{ item_code: number; quantity: number; unit_price: number }>
+  refund_method?: 'cash' | 'card' | 'store_credit' | 'credit_adjustment'
+  reason?: string
+  notes?: string
+  return_date?: string
+}
+
 export const salesApi = {
   createSale: (body: CreateSaleBody) =>
     unwrap(api.post<{ order_id: number; total: number; subtotal: number; tax_amount: number; movement_ids: number[] }>('/sales', body)),
@@ -107,4 +130,18 @@ export const salesApi = {
     const q = qs.toString()
     return unwrap(api.get<DailySummary>(`/sales/daily${q ? `?${q}` : ''}`))
   },
+
+  listReturns: (params?: { page?: number; size?: number; order_id?: number; start?: string; end?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.page)     qs.set('page',     String(params.page))
+    if (params?.size)     qs.set('size',      String(params.size))
+    if (params?.order_id) qs.set('order_id', String(params.order_id))
+    if (params?.start)    qs.set('start',    params.start)
+    if (params?.end)      qs.set('end',      params.end)
+    const q = qs.toString()
+    return unwrap(api.get<{ total: number; page: number; size: number; rows: SalesReturnRow[] }>(`/sales/returns${q ? `?${q}` : ''}`))
+  },
+
+  createReturn: (body: CreateReturnBody) =>
+    unwrap(api.post<{ return_id: number; order_id: number; total: number; refund_method: string; gl_entry_id: number | null }>('/sales/returns', body)),
 }

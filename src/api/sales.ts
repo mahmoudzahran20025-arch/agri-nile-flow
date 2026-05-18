@@ -10,6 +10,8 @@
  *   GET  /api/sales              — list sales orders (paginated)
  *   GET  /api/sales/:id          — get single sales order with items
  *   PATCH /api/sales/:id/void    — void an open or paid sales order
+ *   POST /api/sales/returns      — create a sales return (partial or full)
+ *   GET  /api/sales/returns      — list sales returns
  *
  * Design:
  *   • Each line item calls the inventory movement engine with SALE type.
@@ -427,6 +429,189 @@ sales.get('/daily', permissionGuard('inventory', 'read'), async (c) => {
       by_hour:      byHour.results,
     },
   })
+})
+
+// ── GET /api/sales/returns — must be before /:id ──────────────────────────────
+sales.get('/returns', permissionGuard('inventory', 'read'), async (c) => {
+  const { company_id } = getUser(c)
+  const page     = Math.max(1, Number(c.req.query('page') ?? 1))
+  const size     = Math.min(100, Math.max(1, Number(c.req.query('size') ?? 50)))
+  const offset   = (page - 1) * size
+  const start    = c.req.query('start')
+  const end      = c.req.query('end')
+  const orderId  = c.req.query('order_id')
+
+  let where = 'WHERE sr.company_id = ?'
+  const p: unknown[] = [company_id]
+  if (start)   { where += ' AND sr.return_date >= ?'; p.push(start) }
+  if (end)     { where += ' AND sr.return_date <= ?'; p.push(end) }
+  if (orderId) { where += ' AND sr.original_order_id = ?'; p.push(Number(orderId)) }
+
+  const [countRow, rows] = await Promise.all([
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM sales_returns sr ${where}`).bind(...p).first<{ n: number }>(),
+    c.env.DB.prepare(
+      `SELECT sr.id, sr.original_order_id, sr.return_date, sr.subtotal, sr.total,
+              sr.refund_method, sr.reason, sr.journal_entry_id, sr.created_at,
+              cu.name AS customer_name, cu.code AS customer_code
+       FROM sales_returns sr
+       LEFT JOIN customers cu ON cu.id = sr.customer_id AND cu.company_id = sr.company_id
+       ${where}
+       ORDER BY sr.return_date DESC, sr.id DESC
+       LIMIT ? OFFSET ?`
+    ).bind(...p, size, offset).all(),
+  ])
+
+  return c.json({ success: true, data: { total: countRow?.n ?? 0, page, size, rows: rows.results } })
+})
+
+// ── POST /api/sales/returns — must be before /:id ─────────────────────────────
+sales.post('/returns', permissionGuard('inventory', 'create'), async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+
+  const body = await c.req.json<{
+    original_order_id: number
+    items: Array<{ item_code: number; quantity: number; unit_price: number }>
+    refund_method?: 'cash' | 'card' | 'store_credit' | 'credit_adjustment'
+    reason?: string
+    notes?: string
+    return_date?: string
+  }>().catch(() => null)
+
+  if (!body?.original_order_id || !body.items?.length) {
+    return c.json({ success: false, error: 'original_order_id وitems مطلوبان' }, 400)
+  }
+
+  const returnDate = normalizeIsoDate(body.return_date ?? new Date().toISOString().slice(0, 10))
+  const refundMethod = body.refund_method ?? 'cash'
+
+  const order = await c.env.DB.prepare(
+    `SELECT id, status, warehouse_id, customer_id, payment_method, total, journal_entry_id
+     FROM sales_orders WHERE id = ? AND company_id = ?`
+  ).bind(body.original_order_id, company_id).first<{
+    id: number; status: string; warehouse_id: number; customer_id: number | null
+    payment_method: string; total: number; journal_entry_id: number | null
+  }>()
+
+  if (!order) return c.json({ success: false, error: 'أمر البيع الأصلي غير موجود' }, 404)
+  if (order.status === 'voided') return c.json({ success: false, error: 'لا يمكن إرجاع أمر ملغى' }, 422)
+
+  const origItems = await c.env.DB.prepare(
+    'SELECT item_code, quantity FROM sales_order_items WHERE order_id = ? AND company_id = ?'
+  ).bind(body.original_order_id, company_id).all<{ item_code: number; quantity: number }>()
+
+  const origQtyMap = new Map(origItems.results.map(i => [i.item_code, i.quantity]))
+
+  for (const line of body.items) {
+    if (!line.item_code || line.quantity <= 0 || line.unit_price < 0) {
+      return c.json({ success: false, error: `بيانات البند غير صحيحة للصنف ${line.item_code}` }, 400)
+    }
+    const origQty = origQtyMap.get(line.item_code) ?? 0
+    if (line.quantity > origQty + 0.001) {
+      return c.json({
+        success: false,
+        error: `كمية المرتجع (${line.quantity}) تتجاوز الكمية الأصلية (${origQty}) للصنف ${line.item_code}`,
+        code: 'RETURN_EXCEEDS_ORIGINAL',
+      }, 422)
+    }
+  }
+
+  const subtotal = body.items.reduce((s, l) => s + Math.round(l.quantity * l.unit_price * 100) / 100, 0)
+  const total    = Math.round(subtotal * 100) / 100
+
+  const returnRow = await c.env.DB.prepare(
+    `INSERT INTO sales_returns
+       (company_id, original_order_id, warehouse_id, customer_id, return_date,
+        subtotal, tax_amount, total, refund_method, reason, notes, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+     RETURNING id`
+  ).bind(
+    company_id, order.id, order.warehouse_id, order.customer_id, returnDate,
+    subtotal, total, refundMethod, body.reason ?? null, body.notes ?? null, userId,
+  ).first<{ id: number }>()
+
+  if (!returnRow) return c.json({ success: false, error: 'فشل إنشاء سند المرتجع' }, 500)
+  const returnId = returnRow.id
+
+  for (const line of body.items) {
+    const lineTotal = Math.round(line.quantity * line.unit_price * 100) / 100
+
+    await c.env.DB.prepare(
+      `INSERT INTO sales_return_items (return_id, company_id, item_code, quantity, unit_price, line_total)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(returnId, company_id, line.item_code, line.quantity, line.unit_price, lineTotal).run()
+
+    const bal = await c.env.DB.prepare(
+      'SELECT balance_qty FROM inventory_balances WHERE company_id = ? AND item_code = ? AND warehouse_id = ?'
+    ).bind(company_id, line.item_code, order.warehouse_id).first<{ balance_qty: number }>()
+
+    const newQty = Math.round(((bal?.balance_qty ?? 0) + line.quantity) * 1000) / 1000
+
+    await c.env.DB.prepare(
+      `INSERT INTO inventory_movements
+         (company_id, item_code, warehouse_id, movement_type, movement_date,
+          quantity, unit_price, total_value, running_balance,
+          statement_text, created_by, gl_posting_status)
+       VALUES (?, ?, ?, 'RETURN_CUSTOMER', ?, ?, ?, ?, ?, ?, ?, 'pending')`
+    ).bind(
+      company_id, line.item_code, order.warehouse_id, returnDate,
+      line.quantity, line.unit_price, lineTotal, newQty,
+      `مرتجع مبيعات — سند رقم ${returnId} من أمر ${order.id}`,
+      userId,
+    ).run()
+
+    await c.env.DB.prepare(
+      `INSERT INTO inventory_balances (company_id, item_code, warehouse_id, balance_qty)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(company_id, item_code, warehouse_id) DO UPDATE SET balance_qty = excluded.balance_qty`
+    ).bind(company_id, line.item_code, order.warehouse_id, newQty).run()
+  }
+
+  const reducesAR = order.payment_method === 'credit' || refundMethod === 'credit_adjustment'
+  if (reducesAR && order.customer_id) {
+    await c.env.DB.prepare(
+      'UPDATE customers SET balance = balance - ? WHERE id = ? AND company_id = ?'
+    ).bind(total, order.customer_id, company_id).run()
+  }
+
+  // ── Revenue-reversal GL: DR sales_returns_account / CR cash or AR ───────────
+  let glEntryId: number | null = null
+  try {
+    const setupRow = await c.env.DB.prepare(
+      `SELECT sales_returns_account, sales_account FROM posting_rules
+       WHERE company_id = ? AND rule_type = 'general' AND is_active = 1
+       ORDER BY priority ASC, id ASC LIMIT 1`
+    ).bind(company_id).first<{ sales_returns_account: string | null; sales_account: string | null }>()
+
+    const debitAcc  = setupRow?.sales_returns_account ?? setupRow?.sales_account ?? null
+    const creditAcc = await resolveControlAccount(c.env.DB, company_id, reducesAR ? 'receivable_default' : 'cash_default')
+
+    if (debitAcc && creditAcc) {
+      glEntryId = await postFromBusinessEvent(c.env.DB, {
+        company_id,
+        event_type:    'sales_return_revenue',
+        source_module: 'sales',
+        source_id:     returnId,
+        event_date:    returnDate,
+        description:   `مرتجع مبيعات — سند رقم ${returnId} من أمر ${order.id}`,
+        created_by:    userId,
+        payload:       { return_id: returnId, original_order_id: order.id, total, refund_method: refundMethod },
+        trace:         null,
+        lines: [
+          { account_code: debitAcc,  debit: total, credit: 0,     description: `مرتجعات مبيعات — سند ${returnId}`, rule_slot: 'sales_returns_account', source_ledger: 'cash' as const, source_record_id: returnId },
+          { account_code: creditAcc, debit: 0,     credit: total, description: `استرداد — سند مرتجع ${returnId}`,   rule_slot: reducesAR ? 'receivable_default' : 'cash_default', source_ledger: 'cash' as const, source_record_id: returnId },
+        ],
+        onJournalEntryPosted: async (entryId) => {
+          await c.env.DB.prepare(
+            'UPDATE sales_returns SET journal_entry_id = ? WHERE id = ? AND company_id = ?'
+          ).bind(entryId, returnId, company_id).run()
+        },
+      })
+    }
+  } catch {
+    // Non-blocking
+  }
+
+  return c.json({ success: true, data: { return_id: returnId, order_id: order.id, total, refund_method: refundMethod, gl_entry_id: glEntryId } }, 201)
 })
 
 // ── GET /api/sales/:id ─────────────────────────────────────────────────────────
