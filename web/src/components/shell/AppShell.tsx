@@ -111,7 +111,8 @@ const navSections: { title: string; items: NavItem[] }[] = [
     items: [
       { label: 'Seasons & Fields', path: '/seasons',                   icon: <Sprout        size={18} /> },
       { label: 'Crop Cycles',      path: '/fields/crop-cycles',        icon: <GitBranch     size={18} /> },
-      { label: 'Harvest Settlement', path: '/fields/harvest-settlement', icon: <Sprout        size={18} /> },
+      { label: 'Harvest Settlement', path: '/fields/harvest-settlement',  icon: <Sprout        size={18} /> },
+      { label: 'Settlements',       path: '/fields/harvest-settlements', icon: <Sprout        size={18} /> },
       { label: 'Work Orders',      path: '/operations',                icon: <ClipboardList size={18} /> },
       { label: 'HR & Payroll',     path: '/hr',                        icon: <Users         size={18} /> },
       { label: 'Calendar',         path: '/calendar',                  icon: <CalendarDays  size={18} /> },

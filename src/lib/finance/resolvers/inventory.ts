@@ -434,7 +434,7 @@ export async function processPOReceiptOrchestrated(
 
     const movementId = insertResult.meta.last_row_id as number
     movementIds.push(movementId)
-    await upsertInventoryBalance(db, opts.company_id, item.item_code, item.warehouse_id, balQty, balVal, movementId)
+    await upsertInventoryBalance(db, opts.company_id, item.item_code, item.warehouse_id, balQty, balVal, movementId, prev.version)
 
     await db.prepare(
       `UPDATE purchase_order_items SET qty_received = qty_received + ? WHERE id = ? AND company_id = ?`

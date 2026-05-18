@@ -308,7 +308,7 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
 
   const movRow = await c.env.DB.prepare('SELECT id FROM inventory_movements WHERE local_id = ? AND company_id = ?').bind(localId, company_id).first<{id:number}>()
   const movId = movRow!.id
-  await upsertInventoryBalance(c.env.DB, company_id, b.item_code, warehouseId, prev.balance_qty + qtyIn - qtyOut, prev.balance_value + valueIn - valueOut, movId)
+  await upsertInventoryBalance(c.env.DB, company_id, b.item_code, warehouseId, prev.balance_qty + qtyIn - qtyOut, prev.balance_value + valueIn - valueOut, movId, prev.version)
 
   if (movementValue > 0) {
     const itemRow = await c.env.DB.prepare('SELECT name FROM items WHERE code = ? AND company_id = ?').bind(b.item_code, company_id).first<{name:string}>()
@@ -473,7 +473,7 @@ movements.post('/movements/:id/reverse', permissionGuard('inventory', 'create'),
   const revId = revRow!.id
 
   // 7. Update balance snapshot
-  await upsertInventoryBalance(c.env.DB, company_id, orig.item_code, orig.warehouse_id, newBalQty, newBalVal, revId)
+  await upsertInventoryBalance(c.env.DB, company_id, orig.item_code, orig.warehouse_id, newBalQty, newBalVal, revId, prev.version)
 
   // 8. Enqueue GL reversal posting
   if (revValue > 0) {
@@ -612,7 +612,7 @@ movements.post('/movements/batch', permissionGuard('inventory', 'create'), async
     const movId = Number(insertRes.meta.last_row_id)
     results.push(movId)
 
-    await upsertInventoryBalance(c.env.DB, company_id, item.item_code, warehouseId, prev.balance_qty + qtyIn - qtyOut, prev.balance_value + valueIn - valueOut, movId)
+    await upsertInventoryBalance(c.env.DB, company_id, item.item_code, warehouseId, prev.balance_qty + qtyIn - qtyOut, prev.balance_value + valueIn - valueOut, movId, prev.version)
 
     if (movementValue > 0) {
       const itemRow = await c.env.DB.prepare('SELECT name FROM items WHERE code = ? AND company_id = ?').bind(item.item_code, company_id).first<{name:string}>()

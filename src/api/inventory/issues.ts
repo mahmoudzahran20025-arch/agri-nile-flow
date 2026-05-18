@@ -139,7 +139,7 @@ issues.post('/issues', permissionGuard('inventory', 'create'), async (c) => {
   ])
 
   const movRow = await c.env.DB.prepare('SELECT id FROM inventory_movements WHERE local_id = ? AND company_id = ?').bind(localId, company_id).first<{id:number}>()
-  await upsertInventoryBalance(c.env.DB, company_id, b.item_code, warehouseId, prev.balance_qty - b.qty_out, prev.balance_value - valueOut, movRow!.id)
+  await upsertInventoryBalance(c.env.DB, company_id, b.item_code, warehouseId, prev.balance_qty - b.qty_out, prev.balance_value - valueOut, movRow!.id, prev.version)
 
   if (valueOut > 0) {
     const itemRow = await c.env.DB.prepare('SELECT name FROM items WHERE code = ? AND company_id = ?').bind(b.item_code, company_id).first<{name:string}>()
@@ -254,6 +254,7 @@ issues.post('/issues/batch', permissionGuard('inventory', 'create'), async (c) =
       unitPrice, valueOut,
       newBalQty: prev.balance_qty - li.qty_out,
       newBalVal: prev.balance_value - valueOut,
+      prevVersion: prev.version,
       localId: `${batchKey}_${lineResults.length}`
     })
   }
@@ -279,7 +280,7 @@ issues.post('/issues/batch', permissionGuard('inventory', 'create'), async (c) =
     const movRow = await c.env.DB.prepare('SELECT id FROM inventory_movements WHERE local_id = ? AND company_id = ?').bind(lr.localId, company_id).first<{id:number}>()
     if (!movRow) continue
 
-    await upsertInventoryBalance(c.env.DB, company_id, lr.item_code, warehouseId, lr.newBalQty, lr.newBalVal, movRow.id)
+    await upsertInventoryBalance(c.env.DB, company_id, lr.item_code, warehouseId, lr.newBalQty, lr.newBalVal, movRow.id, lr.prevVersion)
 
     if (lr.valueOut > 0) {
       const itemRow = await c.env.DB.prepare('SELECT name FROM items WHERE code = ? AND company_id = ?').bind(lr.item_code, company_id).first<{name:string}>()

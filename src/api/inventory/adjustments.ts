@@ -204,7 +204,7 @@ adjustments.post('/adjustments/:id/post', permissionGuard('inventory', 'create')
     ).run()
 
     const movementId = Number(insertRes.meta.last_row_id)
-    await upsertInventoryBalance(c.env.DB, company_id, l.item_code, adj.warehouse_id, prevQty + qtyIn - qtyOut, prevVal + valIn - valOut, movementId)
+    await upsertInventoryBalance(c.env.DB, company_id, l.item_code, adj.warehouse_id, prevQty + qtyIn - qtyOut, prevVal + valIn - valOut, movementId, lastRow.version)
 
     if (totalValue > 0) {
       await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', movementId, {

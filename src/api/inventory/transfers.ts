@@ -103,8 +103,8 @@ transfers.post('/movements/transfer-batch', permissionGuard('inventory', 'create
     ppg_code:     string | null
     quantity:     number
     unitPrice:    number
-    srcBalance:   { balance_qty: number; balance_value: number }
-    dstBalance:   { balance_qty: number; balance_value: number }
+    srcBalance:   { balance_qty: number; balance_value: number; version: number }
+    dstBalance:   { balance_qty: number; balance_value: number; version: number }
   }> = []
 
   for (const line of b.items) {
@@ -211,8 +211,8 @@ transfers.post('/movements/transfer-batch', permissionGuard('inventory', 'create
 
     // Update running balances
     await Promise.all([
-      upsertInventoryBalance(c.env.DB, company_id, line.item_code, srcWh.id, newSrcQty, newSrcVal, outId),
-      upsertInventoryBalance(c.env.DB, company_id, line.item_code, dstWh.id, newDstQty, newDstVal, inId),
+      upsertInventoryBalance(c.env.DB, company_id, line.item_code, srcWh.id, newSrcQty, newSrcVal, outId, line.srcBalance.version),
+      upsertInventoryBalance(c.env.DB, company_id, line.item_code, dstWh.id, newDstQty, newDstVal, inId, line.dstBalance.version),
     ])
 
     // Enqueue GL posting — single job covers both movements via target_movement_id
