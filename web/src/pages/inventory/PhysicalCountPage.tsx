@@ -1,38 +1,66 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
   ClipboardList, Warehouse, CheckCircle, AlertTriangle,
-  ChevronLeft, ChevronRight, ArrowUpDown, Info,
+  ChevronLeft, ChevronRight, ArrowUpDown, Save, Trash2,
 } from 'lucide-react'
 import { inventoryApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 import { useMovementPostingPipeline } from '../../hooks/workspace/useMovementPostingPipeline'
 
-// ─── Types ────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface CountLine {
-  item_code: number
-  item_name: string
-  unit: string | null
+  item_code:       number
+  item_name:       string
+  unit:            string | null
   theoretical_qty: number
-  counted_qty: string   // string for controlled input
+  counted_qty:     string
 }
 
 type Step = 1 | 2 | 3
 
-// ─── Helpers ──────────────────────────────────────────────────
-
 const today = () => new Date().toISOString().slice(0, 10)
-const NUM   = (n: number, dp = 3) =>
-  new Intl.NumberFormat('en-US', { maximumFractionDigits: dp }).format(n)
+const NUM   = (n: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 }).format(n)
 
-// ─── Step Indicator ───────────────────────────────────────────
+// ─── Draft persistence ────────────────────────────────────────────────────────
+
+const DRAFT_KEY = 'physical_count_draft'
+
+interface CountDraft {
+  warehouseName: string
+  warehouseId:   number
+  countDate:     string
+  notes:         string
+  lines:         CountLine[]
+  savedAt:       string
+}
+
+function loadDraft(): CountDraft | null {
+  try { return JSON.parse(localStorage.getItem(DRAFT_KEY) ?? 'null') } catch { return null }
+}
+function saveDraft(d: CountDraft) {
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify(d)) } catch { /* quota */ }
+}
+function clearDraft() {
+  try { localStorage.removeItem(DRAFT_KEY) } catch { /* ignore */ }
+}
+function formatTimeAgo(iso: string): string {
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000)
+  if (mins < 1)  return 'الآن'
+  if (mins < 60) return `منذ ${mins} دقيقة`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `منذ ${hours} ساعة`
+  return `منذ ${Math.floor(hours / 24)} يوم`
+}
+
+// ─── Step Bar ─────────────────────────────────────────────────────────────────
 
 const STEPS = [
-  { n: 1, label: 'اختيار المخزن' },
-  { n: 2, label: 'ورقة الجرد' },
-  { n: 3, label: 'مراجعة وترحيل' },
+  { n: 1 as Step, label: 'اختيار المخزن' },
+  { n: 2 as Step, label: 'ورقة الجرد' },
+  { n: 3 as Step, label: 'مراجعة وترحيل' },
 ]
 
 function StepBar({ current }: { current: Step }) {
@@ -41,10 +69,8 @@ function StepBar({ current }: { current: Step }) {
       {STEPS.map((s, idx) => (
         <div key={s.n} className="flex items-center flex-1 last:flex-none">
           <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all
-            ${current === s.n
-              ? 'bg-brand-600 text-white shadow-sm'
-              : current > s.n
-              ? 'bg-green-500 text-white'
+            ${current === s.n ? 'bg-brand-600 text-white shadow-sm'
+              : current > s.n ? 'bg-green-500 text-white'
               : 'bg-slate-100 text-slate-400'}`}>
             <span className="w-5 h-5 rounded-full border border-current flex items-center justify-center text-xs font-bold shrink-0">
               {current > s.n ? '✓' : s.n}
@@ -60,52 +86,69 @@ function StepBar({ current }: { current: Step }) {
   )
 }
 
-// ─── Main Component ───────────────────────────────────────────
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function PhysicalCountPage() {
   const qc       = useQueryClient()
   const navigate = useNavigate()
   const { toast } = useToast()
 
-  const [step,         setStep]         = useState<Step>(1)
-  const [warehouse,    setWarehouse]    = useState('')
-  const [warehouseId,  setWarehouseId]  = useState<number | null>(null)
-  const [countDate,    setCountDate]    = useState(today())
-  const [notes,        setNotes]        = useState('')
-  const [lines,        setLines]        = useState<CountLine[]>([])
-  const [saving,       setSaving]       = useState(false)
-  const [error,        setError]        = useState('')
-  const [adjId, setAdjId] = useState<string | null>(null)
-  const [posted, setPosted] = useState(false)
+  const [step,        setStep]        = useState<Step>(1)
+  const [warehouseName, setWarehouseName] = useState('')
+  const [warehouseId, setWarehouseId] = useState<number | null>(null)
+  const [countDate,   setCountDate]   = useState(today())
+  const [notes,       setNotes]       = useState('')
+  const [lines,       setLines]       = useState<CountLine[]>([])
+  const [saving,      setSaving]      = useState(false)
+  const [error,       setError]       = useState('')
+  const [posted,      setPosted]      = useState(false)
   const [onlyVariance, setOnlyVariance] = useState(false)
+  const [savedDraft,  setSavedDraft]  = useState<CountDraft | null>(() => loadDraft())
 
-  // ─── Queries ─────────────────────────────────────────────
+  // Auto-save whenever lines change in step 2
+  useEffect(() => {
+    if (step !== 2 || !warehouseName || !warehouseId || lines.length === 0) return
+    const d: CountDraft = { warehouseName, warehouseId, countDate, notes, lines, savedAt: new Date().toISOString() }
+    saveDraft(d)
+  }, [lines, step, warehouseName, warehouseId, countDate, notes])
+
+  const recoverDraft = useCallback((d: CountDraft) => {
+    setWarehouseName(d.warehouseName)
+    setWarehouseId(d.warehouseId)
+    setCountDate(d.countDate)
+    setNotes(d.notes)
+    setLines(d.lines)
+    setSavedDraft(null)
+    setStep(2)
+  }, [])
+
+  const discardSavedDraft = useCallback(() => {
+    clearDraft()
+    setSavedDraft(null)
+  }, [])
+
+  // ─── Data ──────────────────────────────────────────────────────────────────
 
   const { data: warehouseEntities = [] } = useQuery({
     queryKey: ['warehouses-setup'],
-    queryFn:  async () => {
+    queryFn: async () => {
       const res = await inventoryApi.warehousesSetup()
-      return (res as unknown as { entities: Array<{ id: number; name: string }> }).entities ?? []
+      return (res as any).entities ?? []
     },
     staleTime: 60_000,
   })
 
-  const {
-    data: balancesResp,
-    isFetching: loadingStock,
-  } = useQuery({
-    queryKey: ['inventory', 'stock-balances', warehouse, 'physical-count'],
-    queryFn:  () => inventoryApi.balancesList({ warehouse, size: 2000 }),
-    enabled:  step >= 2 && !!warehouse,
+  const { data: balancesResp, isFetching: loadingStock } = useQuery({
+    queryKey: ['inventory', 'stock-balances', warehouseName, 'physical-count'],
+    queryFn: () => inventoryApi.balancesList({ warehouse: warehouseName, size: 2000 }),
+    enabled: step >= 2 && !!warehouseName,
     staleTime: 0,
   })
 
-  const balanceData = (balancesResp as unknown as { data?: Array<{ item_code: number; item_name: string; unit: string | null; balance_qty: number }> })?.data ?? []
-
-  // Populate lines when balance data arrives (query fires after step transitions to 2)
   useEffect(() => {
-    if (step === 2 && balanceData.length > 0 && lines.length === 0) {
-      setLines(balanceData.map(b => ({
+    const data = (balancesResp as any)?.data ?? []
+    if (step === 2 && data.length > 0 && lines.length === 0) {
+      setLines(data.map((b: any) => ({
         item_code:       b.item_code,
         item_name:       b.item_name,
         unit:            b.unit,
@@ -115,7 +158,7 @@ export default function PhysicalCountPage() {
     }
   }, [balancesResp, step]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── Variance computations ────────────────────────────────
+  // ─── Computed ──────────────────────────────────────────────────────────────
 
   const computedLines = useMemo(() =>
     lines.map(l => ({
@@ -128,102 +171,80 @@ export default function PhysicalCountPage() {
   const withVariance = computedLines.filter(l => l.difference !== 0)
   const profitLines  = withVariance.filter(l => l.difference > 0)
   const lossLines    = withVariance.filter(l => l.difference < 0)
-
   const displayLines = onlyVariance ? computedLines.filter(l => l.difference !== 0) : computedLines
 
-  // ─── Navigation ──────────────────────────────────────────
+  // ─── Navigation ────────────────────────────────────────────────────────────
 
   const goToStep2 = () => {
-    if (!warehouse || !warehouseId) { setError('اختر المخزن أولاً'); return }
+    if (!warehouseName || !warehouseId) { setError('اختر المخزن أولاً'); return }
     if (!countDate) { setError('التاريخ مطلوب'); return }
     setError('')
-    setLines([])   // cleared — useEffect will repopulate when query resolves
+    setLines([])
     setStep(2)
   }
 
-  const goToStep3 = () => {
-    setError('')
-    setStep(3)
-  }
+  // ─── Posting ───────────────────────────────────────────────────────────────
 
   const { post } = useMovementPostingPipeline()
 
-  const dispatchBatch = async (type: 'ADJUSTMENT_PROFIT' | 'ADJUSTMENT_LOSS', validLines: typeof profitLines) => {
-    if (validLines.length === 0) return true
-
-    // Create a command-derived draft snapshot
+  const postBatch = async (type: 'ADJUSTMENT_PROFIT' | 'ADJUSTMENT_LOSS', batchLines: typeof profitLines) => {
+    if (batchLines.length === 0) return
     const snapshot = {
-      id: `adj-${Date.now()}`,
-      version: 1,
+      id:         `adj-${type}-${Date.now()}`,
+      version:    1,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       header: {
-        movement_date: countDate,
-        warehouse_id: warehouseId,
-        movement_type: type,
-        notes: notes || 'تسوية جرد آلي',
-        payment_method: 'credit' as const,
-        supplier_code: null,
-        document_number: '',
+        movement_date:       countDate,
+        warehouse_id:        warehouseId,
+        movement_type:       type,
+        notes:               notes || 'تسوية جرد آلي',
+        payment_method:      'credit' as const,
+        supplier_code:       null,
+        document_number:     '',
         target_warehouse_id: null,
       },
       dimensions: {
-        season_id: null,
-        field_id: null,
-        work_order_id: null,
-        center_code: null,
-        service_type_code: '',
-        statement_text: '',
+        season_id: null, field_id: null, work_order_id: null,
+        center_code: null, service_type_code: '', statement_text: '',
       },
-      lines: validLines.map(l => ({
-        id: `line-${l.item_code}`,
-        item_code: l.item_code,
-        quantity: Math.abs(l.difference),
-        pack_count: null,
-        unit_price: null,
-        notes: '',
+      lines: batchLines.map(l => ({
+        _key:             `line-${l.item_code}`,
+        item_code:        l.item_code,
+        item_name:        l.item_name,
+        item_unit:        l.unit ?? '',
+        quantity:         Math.abs(l.difference),
+        pack_count:       null,
+        unit_price:       null,
         package_capacity: null,
-        available: l.theoretical_qty,
+        notes:            '',
+        _available:       null,
+        _stockLoading:    false,
+        _error:           null,
+        _warning:         null,
       })),
-      meta: {}
-    } as any
-
-    const res = await post(snapshot, (status) => {
-      console.log(`[Draft ${snapshot.id}] status changed: ${status}`)
-    })
-
-    if (!res.success) {
-      throw new Error(String(res.error || `فشل ترحيل ${type}`))
+      meta: {
+        source: 'manual' as const,
+        recovery_state: 'clean' as const,
+        last_persist_duration_ms: 0,
+        autosave_enabled: false,
+      },
     }
-    
-    // In new batch architecture, we might have multiple IDs, but for simplicity
-    // we capture the last successful one or the batch ID.
-    setAdjId(String(res.data?.id || 'BATCH-PROCESSED'))
-    return true
-  }
-
-  const handleSaveDraft = async () => {
-    toast('هذه الميزة تم استبدالها بمسودة الـ Workspace.', 'error')
+    const res = await post(snapshot, () => {})
+    if (!res.success) throw new Error(String(res.error || `فشل ترحيل ${type}`))
   }
 
   const handlePost = async () => {
-    toast('هذه الميزة تم استبدالها بترحيل الـ Workspace المباشر.', 'error')
-  }
-
-  const handleCreateAndPost = async () => {
     if (!warehouseId) return
-    setSaving(true); setError('')
+    setSaving(true)
+    setError('')
     try {
-      if (profitLines.length > 0) {
-        await dispatchBatch('ADJUSTMENT_PROFIT', profitLines)
-      }
-      if (lossLines.length > 0) {
-        await dispatchBatch('ADJUSTMENT_LOSS', lossLines)
-      }
-      
+      await postBatch('ADJUSTMENT_PROFIT', profitLines)
+      await postBatch('ADJUSTMENT_LOSS',   lossLines)
+      clearDraft()
       setPosted(true)
       await qc.invalidateQueries({ queryKey: ['inventory'], refetchType: 'active' })
-      toast('تم ترحيل التسوية بنجاح عبر Workspace Pipeline', 'success')
+      toast('تم ترحيل التسوية بنجاح', 'success')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'حدث خطأ غير متوقع')
     } finally {
@@ -231,7 +252,7 @@ export default function PhysicalCountPage() {
     }
   }
 
-  // ─── Render ───────────────────────────────────────────────
+  // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-6">
@@ -241,14 +262,43 @@ export default function PhysicalCountPage() {
           <ClipboardList size={20} className="text-brand-600" />
         </div>
         <div>
-          <h1 className="text-xl font-bold text-slate-800">جرد المخزون (Physical Count)</h1>
-          <p className="text-sm text-slate-500">أدخل الكميات الفعلية لكل صنف — النظام يحسب الفروقات ويرحلها تلقائياً</p>
+          <h1 className="text-xl font-bold text-slate-800">جرد المخزون</h1>
+          <p className="text-sm text-slate-500">أدخل الكميات الفعلية — النظام يحسب الفروقات ويرحلها تلقائياً</p>
         </div>
       </div>
 
       <StepBar current={step} />
 
-      {/* ───── STEP 1: Setup ─────────────────────────────── */}
+      {/* ── Draft recovery banner ─────────────────────────────────────────── */}
+      {step === 1 && savedDraft && (
+        <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm">
+          <Save size={15} className="text-amber-500 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <span className="font-semibold text-amber-800">مسودة جرد محفوظة: </span>
+            <span className="text-amber-700">{savedDraft.warehouseName} · {savedDraft.countDate} · {savedDraft.lines.length} صنف</span>
+            <span className="text-amber-500 mr-1">
+              ({formatTimeAgo(savedDraft.savedAt)})
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => recoverDraft(savedDraft)}
+              className="px-3 py-1.5 bg-amber-500 text-white text-xs font-semibold rounded-lg hover:bg-amber-600 transition-colors"
+            >
+              استعادة
+            </button>
+            <button
+              onClick={discardSavedDraft}
+              className="p-1.5 text-amber-400 hover:text-amber-600 transition-colors"
+              title="حذف المسودة"
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── STEP 1: Setup ─────────────────────────────────────────────────── */}
       {step === 1 && (
         <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-5">
           <div className="grid grid-cols-2 gap-4">
@@ -256,16 +306,16 @@ export default function PhysicalCountPage() {
               <label className="label">المخزن <span className="text-red-500">*</span></label>
               <select
                 className="input"
-                value={warehouse}
+                value={warehouseName}
                 onChange={e => {
-                  const w = e.target.value
-                  setWarehouse(w)
-                  const entity = warehouseEntities.find(x => x.name === w)
+                  const name = e.target.value
+                  setWarehouseName(name)
+                  const entity = (warehouseEntities as { id: number; name: string }[]).find(x => x.name === name)
                   setWarehouseId(entity?.id ?? null)
                 }}
               >
                 <option value="">-- اختر المخزن --</option>
-                {warehouseEntities.map(w => (
+                {(warehouseEntities as { id: number; name: string }[]).map(w => (
                   <option key={w.id} value={w.name}>{w.name}</option>
                 ))}
               </select>
@@ -282,28 +332,19 @@ export default function PhysicalCountPage() {
           </div>
 
           <div>
-            <label className="label">ملاحظات (اختياري)</label>
+            <label className="label">ملاحظات</label>
             <input
               type="text"
               className="input"
-              placeholder="مثال: جرد نهاية الموسم، تسوية فصلية..."
+              placeholder="مثال: جرد نهاية الموسم..."
               value={notes}
               onChange={e => setNotes(e.target.value)}
             />
           </div>
 
-          <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 flex items-start gap-2 text-sm text-blue-800">
-            <Info size={15} className="shrink-0 mt-0.5" />
-            <span>
-              سيتم تحميل الأرصدة الحالية لجميع أصناف المخزن المختار.
-              أدخل الكميات الفعلية المحسوبة — النظام يحسب الفروقات ويرحل تسوية <strong>ADJUSTMENT_PROFIT/LOSS</strong> تلقائياً.
-            </span>
-          </div>
-
           {error && (
             <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-              <AlertTriangle size={15} className="shrink-0" />
-              {error}
+              <AlertTriangle size={15} className="shrink-0" /> {error}
             </div>
           )}
 
@@ -311,7 +352,7 @@ export default function PhysicalCountPage() {
             <button
               className="btn-primary gap-1.5"
               onClick={goToStep2}
-              disabled={!warehouse || !warehouseId || loadingStock}
+              disabled={!warehouseName || !warehouseId || loadingStock}
             >
               {loadingStock ? 'جاري تحميل الأرصدة...' : <>تحميل ورقة الجرد <ChevronLeft size={15} /></>}
             </button>
@@ -319,14 +360,13 @@ export default function PhysicalCountPage() {
         </div>
       )}
 
-      {/* ───── STEP 2: Count Sheet ───────────────────────── */}
+      {/* ── STEP 2: Count Sheet ───────────────────────────────────────────── */}
       {step === 2 && (
         <div className="space-y-4">
-          {/* Context bar */}
           <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5">
             <div className="flex items-center gap-3 text-sm">
               <Warehouse size={15} className="text-brand-500" />
-              <span className="font-semibold text-slate-700">{warehouse}</span>
+              <span className="font-semibold text-slate-700">{warehouseName}</span>
               <span className="text-slate-400">{countDate}</span>
               <span className="text-slate-500">{lines.length} صنف</span>
             </div>
@@ -353,44 +393,38 @@ export default function PhysicalCountPage() {
             <span className="text-center">الفرق</span>
           </div>
 
-          {/* Lines */}
           <div className="space-y-1.5 max-h-[420px] overflow-y-auto pr-1">
-            {displayLines.map((cl) => {
-              const diff    = cl.difference
-              const isProfit = diff > 0
-              const isLoss   = diff < 0
-              return (
-                <div
-                  key={cl.item_code}
-                  className={`grid gap-2 items-center px-3 py-2.5 rounded-xl border transition-colors
-                    ${isProfit ? 'border-green-200 bg-green-50' : isLoss ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-                  style={{ gridTemplateColumns: '2fr 80px 110px 110px 100px' }}
-                >
-                  <span className="text-sm font-medium text-slate-700">{cl.item_name}</span>
-                  <span className="text-xs text-slate-400 text-center">{cl.unit ?? '—'}</span>
-                  <span className="text-sm text-center text-slate-600">{NUM(cl.theoretical_qty)}</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="any"
-                    className="input text-sm py-1.5 text-center w-full"
-                    value={cl.counted_qty}
-                    onChange={e => setLines(ls => ls.map(l =>
-                      l.item_code === cl.item_code
-                        ? { ...l, counted_qty: e.target.value }
-                        : l
-                    ))}
-                  />
-                  <div className={`text-sm font-bold text-center
-                    ${diff === 0 ? 'text-slate-400' : isProfit ? 'text-green-700' : 'text-red-700'}`}>
-                    {diff === 0 ? '—' : `${isProfit ? '+' : ''}${NUM(diff)}`}
-                  </div>
+            {displayLines.map(cl => (
+              <div
+                key={cl.item_code}
+                className={`grid gap-2 items-center px-3 py-2.5 rounded-xl border transition-colors
+                  ${cl.difference > 0 ? 'border-green-200 bg-green-50'
+                  : cl.difference < 0 ? 'border-red-200 bg-red-50'
+                  : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+                style={{ gridTemplateColumns: '2fr 80px 110px 110px 100px' }}
+              >
+                <span className="text-sm font-medium text-slate-700">{cl.item_name}</span>
+                <span className="text-xs text-slate-400 text-center">{cl.unit ?? '—'}</span>
+                <span className="text-sm text-center text-slate-600">{NUM(cl.theoretical_qty)}</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  className="input text-sm py-1.5 text-center w-full"
+                  value={cl.counted_qty}
+                  onChange={e => setLines(ls => ls.map(l =>
+                    l.item_code === cl.item_code ? { ...l, counted_qty: e.target.value } : l
+                  ))}
+                />
+                <div className={`text-sm font-bold text-center
+                  ${cl.difference === 0 ? 'text-slate-400'
+                  : cl.difference > 0 ? 'text-green-700' : 'text-red-700'}`}>
+                  {cl.difference === 0 ? '—' : `${cl.difference > 0 ? '+' : ''}${NUM(cl.difference)}`}
                 </div>
-              )
-            })}
+              </div>
+            ))}
           </div>
 
-          {/* Variance summary */}
           {withVariance.length > 0 && (
             <div className="grid grid-cols-3 gap-3 text-sm">
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-center">
@@ -398,11 +432,11 @@ export default function PhysicalCountPage() {
                 <div className="text-lg font-bold text-slate-700">{withVariance.length}</div>
               </div>
               <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
-                <div className="text-xs text-green-600 mb-1">زيادة (ADJUSTMENT_PROFIT)</div>
+                <div className="text-xs text-green-600 mb-1">زيادة</div>
                 <div className="text-lg font-bold text-green-700">{profitLines.length} صنف</div>
               </div>
               <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-center">
-                <div className="text-xs text-red-600 mb-1">نقص (ADJUSTMENT_LOSS)</div>
+                <div className="text-xs text-red-600 mb-1">نقص</div>
                 <div className="text-lg font-bold text-red-700">{lossLines.length} صنف</div>
               </div>
             </div>
@@ -419,59 +453,53 @@ export default function PhysicalCountPage() {
             <button className="btn-secondary gap-1.5" onClick={() => { setStep(1); setError('') }}>
               <ChevronRight size={15} /> السابق
             </button>
-            <button className="btn-primary gap-1.5" onClick={goToStep3}>
+            <button className="btn-primary gap-1.5" onClick={() => setStep(3)}>
               مراجعة وتأكيد <ChevronLeft size={15} />
             </button>
           </div>
         </div>
       )}
 
-      {/* ───── STEP 3: Review & Post ─────────────────────── */}
+      {/* ── STEP 3: Review & Post ─────────────────────────────────────────── */}
       {step === 3 && (
         <div className="space-y-4">
           {posted ? (
-            // Success state
             <div className="bg-white border border-green-200 rounded-2xl p-8 text-center space-y-4">
               <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto">
                 <CheckCircle size={32} className="text-green-600" />
               </div>
               <div>
                 <h2 className="text-xl font-bold text-green-700 mb-1">تم الترحيل بنجاح</h2>
-                <p className="text-slate-500 text-sm">تم تحديث أرصدة المخزون — التسوية رقم <strong>#{adjId}</strong></p>
+                <p className="text-slate-500 text-sm">تم تحديث أرصدة المخزون</p>
               </div>
               <div className="flex gap-3 justify-center">
-                <button
-                  className="btn-secondary"
-                  onClick={() => navigate('/inventory/adjustments')}
-                >
-                  عرض التسويات
-                </button>
-                <button
-                  className="btn-primary"
-                  onClick={() => navigate('/inventory')}
-                >
+                <button className="btn-secondary" onClick={() => navigate('/inventory')}>
                   العودة لأرصدة المخزون
+                </button>
+                <button className="btn-primary" onClick={() => navigate('/inventory/movements')}>
+                  عرض الحركات
                 </button>
               </div>
             </div>
           ) : (
             <>
-              {/* Summary */}
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
                 <h3 className="font-semibold text-slate-700 mb-3 flex items-center gap-2">
                   <ClipboardList size={15} /> ملخص الجرد
                 </h3>
                 <div className="grid grid-cols-2 gap-y-2 gap-x-4 text-sm">
-                  <div className="flex gap-2"><span className="text-slate-500">المخزن:</span><span className="font-medium">{warehouse}</span></div>
+                  <div className="flex gap-2"><span className="text-slate-500">المخزن:</span><span className="font-medium">{warehouseName}</span></div>
                   <div className="flex gap-2"><span className="text-slate-500">التاريخ:</span><span className="font-medium">{countDate}</span></div>
                   <div className="flex gap-2"><span className="text-slate-500">إجمالي الأصناف:</span><span className="font-medium">{lines.length}</span></div>
-                  <div className="flex gap-2"><span className="text-slate-500">أصناف بفروقات:</span><span className={`font-bold ${withVariance.length > 0 ? 'text-amber-600' : 'text-green-600'}`}>{withVariance.length}</span></div>
-                  {profitLines.length > 0 && <div className="flex gap-2"><span className="text-slate-500">زيادة (+):</span><span className="font-bold text-green-700">{profitLines.length} صنف</span></div>}
-                  {lossLines.length > 0 && <div className="flex gap-2"><span className="text-slate-500">نقص (−):</span><span className="font-bold text-red-700">{lossLines.length} صنف</span></div>}
+                  <div className="flex gap-2">
+                    <span className="text-slate-500">أصناف بفروقات:</span>
+                    <span className={`font-bold ${withVariance.length > 0 ? 'text-amber-600' : 'text-green-600'}`}>
+                      {withVariance.length}
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              {/* Variance detail table */}
               {withVariance.length > 0 && (
                 <div className="rounded-xl border border-slate-200 overflow-hidden">
                   <div className="bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-500 flex items-center gap-1.5">
@@ -499,7 +527,7 @@ export default function PhysicalCountPage() {
                           <td className="py-2 px-3 text-center">
                             <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full
                               ${l.difference > 0 ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'}`}>
-                              {l.difference > 0 ? 'PROFIT +' : 'LOSS −'}
+                              {l.difference > 0 ? 'زيادة +' : 'نقص −'}
                             </span>
                           </td>
                         </tr>
@@ -512,60 +540,30 @@ export default function PhysicalCountPage() {
               {withVariance.length === 0 && (
                 <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-xl text-green-700 text-sm">
                   <CheckCircle size={15} className="shrink-0" />
-                  لا توجد فروقات — الجرد مطابق للنظام. يمكنك حفظ ورقة الجرد كسجل.
+                  لا توجد فروقات — يمكنك إغلاق هذه الصفحة
                 </div>
               )}
 
               {error && (
                 <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-                  <AlertTriangle size={15} className="shrink-0 mt-0.5" />
-                  {error}
+                  <AlertTriangle size={15} className="shrink-0 mt-0.5" /> {error}
                 </div>
               )}
 
-              {/* Action buttons */}
               <div className="flex items-center justify-between pt-2">
                 <button className="btn-secondary gap-1.5" onClick={() => { setStep(2); setError('') }} disabled={saving}>
                   <ChevronRight size={15} /> تعديل الكميات
                 </button>
-                <div className="flex gap-2">
-                  {/* Save draft (no GL posting) */}
-                  {!adjId && (
-                    <button
-                      className="btn-secondary gap-1.5"
-                      onClick={handleSaveDraft}
-                      disabled={saving}
-                    >
-                      {saving ? 'جاري الحفظ...' : 'حفظ كمسودة فقط'}
-                    </button>
-                  )}
-                  {/* Post existing draft */}
-                  {adjId && !posted && (
-                    <button
-                      className="btn-primary gap-1.5"
-                      onClick={handlePost}
-                      disabled={saving}
-                    >
-                      {saving
-                        ? <><span className="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full"></span> جاري الترحيل...</>
-                        : <><CheckCircle size={15} /> ترحيل المسودة #{adjId}</>
-                      }
-                    </button>
-                  )}
-                  {/* Save + Post immediately */}
-                  {!adjId && (
-                    <button
-                      className="btn-primary gap-1.5 bg-emerald-600 hover:bg-emerald-700"
-                      onClick={handleCreateAndPost}
-                      disabled={saving}
-                    >
-                      {saving
-                        ? <><span className="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full"></span> جاري الترحيل...</>
-                        : <><CheckCircle size={15} /> حفظ وترحيل فوراً</>
-                      }
-                    </button>
-                  )}
-                </div>
+                <button
+                  className="btn-primary gap-1.5 bg-emerald-600 hover:bg-emerald-700"
+                  onClick={handlePost}
+                  disabled={saving || withVariance.length === 0}
+                >
+                  {saving
+                    ? <><span className="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full" /> جاري الترحيل...</>
+                    : <><CheckCircle size={15} /> ترحيل التسوية</>
+                  }
+                </button>
               </div>
             </>
           )}

@@ -2,9 +2,10 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ArrowRight, Save, CheckCircle, Send, PanelRightOpen, PanelRightClose,
-  Trash2, AlertTriangle, Clock, WifiOff,
+  Trash2, AlertTriangle, Clock, WifiOff, X, FileCheck, Plus, Copy,
 } from 'lucide-react'
 import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
+import { validateDraftForSubmission, type SubmissionValidationResult } from '../../components/workspace/validateDraftForSubmission'
 import StatusPipeline from '../../components/workspace/StatusPipeline'
 import MovementHeaderPanel from '../../components/workspace/MovementHeader'
 import DimensionStrip from '../../components/workspace/DimensionStrip'
@@ -16,7 +17,7 @@ import { useWorkspacePanelStore } from '../../hooks/workspace/useWorkspacePanelS
 import { useNetworkState } from '../../hooks/workspace/useNetworkState'
 import { type MovementMeta, type WorkspaceMode } from '../../components/workspace/types'
 import { MOVEMENT_TYPES } from '../../components/workspace/types'
-import type { DraftIndex } from '../../hooks/workspace/useDraftPersistenceEngine'
+import { LocalStoragePersistenceAdapter, type DraftIndex } from '../../hooks/workspace/persistenceAdapter'
 import { useMovementPostingPipeline } from '../../hooks/workspace/useMovementPostingPipeline'
 
 // ─── Draft recovery banner ──────────────────────────────────────────────────
@@ -87,6 +88,89 @@ function formatTimeAgo(iso: string): string {
   return `منذ ${Math.floor(hours / 24)} يوم`
 }
 
+// ─── Post-confirmation overlay ───────────────────────────────────────────────
+
+interface PostResult {
+  transaction_id: number | null
+  movement_type: string
+  line_count: number
+  total_value: number
+  movement_date: string
+}
+
+interface PostConfirmationProps {
+  result: PostResult
+  onViewTransaction: () => void
+  onNewMovement: () => void
+}
+
+function PostConfirmation({ result, onViewTransaction, onNewMovement }: PostConfirmationProps) {
+  const typeMeta = MOVEMENT_TYPES.find(m => m.value === result.movement_type)
+  return (
+    <div className="flex flex-col items-center justify-center h-full bg-[#f8fafc] gap-6 px-8">
+      <div className="flex flex-col items-center gap-3 text-center max-w-md">
+        <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center">
+          <FileCheck size={32} className="text-green-600" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-800">تم الترحيل بنجاح</h2>
+        <p className="text-sm text-slate-500">
+          تم إنشاء الحركة وإرسالها إلى قائمة انتظار الترحيل المحاسبي.
+        </p>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm w-full max-w-sm divide-y divide-slate-100">
+        {result.transaction_id && (
+          <div className="flex items-center justify-between px-5 py-3">
+            <span className="text-xs text-slate-400">رقم المعاملة</span>
+            <span className="text-sm font-bold text-slate-800 font-mono">#{result.transaction_id}</span>
+          </div>
+        )}
+        <div className="flex items-center justify-between px-5 py-3">
+          <span className="text-xs text-slate-400">نوع الحركة</span>
+          <span className="text-sm font-medium text-slate-700">{typeMeta?.label ?? result.movement_type}</span>
+        </div>
+        <div className="flex items-center justify-between px-5 py-3">
+          <span className="text-xs text-slate-400">عدد الأصناف</span>
+          <span className="text-sm font-medium text-slate-700">{result.line_count} صنف</span>
+        </div>
+        <div className="flex items-center justify-between px-5 py-3">
+          <span className="text-xs text-slate-400">الإجمالي</span>
+          <span className="text-sm font-bold text-slate-800">
+            {result.total_value.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م
+          </span>
+        </div>
+        <div className="flex items-center justify-between px-5 py-3">
+          <span className="text-xs text-slate-400">تاريخ الحركة</span>
+          <span className="text-sm font-medium text-slate-700">{result.movement_date}</span>
+        </div>
+        <div className="flex items-center justify-between px-5 py-3">
+          <span className="text-xs text-slate-400">حالة الترحيل المحاسبي</span>
+          <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">في الانتظار</span>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3">
+        {result.transaction_id && (
+          <button
+            onClick={onViewTransaction}
+            className="flex items-center gap-2 px-5 py-2.5 bg-brand-600 text-white text-sm font-semibold rounded-lg hover:bg-brand-700 transition-colors"
+          >
+            <FileCheck size={15} />
+            عرض المعاملة
+          </button>
+        )}
+        <button
+          onClick={onNewMovement}
+          className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 text-slate-700 text-sm font-semibold rounded-lg hover:bg-slate-50 transition-colors"
+        >
+          <Plus size={15} />
+          حركة جديدة
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main Page Component ─────────────────────────────────────────────────────
 
 export default function MovementWorkspacePage() {
@@ -123,6 +207,8 @@ export default function MovementWorkspacePage() {
 
   // ── Local UI state ──────────────────────────────────────────────────────
   const [showRecovery, setShowRecovery] = useState(true)
+  const [validationResult, setValidationResult] = useState<SubmissionValidationResult | null>(null)
+  const [postResult, setPostResult] = useState<PostResult | null>(null)
 
   // ── Keyboard shortcuts ──────────────────────────────────────────────────
   useEffect(() => {
@@ -165,19 +251,54 @@ export default function MovementWorkspacePage() {
     }
   }, [discardDraft])
 
+  const handleDuplicate = useCallback(async () => {
+    const snapshot = getDraftSnapshot()
+    const now = new Date().toISOString()
+    const newId = `draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const copy = {
+      ...snapshot,
+      id: newId,
+      created_at: now,
+      updated_at: now,
+      meta: { ...snapshot.meta, recovery_state: 'clean' as const },
+    }
+    await LocalStoragePersistenceAdapter.saveDraft(copy)
+    navigate(`/inventory/workspace/create?draft=${newId}`)
+  }, [getDraftSnapshot, navigate])
+
+  // ── Validate ──────────────────────────────────────────────────────────────
+  const handleValidate = useCallback(() => {
+    const snapshot = getDraftSnapshot()
+    const result = validateDraftForSubmission(snapshot)
+    setValidationResult(result)
+  }, [getDraftSnapshot])
+
   // ── Posting Pipeline ──────────────────────────────────────────────────────
   const { post, isPosting } = useMovementPostingPipeline()
 
   const handlePost = useCallback(async () => {
     const snapshot = getDraftSnapshot()
+
+    // Pre-flight validation gate — block post if errors exist
+    const validation = validateDraftForSubmission(snapshot)
+    setValidationResult(validation)
+    if (!validation.valid) return
+
     const res = await post(snapshot, setDraftStatus)
     if (res.success) {
-      alert('تم الاعتماد بنجاح!')
-      navigate('/inventory/movements')
+      setValidationResult(null)
+      setPostResult({
+        transaction_id: (res as any).transaction_id ?? null,
+        movement_type: snapshot.header.movement_type,
+        line_count: snapshot.lines.filter(l => l.item_code).length,
+        total_value: snapshot.lines.reduce((s, l) => s + (l.quantity ?? 0) * (l.unit_price ?? 0), 0),
+        movement_date: snapshot.header.movement_date ?? new Date().toISOString().slice(0, 10),
+      })
+      discardDraft()
     } else if (res.error) {
       alert(res.error)
     }
-  }, [post, getDraftSnapshot, setDraftStatus, navigate])
+  }, [post, getDraftSnapshot, setDraftStatus, discardDraft])
 
   // ── Command bar actions ─────────────────────────────────────────────────
   const actions: CommandAction[] = [
@@ -201,7 +322,9 @@ export default function MovementWorkspacePage() {
       id: 'validate',
       label: 'تحقق',
       icon: <CheckCircle size={15} />,
-      disabled: true,
+      variant: 'secondary',
+      disabled: mode === 'readonly',
+      onClick: handleValidate,
     },
     {
       id: 'post',
@@ -212,6 +335,13 @@ export default function MovementWorkspacePage() {
       onClick: handlePost,
     },
     { id: 'sep1', isSeparator: true },
+    {
+      id: 'duplicate',
+      label: 'نسخ',
+      icon: <Copy size={15} />,
+      variant: 'ghost',
+      onClick: handleDuplicate,
+    },
     {
       id: 'discard',
       label: 'حذف المسودة',
@@ -243,6 +373,18 @@ export default function MovementWorkspacePage() {
   )
 
   // ── Render ──────────────────────────────────────────────────────────────
+  if (postResult) {
+    return (
+      <PostConfirmation
+        result={postResult}
+        onViewTransaction={() => {
+          if (postResult.transaction_id) navigate(`/inventory/transactions/${postResult.transaction_id}`)
+        }}
+        onNewMovement={() => navigate('/inventory/movements/new')}
+      />
+    )
+  }
+
   return (
     <div className="flex flex-col h-full bg-[#f8fafc]">
       <CommandBar actions={actions} rightSlot={rightSlot} />
@@ -255,6 +397,57 @@ export default function MovementWorkspacePage() {
           onRecover={handleRecover}
           onDismiss={() => setShowRecovery(false)}
         />
+      )}
+
+      {validationResult && (
+        <div className={`border-b px-6 py-3 shrink-0 ${
+          validationResult.valid ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
+        }`}>
+          <div className="flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              {validationResult.valid ? (
+                <p className="text-sm font-semibold text-green-700 flex items-center gap-2">
+                  <CheckCircle size={15} className="text-green-600 shrink-0" />
+                  المسودة صالحة للترحيل — لا توجد أخطاء
+                  {validationResult.warnings.length > 0 && (
+                    <span className="text-amber-600 font-medium">({validationResult.warnings.length} تحذير)</span>
+                  )}
+                </p>
+              ) : (
+                <p className="text-sm font-semibold text-red-700 flex items-center gap-2 mb-2">
+                  <AlertTriangle size={15} className="text-red-500 shrink-0" />
+                  {validationResult.errors.length} خطأ يجب تصحيحه قبل الترحيل
+                </p>
+              )}
+              {validationResult.errors.length > 0 && (
+                <ul className="space-y-0.5 mt-1">
+                  {validationResult.errors.map((e, i) => (
+                    <li key={i} className="text-xs text-red-600 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />
+                      {e.line_index != null ? `سطر ${e.line_index + 1}: ` : ''}{e.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {validationResult.warnings.length > 0 && (
+                <ul className="space-y-0.5 mt-1">
+                  {validationResult.warnings.map((w, i) => (
+                    <li key={i} className="text-xs text-amber-600 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
+                      {w.line_index != null ? `سطر ${w.line_index + 1}: ` : ''}{w.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <button
+              onClick={() => setValidationResult(null)}
+              className="text-slate-400 hover:text-slate-600 transition-colors shrink-0 mt-0.5"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
       )}
 
       <div className="flex flex-1 min-h-0">
@@ -284,6 +477,12 @@ export default function MovementWorkspacePage() {
             warehouse={header.warehouse_id}
             onAddLine={() => dispatch({ type: 'ADD_ROW' })}
             onRemoveLine={(key) => dispatch({ type: 'REMOVE_ROW', rowId: key })}
+            onUpdateLine={(rowId, field, value) =>
+              dispatch({ type: 'UPDATE_CELL', rowId, field: field as any, value })
+            }
+            onApplyPaste={(startRowId, rows) =>
+              dispatch({ type: 'APPLY_EXCEL_PASTE', startRowId, rows })
+            }
           />
 
           <SummaryFooter
@@ -293,7 +492,7 @@ export default function MovementWorkspacePage() {
           />
         </div>
 
-        <WorkspaceSidePanel />
+        <WorkspaceSidePanel draft={getDraftSnapshot()} />
       </div>
     </div>
   )

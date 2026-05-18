@@ -97,31 +97,54 @@ governance.post('/gl-preview', permissionGuard('inventory', 'read'), async (c) =
     narration: string
   }[] = []
 
-  const invAcc      = setup?.inventory_account  ?? '140701'
-  const cogsAcc     = setup?.cogs_account       ?? '45010001'
-  const supplierAcc = '2120'  // Accounts payable
-  const cashAcc     = '14010101'
+  const warnings: string[] = []
+  if (!setup) warnings.push(`لا يوجد إعداد ترحيل للتوليفة (${ipg ?? 'ANY'} × ${ppg ?? 'ANY'})`)
+  if (!ipg)   warnings.push(`المخزن "${b.warehouse}" لا يملك مجموعة ترحيل مخزون (IPG)`)
+  if (!ppg)   warnings.push(`الصنف "${item.name}" لا يملك مجموعة ترحيل منتج (PPG)`)
+
+  const invAcc  = setup?.inventory_account
+  const cogsAcc = setup?.cogs_account
+  if (!invAcc) warnings.push('حساب المخزون غير محدد في إعداد الترحيل — لا يمكن توليد معاينة القيد')
+  if (!cogsAcc) warnings.push('حساب تكلفة المبيعات (COGS) غير محدد في إعداد الترحيل')
+
+  const supplierRow = await c.env.DB.prepare(
+    `SELECT account_code FROM posting_rules WHERE company_id = ? AND rule_type = 'control'
+     AND mapping_key IN ('accounts_payable', 'supplier_payable') AND is_active = 1 ORDER BY priority DESC LIMIT 1`
+  ).bind(company_id).first<{ account_code: string }>()
+  const supplierAcc = supplierRow?.account_code
+  if (!supplierAcc) warnings.push('حساب الدائنين (ذمم الموردين) غير محدد في قواعد الترحيل')
+
+  const cashRow2 = await c.env.DB.prepare(
+    `SELECT account_code FROM posting_rules WHERE company_id = ? AND rule_type = 'control'
+     AND mapping_key IN ('cash', 'cash_default') AND is_active = 1 ORDER BY priority DESC LIMIT 1`
+  ).bind(company_id).first<{ account_code: string }>()
+  const cashAcc = cashRow2?.account_code
+  if (b.payment_method === 'cash' && !cashAcc) warnings.push('حساب النقدية غير محدد في قواعد الترحيل')
+
+  // Return early if critical accounts are missing — preview can't be built
+  if (!invAcc) {
+    return c.json({
+      success: true,
+      data: {
+        item_name: item.name, item_unit: item.unit, ipg, ppg,
+        unit_price: unitPrice, value, lines: [], is_balanced: false, warnings,
+      },
+    })
+  }
 
   const isInbound = resolveMovementDirection(b.movement_type) === 'IN'
 
   if (isInbound) {
-    // Purchase receipt / inbound: DR Inventory / CR Supplier (credit) or CR Cash (cash)
     lines.push({ side: 'DR', account_code: invAcc,   account_label: 'أصول - المخزون',       amount: value, narration: `استلام ${item.name} - ${b.warehouse}` })
     if (b.payment_method === 'cash') {
-      lines.push({ side: 'CR', account_code: cashAcc,     account_label: 'صندوق النقدية',      amount: value, narration: `دفع نقدي لـ ${item.name}` })
+      if (cashAcc) lines.push({ side: 'CR', account_code: cashAcc,     account_label: 'صندوق النقدية',       amount: value, narration: `دفع نقدي لـ ${item.name}` })
     } else {
-      lines.push({ side: 'CR', account_code: supplierAcc, account_label: 'دائنو الموردين (2120)', amount: value, narration: `ذمة مورد - ${item.name}` })
+      if (supplierAcc) lines.push({ side: 'CR', account_code: supplierAcc, account_label: 'دائنو الموردين', amount: value, narration: `ذمة مورد - ${item.name}` })
     }
   } else {
-    // Issue / outbound: DR COGS / CR Inventory
-    lines.push({ side: 'DR', account_code: cogsAcc,  account_label: 'تكلفة المبيعات (COGS)', amount: value, narration: `صرف ${item.name} - ${b.warehouse}` })
-    lines.push({ side: 'CR', account_code: invAcc,   account_label: 'أصول - المخزون',        amount: value, narration: `إخراج مخزون ${item.name}` })
+    if (cogsAcc) lines.push({ side: 'DR', account_code: cogsAcc, account_label: 'تكلفة المبيعات (COGS)', amount: value, narration: `صرف ${item.name} - ${b.warehouse}` })
+    lines.push({ side: 'CR', account_code: invAcc, account_label: 'أصول - المخزون', amount: value, narration: `إخراج مخزون ${item.name}` })
   }
-
-  const warnings: string[] = []
-  if (!setup) warnings.push(`لا يوجد إعداد ترحيل للتوليفة (${ipg ?? 'ANY'} × ${ppg ?? 'ANY'}) — سيُستخدم الحساب الافتراضي`)
-  if (!ipg)   warnings.push(`المخزن "${b.warehouse}" لا يملك مجموعة ترحيل مخزون (IPG)`)
-  if (!ppg)   warnings.push(`الصنف "${item.name}" لا يملك مجموعة ترحيل منتج (PPG)`)
 
   return c.json({
     success: true,
@@ -278,19 +301,32 @@ governance.patch('/items-master/:code', permissionGuard('inventory', 'create'), 
 
   const b = await c.req.json<{
     prod_posting_group_code?: string | null
+    inv_posting_group_code?:  string | null
     standard_cost?:           number | null
     reorder_threshold?:       number | null
+    costing_method?:          'moving_average' | 'standard' | 'fifo' | null
+    track_lots?:              boolean | null
+    cogs_account_override?:   string | null
     name?:                    string
     unit?:                    string
   }>()
+
+  const VALID_COSTING = ['moving_average', 'standard', 'fifo']
+  if (b.costing_method != null && !VALID_COSTING.includes(b.costing_method)) {
+    return c.json({ success: false, error: 'طريقة التكلفة غير صالحة' }, 400)
+  }
 
   // Build SET clause dynamically
   const sets: string[] = []
   const binds: unknown[] = []
 
   if ('prod_posting_group_code' in b) { sets.push('prod_posting_group_code = ?'); binds.push(b.prod_posting_group_code ?? null) }
+  if ('inv_posting_group_code'  in b) { sets.push('inv_posting_group_code = ?');  binds.push(b.inv_posting_group_code  ?? null) }
   if ('standard_cost'           in b) { sets.push('standard_cost = ?');           binds.push(b.standard_cost ?? null) }
   if ('reorder_threshold'       in b) { sets.push('reorder_threshold = ?');       binds.push(b.reorder_threshold ?? null) }
+  if ('costing_method'          in b) { sets.push('costing_method = ?');          binds.push(b.costing_method ?? null) }
+  if ('track_lots'              in b) { sets.push('track_lots = ?');              binds.push(b.track_lots ? 1 : 0) }
+  if ('cogs_account_override'   in b) { sets.push('cogs_account_override = ?');   binds.push(b.cogs_account_override ?? null) }
   if ('name'                    in b) { sets.push('name = ?');                    binds.push(b.name) }
   if ('unit'                    in b) { sets.push('unit = ?');                    binds.push(b.unit) }
 

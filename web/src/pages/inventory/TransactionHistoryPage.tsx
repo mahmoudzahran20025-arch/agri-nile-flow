@@ -129,12 +129,21 @@ function TxDrawer({ tx, onClose }: { tx: TxRow; onClose: () => void }) {
             <p className="text-[17px] font-bold text-slate-800 tabular-nums">{EGP(tx.total_value)}</p>
             <p className="text-[11px] text-slate-400 mt-0.5">{tx.line_count} صنف / {NUM(tx.total_qty)} وحدة</p>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-200 hover:text-slate-700 transition-colors shrink-0"
-          >
-            <X size={16} />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            <Link
+              to={`/inventory/transactions/${tx.id}`}
+              className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-200 hover:text-brand-600 transition-colors"
+              title="فتح الصفحة الكاملة"
+            >
+              <FileText size={16} />
+            </Link>
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-200 hover:text-slate-700 transition-colors"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
         {/* Lines */}

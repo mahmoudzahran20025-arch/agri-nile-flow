@@ -75,6 +75,7 @@ const WarehousesPage           = lazy(() => import('./pages/inventory/Warehouses
 const MovementWorkspacePage    = lazy(() => import('./pages/inventory/MovementWorkspacePage'))
 const InventoryMovementsPage   = lazy(() => import('./pages/inventory/InventoryMovementsPage'))
 const TransactionHistoryPage   = lazy(() => import('./pages/inventory/TransactionHistoryPage'))
+const TransactionDetailPage    = lazy(() => import('./pages/inventory/TransactionDetailPage'))
 const ItemCardPage             = lazy(() => import('./pages/inventory/ItemCardPage'))
 const CostByFieldPage          = lazy(() => import('./pages/inventory/CostByFieldPage'))
 const ItemCategoriesPage       = lazy(() => import('./pages/inventory/ItemCategoriesPage'))
@@ -187,6 +188,7 @@ export default function App() {
         <Route path="inventory/workspace/create"    element={<MovementWorkspacePage />} />
         <Route path="inventory/movements"        element={<InventoryMovementsPage />} />
         <Route path="inventory/transactions"     element={<TransactionHistoryPage />} />
+        <Route path="inventory/transactions/:id" element={<TransactionDetailPage />} />
         <Route path="inventory/item/:code"       element={<ItemCardPage />} />
         <Route path="inventory/cost-by-field"    element={<CostByFieldPage />} />
         <Route path="inventory/posting-health"   element={<InventoryPostingHealthPage />} />

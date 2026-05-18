@@ -339,6 +339,168 @@ movements.post('/movements', permissionGuard('inventory', 'create'), async (c) =
   return c.json({ success: true, data: { id: movId } }, 201)
 })
 
+// ── POST /movements/:id/reverse ──────────────────────────────
+// Creates a mirror movement that fully negates a posted movement.
+// The original movement is marked is_reversed = 1.
+// The reversal movement references reversal_of_id = original.id.
+// Only movements with gl_posting_status IN ('posted', 'pending', 'failed') can be reversed.
+// Zero-value and already-reversed movements are blocked.
+
+movements.post('/movements/:id/reverse', permissionGuard('inventory', 'create'), async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const origId = Number(c.req.param('id'))
+  if (!origId) return c.json({ success: false, error: 'معرف الحركة غير صحيح' }, 400)
+
+  const b: { reason?: string; reversal_date?: string } = await c.req.json<{ reason?: string; reversal_date?: string }>().catch(() => ({}))
+
+  // 1. Load original movement
+  const orig = await c.env.DB.prepare(
+    `SELECT im.*,
+            w.name AS warehouse_name
+     FROM inventory_movements im
+     LEFT JOIN warehouses w ON w.id = im.warehouse_id AND w.company_id = im.company_id
+     WHERE im.id = ? AND im.company_id = ?`
+  ).bind(origId, company_id).first<{
+    id: number; company_id: number; item_code: number; warehouse_id: number; warehouse_name: string | null
+    movement_type: string; movement_date: string; quantity: number; unit_price: number
+    qty_in: number; qty_out: number; value_in: number; value_out: number
+    season_id: number | null; field_id: number | null; work_order_id: number | null
+    supplier_code: number | null; document_number: string | null; center_code: number | null
+    statement_text: string | null; service_type_code: string | null; notes: string | null
+    gl_posting_status: string; journal_entry_id: number | null
+    is_reversed: number | null; reversal_of_id: number | null
+    posting_mode: string; zero_value_reason: string | null
+  }>()
+
+  if (!orig) return c.json({ success: false, error: 'الحركة غير موجودة' }, 404)
+
+  if (orig.is_reversed) {
+    return c.json({ success: false, error: 'هذه الحركة تم عكسها مسبقاً' }, 409)
+  }
+  if (orig.reversal_of_id) {
+    return c.json({ success: false, error: 'لا يمكن عكس حركة عكسية' }, 409)
+  }
+  if (orig.gl_posting_status === 'exempt_zero_value') {
+    return c.json({ success: false, error: 'حركة القيمة الصفرية لا تحتاج إلى عكس' }, 409)
+  }
+
+  // 2. Check period + lock date
+  const controls = await getInventoryPostingControls(c.env.DB, company_id)
+  const reversalDate = b.reversal_date
+    ? normalizeIsoDate(b.reversal_date)
+    : new Date().toISOString().slice(0, 10)
+
+  try {
+    enforceInventoryLockDate(controls, reversalDate)
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 422)
+  }
+
+  const periodId = await getOpenPeriod(c.env.DB, company_id, reversalDate)
+  if (!periodId) return c.json({ success: false, error: 'لا توجد فترة مالية مفتوحة لتاريخ العكس' }, 400)
+
+  // 3. Reversal inverts qty direction — inbound becomes outbound and vice versa
+  const isOrigInbound = orig.qty_in > 0
+  const revQtyIn    = isOrigInbound ? 0 : orig.quantity
+  const revQtyOut   = isOrigInbound ? orig.quantity : 0
+  const revValueIn  = isOrigInbound ? 0 : orig.value_out  // original value_out is now the reverse value_in
+  const revValueOut = isOrigInbound ? orig.value_in : 0   // original value_in is now the reverse value_out
+  const revValue    = Math.max(revValueIn, revValueOut)
+
+  // Reversal movement type is the mirror type
+  const REVERSAL_TYPES: Record<string, string> = {
+    GRN:               'RETURN_SUPPLIER',
+    ISSUE:             'RETURN_CUSTOMER',
+    TRANSFER_IN:       'TRANSFER_OUT',
+    TRANSFER_OUT:      'TRANSFER_IN',
+    RETURN_SUPPLIER:   'GRN',
+    RETURN_CUSTOMER:   'ISSUE',
+    ADJUSTMENT_PROFIT: 'ADJUSTMENT_LOSS',
+    ADJUSTMENT_LOSS:   'ADJUSTMENT_PROFIT',
+    PRODUCTION_INPUT:  'PRODUCTION_OUTPUT',
+    PRODUCTION_OUTPUT: 'PRODUCTION_INPUT',
+  }
+  const reversalType = REVERSAL_TYPES[orig.movement_type] ?? orig.movement_type
+
+  // 4. Stock check: if reversal is outbound, ensure enough balance exists
+  const prev = await readInventoryBalance(c.env.DB, company_id, orig.item_code, orig.warehouse_id)
+  if (revQtyOut > 0 && prev.balance_qty < revQtyOut) {
+    return c.json({
+      success: false,
+      error: `رصيد غير كافٍ للعكس: الرصيد الحالي ${prev.balance_qty}، الكمية المطلوبة ${revQtyOut}`,
+      code: 'INSUFFICIENT_STOCK',
+    }, 409)
+  }
+
+  const ym = yearMonthParts(reversalDate)
+  const localId = `inv_rev_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+  const transactionId = Math.floor(Date.now() / 1000) * 1000 + Math.floor(Math.random() * 1000)
+  const newBalQty = prev.balance_qty + revQtyIn - revQtyOut
+  const newBalVal = prev.balance_value + revValueIn - revValueOut
+
+  // 5. Insert reversal movement + mark original as reversed (batch)
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `INSERT INTO inventory_movements
+       (company_id, season_id, field_id, work_order_id, supplier_code, item_code, center_code,
+        movement_date, warehouse_id, movement_type, document_number,
+        quantity, unit_price, qty_in, qty_out, balance_qty, value_in, value_out, balance_value,
+        notes, statement_text, service_type_code, year, month, created_by_user_id, local_id,
+        posting_mode, gl_posting_status, transaction_id, reversal_of_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(
+      company_id, orig.season_id, orig.field_id, orig.work_order_id, orig.supplier_code,
+      orig.item_code, orig.center_code, reversalDate, orig.warehouse_id,
+      reversalType, orig.document_number ? `REV-${orig.document_number}` : null,
+      orig.quantity, orig.unit_price,
+      revQtyIn, revQtyOut, newBalQty, revValueIn, revValueOut, newBalVal,
+      b.reason ? `عكس: ${b.reason}` : `عكس الحركة رقم ${origId}`,
+      orig.statement_text, orig.service_type_code,
+      ym.year, ym.month, userId, localId,
+      controls.posting_mode,
+      revValue === 0 ? 'exempt_zero_value' : 'pending',
+      transactionId, origId,
+    ),
+    c.env.DB.prepare(
+      `UPDATE inventory_movements SET is_reversed = 1 WHERE id = ? AND company_id = ?`
+    ).bind(origId, company_id),
+  ])
+
+  // 6. Get new movement id
+  const revRow = await c.env.DB.prepare(
+    'SELECT id FROM inventory_movements WHERE local_id = ? AND company_id = ?'
+  ).bind(localId, company_id).first<{ id: number }>()
+  const revId = revRow!.id
+
+  // 7. Update balance snapshot
+  await upsertInventoryBalance(c.env.DB, company_id, orig.item_code, orig.warehouse_id, newBalQty, newBalVal, revId)
+
+  // 8. Enqueue GL reversal posting
+  if (revValue > 0) {
+    const itemRow = await c.env.DB.prepare(
+      'SELECT name FROM items WHERE code = ? AND company_id = ?'
+    ).bind(orig.item_code, company_id).first<{ name: string }>()
+    await enqueueInventoryPostingOutbox(c.env.DB, company_id, 'inventory_movement', revId, {
+      company_id, ref_id: revId, item_code: orig.item_code, warehouse_id: orig.warehouse_id,
+      movement_type: reversalType, value: revValue, date: reversalDate,
+      item_name: itemRow?.name ?? String(orig.item_code), created_by: userId,
+      center_code: orig.center_code, supplier_code: orig.supplier_code,
+      reversal_of_id: origId,
+    })
+  }
+
+  return c.json({
+    success: true,
+    data: {
+      reversal_id:  revId,
+      original_id:  origId,
+      reversal_type: reversalType,
+      quantity:     orig.quantity,
+      reversal_date: reversalDate,
+    },
+  }, 201)
+})
+
 // ── POST /movements/batch ─────────────────────────────────────
 // Handles multiple movements in a single request.
 // Used by the manual entry UI for bulk GRN/ISSUE.

@@ -2,13 +2,6 @@ import { api, unwrap, unwrapPaginated, paginatedUrl } from './core'
 import { normalizeMovementPayload } from '../schema/normalizeMovementPayload'
 
 export const inventoryApi = {
-  balances: (warehouse?: string | number) => {
-    const q = typeof warehouse === 'number'
-      ? `warehouse_id=${warehouse}`
-      : `warehouse=${encodeURIComponent(String(warehouse || ''))}`
-    return unwrap(api.get<unknown[]>(`/inventory/balances${warehouse ? `?${q}` : ''}`))
-  },
-
   warehouses:      () => unwrap(api.get<string[]>('/inventory/warehouses')),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   warehousesSetup: () => api.get<{ success: boolean; data: string[]; entities: any[] }>('/inventory/warehouses'),
@@ -56,13 +49,6 @@ export const inventoryApi = {
   categories:       () => unwrap(api.get<any[]>('/inventory/categories')),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   createCategory:   (body: any) => api.post('/inventory/categories', body),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  adjustments:      () => unwrap(api.get<any[]>('/inventory/adjustments')),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  adjustmentDetail: (id: number) => unwrap(api.get<any>(`/inventory/adjustments/${id}`)),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  saveAdjustmentLines: (id: number, lines: any[]) => api.put(`/inventory/adjustments/${id}/lines`, { lines }),
-
   // ── Governance / Financial Integrity ────────────────────────────────────
 
   glPreview: (body: {
@@ -147,6 +133,9 @@ export const inventoryApi = {
     inv_posting_group_code?:  string | null
     standard_cost?:           number | null
     reorder_threshold?:       number | null
+    costing_method?:          'moving_average' | 'standard' | 'fifo' | null
+    track_lots?:              boolean | null
+    cogs_account_override?:   string | null
     name?:                    string
     unit?:                    string
   }) => api.patch(`/inventory/items-master/${code}`, body),
@@ -294,24 +283,6 @@ export const inventoryApi = {
     return res
   },
 
-  balanceItem: (code: number) =>
-    unwrap(api.get<{
-      item: {
-        code: number; name: string; unit: string | null; category_id: number | null
-        prod_posting_group_code: string | null; inv_posting_group_code: string | null
-        standard_cost: number | null; reorder_threshold: number | null
-      }
-      by_warehouse: Array<{
-        warehouse: string; balance_qty: number; balance_value: number
-        is_stale: number; updated_at: string | null
-      }>
-      totals: { total_qty: number; total_value: number; avg_cost: number }
-      recent_movements: Array<{
-        movement_date: string; movement_type: string; warehouse: string
-        quantity: number; unit_price: number; gl_posting_status: string
-      }>
-    }>(`/inventory/balances/${code}`)),
-
   resolveGlTrace: (id: number, action: 'exempt' | 'retry', reason?: string) =>
     unwrap(api.post<{ action: string; movement_id: number; outbox?: string }>(
       `/inventory/gl-trace/${id}/resolve`, { action, reason }
@@ -340,4 +311,10 @@ export const inventoryApi = {
       code: string; name_ar: string; name_en: string | null
       service_group: string; requires_center: number; requires_document: number
     }>>('/inventory/service-types')),
+
+  reverseMovement: (id: number, body?: { reason?: string; reversal_date?: string }) =>
+    unwrap(api.post<{
+      reversal_id: number; original_id: number; reversal_type: string
+      quantity: number; reversal_date: string
+    }>(`/inventory/movements/${id}/reverse`, body ?? {})),
 }

@@ -30,9 +30,12 @@ const FILTER_OPTS: { key: TraceFilter; label: string; color: string }[] = [
   { key: 'exempt',       label: 'معفى (صفر القيمة)', color: 'slate'  },
 ]
 
+const TRACE_PAGE_SIZE = 100
+
 export default function InventoryPostingHealthPage() {
   const navigate = useNavigate()
   const [traceFilter, setTraceFilter] = useState<TraceFilter>('ghost_posted')
+  const [tracePage, setTracePage] = useState(1)
 
   const { data, isLoading } = useQuery({
     queryKey: ['inventory', 'posting-health'],
@@ -51,8 +54,8 @@ export default function InventoryPostingHealthPage() {
   })
 
   const { data: traceData, isLoading: traceLoading } = useQuery({
-    queryKey: ['inventory', 'gl-trace', traceFilter],
-    queryFn:  () => inventoryApi.glTrace({ status: traceFilter, limit: 200 }),
+    queryKey: ['inventory', 'gl-trace', traceFilter, tracePage],
+    queryFn:  () => inventoryApi.glTrace({ status: traceFilter, limit: TRACE_PAGE_SIZE * tracePage }),
     staleTime: 30_000,
   })
 
@@ -268,7 +271,7 @@ export default function InventoryPostingHealthPage() {
           {FILTER_OPTS.map(opt => (
             <button
               key={opt.key}
-              onClick={() => setTraceFilter(opt.key)}
+              onClick={() => { setTraceFilter(opt.key); setTracePage(1) }}
               className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-colors ${
                 traceFilter === opt.key
                   ? 'bg-brand-600 text-white border-brand-600'
@@ -391,6 +394,18 @@ export default function InventoryPostingHealthPage() {
                 })}
               </tbody>
             </table>
+            {/* Load more — backend max is 500; each page fetches TRACE_PAGE_SIZE more */}
+            {traceData && traceData.rows.length >= TRACE_PAGE_SIZE * tracePage && (
+              <div className="flex justify-center py-3 border-t border-slate-100">
+                <button
+                  onClick={() => setTracePage(p => p + 1)}
+                  disabled={traceLoading}
+                  className="text-xs font-medium text-brand-600 hover:text-brand-700 px-4 py-2 rounded-lg hover:bg-brand-50 transition-colors"
+                >
+                  {traceLoading ? 'جاري التحميل...' : `تحميل المزيد (${traceData.rows.length} مُحمَّل)`}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -117,15 +117,14 @@ analytics.get('/cost-by-field', permissionGuard('inventory', 'read'), async (c) 
 analytics.get('/reorder-alerts', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
 
+  // Use inventory_balances (snapshot table) for authoritative current stock — never balance_qty
+  // on inventory_movements rows which is a stale per-row field.
   const { results } = await c.env.DB.prepare(`
-    WITH last_balance AS (
-      SELECT im.item_code, im.balance_qty
-      FROM inventory_movements im
-      WHERE im.company_id = ?
-        AND im.id = (
-          SELECT MAX(id) FROM inventory_movements
-          WHERE item_code = im.item_code AND company_id = im.company_id
-        )
+    WITH aggregated_balance AS (
+      SELECT item_code, SUM(balance_qty) AS balance_qty
+      FROM inventory_balances
+      WHERE company_id = ?
+      GROUP BY item_code
     ),
     active_consumption AS (
       SELECT im.item_code, SUM(im.qty_out) AS consumed_qty
@@ -137,24 +136,24 @@ analytics.get('/reorder-alerts', permissionGuard('inventory', 'read'), async (c)
       GROUP BY im.item_code
     )
     SELECT
-      lb.item_code,
+      ab.item_code,
       i.name     AS item_name,
       i.unit,
-      lb.balance_qty  AS current_balance,
+      ab.balance_qty  AS current_balance,
       ac.consumed_qty AS consumed_active_orders,
-      ROUND(ac.consumed_qty * 100.0 / NULLIF(lb.balance_qty, 0), 1) AS consumption_pct,
+      ROUND(ac.consumed_qty * 100.0 / NULLIF(ab.balance_qty, 0), 1) AS consumption_pct,
       (SELECT COUNT(DISTINCT wo2.id)
        FROM inventory_movements im2
        JOIN work_orders wo2 ON wo2.id = im2.work_order_id AND wo2.company_id = im2.company_id
-       WHERE im2.item_code = lb.item_code AND im2.company_id = ?
+       WHERE im2.item_code = ab.item_code AND im2.company_id = ?
         AND im2.movement_type IN ('ISSUE', 'TRANSFER_OUT', 'COGS_ADJUSTMENT', 'PRODUCTION_INPUT', 'ADJUSTMENT_LOSS')
          AND wo2.status IN ('pending', 'in_progress', 'done')
       ) AS active_order_count
-    FROM last_balance lb
-    JOIN active_consumption ac ON ac.item_code = lb.item_code
-    JOIN items i ON i.code = lb.item_code AND i.company_id = ?
-    WHERE lb.balance_qty > 0
-      AND ac.consumed_qty >= lb.balance_qty * 0.8
+    FROM aggregated_balance ab
+    JOIN active_consumption ac ON ac.item_code = ab.item_code
+    JOIN items i ON i.code = ab.item_code AND i.company_id = ?
+    WHERE ab.balance_qty > 0
+      AND ac.consumed_qty >= ab.balance_qty * 0.8
     ORDER BY consumption_pct DESC
   `).bind(company_id, company_id, company_id, company_id).all()
 
