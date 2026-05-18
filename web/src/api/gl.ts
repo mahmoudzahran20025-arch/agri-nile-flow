@@ -962,6 +962,32 @@ export const glApi = {
     unwrap(api.get(`/gl/hardening/health/daily-log?limit=${limit}`)),
   healthRunNow: () =>
     unwrap(api.post('/gl/hardening/health/run-now', {})),
+
+  // ── Business Events monitoring ──────────────────────────────────────────────
+  eventsSummary: () =>
+    unwrap(api.get<BusinessEventsSummary>('/gl/events/summary')),
+
+  events: (params?: {
+    status?: string; module?: string; start?: string; end?: string
+    acknowledged?: '0' | '1'; page?: number; size?: number
+  }) => {
+    const qs = new URLSearchParams()
+    if (params?.status)       qs.set('status',       params.status)
+    if (params?.module)       qs.set('module',        params.module)
+    if (params?.start)        qs.set('start',         params.start)
+    if (params?.end)          qs.set('end',           params.end)
+    if (params?.acknowledged) qs.set('acknowledged',  params.acknowledged)
+    if (params?.page != null) qs.set('page',          String(params.page))
+    if (params?.size != null) qs.set('size',          String(params.size))
+    const q = qs.toString()
+    return unwrap(api.get<BusinessEventsListResponse>(`/gl/events${q ? `?${q}` : ''}`))
+  },
+
+  acknowledgeEvent: (id: number) =>
+    unwrap(api.post<{ success: boolean }>(`/gl/events/${id}/acknowledge`, {})),
+
+  unacknowledgeEvent: (id: number) =>
+    unwrap(api.post<{ success: boolean }>(`/gl/events/${id}/unacknowledge`, {})),
 }
 
 // ── Reconciliation types (shared with ReconciliationPage, PeriodCloseCockpit) ─
@@ -999,4 +1025,33 @@ export interface ReconciliationResult {
   page: number
   page_size: number
   summary: ReconciliationSummary
+}
+
+export interface BusinessEventRow {
+  id:                number
+  event_type:        string
+  event_date:        string
+  source_module:     string
+  source_id:         number
+  status:            'pending' | 'posted' | 'error' | 'reversed'
+  error_message:     string | null
+  journal_entry_id:  number | null
+  acknowledged:      number
+  acknowledged_by:   number | null
+  acknowledged_at:   string | null
+  created_at:        string
+}
+
+export interface BusinessEventsListResponse {
+  total: number
+  page:  number
+  size:  number
+  rows:  BusinessEventRow[]
+}
+
+export interface BusinessEventsSummary {
+  pending:  { total: number; unacknowledged: number }
+  posted:   { total: number; unacknowledged: number }
+  error:    { total: number; unacknowledged: number }
+  reversed: { total: number; unacknowledged: number }
 }

@@ -147,6 +147,14 @@ export default function DashboardPage() {
     staleTime: 120_000,
   })
 
+  const { data: glEventsSummary } = useQuery({
+    queryKey: ['gl-events-summary'],
+    queryFn: () => glApi.eventsSummary(),
+    enabled: isAdmin,
+    staleTime: 60_000,
+  })
+  const glErrorCount = glEventsSummary?.error?.unacknowledged ?? 0
+
   const glChecks = (glHealth?.checks ?? []) as IntegrityCheck[]
   const glScore = glHealth?.score ?? null
   const glBlockers = glChecks.filter((check) => !check.ok && check.blocker).length
@@ -395,7 +403,7 @@ export default function DashboardPage() {
           </SectionCard>
         </div>
 
-        {canReadFinance && (pendingPayrolls > 0 || draftTxCount > 0) && (
+        {canReadFinance && (pendingPayrolls > 0 || draftTxCount > 0 || glErrorCount > 0) && (
           <SectionCard title="إجراءات معلقة" subtitle="العناصر التي تحتاج متابعة تشغيلية" icon={<Bell size={18} />}>
             <div className="space-y-2.5">
               {pendingPayrolls > 0 && (
@@ -428,6 +436,22 @@ export default function DashboardPage() {
                     <p className="text-[11px] text-blue-700 mt-0.5">يلزم الترحيل لتحديث رصيد الخزينة والدفتر</p>
                   </div>
                   <ArrowRight size={14} className="text-blue-500 shrink-0" />
+                </button>
+              )}
+              {glErrorCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => navigate('/gl/batch-posting')}
+                  className="w-full flex items-center gap-3 py-3 px-3 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 transition-colors text-right"
+                >
+                  <div className="w-9 h-9 rounded-lg bg-red-200 flex items-center justify-center shrink-0">
+                    <AlertTriangle size={16} className="text-red-700" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-semibold text-red-800">{glErrorCount} أحداث ترحيل فاشلة بانتظار الإقرار</p>
+                    <p className="text-[11px] text-red-700 mt-0.5">قد تؤثر على دقة الدفتر العام — راجع مركز الترحيل</p>
+                  </div>
+                  <ArrowRight size={14} className="text-red-500 shrink-0" />
                 </button>
               )}
             </div>

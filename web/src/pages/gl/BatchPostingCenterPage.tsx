@@ -9,9 +9,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Play, StopCircle, RefreshCw, Plus, Loader2, CheckCircle2, XCircle,
   Clock, ChevronRight, X, RotateCcw, Layers, Info, GitBranch, ExternalLink,
+  AlertTriangle, CheckCheck, Eye,
 } from 'lucide-react'
 import { glApi } from '../../api/client'
-import type { BatchPostJobRow } from '../../api/gl'
+import type { BatchPostJobRow, BusinessEventRow } from '../../api/gl'
 import { KpiStrip, type KpiItem } from '../../components/ui/KpiStrip'
 import SectionCard from '../../components/ui/SectionCard'
 import { CommandBar, type CommandAction } from '../../components/shell/CommandBar'
@@ -297,14 +298,269 @@ function EnqueueModal({ open, onClose, onCreate }: {
   )
 }
 
+// ── GL Events Monitor Panel ───────────────────────────────────────────────────
+
+const MODULE_LABELS: Record<string, string> = {
+  sales:     'المبيعات',
+  pos:       'نقطة البيع',
+  inventory: 'المخزون',
+  suppliers: 'الموردون',
+  treasury:  'الخزينة',
+  customers: 'العملاء',
+  hr:        'الموارد البشرية',
+  assets:    'الأصول',
+}
+
+const EVENT_STATUS_CONFIG: Record<BusinessEventRow['status'], {
+  label: string; className: string; icon: React.ReactNode
+}> = {
+  pending:  { label: 'معلق',    className: 'text-amber-600 bg-amber-50',   icon: <Clock size={11} /> },
+  posted:   { label: 'مرحَّل',  className: 'text-emerald-600 bg-emerald-50', icon: <CheckCircle2 size={11} /> },
+  error:    { label: 'خطأ',     className: 'text-red-600 bg-red-50',       icon: <XCircle size={11} /> },
+  reversed: { label: 'معكوس',   className: 'text-slate-600 bg-slate-100',  icon: <RotateCcw size={11} /> },
+}
+
+function FailedEventsPanel() {
+  const qc = useQueryClient()
+  const [statusFilter, setStatusFilter] = useState<'error' | ''>('error')
+  const [moduleFilter, setModuleFilter] = useState('')
+  const [showAcked,    setShowAcked]    = useState(false)
+  const [page, setPage] = useState(1)
+
+  const params = {
+    status:       statusFilter  || undefined,
+    module:       moduleFilter  || undefined,
+    acknowledged: (statusFilter === 'error' && !showAcked ? '0' : undefined) as '0' | '1' | undefined,
+    page,
+    size: 50,
+  }
+
+  const { data, isLoading, refetch, isFetching } = useQuery({
+    queryKey: ['gl-events', params],
+    queryFn:  () => glApi.events(params),
+    staleTime: 15_000,
+    placeholderData: prev => prev,
+  })
+
+  const { data: summary, refetch: refetchSummary } = useQuery({
+    queryKey: ['gl-events-summary'],
+    queryFn:  () => glApi.eventsSummary(),
+    staleTime: 30_000,
+  })
+
+  const ackMut = useMutation({
+    mutationFn: (id: number) => glApi.acknowledgeEvent(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['gl-events'] })
+      qc.invalidateQueries({ queryKey: ['gl-events-summary'] })
+    },
+  })
+
+  const unackMut = useMutation({
+    mutationFn: (id: number) => glApi.unacknowledgeEvent(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['gl-events'] })
+      qc.invalidateQueries({ queryKey: ['gl-events-summary'] })
+    },
+  })
+
+  const rows  = data?.rows  ?? []
+  const total = data?.total ?? 0
+
+  const unackedErrors = summary?.error?.unacknowledged ?? 0
+
+  const summaryKpis: KpiItem[] = [
+    { id: 'errors',   label: 'أخطاء غير مُقرّة', value: unackedErrors,              variant: unackedErrors > 0 ? 'warning' : 'success' },
+    { id: 'pending',  label: 'معلق',              value: summary?.pending?.total  ?? 0 },
+    { id: 'posted',   label: 'مرحَّل',            value: summary?.posted?.total   ?? 0, variant: 'success' },
+    { id: 'reversed', label: 'معكوس',             value: summary?.reversed?.total ?? 0 },
+  ]
+
+  return (
+    <div className="flex flex-col h-full overflow-auto p-6 gap-4">
+      <KpiStrip items={summaryKpis} />
+
+      <SectionCard
+        title="أحداث الترحيل"
+        subtitle={`${total.toLocaleString()} نتيجة`}
+        icon={<AlertTriangle size={14} className="text-amber-500" />}
+        action={
+          <button
+            onClick={() => { refetch(); refetchSummary() }}
+            className="flex items-center gap-1.5 text-[11px] text-slate-500 hover:text-[#0F2D5C]"
+          >
+            <RefreshCw size={11} className={isFetching ? 'animate-spin' : ''} />
+            تحديث
+          </button>
+        }
+      >
+        {/* Filters */}
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <span className="text-[11px] text-slate-500">الحالة:</span>
+          {(['error', 'pending', 'posted', ''] as const).map(s => (
+            <button
+              key={s}
+              onClick={() => { setStatusFilter(s as 'error' | ''); setPage(1) }}
+              className={`text-[11px] px-2.5 py-1 rounded ${
+                statusFilter === s
+                  ? 'bg-[#0F2D5C] text-white'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              {s === ''      ? 'الكل'   :
+               s === 'error' ? 'أخطاء'  :
+               s === 'pending' ? 'معلق' : 'مرحَّل'}
+              {s === 'error' && unackedErrors > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 text-[9px] font-bold rounded-full bg-red-500 text-white">
+                  {unackedErrors > 9 ? '9+' : unackedErrors}
+                </span>
+              )}
+            </button>
+          ))}
+
+          <span className="text-[11px] text-slate-500 ml-3">الوحدة:</span>
+          <select
+            value={moduleFilter}
+            onChange={e => { setModuleFilter(e.target.value); setPage(1) }}
+            className="text-[11px] border border-slate-200 rounded px-2 py-1 text-slate-600 bg-white"
+          >
+            <option value="">الكل</option>
+            {Object.entries(MODULE_LABELS).map(([k, v]) => (
+              <option key={k} value={k}>{v}</option>
+            ))}
+          </select>
+
+          {statusFilter === 'error' && (
+            <label className="flex items-center gap-1.5 text-[11px] text-slate-600 ml-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showAcked}
+                onChange={e => setShowAcked(e.target.checked)}
+                className="rounded"
+              />
+              عرض المُقرَّة
+            </label>
+          )}
+        </div>
+
+        {/* Table */}
+        {isLoading ? (
+          <div className="space-y-2">
+            {[1,2,3,4].map(i => <div key={i} className="h-12 bg-slate-100 rounded animate-pulse" />)}
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-40 text-slate-400">
+            <CheckCheck size={36} className="mb-3 opacity-30" />
+            <p className="text-[13px]">لا توجد أحداث مطابقة</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="border-b border-slate-100 text-slate-400 text-right">
+                  <th className="py-2 pr-2 font-medium">ID</th>
+                  <th className="py-2 pr-2 font-medium">التاريخ</th>
+                  <th className="py-2 pr-2 font-medium">الوحدة</th>
+                  <th className="py-2 pr-2 font-medium">نوع الحدث</th>
+                  <th className="py-2 pr-2 font-medium">المصدر</th>
+                  <th className="py-2 pr-2 font-medium">الحالة</th>
+                  <th className="py-2 pr-2 font-medium">رسالة الخطأ</th>
+                  <th className="py-2 pr-2 font-medium">القيد</th>
+                  <th className="py-2 pr-2 font-medium">إجراء</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {rows.map(row => {
+                  const cfg = EVENT_STATUS_CONFIG[row.status]
+                  return (
+                    <tr key={row.id} className={`hover:bg-slate-50 ${row.acknowledged ? 'opacity-50' : ''}`}>
+                      <td className="py-2 pr-2 font-mono text-slate-400">#{row.id}</td>
+                      <td className="py-2 pr-2 text-slate-600">{row.event_date.slice(0, 10)}</td>
+                      <td className="py-2 pr-2 text-slate-700">
+                        {MODULE_LABELS[row.source_module] ?? row.source_module}
+                      </td>
+                      <td className="py-2 pr-2 text-slate-600 font-mono text-[10px]">{row.event_type}</td>
+                      <td className="py-2 pr-2 text-slate-400 font-mono">#{row.source_id}</td>
+                      <td className="py-2 pr-2">
+                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${cfg.className}`}>
+                          {cfg.icon}{cfg.label}
+                        </span>
+                        {row.acknowledged ? (
+                          <span className="mr-1 text-[10px] text-slate-400">✓ مُقرَّة</span>
+                        ) : null}
+                      </td>
+                      <td className="py-2 pr-2 max-w-[200px]">
+                        {row.error_message ? (
+                          <span className="text-red-500 truncate block" title={row.error_message}>
+                            {row.error_message.slice(0, 60)}{row.error_message.length > 60 ? '…' : ''}
+                          </span>
+                        ) : <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="py-2 pr-2">
+                        {row.journal_entry_id ? (
+                          <span className="text-[#0F2D5C] font-mono">#{row.journal_entry_id}</span>
+                        ) : <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="py-2 pr-2">
+                        {row.status === 'error' && (
+                          row.acknowledged ? (
+                            <button
+                              className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-[#0F2D5C] px-2 py-0.5 rounded border border-slate-200 hover:border-[#0F2D5C]"
+                              onClick={() => unackMut.mutate(row.id)}
+                              disabled={unackMut.isPending}
+                            >
+                              <Eye size={10} /> إلغاء الإقرار
+                            </button>
+                          ) : (
+                            <button
+                              className="flex items-center gap-1 text-[10px] text-emerald-600 hover:text-emerald-800 px-2 py-0.5 rounded border border-emerald-200 hover:border-emerald-400"
+                              onClick={() => ackMut.mutate(row.id)}
+                              disabled={ackMut.isPending}
+                            >
+                              <CheckCheck size={10} /> إقرار
+                            </button>
+                          )
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Pagination */}
+        {total > 50 && (
+          <div className="flex items-center justify-between mt-4 text-[12px] text-slate-500">
+            <span>عرض {Math.min((page-1)*50+1, total)}–{Math.min(page*50, total)} من {total.toLocaleString()}</span>
+            <div className="flex gap-2">
+              <button className="btn-secondary py-1 px-3 text-[12px]" disabled={page===1} onClick={() => setPage(p => p-1)}>← السابق</button>
+              <button className="btn-secondary py-1 px-3 text-[12px]" disabled={page*50>=total} onClick={() => setPage(p => p+1)}>التالي →</button>
+            </div>
+          </div>
+        )}
+      </SectionCard>
+    </div>
+  )
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function BatchPostingCenterPage() {
   const qc = useQueryClient()
+  const [activeTab, setActiveTab]       = useState<'jobs' | 'events'>('jobs')
   const [statusFilter, setStatusFilter] = useState<BatchPostJobRow['status'] | ''>('')
   const [page, setPage]                 = useState(1)
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null)
   const [showEnqueue, setShowEnqueue]   = useState(false)
+
+  const { data: eventsSummary } = useQuery({
+    queryKey: ['gl-events-summary'],
+    queryFn:  () => glApi.eventsSummary(),
+    staleTime: 30_000,
+  })
+  const unackedErrors = eventsSummary?.error?.unacknowledged ?? 0
 
   const params = {
     page,
@@ -407,13 +663,41 @@ export default function BatchPostingCenterPage() {
 
   return (
     <div className="flex flex-col h-full bg-[#f8fafc]">
-      <div className="px-6 py-5 bg-white border-b border-slate-200">
+      <div className="px-6 py-4 bg-white border-b border-slate-200">
         <h1 className="text-[18px] font-bold text-[#0F2D5C]">Batch Posting Center</h1>
         <p className="text-[12px] text-slate-500 mt-0.5">
           Enqueue, monitor, and control GL batch posting jobs. Auto-refreshes every 5 seconds.
         </p>
+        {/* Tabs */}
+        <div className="flex gap-1 mt-3">
+          {([
+            { id: 'jobs',   label: 'دفعات الترحيل' },
+            { id: 'events', label: 'أحداث الترحيل', badge: unackedErrors },
+          ] as { id: 'jobs' | 'events'; label: string; badge?: number }[]).map(t => (
+            <button
+              key={t.id}
+              onClick={() => setActiveTab(t.id)}
+              className={`flex items-center gap-1.5 text-[12px] px-4 py-1.5 rounded-t border-b-2 transition-colors ${
+                activeTab === t.id
+                  ? 'border-[#0F2D5C] text-[#0F2D5C] font-semibold bg-white'
+                  : 'border-transparent text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              {t.label}
+              {t.badge ? (
+                <span className="inline-flex items-center justify-center w-4 h-4 text-[9px] font-bold rounded-full bg-red-500 text-white">
+                  {t.badge > 9 ? '9+' : t.badge}
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </div>
       </div>
 
+      {activeTab === 'events' ? (
+        <FailedEventsPanel />
+      ) : (
+      <>
       <CommandBar actions={actions} rightSlot={rightSlot} />
       <KpiStrip items={kpis} />
 
@@ -540,6 +824,8 @@ export default function BatchPostingCenterPage() {
         onClose={() => setShowEnqueue(false)}
         onCreate={body => createMut.mutate(body)}
       />
+      </>
+      )}
     </div>
   )
 }

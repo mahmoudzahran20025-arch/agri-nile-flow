@@ -19,6 +19,7 @@ import enhancedLedger from './enhanced_ledger'
 import journalEntryEngine from './journal_entry_regeneration'
 import preview from './preview'
 import depreciation from './depreciation'
+import glEvents from './events'
 
 // Main GL router - aggregator for all GL sub-modules
 const gl = new Hono<{ Bindings: Env }>()
@@ -74,6 +75,9 @@ gl.route('/', preview)
 
 // Depreciation: Monthly batch depreciation posting and schedule view
 gl.route('/', depreciation)
+
+// Events: Business events monitoring, error acknowledgement
+gl.route('/events', glEvents)
 
 // Schema migrations registry — read-only admin visibility
 gl.get('/migrations/registry', async (c) => {
