@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { reportsApi, configApi } from '../../api/client'
 import type { Season } from '../../types'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 // ─── Score ring ───────────────────────────────────────────────
 function ScoreRing({ score, ready }: { score: number; ready: boolean }) {
@@ -137,43 +138,34 @@ export default function SeasonReadinessPage() {
   const passing  = checks.filter(ch => ch.ok)
 
   return (
-    <div className="space-y-6 max-w-3xl mx-auto">
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="جاهزية إغلاق الموسم"
+        subtitle="قائمة مراجعة قبل إغلاق حسابات الموسم"
+        actions={seasonId ? [{
+          label: 'تحديث',
+          icon: <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />,
+          variant: 'secondary',
+          onClick: () => refetch(),
+          disabled: isFetching,
+        }] : []}
+      />
 
-      {/* ── Header ───────────────────────────────────────────── */}
-      <div className="page-header">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-brand-100 rounded-xl">
-            <ShieldCheck size={20} className="text-brand-600" />
-          </div>
-          <div>
-            <h1 className="page-title">جاهزية إغلاق الموسم</h1>
-            <p className="text-sm text-slate-400">قائمة مراجعة قبل إغلاق حسابات الموسم</p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {seasonId && (
-            <button
-              onClick={() => refetch()}
-              disabled={isFetching}
-              className="btn-secondary gap-1.5"
-            >
-              <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />
-              تحديث
-            </button>
-          )}
-          <select
-            className="input w-52 text-sm"
-            value={seasonId ?? ''}
-            onChange={e => setSeasonId(e.target.value ? Number(e.target.value) : null)}
-          >
-            <option value="">— اختر الموسم —</option>
-            {seasons.map(s => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
-          </select>
-        </div>
+      {/* Season selector sub-bar */}
+      <div className="flex items-center gap-3 px-5 py-2.5 border-b border-slate-200 bg-white shrink-0">
+        <select
+          className="input w-52 text-sm"
+          value={seasonId ?? ''}
+          onChange={e => setSeasonId(e.target.value ? Number(e.target.value) : null)}
+        >
+          <option value="">— اختر الموسم —</option>
+          {seasons.map(s => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
       </div>
+
+      <div className="flex-1 overflow-y-auto p-5 space-y-6 max-w-3xl mx-auto w-full">
 
       {/* ── Empty state ──────────────────────────────────────── */}
       {!seasonId && (
@@ -320,6 +312,7 @@ export default function SeasonReadinessPage() {
           )}
         </>
       )}
+      </div>{/* end scroll container */}
     </div>
   )
 }

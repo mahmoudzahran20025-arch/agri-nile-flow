@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, FolderTree, Tag, Info } from 'lucide-react'
+import { Plus, Tag, Info } from 'lucide-react'
 import { inventoryApi } from '../../api/client'
 import { useToast } from '../../contexts/ToastContext'
 import { useNewShortcut } from '../../hooks/useNewShortcut'
 import { EmptyList } from '../../components/ui/EmptyState'
 import Modal from '../../components/ui/Modal'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 export default function ItemCategoriesPage() {
   const qc = useQueryClient()
@@ -32,20 +33,19 @@ export default function ItemCategoriesPage() {
   })
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title flex items-center gap-2">
-            <FolderTree size={24} className="text-indigo-600" />
-            تصنيفات الأصناف (Item Categories)
-          </h1>
-          <p className="text-xs text-slate-400 mt-1">تنظيم الأصناف في مجموعات منطقية للتقارير والتوجيه المحاسبي</p>
-        </div>
-        <button className="btn-primary gap-2" onClick={() => setOpen(true)}>
-          <Plus size={16} /> إضافة تصنيف جديد
-        </button>
-      </div>
+    <div className="flex flex-col h-full animate-fade-in">
+      <CommandBar
+        title="تصنيفات الأصناف"
+        subtitle="تنظيم الأصناف في مجموعات منطقية للتقارير والتوجيه المحاسبي"
+        actions={[{
+          label: 'إضافة تصنيف جديد',
+          icon: <Plus size={15} />,
+          variant: 'primary',
+          onClick: () => setOpen(true),
+        }]}
+      />
 
+      <div className="flex-1 overflow-y-auto p-5 space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {isLoading && Array(6).fill(0).map((_, i) => (
           <div key={i} className="card animate-pulse h-32 bg-slate-100" />
@@ -135,6 +135,7 @@ export default function ItemCategoriesPage() {
           </div>
         </div>
       </Modal>
+      </div>{/* end scroll container */}
     </div>
   )
 }

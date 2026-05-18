@@ -9,6 +9,7 @@ import SeasonReadinessPage from './SeasonReadinessPage'
 import SeasonClosePage    from './SeasonClosePage'
 import SeasonRollupPage   from './SeasonRollupPage'
 import WorkOrderReconciliationPage from './WorkOrderReconciliationPage'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 type Tab = 'summary' | 'pnl' | 'budget' | 'readiness' | 'close' | 'rollup' | 'wo-reconcile'
 
@@ -28,23 +29,15 @@ export default function SeasonReportsPage() {
 
   const setTab = (t: Tab) => setParams({ tab: t }, { replace: true })
 
-  const active = TABS.find(t => t.id === tab) ?? TABS[0]
-
   return (
-    <div className="space-y-5 animate-fade-in">
-      {/* Header */}
-      <div className="page-header">
-        <div className="flex items-center gap-3">
-          <span className={active.color}>{active.icon}</span>
-          <div>
-            <h1 className="page-title">تقارير الموسم الزراعي</h1>
-            <p className="text-sm text-slate-500">ملخص · أرباح وخسائر · ميزانية · تكاليف · أوامر عمل · جاهزية · إغلاق</p>
-          </div>
-        </div>
-      </div>
+    <div className="flex flex-col h-full animate-fade-in">
+      <CommandBar
+        title="تقارير الموسم الزراعي"
+        subtitle="ملخص · أرباح وخسائر · ميزانية · تكاليف · أوامر عمل · جاهزية · إغلاق"
+      />
 
       {/* Tab bar */}
-      <div className="flex flex-wrap items-end gap-0 border-b border-slate-200">
+      <div className="flex flex-wrap items-end gap-0 border-b border-slate-200 px-5 bg-white shrink-0">
         {TABS.map(t => (
           <button
             key={t.id}
@@ -62,8 +55,8 @@ export default function SeasonReportsPage() {
         ))}
       </div>
 
-      {/* Content — suppress inner page headers */}
-      <div className="[&_.page-header]:hidden [&_.page-title]:hidden">
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-5">
         {tab === 'summary'      && <SeasonSummaryPage />}
         {tab === 'pnl'          && <SeasonPnLPage />}
         {tab === 'budget'       && <BudgetVsActualPage />}

@@ -8,6 +8,7 @@ import {
 import { BarChart3, TrendingUp, Package, Users, TrendingDown, RefreshCw, Banknote, Leaf } from 'lucide-react'
 import { dashboardApi, suppliersApi, inventoryApi } from '../../api/client'
 import { useSeasonId } from '../../store/appStore'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 // ─── Formatters ────────────────────────────────────────────────
 function egp(n: number) {
@@ -188,31 +189,32 @@ export default function ChartsPage() {
   const totalCreditors = suppliersData.reduce((s, r) => s + Math.max(0, r?.current_balance ?? 0), 0)
 
   return (
-    <div className="space-y-5 pb-10" dir="rtl">
-      {/* Header */}
-      <div className="page-header">
-        <h1 className="page-title flex items-center gap-2">
-          <BarChart3 size={22} className="text-brand-600" />
-          التقارير المرئية
-        </h1>
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs text-slate-400">فترة التدفق النقدي:</span>
-          <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
-            {[6, 12, 24].map(m => (
-              <button
-                key={m}
-                onClick={() => setCashflowMonths(m)}
-                className={`px-3 py-1 text-xs rounded-md font-semibold transition-all ${
-                  cashflowMonths === m
-                    ? 'bg-white shadow text-brand-700'
-                    : 'text-slate-500 hover:text-slate-700'}`}
-              >
-                {m} شهر
-              </button>
-            ))}
-          </div>
+    <div className="flex flex-col h-full" dir="rtl">
+      <CommandBar
+        title="التقارير المرئية"
+        subtitle="مؤشرات التدفق النقدي · المخزون · الذمم"
+      />
+
+      {/* Cashflow period filter sub-bar */}
+      <div className="flex items-center gap-3 px-5 py-2.5 border-b border-slate-200 bg-white shrink-0">
+        <span className="text-xs text-slate-400">فترة التدفق النقدي:</span>
+        <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
+          {[6, 12, 24].map(m => (
+            <button
+              key={m}
+              onClick={() => setCashflowMonths(m)}
+              className={`px-3 py-1 text-xs rounded-md font-semibold transition-all ${
+                cashflowMonths === m
+                  ? 'bg-white shadow text-brand-700'
+                  : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              {m} شهر
+            </button>
+          ))}
         </div>
       </div>
+
+      <div className="flex-1 overflow-y-auto p-5 pb-10 space-y-5">
 
       {/* KPI Strip */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -351,6 +353,7 @@ export default function ChartsPage() {
           ) : <EmptyChart message="لا توجد ذمم موردين مستحقة" />}
         </ChartSection>
       </div>
+      </div>{/* end scroll container */}
     </div>
   )
 }

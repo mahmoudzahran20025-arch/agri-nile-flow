@@ -5,6 +5,7 @@ import { FileText, TrendingUp, TrendingDown, Package, Users, Banknote, ArrowDown
 import { dashboardApi, suppliersApi, treasuryApi, inventoryApi, downloadCsv } from '../api/client'
 import { useSeasonId } from '../store/appStore'
 import type { Supplier } from '../types'
+import { CommandBar } from '../components/ui/CommandBar'
 
 function egp(n: number | null | undefined) {
   if (n == null) return '—'
@@ -55,30 +56,19 @@ export default function ReportsPage() {
   const creditors = suppliersData.filter(s => (s.current_balance ?? 0) < 0).sort((a, b) => (a.current_balance ?? 0) - (b.current_balance ?? 0))
 
   return (
-    <div className="space-y-6 pb-10">
-      <div className="page-header">
-        <h1 className="page-title flex items-center gap-2">
-          <FileText size={22} className="text-slate-400" />
-          التقارير المالية
-        </h1>
-        <div className="flex items-center gap-2 flex-wrap">
-          <button className="btn-secondary gap-2" onClick={() => downloadCsv('/suppliers', 'أرصدة_الموردين')}>
-            <Download size={14} /> موردين
-          </button>
-          <button className="btn-secondary gap-2" onClick={() => downloadCsv('/inventory/stock-balances', 'أرصدة_المخازن')}>
-            <Download size={14} /> مخزون
-          </button>
-          <button className="btn-secondary gap-2" onClick={() => downloadCsv('/treasury', 'دفتر_اليومية', { year: new Date().getFullYear() })}>
-            <Download size={14} /> خزينة
-          </button>
-          <button className="btn-secondary gap-2" onClick={() => window.print()}>
-            <FileText size={15} /> طباعة PDF
-          </button>
-          <button className="btn-primary gap-2" onClick={() => navigate('/reports/charts')}>
-            <BarChart3 size={15} /> التقارير المرئية
-          </button>
-        </div>
-      </div>
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="التقارير المالية"
+        actions={[
+          { label: 'موردين',       icon: <Download size={14} />, variant: 'secondary', onClick: () => downloadCsv('/suppliers', 'أرصدة_الموردين') },
+          { label: 'مخزون',        icon: <Download size={14} />, variant: 'secondary', onClick: () => downloadCsv('/inventory/stock-balances', 'أرصدة_المخازن') },
+          { label: 'خزينة',        icon: <Download size={14} />, variant: 'secondary', onClick: () => downloadCsv('/treasury', 'دفتر_اليومية', { year: new Date().getFullYear() }) },
+          { label: 'طباعة PDF',    icon: <FileText size={15} />, variant: 'secondary', onClick: () => window.print() },
+          { label: 'التقارير المرئية', icon: <BarChart3 size={15} />, variant: 'primary', onClick: () => navigate('/reports/charts') },
+        ]}
+      />
+
+      <div className="flex-1 overflow-y-auto p-5 pb-10 space-y-6">
 
       {/* ── Specialized Reports Hub ──────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -379,6 +369,7 @@ export default function ReportsPage() {
           </table>
         </Section>
       )}
+      </div>{/* end scroll container */}
     </div>
   )
 }

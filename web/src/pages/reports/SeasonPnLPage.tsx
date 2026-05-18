@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { reportsApi, configApi } from '../../api/client'
 import type { Season } from '../../types'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 // ─── Formatters ───────────────────────────────────────────────
 
@@ -189,41 +190,33 @@ export default function SeasonPnLPage() {
   const hasGlData  = glRev > 0 || glExp > 0
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="page-header">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-emerald-100 rounded-xl">
-            <Banknote size={20} className="text-emerald-700" />
-          </div>
-          <div>
-            <h1 className="page-title">حساب الأرباح والخسائر</h1>
-            <p className="text-sm text-slate-400">إيرادات عقود البيع مقابل تكاليف الموسم الكاملة</p>
-          </div>
-        </div>
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="حساب الأرباح والخسائر"
+        subtitle="إيرادات عقود البيع مقابل تكاليف الموسم الكاملة"
+        actions={seasonId ? [{
+          label: 'جاهزية الإغلاق',
+          icon: <ShieldCheck size={15} />,
+          variant: 'secondary',
+          onClick: () => navigate('/reports/season-readiness'),
+        }] : []}
+      />
 
-        <div className="flex items-center gap-2">
-          {seasonId && (
-            <button
-              onClick={() => navigate('/reports/season-readiness')}
-              className="flex items-center gap-1.5 btn-secondary text-sm"
-            >
-              <ShieldCheck size={15} className="text-brand-500" />
-              جاهزية الإغلاق
-            </button>
-          )}
-          <select
-            className="input w-52 text-sm"
-            value={seasonId ?? ''}
-            onChange={e => setSeasonId(e.target.value ? Number(e.target.value) : null)}
-          >
-            <option value="">— اختر الموسم —</option>
-            {seasons.map(s => (
-              <option key={s.id} value={s.id}>{s.name}{s.status === 'active' ? ' ✓' : ''}</option>
-            ))}
-          </select>
-        </div>
+      {/* Season selector sub-bar */}
+      <div className="flex items-center gap-3 px-5 py-2.5 border-b border-slate-200 bg-white shrink-0">
+        <select
+          className="input w-52 text-sm"
+          value={seasonId ?? ''}
+          onChange={e => setSeasonId(e.target.value ? Number(e.target.value) : null)}
+        >
+          <option value="">— اختر الموسم —</option>
+          {seasons.map(s => (
+            <option key={s.id} value={s.id}>{s.name}{s.status === 'active' ? ' ✓' : ''}</option>
+          ))}
+        </select>
       </div>
+
+      <div className="flex-1 overflow-y-auto p-5 space-y-6">
 
       {/* No season selected */}
       {!seasonId && (
@@ -523,6 +516,7 @@ export default function SeasonPnLPage() {
           )}
         </>
       )}
+      </div>{/* end scroll container */}
     </div>
   )
 }

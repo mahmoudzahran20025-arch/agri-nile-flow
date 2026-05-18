@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { reportsApi, configApi } from '../../api/client'
 import type { Season } from '../../types'
+import { CommandBar } from '../../components/ui/CommandBar'
 
 // ── Helpers ───────────────────────────────────────────────────
 function egp(n: number) {
@@ -211,37 +212,32 @@ export default function BudgetVsActualPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-6xl mx-auto">
+    <div className="flex flex-col h-full">
+      <CommandBar
+        title="الميزانية مقابل الفعلي"
+        subtitle="متابعة تنفيذ ميزانية كل حقل خلال الموسم"
+        actions={seasonId ? [{
+          label: 'تحديث',
+          icon: <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />,
+          variant: 'secondary',
+          onClick: () => refetch(),
+          disabled: isFetching,
+        }] : []}
+      />
 
-      {/* Header */}
-      <div className="page-header">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-brand-100 rounded-xl">
-            <Target size={20} className="text-brand-600" />
-          </div>
-          <div>
-            <h1 className="page-title">الميزانية مقابل الفعلي</h1>
-            <p className="text-sm text-slate-400">متابعة تنفيذ ميزانية كل حقل خلال الموسم</p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {seasonId && (
-            <button onClick={() => refetch()} disabled={isFetching} className="btn-secondary gap-1.5">
-              <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />
-              تحديث
-            </button>
-          )}
-          <select
-            className="input w-52 text-sm"
-            value={seasonId ?? ''}
-            onChange={e => setSeasonId(e.target.value ? Number(e.target.value) : null)}
-          >
-            <option value="">— اختر الموسم —</option>
-            {seasons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-        </div>
+      {/* Season selector sub-bar */}
+      <div className="flex items-center gap-3 px-5 py-2.5 border-b border-slate-200 bg-white shrink-0">
+        <select
+          className="input w-52 text-sm"
+          value={seasonId ?? ''}
+          onChange={e => setSeasonId(e.target.value ? Number(e.target.value) : null)}
+        >
+          <option value="">— اختر الموسم —</option>
+          {seasons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
       </div>
+
+      <div className="flex-1 overflow-y-auto p-5 space-y-6 max-w-6xl mx-auto w-full">
 
       {/* Empty state */}
       {!seasonId && (
@@ -410,6 +406,7 @@ export default function BudgetVsActualPage() {
           </p>
         </>
       )}
+      </div>{/* end scroll container */}
     </div>
   )
 }
