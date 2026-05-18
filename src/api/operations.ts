@@ -823,20 +823,24 @@ operations.post('/templates', async (c) => {
   if (!b.name || !b.operation_type)
     return c.json({ success: false, error: 'الاسم ونوع العملية مطلوبان' }, 400)
 
-  const r = await c.env.DB.prepare(
+  // Use batch to atomically create template + all its tasks.
+  // If task inserts fail the template row is also rolled back.
+  const tplStmt = c.env.DB.prepare(
     `INSERT INTO wo_templates (company_id, name, operation_type, description, created_by)
      VALUES (?, ?, ?, ?, ?)`
-  ).bind(company_id, b.name, b.operation_type, b.description ?? null, userId).run()
+  ).bind(company_id, b.name, b.operation_type, b.description ?? null, userId)
 
-  const tplId = r.meta.last_row_id
+  const r = await c.env.DB.batch([tplStmt])
+  const tplId = r[0].meta.last_row_id
+
   if (b.tasks && b.tasks.length > 0) {
-    for (let i = 0; i < b.tasks.length; i++) {
-      const t = b.tasks[i]
-      await c.env.DB.prepare(
+    const taskStmts = b.tasks.map((t, i) =>
+      c.env.DB.prepare(
         `INSERT INTO wo_template_tasks (template_id, company_id, task_name, task_order, estimated_hours, notes)
          VALUES (?, ?, ?, ?, ?, ?)`
-      ).bind(tplId, company_id, t.task_name, i + 1, t.estimated_hours ?? null, t.notes ?? null).run()
-    }
+      ).bind(tplId, company_id, t.task_name, i + 1, t.estimated_hours ?? null, t.notes ?? null)
+    )
+    await c.env.DB.batch(taskStmts)
   }
 
   void logAudit(c.env.DB, {
@@ -967,7 +971,8 @@ operations.post('/templates/:id/use', async (c) => {
     ).bind(tplId).all<{ equipment_name: string; estimated_hours: number | null; cost_per_hour: number; notes: string | null }>(),
   ])
 
-  const woResult = await c.env.DB.prepare(
+  // Atomically create WO header + all child tasks + equipment in one batch.
+  const woStmt = c.env.DB.prepare(
     `INSERT INTO work_orders (company_id, season_id, field_id, name, operation_type,
      planned_date, area_feddan, notes, created_by) VALUES (?,?,?,?,?,?,?,?,?)`
   ).bind(
@@ -975,22 +980,26 @@ operations.post('/templates/:id/use', async (c) => {
     b.season_id ?? null, b.field_id ?? null,
     b.name ?? tpl.name, tpl.operation_type,
     b.planned_date, b.area_feddan ?? null, b.notes ?? null, userId
-  ).run()
+  )
+  const woResult = await c.env.DB.batch([woStmt])
+  const woId = woResult[0].meta.last_row_id
 
-  const woId = woResult.meta.last_row_id
-  for (const t of tplTasks) {
-    await c.env.DB.prepare(
-      `INSERT INTO work_tasks (work_order_id, company_id, task_date, description, notes)
-       VALUES (?, ?, ?, ?, ?)`
-    ).bind(woId, company_id, b.planned_date, t.task_name, t.notes ?? null).run()
-  }
-  for (const e of tplEquipment) {
-    await c.env.DB.prepare(
-      `INSERT INTO work_order_equipment (work_order_id, company_id, equipment_name, task_date, hours_worked, cost_per_hour, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).bind(woId, company_id, e.equipment_name, b.planned_date,
-      e.estimated_hours ?? 0, e.cost_per_hour, e.notes ?? null).run()
-  }
+  const childStmts = [
+    ...tplTasks.map(t =>
+      c.env.DB.prepare(
+        `INSERT INTO work_tasks (work_order_id, company_id, task_date, description, notes)
+         VALUES (?, ?, ?, ?, ?)`
+      ).bind(woId, company_id, b.planned_date, t.task_name, t.notes ?? null)
+    ),
+    ...tplEquipment.map(e =>
+      c.env.DB.prepare(
+        `INSERT INTO work_order_equipment (work_order_id, company_id, equipment_name, task_date, hours_worked, cost_per_hour, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(woId, company_id, e.equipment_name, b.planned_date,
+        e.estimated_hours ?? 0, e.cost_per_hour, e.notes ?? null)
+    ),
+  ]
+  if (childStmts.length > 0) await c.env.DB.batch(childStmts)
 
   void logAudit(c.env.DB, {
     user_id: userId, company_id, action: 'CREATE',
