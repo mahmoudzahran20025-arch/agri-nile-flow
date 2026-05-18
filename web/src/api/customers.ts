@@ -39,6 +39,39 @@ export interface CustomerLedgerResponse {
   orders: CustomerLedgerOrder[]
 }
 
+export interface CustomerPayment {
+  id:               number
+  payment_date:     string
+  amount:           number
+  payment_method:   string
+  reference:        string | null
+  notes:            string | null
+  journal_entry_id: number | null
+  created_at:       string
+}
+
+export interface ARAgingRow {
+  id:                 number
+  code:               string
+  name:               string
+  balance:            number
+  credit_limit:       number
+  oldest_unpaid_date: string | null
+  days_outstanding:   number
+  bucket:             'current' | 'days_31_60' | 'days_61_90' | 'days_91_plus'
+}
+
+export interface ARAgingResponse {
+  total_ar: number
+  buckets: {
+    current:      number
+    days_31_60:   number
+    days_61_90:   number
+    days_91_plus: number
+  }
+  rows: ARAgingRow[]
+}
+
 export const customersApi = {
   list: (params?: { q?: string; tier_id?: number; is_active?: string; limit?: number; offset?: number }) => {
     const qs = new URLSearchParams()
@@ -70,4 +103,23 @@ export const customersApi = {
     const q = qs.toString()
     return unwrap(api.get<CustomerLedgerResponse>(`/customers/${id}/ledger${q ? `?${q}` : ''}`))
   },
+
+  collect: (id: number, body: {
+    amount:          number
+    payment_date?:   string
+    payment_method?: 'cash' | 'card' | 'bank_transfer' | 'cheque'
+    reference?:      string
+    notes?:          string
+  }) => unwrap(api.post<{ payment_id: number; customer_id: number; amount: number; new_balance: number; gl_entry_id: number | null }>(`/customers/${id}/collect`, body)),
+
+  getCollections: (id: number, params?: { limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.limit != null)  qs.set('limit',  String(params.limit))
+    if (params?.offset != null) qs.set('offset', String(params.offset))
+    const q = qs.toString()
+    return unwrap(api.get<{ payments: CustomerPayment[]; total_collected: number }>(`/customers/${id}/collections${q ? `?${q}` : ''}`))
+  },
+
+  arAging: () =>
+    unwrap(api.get<ARAgingResponse>('/customers/ar-aging')),
 }

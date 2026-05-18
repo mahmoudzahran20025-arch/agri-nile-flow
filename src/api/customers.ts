@@ -15,6 +15,8 @@
 import { Hono } from 'hono'
 import type { Env } from '../types'
 import { getUser, permissionGuard } from '../middleware/auth'
+import { resolveControlAccount } from '../lib/posting_engine'
+import { postFromBusinessEvent } from '../lib/finance'
 
 const customers = new Hono<{ Bindings: Env }>()
 
@@ -68,6 +70,50 @@ customers.get('/', permissionGuard('sales', 'read'), async (c) => {
     data:  rows.results,
     total: countRow?.n ?? 0,
   })
+})
+
+// ── GET /api/customers/ar-aging ───────────────────────────────────────────────
+// IMPORTANT: registered before /:id so Hono does not match 'ar-aging' as a numeric id.
+// AR aging summary — customers with outstanding credit balances bucketed by
+// how long the oldest unpaid credit order has been outstanding.
+// Buckets: current (≤30d), 31-60d, 61-90d, 91+d.
+customers.get('/ar-aging', permissionGuard('sales', 'read'), async (c) => {
+  const { company_id } = getUser(c)
+  const today = new Date().toISOString().slice(0, 10)
+
+  const { results: customers_with_balance } = await c.env.DB.prepare(`
+    SELECT c.id, c.code, c.name, c.balance, c.credit_limit,
+           MIN(o.order_date) AS oldest_unpaid_date
+    FROM customers c
+    LEFT JOIN sales_orders o
+      ON o.customer_id = c.id
+      AND o.company_id = c.company_id
+      AND o.payment_method = 'credit'
+      AND o.status != 'voided'
+    WHERE c.company_id = ? AND c.balance > 0.005
+    GROUP BY c.id
+    ORDER BY c.balance DESC
+  `).bind(company_id).all<{
+    id: number; code: string; name: string; balance: number; credit_limit: number
+    oldest_unpaid_date: string | null
+  }>()
+
+  const buckets = { current: 0, days_31_60: 0, days_61_90: 0, days_91_plus: 0 }
+  const todayMs = new Date(today).getTime()
+
+  const rows = customers_with_balance.map(r => {
+    const days = r.oldest_unpaid_date
+      ? Math.floor((todayMs - new Date(r.oldest_unpaid_date).getTime()) / 86_400_000)
+      : 0
+    let bucket: keyof typeof buckets
+    if      (days <= 30)  { bucket = 'current';      buckets.current      += r.balance }
+    else if (days <= 60)  { bucket = 'days_31_60';   buckets.days_31_60   += r.balance }
+    else if (days <= 90)  { bucket = 'days_61_90';   buckets.days_61_90   += r.balance }
+    else                  { bucket = 'days_91_plus';  buckets.days_91_plus  += r.balance }
+    return { ...r, days_outstanding: days, bucket }
+  })
+
+  return c.json({ success: true, data: { total_ar: rows.reduce((s, r) => s + r.balance, 0), buckets, rows } })
 })
 
 // ── GET /api/customers/:id ─────────────────────────────────────────────────────
@@ -186,6 +232,133 @@ customers.delete('/:id', permissionGuard('sales', 'delete'), async (c) => {
   ).bind(id, company_id).run()
 
   return c.json({ success: true })
+})
+
+// ── POST /api/customers/:id/collect ───────────────────────────────────────────
+// Record a cash receipt from a credit customer.
+// DR Cash (cash_default) / CR AR (receivable_default), updates customer.balance.
+customers.post('/:id/collect', permissionGuard('sales', 'update'), async (c) => {
+  const { company_id, sub: userId } = getUser(c)
+  const id = Number(c.req.param('id'))
+
+  const customer = await c.env.DB.prepare(
+    'SELECT id, name, balance FROM customers WHERE id = ? AND company_id = ? AND is_active = 1'
+  ).bind(id, company_id).first<{ id: number; name: string; balance: number }>()
+  if (!customer) return c.json({ success: false, error: 'العميل غير موجود أو غير نشط' }, 404)
+
+  const b = await c.req.json<{
+    amount:          number
+    payment_date?:   string
+    payment_method?: 'cash' | 'card' | 'bank_transfer' | 'cheque'
+    reference?:      string
+    notes?:          string
+  }>()
+
+  if (!b.amount || b.amount <= 0) {
+    return c.json({ success: false, error: 'المبلغ يجب أن يكون أكبر من صفر' }, 400)
+  }
+  const amount = Math.round(b.amount * 100) / 100
+  if (amount > Math.round(customer.balance * 100) / 100 + 0.01) {
+    return c.json({
+      success: false,
+      error: `المبلغ المُحصَّل (${amount}) يتجاوز الرصيد المديون (${customer.balance.toFixed(2)})`,
+      code: 'OVERPAYMENT',
+    }, 422)
+  }
+
+  const paymentDate   = b.payment_date ?? new Date().toISOString().slice(0, 10)
+  const paymentMethod = b.payment_method ?? 'cash'
+
+  // Insert payment record
+  const pr = await c.env.DB.prepare(
+    `INSERT INTO customer_payments
+       (company_id, customer_id, payment_date, amount, payment_method, reference, notes, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     RETURNING id`
+  ).bind(
+    company_id, id, paymentDate, amount, paymentMethod,
+    b.reference?.trim() ?? null, b.notes?.trim() ?? null, userId,
+  ).first<{ id: number }>()
+
+  if (!pr) return c.json({ success: false, error: 'فشل في تسجيل الدفعة' }, 500)
+
+  // Reduce customer AR balance
+  const newBalance = Math.round((customer.balance - amount) * 100) / 100
+  await c.env.DB.prepare(
+    'UPDATE customers SET balance = ? WHERE id = ? AND company_id = ?'
+  ).bind(newBalance, id, company_id).run()
+
+  // ── GL: DR Cash / CR AR ────────────────────────────────────────────────────
+  let glEntryId: number | null = null
+  try {
+    const cashAcc       = await resolveControlAccount(c.env.DB, company_id, 'cash_default')
+    const receivableAcc = await resolveControlAccount(c.env.DB, company_id, 'receivable_default')
+    if (cashAcc && receivableAcc) {
+      glEntryId = await postFromBusinessEvent(c.env.DB, {
+        company_id,
+        event_type:    'customer_payment_receipt',
+        source_module: 'sales',
+        source_id:     pr.id,
+        event_date:    paymentDate,
+        description:   `تحصيل من ${customer.name} — دفعة رقم ${pr.id}`,
+        created_by:    userId,
+        payload:       { customer_id: id, amount, payment_method: paymentMethod },
+        lines: [
+          { account_code: cashAcc,       debit: amount, credit: 0,      description: `تحصيل مديونية — ${customer.name}`, rule_slot: 'cash',            source_ledger: 'cash' as const, source_record_id: pr.id },
+          { account_code: receivableAcc, debit: 0,      credit: amount, description: `تسوية ذمم مدينة — ${customer.name}`, rule_slot: 'receivable_account', source_ledger: 'cash' as const, source_record_id: pr.id },
+        ],
+        onJournalEntryPosted: async (entryId) => {
+          await c.env.DB.prepare(
+            'UPDATE customer_payments SET journal_entry_id = ? WHERE id = ? AND company_id = ?'
+          ).bind(entryId, pr.id, company_id).run()
+        },
+      })
+    }
+  } catch {
+    // Non-blocking — payment recorded, GL retry via batch posting center
+  }
+
+  return c.json({
+    success: true,
+    data: {
+      payment_id:   pr.id,
+      customer_id:  id,
+      amount,
+      new_balance:  newBalance,
+      gl_entry_id:  glEntryId,
+    },
+  }, 201)
+})
+
+// ── GET /api/customers/:id/collections ────────────────────────────────────────
+customers.get('/:id/collections', permissionGuard('sales', 'read'), async (c) => {
+  const { company_id } = getUser(c)
+  const id = Number(c.req.param('id'))
+  const { limit = '30', offset = '0' } = c.req.query()
+
+  const exists = await c.env.DB.prepare(
+    'SELECT id FROM customers WHERE id = ? AND company_id = ?'
+  ).bind(id, company_id).first<{ id: number }>()
+  if (!exists) return c.json({ success: false, error: 'العميل غير موجود' }, 404)
+
+  const { results } = await c.env.DB.prepare(`
+    SELECT cp.id, cp.payment_date, cp.amount, cp.payment_method,
+           cp.reference, cp.notes, cp.journal_entry_id, cp.created_at
+    FROM customer_payments cp
+    WHERE cp.company_id = ? AND cp.customer_id = ?
+    ORDER BY cp.payment_date DESC, cp.id DESC
+    LIMIT ? OFFSET ?
+  `).bind(company_id, id, Number(limit), Number(offset)).all<{
+    id: number; payment_date: string; amount: number; payment_method: string
+    reference: string | null; notes: string | null
+    journal_entry_id: number | null; created_at: string
+  }>()
+
+  const total = await c.env.DB.prepare(
+    'SELECT COALESCE(SUM(amount),0) AS total_collected FROM customer_payments WHERE company_id = ? AND customer_id = ?'
+  ).bind(company_id, id).first<{ total_collected: number }>()
+
+  return c.json({ success: true, data: { payments: results, total_collected: total?.total_collected ?? 0 } })
 })
 
 // ── GET /api/customers/:id/ledger ─────────────────────────────────────────────
