@@ -55,6 +55,30 @@ export interface SaleOrderDetail extends SaleOrder {
   items: SaleOrderItem[]
 }
 
+export interface DailyPaymentBreakdown {
+  payment_method: string
+  order_count:    number
+  revenue:        number
+}
+
+export interface DailyHourBreakdown {
+  hour:        string
+  order_count: number
+  revenue:     number
+}
+
+export interface DailySummary {
+  date:         string
+  branch_id:    number | null
+  gross_sales:  number
+  voided_total: number
+  net_sales:    number
+  order_count:  number
+  voided_count: number
+  by_payment:   DailyPaymentBreakdown[]
+  by_hour:      DailyHourBreakdown[]
+}
+
 export const salesApi = {
   createSale: (body: CreateSaleBody) =>
     unwrap(api.post<{ order_id: number; total: number; subtotal: number; tax_amount: number; movement_ids: number[] }>('/sales', body)),
@@ -75,4 +99,12 @@ export const salesApi = {
 
   voidSale: (id: number) =>
     unwrap(api.patch<{ voided: boolean; order_id: number }>(`/sales/${id}/void`, {})),
+
+  getDailySummary: (params?: { date?: string; branch_id?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.date)      qs.set('date',      params.date)
+    if (params?.branch_id) qs.set('branch_id', String(params.branch_id))
+    const q = qs.toString()
+    return unwrap(api.get<DailySummary>(`/sales/daily${q ? `?${q}` : ''}`))
+  },
 }

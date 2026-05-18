@@ -278,6 +278,81 @@ sales.get('/', permissionGuard('inventory', 'read'), async (c) => {
   })
 })
 
+// ── GET /api/sales/daily ───────────────────────────────────────────────────────
+// Daily revenue summary. Query params: date (YYYY-MM-DD, defaults today),
+// branch_id (optional). Returns gross_sales, voided_total, net_sales, order
+// counts, and a breakdown by payment_method.
+// IMPORTANT: this route must be registered before /:id to prevent Hono from
+// matching "daily" as a numeric id param.
+sales.get('/daily', permissionGuard('inventory', 'read'), async (c) => {
+  const { company_id } = getUser(c)
+
+  const date     = c.req.query('date') ?? new Date().toISOString().slice(0, 10)
+  const branchId = c.req.query('branch_id') ? Number(c.req.query('branch_id')) : null
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return c.json({ success: false, error: 'date يجب أن يكون بصيغة YYYY-MM-DD' }, 400)
+  }
+
+  const branchFilter = branchId ? 'AND so.branch_id = ?' : ''
+  const binds: unknown[] = [company_id, date, ...(branchId ? [branchId] : [])]
+
+  const [totals, byPayment, byHour] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT
+         COALESCE(SUM(CASE WHEN status != 'voided' THEN total ELSE 0 END), 0) AS gross_sales,
+         COALESCE(SUM(CASE WHEN status  = 'voided' THEN total ELSE 0 END), 0) AS voided_total,
+         COUNT(CASE WHEN status != 'voided' THEN 1 END)                        AS order_count,
+         COUNT(CASE WHEN status  = 'voided' THEN 1 END)                        AS voided_count
+       FROM sales_orders so
+       WHERE so.company_id = ? AND so.order_date = ? ${branchFilter}`
+    ).bind(...binds).first<{
+      gross_sales: number; voided_total: number
+      order_count: number; voided_count: number
+    }>(),
+
+    c.env.DB.prepare(
+      `SELECT payment_method,
+              COUNT(*)     AS order_count,
+              SUM(total)   AS revenue
+       FROM sales_orders so
+       WHERE so.company_id = ? AND so.order_date = ? AND status != 'voided' ${branchFilter}
+       GROUP BY payment_method
+       ORDER BY revenue DESC`
+    ).bind(...binds).all<{ payment_method: string; order_count: number; revenue: number }>(),
+
+    c.env.DB.prepare(
+      `SELECT strftime('%H', created_at) AS hour,
+              COUNT(*)   AS order_count,
+              SUM(total) AS revenue
+       FROM sales_orders so
+       WHERE so.company_id = ? AND so.order_date = ? AND status != 'voided' ${branchFilter}
+         AND created_at IS NOT NULL
+       GROUP BY hour
+       ORDER BY hour`
+    ).bind(...binds).all<{ hour: string; order_count: number; revenue: number }>(),
+  ])
+
+  const grossSales  = totals?.gross_sales  ?? 0
+  const voidedTotal = totals?.voided_total ?? 0
+  const netSales    = Math.round((grossSales - voidedTotal) * 100) / 100
+
+  return c.json({
+    success: true,
+    data: {
+      date,
+      branch_id:   branchId,
+      gross_sales:  grossSales,
+      voided_total: voidedTotal,
+      net_sales:    netSales,
+      order_count:  totals?.order_count  ?? 0,
+      voided_count: totals?.voided_count ?? 0,
+      by_payment:   byPayment.results,
+      by_hour:      byHour.results,
+    },
+  })
+})
+
 // ── GET /api/sales/:id ─────────────────────────────────────────────────────────
 sales.get('/:id', permissionGuard('inventory', 'read'), async (c) => {
   const { company_id } = getUser(c)
